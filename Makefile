@@ -4,13 +4,20 @@ BUILD_DIR := ./build
 GO_FILES := $(shell find . -name '*.go' -not -path './vendor/*')
 LDFLAGS := -ldflags "-X github.com/openstack-project/openstack/internal/cli.version=$(VERSION)"
 
-.PHONY: all build run clean test lint fmt vet
+.PHONY: all build secrets-proxy start run clean test lint fmt vet ui-install ui-dev ui-build docker-build docker-build-ui docker-run
 
 all: build
 
-build:
+build: secrets-proxy
 	@mkdir -p $(BUILD_DIR)
 	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/openstack
+
+secrets-proxy:
+	@mkdir -p $(BUILD_DIR)
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o $(BUILD_DIR)/secrets-proxy-linux ./cmd/secrets-proxy
+
+start: build
+	$(BUILD_DIR)/$(BINARY_NAME) start
 
 run: build
 	$(BUILD_DIR)/$(BINARY_NAME) start
@@ -44,5 +51,17 @@ dev: build
 docker-build:
 	docker build -t openstack:$(VERSION) .
 
+docker-build-ui:
+	docker build --build-arg OPENSTACK_BUILD_UI=true -t openstack:$(VERSION)-ui .
+
 docker-run:
 	docker run -p 4566:4566 -v /var/run/docker.sock:/var/run/docker.sock openstack:$(VERSION)
+
+ui-install:
+	cd ui && bun install
+
+ui-dev:
+	cd ui && bun run dev
+
+ui-build:
+	cd ui && bun run build

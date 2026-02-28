@@ -2,29 +2,54 @@ package lambda
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
+	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/openstack-project/openstack/internal/config"
 	"github.com/openstack-project/openstack/internal/engine"
+	logssvc "github.com/openstack-project/openstack/internal/logs"
 	"github.com/openstack-project/openstack/pkg/types"
 )
 
 // Service implements Lambda business logic.
 type Service struct {
-	cfg    *config.Config
-	store  *Store
-	engine *engine.Engine
-	pool   *engine.WarmPool
+	cfg     *config.Config
+	store   *Store
+	engine  *engine.Engine
+	pool    *engine.WarmPool
+	invoker *engine.Invoker
+	logsSvc *logssvc.Service
+	startMu sync.Map // per-function mutex to prevent duplicate cold starts
+
+	logCursorMu sync.Mutex
+	logCursors  map[string]int
+	metricsMu   sync.RWMutex
+	metrics     map[string]*FunctionMetrics
+}
+
+// FunctionMetrics tracks invoke-level function metrics used by the dashboard.
+type FunctionMetrics struct {
+	Invocations       int64     `json:"invocations"`
+	MessagesProcessed int64     `json:"messagesProcessed"`
+	LastInvokedAt     time.Time `json:"lastInvokedAt"`
 }
 
 // NewService creates a new Lambda service.
-func NewService(cfg *config.Config, store *Store, eng *engine.Engine, pool *engine.WarmPool) *Service {
+func NewService(cfg *config.Config, store *Store, eng *engine.Engine, pool *engine.WarmPool, logsSvc *logssvc.Service) *Service {
 	return &Service{
-		cfg:    cfg,
-		store:  store,
-		engine: eng,
-		pool:   pool,
+		cfg:        cfg,
+		store:      store,
+		engine:     eng,
+		pool:       pool,
+		invoker:    engine.NewInvoker(),
+		logsSvc:    logsSvc,
+		logCursors: make(map[string]int),
+		metrics:    make(map[string]*FunctionMetrics),
 	}
 }
 
@@ -34,7 +59,6 @@ func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, 
 		return nil, fmt.Errorf("function %s already exists", fn.FunctionName)
 	}
 
-	// Set defaults
 	if fn.Timeout == 0 {
 		fn.Timeout = s.cfg.LambdaDefaultTimeout
 	}
@@ -49,7 +73,6 @@ func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, 
 	fn.State = types.FunctionStateActive
 	fn.LastModified = time.Now()
 
-	// Save code
 	if len(code) > 0 {
 		hash, err := s.store.SaveCode(fn.FunctionName, code)
 		if err != nil {
@@ -57,24 +80,39 @@ func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, 
 		}
 		fn.CodeSHA256 = hash
 		fn.CodeSize = int64(len(code))
+
+		// Pre-extract so the first invoke is faster
+		if _, err := s.store.ExtractCode(fn.FunctionName); err != nil {
+			log.Printf("[lambda] warning: failed to pre-extract code for %s: %v", fn.FunctionName, err)
+		}
 	}
 
-	// Save config
 	if err := s.store.SaveFunction(fn); err != nil {
 		return nil, fmt.Errorf("failed to save function: %w", err)
 	}
+	s.ensureFunctionMetrics(fn.FunctionName)
+	if s.logsSvc != nil {
+		s.logsSvc.CreateLogGroup(fmt.Sprintf("/aws/lambda/%s", fn.FunctionName))
+	}
 
 	// Pull runtime image in background
-	go func() {
-		pullCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		exists, _ := s.engine.ImageExists(pullCtx, fn.Runtime)
-		if !exists {
-			_ = s.engine.PullImage(pullCtx, fn.Runtime)
-		}
-	}()
+	if s.engine != nil {
+		go func() {
+			pullCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if err := s.engine.EnsureImage(pullCtx, fn.Runtime); err != nil {
+				log.Printf("[lambda] warning: failed to pull image for %s: %v", fn.Runtime, err)
+			}
+		}()
+	}
 
 	return fn, nil
+}
+
+// getFunctionMutex returns a per-function mutex (created lazily) to serialize cold starts.
+func (s *Service) getFunctionMutex(name string) *sync.Mutex {
+	v, _ := s.startMu.LoadOrStore(name, &sync.Mutex{})
+	return v.(*sync.Mutex)
 }
 
 // GetFunction retrieves a function by name.
@@ -89,13 +127,12 @@ func (s *Service) ListFunctions() ([]*types.FunctionConfig, error) {
 
 // DeleteFunction removes a function and its container.
 func (s *Service) DeleteFunction(ctx context.Context, name string) error {
-	// Stop warm container if running
-	if info, ok := s.engine.GetContainer(name); ok {
-		_ = s.engine.StopContainer(ctx, info.ID)
-		_ = s.engine.RemoveContainer(ctx, info.ID)
+	s.evictWarmContainer(ctx, name)
+	if err := s.store.DeleteFunction(name); err != nil {
+		return err
 	}
-
-	return s.store.DeleteFunction(name)
+	s.deleteFunctionMetrics(name)
+	return nil
 }
 
 // UpdateFunctionCode replaces function code.
@@ -114,11 +151,164 @@ func (s *Service) UpdateFunctionCode(ctx context.Context, name string, code []by
 	fn.CodeSize = int64(len(code))
 	fn.LastModified = time.Now()
 
-	// Evict warm container so next invoke uses new code
-	if info, ok := s.engine.GetContainer(name); ok {
-		_ = s.engine.StopContainer(ctx, info.ID)
-		_ = s.engine.RemoveContainer(ctx, info.ID)
+	// Re-extract code
+	if _, err := s.store.ExtractCode(name); err != nil {
+		return nil, fmt.Errorf("failed to extract code: %w", err)
 	}
+
+	// Evict warm container so next invoke uses new code
+	s.evictWarmContainer(ctx, name)
+
+	if err := s.store.SaveFunction(fn); err != nil {
+		return nil, err
+	}
+
+	return fn, nil
+}
+
+// TagResource adds or overwrites tags on a function.
+func (s *Service) TagResource(name string, tags map[string]string) error {
+	fn, err := s.store.GetFunction(name)
+	if err != nil {
+		return err
+	}
+	if fn.Tags == nil {
+		fn.Tags = make(map[string]string)
+	}
+	for k, v := range tags {
+		fn.Tags[k] = v
+	}
+	return s.store.SaveFunction(fn)
+}
+
+// UntagResource removes specified tag keys from a function.
+func (s *Service) UntagResource(name string, tagKeys []string) error {
+	fn, err := s.store.GetFunction(name)
+	if err != nil {
+		return err
+	}
+	if fn.Tags != nil {
+		for _, k := range tagKeys {
+			delete(fn.Tags, k)
+		}
+	}
+	return s.store.SaveFunction(fn)
+}
+
+// --- Layer operations ---
+
+// PublishLayerVersion publishes a new layer version.
+func (s *Service) PublishLayerVersion(name, description string, runtimes []string, code []byte) (*types.LayerConfig, error) {
+	version := s.store.NextLayerVersion(name)
+
+	cfg := &types.LayerConfig{
+		LayerName:          name,
+		LayerArn:           fmt.Sprintf("arn:aws:lambda:%s:%s:layer:%s", s.cfg.Region, s.cfg.AccountID, name),
+		VersionNumber:      version,
+		Description:        description,
+		CompatibleRuntimes: runtimes,
+		CreatedDate:        time.Now().UTC().Format(time.RFC3339),
+	}
+	cfg.LayerVersionArn = fmt.Sprintf("%s:%d", cfg.LayerArn, version)
+
+	hash, err := s.store.SaveLayer(name, version, code, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to save layer: %w", err)
+	}
+	cfg.CodeSHA256 = hash
+	cfg.CodeSize = int64(len(code))
+
+	return cfg, nil
+}
+
+// GetLayerVersion retrieves a specific layer version.
+func (s *Service) GetLayerVersion(name string, version int64) (*types.LayerConfig, error) {
+	return s.store.GetLayer(name, version)
+}
+
+// ListLayers returns all layers (latest version of each).
+func (s *Service) ListLayers() ([]*types.LayerConfig, error) {
+	return s.store.ListLayers()
+}
+
+// ListLayerVersions returns all versions for a layer.
+func (s *Service) ListLayerVersions(name string) ([]*types.LayerConfig, error) {
+	return s.store.ListLayerVersions(name)
+}
+
+// DeleteLayerVersion removes a specific layer version.
+func (s *Service) DeleteLayerVersion(name string, version int64) error {
+	return s.store.DeleteLayerVersion(name, version)
+}
+
+// ResolveLayerDirs extracts and returns paths for all layer ARNs on a function.
+func (s *Service) ResolveLayerDirs(layers []string) ([]string, error) {
+	var dirs []string
+	for _, arn := range layers {
+		name, version, err := parseLayerArn(arn)
+		if err != nil {
+			return nil, err
+		}
+		dir, err := s.store.ExtractLayer(name, version)
+		if err != nil {
+			return nil, fmt.Errorf("failed to extract layer %s v%d: %w", name, version, err)
+		}
+		dirs = append(dirs, dir)
+	}
+	return dirs, nil
+}
+
+// parseLayerArn extracts the layer name and version from an ARN like
+// "arn:aws:lambda:us-east-1:000000000000:layer:myLayer:1"
+func parseLayerArn(arn string) (string, int64, error) {
+	parts := strings.Split(arn, ":")
+	if len(parts) < 8 {
+		return "", 0, fmt.Errorf("invalid layer ARN: %s", arn)
+	}
+	name := parts[len(parts)-2]
+	version, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
+	if err != nil {
+		return "", 0, fmt.Errorf("invalid layer version in ARN %s: %w", arn, err)
+	}
+	return name, version, nil
+}
+
+// UpdateFunctionConfiguration updates a function's configuration without changing its code.
+func (s *Service) UpdateFunctionConfiguration(ctx context.Context, name string, update *types.FunctionConfigUpdate) (*types.FunctionConfig, error) {
+	fn, err := s.store.GetFunction(name)
+	if err != nil {
+		return nil, err
+	}
+
+	if update.Handler != "" {
+		fn.Handler = update.Handler
+	}
+	if update.Description != nil {
+		fn.Description = *update.Description
+	}
+	if update.Timeout != 0 {
+		fn.Timeout = update.Timeout
+	}
+	if update.MemorySize != 0 {
+		fn.MemorySize = update.MemorySize
+	}
+	if update.Role != "" {
+		fn.Role = update.Role
+	}
+	if update.Runtime != "" {
+		fn.Runtime = types.Runtime(update.Runtime)
+	}
+	if update.Environment != nil {
+		fn.Environment = update.Environment.Variables
+	}
+	if update.Layers != nil {
+		fn.Layers = update.Layers
+	}
+
+	fn.LastModified = time.Now()
+
+	// Evict warm container since config changed
+	s.evictWarmContainer(ctx, name)
 
 	if err := s.store.SaveFunction(fn); err != nil {
 		return nil, err
@@ -137,34 +327,199 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	if fn.State != types.FunctionStateActive {
 		return nil, fmt.Errorf("function %s is not active (state: %s)", fn.FunctionName, fn.State)
 	}
+	if s.engine == nil || s.pool == nil {
+		return nil, fmt.Errorf("lambda execution engine is not configured")
+	}
 
-	// DryRun just validates
+	// DryRun just validates the function exists and is active
 	if input.InvocationType == "DryRun" {
 		return &types.InvokeOutput{StatusCode: 204}, nil
 	}
 
-	codeDir := s.store.GetCodeDir(fn.FunctionName)
+	// Ensure code is extracted
+	codeDir, err := s.store.ExtractCode(fn.FunctionName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract code: %w", err)
+	}
 
-	// Check for warm container
-	info, warm := s.engine.GetContainer(fn.FunctionName)
-	if !warm {
-		// Create and start a new container
-		info, err = s.engine.CreateContainer(ctx, fn, codeDir, nil)
+	// Resolve layer directories
+	var layerDirs []string
+	if len(fn.Layers) > 0 {
+		layerDirs, err = s.ResolveLayerDirs(fn.Layers)
 		if err != nil {
-			return nil, fmt.Errorf("failed to create container: %w", err)
-		}
-		if err := s.engine.StartContainer(ctx, info.ID); err != nil {
-			return nil, fmt.Errorf("failed to start container: %w", err)
+			return nil, fmt.Errorf("failed to resolve layers: %w", err)
 		}
 	}
 
+	// Ensure runtime image is available (block if needed)
+	if err := s.engine.EnsureImage(ctx, fn.Runtime); err != nil {
+		return nil, fmt.Errorf("runtime image not available: %w", err)
+	}
+
+	// Per-function mutex prevents duplicate cold starts from concurrent invokes
+	fnMu := s.getFunctionMutex(fn.FunctionName)
+	fnMu.Lock()
+	info, warm := s.engine.GetContainer(fn.FunctionName)
+	if !warm {
+		log.Printf("[lambda] cold start for %s", fn.FunctionName)
+
+		info, err = s.engine.CreateContainer(ctx, fn, codeDir, layerDirs)
+		if err != nil {
+			fnMu.Unlock()
+			return nil, fmt.Errorf("failed to create container: %w", err)
+		}
+
+		if err := s.engine.StartContainer(ctx, info); err != nil {
+			s.engine.RemoveContainer(ctx, info.ID)
+			fnMu.Unlock()
+			return nil, fmt.Errorf("failed to start container: %w", err)
+		}
+
+		// Wait for the RIE to be ready
+		if err := s.invoker.WaitForReady(ctx, info.HostPort); err != nil {
+			s.engine.EvictContainer(ctx, fn.FunctionName)
+			fnMu.Unlock()
+			return nil, fmt.Errorf("container not ready: %w", err)
+		}
+	} else {
+		log.Printf("[lambda] warm invoke for %s (container %s)", fn.FunctionName, info.ID[:12])
+	}
+	fnMu.Unlock()
+
 	s.pool.Touch(fn.FunctionName)
 
-	// TODO: Phase 3 — Send event payload to container via RIE and collect response.
-	// For now, return a placeholder indicating the container was started.
-	return &types.InvokeOutput{
-		StatusCode:      200,
-		Payload:         []byte(`{"message": "invoke not yet wired to RIE — container started successfully"}`),
-		ExecutedVersion: fn.Version,
-	}, nil
+	// Set timeout deadline for the invocation
+	invokeCtx, cancel := context.WithTimeout(ctx, time.Duration(fn.Timeout)*time.Second)
+	defer cancel()
+
+	output, err := s.invoker.InvokeWithLogs(invokeCtx, s.engine, info, input)
+	s.ingestContainerLogs(fn.FunctionName, info)
+	if err != nil {
+		return nil, fmt.Errorf("invocation failed: %w", err)
+	}
+
+	output.ExecutedVersion = fn.Version
+	s.recordInvocation(fn.FunctionName, input.Payload)
+
+	// For async invocations, return 202 immediately
+	if input.InvocationType == "Event" {
+		return &types.InvokeOutput{
+			StatusCode:      202,
+			ExecutedVersion: fn.Version,
+		}, nil
+	}
+
+	return output, nil
+}
+
+// GetFunctionMetrics returns invocation metrics for the given function.
+func (s *Service) GetFunctionMetrics(name string) FunctionMetrics {
+	s.metricsMu.RLock()
+	defer s.metricsMu.RUnlock()
+
+	metric, exists := s.metrics[name]
+	if !exists {
+		return FunctionMetrics{}
+	}
+	return *metric
+}
+
+func (s *Service) ensureFunctionMetrics(name string) {
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
+
+	if _, exists := s.metrics[name]; !exists {
+		s.metrics[name] = &FunctionMetrics{}
+	}
+}
+
+func (s *Service) deleteFunctionMetrics(name string) {
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
+	delete(s.metrics, name)
+}
+
+func (s *Service) recordInvocation(name string, payload []byte) {
+	s.metricsMu.Lock()
+	defer s.metricsMu.Unlock()
+
+	metric, exists := s.metrics[name]
+	if !exists {
+		metric = &FunctionMetrics{}
+		s.metrics[name] = metric
+	}
+
+	metric.Invocations++
+	metric.MessagesProcessed += countProcessedMessages(payload)
+	metric.LastInvokedAt = time.Now().UTC()
+}
+
+func countProcessedMessages(payload []byte) int64 {
+	if len(payload) == 0 {
+		return 1
+	}
+
+	var envelope struct {
+		Records *[]json.RawMessage `json:"Records"`
+	}
+	if err := json.Unmarshal(payload, &envelope); err == nil && envelope.Records != nil {
+		return int64(len(*envelope.Records))
+	}
+
+	return 1
+}
+
+func (s *Service) evictWarmContainer(ctx context.Context, functionName string) {
+	if s.engine == nil {
+		return
+	}
+	if info, ok := s.engine.GetContainer(functionName); ok && info != nil {
+		s.clearLogCursor(info.ID)
+	}
+	s.engine.EvictContainer(ctx, functionName)
+}
+
+func (s *Service) ingestContainerLogs(functionName string, info *engine.ContainerInfo) {
+	if s.logsSvc == nil || s.engine == nil || info == nil {
+		return
+	}
+
+	logCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	rawLogs, err := s.engine.ContainerLogs(logCtx, info.ID)
+	if err != nil || rawLogs == "" {
+		return
+	}
+
+	newLogs := s.consumeNewContainerLogs(info.ID, rawLogs)
+	if newLogs == "" {
+		return
+	}
+
+	streamName := info.ID
+	if len(streamName) > 12 {
+		streamName = streamName[:12]
+	}
+	s.logsSvc.IngestContainerLogs(functionName, streamName, newLogs)
+}
+
+func (s *Service) consumeNewContainerLogs(containerID, rawLogs string) string {
+	s.logCursorMu.Lock()
+	defer s.logCursorMu.Unlock()
+
+	offset := s.logCursors[containerID]
+	if offset < 0 || offset > len(rawLogs) {
+		offset = 0
+	}
+
+	newLogs := rawLogs[offset:]
+	s.logCursors[containerID] = len(rawLogs)
+	return newLogs
+}
+
+func (s *Service) clearLogCursor(containerID string) {
+	s.logCursorMu.Lock()
+	defer s.logCursorMu.Unlock()
+	delete(s.logCursors, containerID)
 }

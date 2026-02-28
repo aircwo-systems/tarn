@@ -1,0 +1,9 @@
+{
+  "name": "openstack-example-kysely-postgres-lambda",
+  "private": true,
+  "type": "commonjs",
+  "dependencies": {
+    "kysely": "^0.27.5",
+    "pg": "^8.11.5"
+  }
+}

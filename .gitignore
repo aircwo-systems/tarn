@@ -1,6 +1,7 @@
 # Build output
 /build/
 /dist/
+/ui/build/
 
 # Go
 *.exe
@@ -26,6 +27,19 @@ vendor/
 # Environment
 .env
 .env.local
+
+# Local tool state
+/.claude/
+/.playwright-cli/
+/function.zip
+/examples/**/.state.env
+
+# Frontend
+/ui/node_modules/
+/ui/.svelte-kit/
+/ui/.vite/
+/examples/**/node_modules/
+/examples/**/bun.lock
 
 # Debug
 __debug_bin*

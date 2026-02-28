@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
+	"github.com/openstack-project/openstack/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -21,6 +23,8 @@ func newCreateCmd() *cobra.Command {
 		zipFile    string
 		timeout    int
 		memorySize int
+		envVars    []string
+		tags       string
 	)
 
 	cmd := &cobra.Command{
@@ -42,6 +46,24 @@ func newCreateCmd() *cobra.Command {
 			}
 			if memorySize > 0 {
 				reqBody["MemorySize"] = memorySize
+			}
+			if len(envVars) > 0 {
+				variables, err := parseEnvFlags(envVars)
+				if err != nil {
+					return err
+				}
+				reqBody["Environment"] = map[string]any{
+					"Variables": variables,
+				}
+			}
+			if strings.TrimSpace(tags) != "" {
+				parsedTags, err := common.ParseTagMap(tags)
+				if err != nil {
+					return err
+				}
+				if len(parsedTags) > 0 {
+					reqBody["Tags"] = parsedTags
+				}
 			}
 
 			if zipFile != "" {
@@ -84,10 +106,24 @@ func newCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&zipFile, "zip", "", "Path to deployment package (zip file)")
 	cmd.Flags().IntVar(&timeout, "timeout", 0, "Function timeout in seconds")
 	cmd.Flags().IntVar(&memorySize, "memory", 0, "Function memory in MB")
+	cmd.Flags().StringArrayVar(&envVars, "env", nil, "Environment variable in KEY=VALUE form (repeatable)")
+	cmd.Flags().StringVar(&tags, "tags", "", "Comma-separated tags in KEY=VALUE form")
 
 	cmd.MarkFlagRequired("name")
 	cmd.MarkFlagRequired("runtime")
 	cmd.MarkFlagRequired("handler")
 
 	return cmd
+}
+
+func parseEnvFlags(values []string) (map[string]string, error) {
+	variables := make(map[string]string, len(values))
+	for _, entry := range values {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || strings.TrimSpace(key) == "" {
+			return nil, fmt.Errorf("invalid --env value %q: expected KEY=VALUE", entry)
+		}
+		variables[strings.TrimSpace(key)] = value
+	}
+	return variables, nil
 }

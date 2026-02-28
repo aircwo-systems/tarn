@@ -9,6 +9,7 @@ const (
 	RuntimeNodeJS18 Runtime = "nodejs18.x"
 	RuntimeNodeJS20 Runtime = "nodejs20.x"
 	RuntimeNodeJS22 Runtime = "nodejs22.x"
+	RuntimeNodeJS24 Runtime = "nodejs24.x"
 	RuntimePython39 Runtime = "python3.9"
 	RuntimePython310 Runtime = "python3.10"
 	RuntimePython311 Runtime = "python3.11"
@@ -29,6 +30,7 @@ var RuntimeImageMap = map[Runtime]string{
 	RuntimeNodeJS18:  "public.ecr.aws/lambda/nodejs:18",
 	RuntimeNodeJS20:  "public.ecr.aws/lambda/nodejs:20",
 	RuntimeNodeJS22:  "public.ecr.aws/lambda/nodejs:22",
+	RuntimeNodeJS24:  "public.ecr.aws/lambda/nodejs:24",
 	RuntimePython39:  "public.ecr.aws/lambda/python:3.9",
 	RuntimePython310: "public.ecr.aws/lambda/python:3.10",
 	RuntimePython311: "public.ecr.aws/lambda/python:3.11",
@@ -72,6 +74,7 @@ type FunctionConfig struct {
 	MemorySize   int               `json:"MemorySize"`
 	Environment  map[string]string `json:"Environment,omitempty"`
 	Layers       []string          `json:"Layers,omitempty"`
+	Tags         map[string]string `json:"Tags,omitempty"`
 	State        FunctionState     `json:"State"`
 	CodeSHA256   string            `json:"CodeSha256"`
 	CodeSize     int64             `json:"CodeSize"`
@@ -81,13 +84,39 @@ type FunctionConfig struct {
 
 // LayerConfig holds the configuration for a Lambda layer.
 type LayerConfig struct {
-	LayerName         string `json:"LayerName"`
-	LayerArn          string `json:"LayerArn"`
-	VersionNumber     int64  `json:"VersionNumber"`
-	Description       string `json:"Description,omitempty"`
-	CodeSHA256        string `json:"CodeSha256"`
-	CodeSize          int64  `json:"CodeSize"`
-	CompatibleRuntime string `json:"CompatibleRuntime,omitempty"`
+	LayerName          string   `json:"LayerName"`
+	LayerArn           string   `json:"LayerArn"`
+	LayerVersionArn    string   `json:"LayerVersionArn"`
+	VersionNumber      int64    `json:"Version"`
+	Description        string   `json:"Description,omitempty"`
+	CodeSHA256         string   `json:"CodeSha256"`
+	CodeSize           int64    `json:"CodeSize"`
+	CompatibleRuntimes []string `json:"CompatibleRuntimes,omitempty"`
+	CreatedDate        string   `json:"CreatedDate"`
+}
+
+// LayerVersionContent holds the content metadata returned after publishing.
+type LayerVersionContent struct {
+	CodeSHA256 string `json:"CodeSha256"`
+	CodeSize   int64  `json:"CodeSize"`
+}
+
+// FunctionConfigUpdate holds optional fields for updating function configuration.
+// Pointer types and zero-value checks allow distinguishing "not provided" from "set to zero."
+type FunctionConfigUpdate struct {
+	Handler     string    `json:"Handler,omitempty"`
+	Description *string   `json:"Description,omitempty"`
+	Timeout     int       `json:"Timeout,omitempty"`
+	MemorySize  int       `json:"MemorySize,omitempty"`
+	Role        string    `json:"Role,omitempty"`
+	Runtime     string    `json:"Runtime,omitempty"`
+	Environment *EnvVars  `json:"Environment,omitempty"`
+	Layers      []string  `json:"Layers,omitempty"`
+}
+
+// EnvVars wraps environment variable maps (matches AWS API shape).
+type EnvVars struct {
+	Variables map[string]string `json:"Variables,omitempty"`
 }
 
 // InvokeInput represents a Lambda invocation request.
