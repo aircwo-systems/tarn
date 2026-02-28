@@ -1,0 +1,127 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+@import '@fontsource-variable/jetbrains-mono';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, SFMono-Regular, monospace;
+
+  /* Rack Console — dark palette */
+  --color-bg: #0A0F14;
+  --color-bg-raised: #111820;
+  --color-bg-surface: #161D26;
+  --color-bg-overlay: #1A2230;
+
+  --color-border: rgba(186, 210, 230, 0.12);
+  --color-border-strong: rgba(186, 210, 230, 0.22);
+
+  --color-text: #EDF3F8;
+  --color-text-muted: #8A9BB0;
+  --color-text-faint: #5C6E80;
+
+  --color-accent: #00E5A0;
+  --color-accent-muted: rgba(0, 229, 160, 0.15);
+  --color-accent-strong: rgba(0, 229, 160, 0.25);
+
+  --color-amber: #F59E0B;
+  --color-amber-muted: rgba(245, 158, 11, 0.15);
+
+  --color-red: #FB7185;
+  --color-red-muted: rgba(251, 113, 133, 0.15);
+
+  --color-blue: #60A5FA;
+  --color-blue-muted: rgba(96, 165, 250, 0.15);
+
+  /* shadcn semantic tokens */
+  --color-background: #0A0F14;
+  --color-foreground: #EDF3F8;
+  --color-card: #111820;
+  --color-card-foreground: #EDF3F8;
+  --color-popover: #111820;
+  --color-popover-foreground: #EDF3F8;
+  --color-primary: #00E5A0;
+  --color-primary-foreground: #0A0F14;
+  --color-secondary: #161D26;
+  --color-secondary-foreground: #EDF3F8;
+  --color-muted: #161D26;
+  --color-muted-foreground: #8A9BB0;
+  --color-accent-shadcn: #1A2230;
+  --color-accent-foreground: #EDF3F8;
+  --color-destructive: #FB7185;
+  --color-destructive-foreground: #0A0F14;
+  --color-border-shadcn: rgba(186, 210, 230, 0.12);
+  --color-input: rgba(186, 210, 230, 0.12);
+  --color-ring: rgba(0, 229, 160, 0.35);
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+}
+
+/* Light mode overrides */
+.light {
+  --color-bg: #F8FAFB;
+  --color-bg-raised: #FFFFFF;
+  --color-bg-surface: #F1F4F7;
+  --color-bg-overlay: #E8ECF0;
+
+  --color-border: rgba(30, 50, 70, 0.12);
+  --color-border-strong: rgba(30, 50, 70, 0.22);
+
+  --color-text: #0F1720;
+  --color-text-muted: #5C6E80;
+  --color-text-faint: #8A9BB0;
+
+  --color-accent: #00B880;
+  --color-accent-muted: rgba(0, 184, 128, 0.12);
+  --color-accent-strong: rgba(0, 184, 128, 0.22);
+
+  --color-background: #F8FAFB;
+  --color-foreground: #0F1720;
+  --color-card: #FFFFFF;
+  --color-card-foreground: #0F1720;
+  --color-popover: #FFFFFF;
+  --color-popover-foreground: #0F1720;
+  --color-primary: #00B880;
+  --color-primary-foreground: #FFFFFF;
+  --color-secondary: #F1F4F7;
+  --color-secondary-foreground: #0F1720;
+  --color-muted: #F1F4F7;
+  --color-muted-foreground: #5C6E80;
+  --color-accent-shadcn: #E8ECF0;
+  --color-accent-foreground: #0F1720;
+  --color-destructive: #E11D48;
+  --color-destructive-foreground: #FFFFFF;
+  --color-border-shadcn: rgba(30, 50, 70, 0.12);
+  --color-input: rgba(30, 50, 70, 0.12);
+  --color-ring: rgba(0, 184, 128, 0.35);
+}
+
+* {
+  border-color: var(--color-border);
+}
+
+html {
+  font-size: 13px;
+}
+
+body {
+  font-family: var(--font-sans);
+  background-color: var(--color-bg);
+  color: var(--color-text);
+}
+
+::selection {
+  background: var(--color-accent-muted);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

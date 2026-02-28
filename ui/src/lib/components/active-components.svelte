@@ -1,0 +1,161 @@
+<script lang="ts">
+	import { GlobeHemisphereWest, Lightning, ChatCircle, Key, HardDrives } from 'phosphor-svelte';
+	import LedDot from './led-dot.svelte';
+	import Badge from '$lib/components/ui/badge/badge.svelte';
+	import { getDashboard, getDashboardFilters, matchesTagFilter } from '$lib/state.svelte';
+	import { formatBytes } from '$lib/utils';
+
+	const dashboard = getDashboard();
+	const filters = getDashboardFilters();
+
+	const gateways = $derived((dashboard.data?.gateways ?? []).filter((gateway) => matchesTagFilter(gateway.tags, filters.tagFilter)));
+	const functions = $derived((dashboard.data?.functions ?? []).filter((fn) => matchesTagFilter(fn.tags, filters.tagFilter)));
+	const queues = $derived((dashboard.data?.queues ?? []).filter((queue) => matchesTagFilter(queue.tags, filters.tagFilter)));
+	const secrets = $derived((dashboard.data?.secrets ?? []).filter((secret) => matchesTagFilter(secret.tags, filters.tagFilter)));
+	const infra = $derived(dashboard.data?.infrastructure ?? []);
+	const totalCount = $derived(gateways.length + functions.length + queues.length + secrets.length + infra.length);
+
+	function fnLedColor(state: string): 'green' | 'amber' | 'red' | 'gray' {
+		const s = state.toLowerCase();
+		if (s === 'active') return 'green';
+		if (s === 'pending') return 'amber';
+		if (s === 'failed' || s === 'inactive') return 'red';
+		return 'gray';
+	}
+</script>
+
+<div class="rounded-lg border border-border bg-bg-raised overflow-hidden">
+	<div class="flex items-center justify-between px-3 py-2 border-b border-border">
+		<h3 class="text-xs font-mono uppercase tracking-wider text-text-muted">Active Components</h3>
+		<span class="text-[10px] text-text-faint font-mono">{totalCount} total</span>
+	</div>
+
+	{#if totalCount === 0 && !dashboard.loading}
+		<div class="flex items-center justify-center py-8 text-text-faint">
+			<p class="text-xs font-mono">No resources deployed</p>
+		</div>
+	{:else}
+		<div class="grid grid-cols-1 lg:grid-cols-5 divide-y lg:divide-y-0 lg:divide-x divide-border">
+			<!-- API Gateway -->
+			<div class="p-3">
+				<div class="flex items-center gap-2 mb-2">
+					<GlobeHemisphereWest size={13} weight="fill" class="text-blue" />
+					<span class="text-[10px] font-mono uppercase tracking-wider text-text-muted">API Gateway</span>
+					<span class="ml-auto text-[10px] font-mono text-text-faint">{gateways.length}</span>
+				</div>
+				{#if gateways.length === 0}
+					<p class="text-[11px] text-text-faint py-2">No gateways</p>
+				{:else}
+					<ul class="space-y-1.5">
+						{#each gateways as gateway}
+							<li class="flex items-center gap-2 group">
+								<LedDot color="green" />
+								<span class="text-xs text-text truncate flex-1" title={gateway.arn}>{gateway.name}</span>
+								<span class="text-[10px] font-mono text-text-faint shrink-0">{gateway.routes} routes</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+
+			<!-- Lambda -->
+			<div class="p-3">
+				<div class="flex items-center gap-2 mb-2">
+					<Lightning size={13} weight="fill" class="text-accent" />
+					<span class="text-[10px] font-mono uppercase tracking-wider text-text-muted">Lambda</span>
+					<span class="ml-auto text-[10px] font-mono text-text-faint">{functions.length}</span>
+				</div>
+				{#if functions.length === 0}
+					<p class="text-[11px] text-text-faint py-2">No functions</p>
+				{:else}
+					<ul class="space-y-1.5">
+						{#each functions as fn}
+							<li class="flex items-center gap-2 group">
+								<LedDot color={fnLedColor(fn.state)} />
+								<span class="text-xs text-text truncate flex-1" title={fn.arn}>{fn.name}</span>
+								<Badge variant="secondary" class="text-[10px] px-1.5 py-0">{fn.runtime}</Badge>
+								<span class="text-[10px] font-mono text-text-faint shrink-0">{fn.memoryMB}MB</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+
+			<!-- SQS -->
+			<div class="p-3">
+				<div class="flex items-center gap-2 mb-2">
+					<ChatCircle size={13} weight="fill" class="text-amber" />
+					<span class="text-[10px] font-mono uppercase tracking-wider text-text-muted">SQS</span>
+					<span class="ml-auto text-[10px] font-mono text-text-faint">{queues.length}</span>
+				</div>
+				{#if queues.length === 0}
+					<p class="text-[11px] text-text-faint py-2">No queues</p>
+				{:else}
+					<ul class="space-y-1.5">
+						{#each queues as q}
+							<li class="flex items-center gap-2 group">
+								<LedDot color="amber" />
+								<span class="text-xs text-text truncate flex-1" title={q.url}>{q.name}</span>
+								<Badge variant={q.fifo ? 'amber' : 'secondary'} class="text-[10px] px-1.5 py-0">
+									{q.fifo ? 'FIFO' : 'Std'}
+								</Badge>
+								<span class="text-[10px] font-mono text-text-faint shrink-0">{q.approxVisible} msg</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+
+			<!-- Secrets -->
+			<div class="p-3">
+				<div class="flex items-center gap-2 mb-2">
+					<Key size={13} weight="fill" class="text-blue" />
+					<span class="text-[10px] font-mono uppercase tracking-wider text-text-muted">Secrets</span>
+					<span class="ml-auto text-[10px] font-mono text-text-faint">{secrets.length}</span>
+				</div>
+				{#if secrets.length === 0}
+					<p class="text-[11px] text-text-faint py-2">No secrets</p>
+				{:else}
+					<ul class="space-y-1.5">
+						{#each secrets as s}
+							<li class="flex items-center gap-2 group">
+								<LedDot color="green" />
+								<span class="text-xs text-text truncate flex-1" title={s.arn}>{s.name}</span>
+								<span class="text-[10px] font-mono text-text-faint shrink-0">v{s.versionId.slice(0, 8)}</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+
+			<!-- Infrastructure -->
+			<div class="p-3">
+				<div class="flex items-center gap-2 mb-2">
+					<HardDrives size={13} weight="fill" class="text-accent" />
+					<span class="text-[10px] font-mono uppercase tracking-wider text-text-muted">Infrastructure</span>
+					<span class="ml-auto text-[10px] font-mono text-text-faint">{infra.length}</span>
+				</div>
+				{#if infra.length === 0}
+					<p class="text-[11px] text-text-faint py-2">No probes configured</p>
+				{:else}
+					<ul class="space-y-1.5">
+						{#each infra as probe (probe.kind + probe.host + probe.port)}
+							<li class="flex items-center gap-2 group">
+								<LedDot color={probe.status === 'connected' ? 'green' : 'red'} />
+								<span class="text-xs text-text truncate flex-1" title="{probe.host}:{probe.port}">{probe.name}</span>
+								{#if probe.version}
+									<Badge variant="secondary" class="text-[10px] px-1.5 py-0">{probe.version}</Badge>
+								{/if}
+								{#if probe.status === 'connected'}
+									<span class="text-[10px] font-mono text-text-faint shrink-0">{Math.round(probe.latencyMs)}ms</span>
+								{:else}
+									<span class="text-[10px] font-mono text-red/70 shrink-0">{probe.status}</span>
+								{/if}
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+		</div>
+	{/if}
+</div>

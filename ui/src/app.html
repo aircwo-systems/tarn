@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="OpenStack dashboard for monitoring local AWS emulation resources"
+    />
+    <script>
+      (function () {
+        var cookieName = 'openstack-ui-settings=';
+        var cookieValue = null;
+        var parts = document.cookie.split('; ');
+        for (var i = 0; i < parts.length; i++) {
+          if (parts[i].indexOf(cookieName) === 0) {
+            cookieValue = parts[i].slice(cookieName.length);
+            break;
+          }
+        }
+
+        var mode = 'system';
+        if (cookieValue) {
+          try {
+            var parsed = JSON.parse(decodeURIComponent(cookieValue));
+            if (parsed && (parsed.themeMode === 'light' || parsed.themeMode === 'dark' || parsed.themeMode === 'system')) {
+              mode = parsed.themeMode;
+            }
+          } catch (_) {}
+        }
+
+        var resolved = mode;
+        if (mode === 'system') {
+          resolved = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+        }
+
+        if (resolved === 'light') {
+          document.documentElement.classList.add('light');
+          document.documentElement.classList.remove('dark');
+        } else {
+          document.documentElement.classList.add('dark');
+          document.documentElement.classList.remove('light');
+        }
+      })();
+    </script>
+    %sveltekit.head%
+  </head>
+  <body data-sveltekit-preload-data="hover">
+    <div style="display: contents">%sveltekit.body%</div>
+  </body>
+</html>
