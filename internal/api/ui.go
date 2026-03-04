@@ -15,8 +15,8 @@ func (s *Server) registerUIRoutes(mux *http.ServeMux) {
 	}
 
 	uiHandler := newUIHandler(s.cfg.UIDir)
-	mux.Handle("GET /", uiHandler)
-	mux.Handle("GET /{path...}", uiHandler)
+	// Register only a single catch-all route to avoid pattern conflicts.
+	mux.Handle("/", uiHandler)
 }
 
 func newUIHandler(dir string) http.Handler {
@@ -54,7 +54,7 @@ func newUIHandler(dir string) http.Handler {
 		clean := path.Clean("/" + r.URL.Path)
 		rel := strings.TrimPrefix(clean, "/")
 		if rel == "" {
-			serveExistingOrIndex(w, r, dir, "index.html")
+			serveExistingOrIndex(w, r, dir, "200.html")
 			return
 		}
 

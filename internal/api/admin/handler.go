@@ -12,9 +12,11 @@ import (
 
 	apigatewaysvc "github.com/openstack-project/openstack/internal/apigateway"
 	"github.com/openstack-project/openstack/internal/config"
+	eventsourcesvc "github.com/openstack-project/openstack/internal/eventsource"
 	infrasvc "github.com/openstack-project/openstack/internal/infrastructure"
 	lambdasvc "github.com/openstack-project/openstack/internal/lambda"
 	logssvc "github.com/openstack-project/openstack/internal/logs"
+	s3svc "github.com/openstack-project/openstack/internal/s3"
 	secretssvc "github.com/openstack-project/openstack/internal/secrets"
 	sqssvc "github.com/openstack-project/openstack/internal/sqs"
 	"github.com/openstack-project/openstack/pkg/types"
@@ -26,36 +28,42 @@ type Handler struct {
 	apigw   *apigatewaysvc.Service
 	lambda  *lambdasvc.Service
 	logs    *logssvc.Service
+	s3      *s3svc.Service
 	sqs     *sqssvc.Service
 	secrets *secretssvc.Service
 	infra   *infrasvc.Service
+	esm     *eventsourcesvc.Service
 }
 
-func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service) *Handler {
+func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service) *Handler {
 	return &Handler{
 		cfg:     cfg,
 		apigw:   apigw,
 		lambda:  lambda,
 		logs:    logs,
+		s3:      s3,
 		sqs:     sqs,
 		secrets: secrets,
 		infra:   infra,
+		esm:     esm,
 	}
 }
 
 type overviewResponse struct {
-	Status         string                 `json:"status"`
-	Timestamp      time.Time              `json:"timestamp"`
-	Services       []string               `json:"services"`
-	Config         overviewConfig         `json:"config"`
-	Counts         overviewCounts         `json:"counts"`
-	Gateways       []gatewaySummary       `json:"gateways"`
-	Functions      []functionSummary      `json:"functions"`
-	Queues         []queueSummary         `json:"queues"`
-	Secrets        []secretSummary        `json:"secrets"`
-	Infrastructure []infrasvc.ProbeResult `json:"infrastructure"`
-	Connections    []infraConnection      `json:"connections,omitempty"`
-	Warnings       []string               `json:"warnings,omitempty"`
+	Status              string                 `json:"status"`
+	Timestamp           time.Time              `json:"timestamp"`
+	Services            []string               `json:"services"`
+	Config              overviewConfig         `json:"config"`
+	Counts              overviewCounts         `json:"counts"`
+	Gateways            []gatewaySummary       `json:"gateways"`
+	Functions           []functionSummary      `json:"functions"`
+	Queues              []queueSummary         `json:"queues"`
+	Secrets             []secretSummary        `json:"secrets"`
+	Buckets             []s3BucketSummary      `json:"buckets"`
+	EventSourceMappings []esmSummary           `json:"eventSourceMappings"`
+	Infrastructure      []infrasvc.ProbeResult `json:"infrastructure"`
+	Connections         []infraConnection      `json:"connections,omitempty"`
+	Warnings            []string               `json:"warnings,omitempty"`
 }
 
 type overviewConfig struct {
@@ -67,11 +75,29 @@ type overviewConfig struct {
 }
 
 type overviewCounts struct {
-	Gateways  int `json:"gateways"`
-	Functions int `json:"functions"`
-	Queues    int `json:"queues"`
-	Secrets   int `json:"secrets"`
-	LogGroups int `json:"logGroups"`
+	Gateways            int `json:"gateways"`
+	Functions           int `json:"functions"`
+	Queues              int `json:"queues"`
+	Secrets             int `json:"secrets"`
+	Buckets             int `json:"buckets"`
+	LogGroups           int `json:"logGroups"`
+	EventSourceMappings int `json:"eventSourceMappings"`
+}
+
+type esmSummary struct {
+	UUID         string `json:"uuid"`
+	QueueName    string `json:"queueName"`
+	FunctionName string `json:"functionName"`
+	BatchSize    int    `json:"batchSize"`
+	State        string `json:"state"`
+	LastResult   string `json:"lastResult,omitempty"`
+}
+
+type s3BucketSummary struct {
+	Name        string    `json:"name"`
+	Objects     int       `json:"objects"`
+	TotalSize   int64     `json:"totalSize"`
+	CreatedDate time.Time `json:"createdDate"`
 }
 
 type gatewaySummary struct {
@@ -165,16 +191,22 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 
 	queues := h.sqs.ListQueues("")
 	secrets := h.secrets.ListSecrets()
+	buckets := h.s3.ListBuckets()
 	logGroups := h.logs.ListGroups()
 	infraResults := []infrasvc.ProbeResult{}
 	if h.infra != nil {
 		infraResults = h.infra.Results()
 	}
 
+	var esmMappings []*types.EventSourceMapping
+	if h.esm != nil {
+		esmMappings = h.esm.ListMappings("", "")
+	}
+
 	resp := overviewResponse{
 		Status:    "running",
 		Timestamp: time.Now().UTC(),
-		Services:  []string{"apigatewayv2", "lambda", "sqs", "secretsmanager"},
+		Services:  []string{"apigatewayv2", "lambda", "s3", "sqs", "secretsmanager", "eventsource"},
 		Config: overviewConfig{
 			Region:    h.cfg.Region,
 			AccountID: h.cfg.AccountID,
@@ -183,19 +215,65 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			UIEnabled: h.cfg.UIEnabled,
 		},
 		Counts: overviewCounts{
-			Gateways:  len(gateways),
-			Functions: len(functions),
-			Queues:    len(queues),
-			Secrets:   len(secrets),
-			LogGroups: len(logGroups),
+			Gateways:            len(gateways),
+			Functions:           len(functions),
+			Queues:              len(queues),
+			Secrets:             len(secrets),
+			Buckets:             len(buckets),
+			LogGroups:           len(logGroups),
+			EventSourceMappings: len(esmMappings),
 		},
-		Gateways:       make([]gatewaySummary, 0, len(gateways)),
-		Functions:      make([]functionSummary, 0, len(functions)),
-		Queues:         make([]queueSummary, 0, len(queues)),
-		Secrets:        make([]secretSummary, 0, len(secrets)),
-		Infrastructure: infraResults,
-		Connections:    inferInfraConnections(functions, infraResults),
+		Gateways:            make([]gatewaySummary, 0, len(gateways)),
+		Functions:           make([]functionSummary, 0, len(functions)),
+		Queues:              make([]queueSummary, 0, len(queues)),
+		Secrets:             make([]secretSummary, 0, len(secrets)),
+		Buckets:             make([]s3BucketSummary, 0, len(buckets)),
+		EventSourceMappings: make([]esmSummary, 0, len(esmMappings)),
+		Infrastructure:      infraResults,
+		Connections:         inferInfraConnections(functions, infraResults),
 	}
+
+	// Event source mappings
+	for _, m := range esmMappings {
+		resp.EventSourceMappings = append(resp.EventSourceMappings, esmSummary{
+			UUID:         m.UUID,
+			QueueName:    m.QueueName,
+			FunctionName: m.FunctionName,
+			BatchSize:    m.BatchSize,
+			State:        m.State,
+			LastResult:   m.LastProcessingResult,
+		})
+
+		// Add SQS→Lambda connection
+		resp.Connections = append(resp.Connections, infraConnection{
+			SourceFunction: m.QueueName,
+			TargetID:       m.FunctionName,
+			TargetName:     m.FunctionName,
+			TargetKind:     "sqs-lambda",
+			Evidence:       "esm",
+			Source:         m.UUID,
+		})
+	}
+
+	// S3→Lambda notification connections
+	for _, b := range buckets {
+		notifCfg := h.s3.GetBucketNotificationConfiguration(b.Name)
+		if notifCfg == nil {
+			continue
+		}
+		for _, lc := range notifCfg.LambdaConfigurations {
+			resp.Connections = append(resp.Connections, infraConnection{
+				SourceFunction: b.Name,
+				TargetID:       lc.LambdaFunctionName,
+				TargetName:     lc.LambdaFunctionName,
+				TargetKind:     "s3-lambda",
+				Evidence:       "notification",
+				Source:         lc.ID,
+			})
+		}
+	}
+
+	// APIGW→SQS integration connections (added inside gateway loop below)
 
 	for _, api := range gateways {
 		routes, err := h.apigw.ListRoutes(api.APIID)
@@ -249,6 +327,30 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			TagCount:     len(api.Tags),
 			RouteKeys:    routeKeys,
 		})
+
+		// APIGW→SQS and APIGW→Lambda connections
+		for _, integ := range integrations {
+			if integ.IntegrationType == "AWS" && integ.SQSQueueName != "" {
+				resp.Connections = append(resp.Connections, infraConnection{
+					SourceFunction: api.APIID,
+					TargetID:       integ.SQSQueueName,
+					TargetName:     integ.SQSQueueName,
+					TargetKind:     "apigw-sqs",
+					Evidence:       "integration",
+					Source:         integ.IntegrationID,
+				})
+			}
+			if integ.IntegrationType == "AWS_PROXY" && integ.LambdaFunctionName != "" {
+				resp.Connections = append(resp.Connections, infraConnection{
+					SourceFunction: api.APIID,
+					TargetID:       integ.LambdaFunctionName,
+					TargetName:     integ.LambdaFunctionName,
+					TargetKind:     "apigw-lambda",
+					Evidence:       "integration",
+					Source:         integ.IntegrationID,
+				})
+			}
+		}
 	}
 	sort.Slice(resp.Gateways, func(i, j int) bool {
 		if resp.Gateways[i].Name == resp.Gateways[j].Name {
@@ -343,6 +445,16 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	sort.Slice(resp.Secrets, func(i, j int) bool { return resp.Secrets[i].Name < resp.Secrets[j].Name })
+
+	for _, b := range buckets {
+		resp.Buckets = append(resp.Buckets, s3BucketSummary{
+			Name:        b.Name,
+			Objects:     h.s3.ObjectCount(b.Name),
+			TotalSize:   h.s3.TotalSize(b.Name),
+			CreatedDate: b.CreationDate,
+		})
+	}
+	sort.Slice(resp.Buckets, func(i, j int) bool { return resp.Buckets[i].Name < resp.Buckets[j].Name })
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
@@ -515,17 +627,29 @@ func (h *Handler) LogEvents(w http.ResponseWriter, r *http.Request) {
 			filter.Offset = n
 		}
 	}
+	if v := q.Get("cursor"); v != "" {
+		if ts, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			filter.Cursor = &ts
+		}
+	}
 
 	events, total := h.logs.GetLogEvents(name, filter)
 	if events == nil {
 		events = []logssvc.LogEvent{}
 	}
 
+	var nextCursor string
+	if len(events) > 0 {
+		last := events[len(events)-1]
+		nextCursor = last.Timestamp.Format(time.RFC3339Nano)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"events": events,
-		"total":  total,
+		"events":     events,
+		"total":      total,
+		"nextCursor": nextCursor,
 	})
 }
 
@@ -694,6 +818,7 @@ func inferEnvConnectionHints(env map[string]string) []connectionHint {
 	addHint("postgresql", env["PGHOST"], parseConnectionPort(env["PGPORT"]), "PGHOST")
 	addHint("postgresql", env["POSTGRES_HOST"], parseConnectionPort(env["POSTGRES_PORT"]), "POSTGRES_HOST")
 	addHint("mysql", env["MYSQL_HOST"], parseConnectionPort(env["MYSQL_PORT"]), "MYSQL_HOST")
+	addHint("redis", env["REDIS_HOST"], parseConnectionPort(env["REDIS_PORT"]), "REDIS_HOST")
 	addHint(genericDBKind, env["DATABASE_HOST"], parseConnectionPort(env["DATABASE_PORT"]), "DATABASE_HOST")
 	addHint(genericDBKind, env["DB_HOST"], parseConnectionPort(env["DB_PORT"]), "DB_HOST")
 
@@ -706,7 +831,8 @@ func looksLikeDatabaseEnvKey(key string) bool {
 		strings.HasPrefix(key, "DB") ||
 		strings.Contains(key, "POSTGRES") ||
 		strings.HasPrefix(key, "PG") ||
-		strings.Contains(key, "MYSQL")
+		strings.Contains(key, "MYSQL") ||
+		strings.Contains(key, "REDIS")
 }
 
 func kindHintFromEnvKey(key string) string {
@@ -715,6 +841,8 @@ func kindHintFromEnvKey(key string) string {
 		return "postgresql"
 	case strings.Contains(key, "MYSQL"):
 		return "mysql"
+	case strings.Contains(key, "REDIS"):
+		return "redis"
 	default:
 		return ""
 	}
@@ -790,6 +918,8 @@ func normalizeDatabaseKind(kind string) string {
 		return "postgresql"
 	case "mysql", "mysql2":
 		return "mysql"
+	case "redis", "rediss":
+		return "redis"
 	default:
 		return ""
 	}
@@ -801,6 +931,8 @@ func defaultPortForKind(kind string) int {
 		return 5432
 	case "mysql":
 		return 3306
+	case "redis":
+		return 6379
 	default:
 		return 0
 	}
@@ -808,7 +940,7 @@ func defaultPortForKind(kind string) int {
 
 func isDatabaseKind(kind string) bool {
 	switch normalizeDatabaseKind(kind) {
-	case "postgresql", "mysql":
+	case "postgresql", "mysql", "redis":
 		return true
 	default:
 		return false

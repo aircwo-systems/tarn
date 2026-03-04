@@ -10,9 +10,11 @@ import (
 
 	apigatewaysvc "github.com/openstack-project/openstack/internal/apigateway"
 	"github.com/openstack-project/openstack/internal/config"
+	eventsourcesvc "github.com/openstack-project/openstack/internal/eventsource"
 	infrasvc "github.com/openstack-project/openstack/internal/infrastructure"
 	lambdasvc "github.com/openstack-project/openstack/internal/lambda"
 	logssvc "github.com/openstack-project/openstack/internal/logs"
+	s3svc "github.com/openstack-project/openstack/internal/s3"
 	secretssvc "github.com/openstack-project/openstack/internal/secrets"
 	sqssvc "github.com/openstack-project/openstack/internal/sqs"
 	"github.com/openstack-project/openstack/pkg/types"
@@ -306,6 +308,61 @@ func TestOverviewInfersInfraConnectionsFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestOverviewInfersRedisInfraConnectionsFromEnvironment(t *testing.T) {
+	h := newTestHandler(t)
+
+	_, err := h.lambda.CreateFunction(context.Background(), &types.FunctionConfig{
+		FunctionName: "media-cache-handler",
+		Runtime:      types.RuntimeNodeJS20,
+		Handler:      "index.handler",
+		Role:         "arn:aws:iam::000000000000:role/lambda-role",
+		Environment: map[string]string{
+			"REDIS_URL": "redis://localhost:6379/0",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("create function: %v", err)
+	}
+
+	h.infra.SetResult(infrasvc.ProbeResult{
+		Name:     "Redis",
+		Kind:     "redis",
+		Host:     "localhost",
+		Port:     6379,
+		Status:   "connected",
+		ProbedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/_openstack/admin/overview", nil)
+	rec := httptest.NewRecorder()
+
+	h.Overview(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var payload struct {
+		Connections []infraConnection `json:"connections"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if len(payload.Connections) != 1 {
+		t.Fatalf("connections len = %d, want 1", len(payload.Connections))
+	}
+	if payload.Connections[0].SourceFunction != "media-cache-handler" {
+		t.Fatalf("sourceFunction = %q, want %q", payload.Connections[0].SourceFunction, "media-cache-handler")
+	}
+	if payload.Connections[0].TargetKind != "redis" || payload.Connections[0].TargetPort != 6379 {
+		t.Fatalf("unexpected connection target: %+v", payload.Connections[0])
+	}
+	if payload.Connections[0].Evidence != "env" || payload.Connections[0].Source != "REDIS_URL" {
+		t.Fatalf("unexpected connection evidence: %+v", payload.Connections[0])
+	}
+}
+
 func newTestHandler(t *testing.T) *Handler {
 	t.Helper()
 
@@ -320,9 +377,12 @@ func newTestHandler(t *testing.T) *Handler {
 	}
 	logs := logssvc.NewService(cfg)
 	lambda := lambdasvc.NewService(cfg, store, nil, nil, logs)
-	apigw := apigatewaysvc.NewService(cfg, lambda)
+	apigw := apigatewaysvc.NewService(cfg, lambda, nil)
+	s3 := s3svc.NewService(cfg)
 	sqs := sqssvc.NewService(cfg)
 	secrets := secretssvc.NewService(cfg)
 	infra := infrasvc.NewService("", false)
-	return NewHandler(cfg, apigw, lambda, logs, sqs, secrets, infra)
+	esmStore := eventsourcesvc.NewStore(cfg)
+	esm := eventsourcesvc.NewService(cfg, esmStore, nil, nil)
+	return NewHandler(cfg, apigw, lambda, logs, sqs, secrets, infra, s3, esm)
 }
