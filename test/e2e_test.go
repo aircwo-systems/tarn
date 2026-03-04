@@ -694,6 +694,9 @@ func TestGetFunction(t *testing.T) {
 			Description  string `json:"Description"`
 			State        string `json:"State"`
 		} `json:"Configuration"`
+		Code struct {
+			RepositoryType string `json:"RepositoryType"`
+		} `json:"Code"`
 	}
 	json.Unmarshal(getBody, &result)
 
@@ -712,6 +715,9 @@ func TestGetFunction(t *testing.T) {
 	}
 	if cfg.State != "Active" {
 		t.Fatalf("expected state 'Active', got %q", cfg.State)
+	}
+	if result.Code.RepositoryType == "" {
+		t.Fatalf("expected non-empty Code.RepositoryType")
 	}
 
 	// Cleanup
