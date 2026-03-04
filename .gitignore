@@ -41,5 +41,18 @@ vendor/
 /examples/**/node_modules/
 /examples/**/bun.lock
 
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfstate.*.backup
+
+# Example build artifacts
+/examples/**/build/
+/examples/**/.build/
+/examples/**/*.zip
+/examples/**/bootstrap
+/examples/**/function.zip
+
 # Debug
 __debug_bin*
