@@ -171,7 +171,23 @@ func (c *Config) APIGatewayStatePath() string {
 	return filepath.Join(c.APIGatewayDir(), "state.json")
 }
 
+// S3Dir returns the path where S3 bucket data is stored.
+func (c *Config) S3Dir() string {
+	return filepath.Join(c.DataDir, "s3")
+}
+
+// EventSourceDir returns the path where event source mapping state is stored.
+func (c *Config) EventSourceDir() string {
+	return filepath.Join(c.DataDir, "eventsource")
+}
+
 // Endpoint returns the full API endpoint URL.
+// Unspecified/wildcard bind addresses are normalised to 127.0.0.1 so that
+// generated URLs (queue URLs, API endpoints, invoke URLs) are routable.
 func (c *Config) Endpoint() string {
-	return fmt.Sprintf("http://%s:%d", c.Host, c.Port)
+	host := c.Host
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "[::]" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("http://%s:%d", host, c.Port)
 }
