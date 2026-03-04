@@ -67,6 +67,7 @@ func (s *Service) LogSystemEvent(level LogLevel, message string) {
 			Timestamp: time.Now().UTC(),
 			Message:   message,
 			Level:     level,
+			Source:    SourceSystem,
 		},
 	})
 }
@@ -86,6 +87,7 @@ func (s *Service) LogAPIRequest(method, path string, status int, duration time.D
 			Timestamp: time.Now().UTC(),
 			Message:   msg,
 			Level:     level,
+			Source:    SourceAPI,
 		},
 	})
 }
@@ -106,17 +108,66 @@ func (s *Service) IngestContainerLogs(functionName, streamName, rawLogs string) 
 		}
 
 		ts, msg := parseTimestamp(line)
-		level := detectLevel(msg)
+		msg, level, source := classifyLambdaLogEvent(msg)
 
 		events = append(events, LogEvent{
 			Timestamp: ts,
 			Message:   msg,
 			Level:     level,
+			Source:    source,
 		})
 	}
 
 	if len(events) > 0 {
 		s.store.PutLogEvents(groupName, streamName, events)
+	}
+}
+
+func classifyLambdaLogEvent(msg string) (string, LogLevel, LogSource) {
+	if outputMsg, outputLevel, ok := parseLambdaOutputRecord(msg); ok {
+		return outputMsg, outputLevel, SourceOutput
+	}
+	return msg, detectLevel(msg), SourceRuntime
+}
+
+func parseLambdaOutputRecord(msg string) (string, LogLevel, bool) {
+	parts := strings.SplitN(msg, "\t", 3)
+	if len(parts) != 3 {
+		return "", "", false
+	}
+
+	requestID := strings.TrimSpace(parts[0])
+	levelToken := strings.TrimSpace(strings.ToUpper(parts[1]))
+	message := strings.TrimSpace(parts[2])
+
+	if !looksLikeLambdaRequestID(requestID) || !isLambdaOutputLevel(levelToken) || message == "" {
+		return "", "", false
+	}
+
+	return message, LogLevel(levelToken), true
+}
+
+func looksLikeLambdaRequestID(value string) bool {
+	if value == "" || strings.ContainsAny(value, " \t:") {
+		return false
+	}
+
+	for _, r := range value {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' {
+			continue
+		}
+		return false
+	}
+
+	return true
+}
+
+func isLambdaOutputLevel(value string) bool {
+	switch LogLevel(value) {
+	case LevelDEBUG, LevelINFO, LevelWARN, LevelERROR:
+		return true
+	default:
+		return false
 	}
 }
 

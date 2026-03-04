@@ -299,14 +299,32 @@ REPORT RequestId: abc-123	Duration: 50ms`
 
 	// Check that ERROR level was detected
 	foundError := false
+	outputCount := 0
+	runtimeCount := 0
+	var outputMessages []string
 	for _, evt := range events {
 		if evt.Level == LevelERROR {
 			foundError = true
-			break
+		}
+		if evt.Source == SourceOutput {
+			outputCount++
+			outputMessages = append(outputMessages, evt.Message)
+		}
+		if evt.Source == SourceRuntime {
+			runtimeCount++
 		}
 	}
 	if !foundError {
 		t.Error("expected at least one ERROR-level event")
+	}
+	if outputCount != 2 {
+		t.Fatalf("expected 2 output events, got %d", outputCount)
+	}
+	if runtimeCount != 3 {
+		t.Fatalf("expected 3 runtime events, got %d", runtimeCount)
+	}
+	if len(outputMessages) != 2 || outputMessages[0] != "handling request" || outputMessages[1] != "something went wrong" {
+		t.Fatalf("expected normalized output messages, got %#v", outputMessages)
 	}
 }
 

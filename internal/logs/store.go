@@ -17,11 +17,22 @@ const (
 	LevelERROR LogLevel = "ERROR"
 )
 
+// LogSource describes where a log line originated.
+type LogSource string
+
+const (
+	SourceSystem  LogSource = "system"
+	SourceAPI     LogSource = "api"
+	SourceRuntime LogSource = "runtime"
+	SourceOutput  LogSource = "output"
+)
+
 // LogEvent is a single log entry.
 type LogEvent struct {
 	Timestamp  time.Time `json:"timestamp"`
 	Message    string    `json:"message"`
 	Level      LogLevel  `json:"level"`
+	Source     LogSource `json:"source,omitempty"`
 	StreamName string    `json:"streamName"`
 }
 
@@ -49,7 +60,8 @@ type LogFilter struct {
 	Pattern    string
 	StreamName string
 	Limit      int
-	Offset     int
+	Offset     int        // Deprecated: use Cursor for pagination
+	Cursor     *time.Time // Return events after this timestamp (exclusive)
 }
 
 // logGroup holds events in a ring buffer.
@@ -164,6 +176,9 @@ func (s *Store) GetLogEvents(groupName string, filter *LogFilter) ([]LogEvent, i
 		idx := (start + i) % g.maxEvents
 		evt := g.events[idx]
 
+		if filter != nil && filter.Cursor != nil && !evt.Timestamp.After(*filter.Cursor) {
+			continue // skip events before or at the cursor
+		}
 		if !matchesFilter(evt, filter) {
 			continue
 		}
@@ -172,7 +187,7 @@ func (s *Store) GetLogEvents(groupName string, filter *LogFilter) ([]LogEvent, i
 
 	total := len(matched)
 
-	// Apply offset and limit
+	// Offset is deprecated, but still supported for compatibility
 	if filter != nil && filter.Offset > 0 {
 		if filter.Offset >= len(matched) {
 			return nil, total
