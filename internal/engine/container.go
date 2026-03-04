@@ -333,8 +333,7 @@ func (e *Engine) ContainerLogs(ctx context.Context, containerID string) (string,
 	}
 	defer reader.Close()
 
-	var stdout, stderr bytes.Buffer
-	_, err = stdcopy.StdCopy(&stdout, &stderr, reader)
+	logs, err := readContainerLogStream(reader)
 	if err != nil {
 		// Fallback: some container configs use raw stream (no mux headers)
 		var raw strings.Builder
@@ -350,9 +349,17 @@ func (e *Engine) ContainerLogs(ctx context.Context, containerID string) (string,
 		return raw.String(), nil
 	}
 
-	// Combine stdout and stderr
-	combined := stdout.String() + stderr.String()
-	return combined, nil
+	return logs, nil
+}
+
+func readContainerLogStream(reader io.Reader) (string, error) {
+	// Preserve stdout/stderr interleaving by writing both streams to the same
+	// destination buffer in the order frames are read.
+	var combined bytes.Buffer
+	if _, err := stdcopy.StdCopy(&combined, &combined, reader); err != nil {
+		return "", err
+	}
+	return combined.String(), nil
 }
 
 // Cleanup stops and removes all managed containers.
