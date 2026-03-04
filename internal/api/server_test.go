@@ -86,12 +86,12 @@ func TestNewServerRegistersRoutes(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("configuration GET status=%d", resp.StatusCode)
 	}
-	var cfg types.FunctionConfig
-	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
+	var cfg1 types.FunctionConfig
+	if err := json.NewDecoder(resp.Body).Decode(&cfg1); err != nil {
 		t.Fatalf("decode configuration response: %v", err)
 	}
-	if cfg.FunctionName != "foo" {
-		t.Fatalf("unexpected config response: %+v", cfg)
+	if cfg1.FunctionName != "foo" {
+		t.Fatalf("unexpected config response: %+v", cfg1)
 	}
 
 	// verify state progression via the API: first fetch should be pending,

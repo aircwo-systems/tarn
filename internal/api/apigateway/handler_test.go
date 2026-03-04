@@ -189,5 +189,12 @@ func newTestHandler(t *testing.T) *Handler {
 		Runtime:      types.RuntimeNodeJS20,
 		Handler:      "index.handler",
 		Role:         "arn:aws:iam::000000000000:role/lambda-role",
-		State:        types.FunctionStateActive,
-			LastUpdateStatus: types.LastUpdateStatusSuccessful,
+		State:            types.FunctionStateActive,
+		LastUpdateStatus: types.LastUpdateStatusSuccessful,
+	}); err != nil {
+		t.Fatalf("save function: %v", err)
+	}
+
+	svc := apisvc.NewService(cfg, lambdaSvc, nil)
+	return NewHandler(svc)
+}
