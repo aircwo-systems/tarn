@@ -23,8 +23,15 @@ func NewHandler(svc *sqssvc.Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// Dispatch routes SQS requests by the Action form parameter.
+// Dispatch routes SQS requests by protocol. Terraform AWS provider v5+ and
+// AWS SDK v2 use the JSON wire protocol (X-Amz-Target header); older clients
+// use the query/XML protocol (Action form parameter).
 func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
+	if isJSONProtocol(r) {
+		h.dispatchJSON(w, r)
+		return
+	}
+
 	r.ParseForm()
 	action := r.FormValue("Action")
 	if action == "" {
