@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { SquaresFour, GlobeHemisphereWest, Lightning, ChatCircle, Key, Scroll, SidebarSimple, ArrowsClockwise, Gear, X } from 'phosphor-svelte';
+	import { SquaresFour, GlobeHemisphereWest, Lightning, ChatCircle, Key, HardDrive, Scroll, SidebarSimple, ArrowsClockwise, Gear, X } from 'phosphor-svelte';
 	import NavRailItem from './nav-rail-item.svelte';
 	import ThemeToggle from './theme-toggle.svelte';
 	import StatusIndicator from './status-indicator.svelte';
@@ -40,6 +40,8 @@
 		{ id: 'functions', label: 'Functions', icon: Lightning },
 		{ id: 'queues', label: 'Queues', icon: ChatCircle },
 		{ id: 'secrets', label: 'Secrets', icon: Key },
+		{ id: 'triggers', label: 'Triggers', icon: ArrowsClockwise },
+		{ id: 'storage', label: 'Storage', icon: HardDrive },
 		{ id: 'logs', label: 'Logs', icon: Scroll }
 	];
 
@@ -124,7 +126,7 @@
 	</nav>
 
 	<!-- Bottom section -->
-	<div class="mt-auto flex flex-col gap-2 px-2 pb-2 shrink-0">
+	<div class="mt-auto flex flex-col gap-2 pb-2 shrink-0" class:px-2={!collapsed} class:px-1={collapsed}>
 		{#if !collapsed}
 			<Separator />
 			<StatusIndicator status={connectionStatus} text={statusText} />
@@ -152,8 +154,16 @@
 		{/if}
 
 		<Separator />
-		<div class="flex items-center justify-between">
-			<div class="flex items-center gap-1">
+		{#if collapsed}
+			<div class="flex flex-col items-center gap-1">
+				<button
+					type="button"
+					onclick={toggleCollapsed}
+					class="flex items-center justify-center h-8 w-8 rounded-md text-text-muted hover:text-text hover:bg-bg-surface transition-colors"
+					aria-label="Expand sidebar"
+				>
+					<SidebarSimple size={15} />
+				</button>
 				<ThemeToggle />
 				<button
 					type="button"
@@ -164,19 +174,29 @@
 					<Gear size={15} />
 				</button>
 			</div>
-			<button
-				type="button"
-				onclick={toggleCollapsed}
-				class="flex items-center justify-center h-8 w-8 rounded-md text-text-muted hover:text-text hover:bg-bg-surface transition-colors"
-				aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-			>
-				{#if collapsed}
-					<SidebarSimple size={15} />
-				{:else}
+		{:else}
+			<div class="flex items-center justify-between">
+				<div class="flex items-center gap-1">
+					<ThemeToggle />
+					<button
+						type="button"
+						onclick={openSettings}
+						class="flex items-center justify-center h-8 w-8 rounded-md text-text-muted hover:text-text hover:bg-bg-surface transition-colors"
+						aria-label="Open UI settings"
+					>
+						<Gear size={15} />
+					</button>
+				</div>
+				<button
+					type="button"
+					onclick={toggleCollapsed}
+					class="flex items-center justify-center h-8 w-8 rounded-md text-text-muted hover:text-text hover:bg-bg-surface transition-colors"
+					aria-label="Collapse sidebar"
+				>
 					<SidebarSimple size={15} weight="fill" />
-				{/if}
-			</button>
-		</div>
+				</button>
+			</div>
+		{/if}
 	</div>
 </aside>
 

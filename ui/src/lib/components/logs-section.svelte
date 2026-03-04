@@ -28,7 +28,8 @@
 	let filterPattern = $state('');
 	let filterStream = $state('');
 	let eventsLimit = $state(100);
-	let eventsOffset = $state(0);
+	let eventsCursor = $state<string | null>(null); // Cursor for pagination (timestamp)
+	let prevCursors = $state<string[]>([]); // Stack of previous cursors for back navigation
 	let showFilters = $state(false);
 	let autoRefresh = $state(false);
 	let autoRefreshTimer = $state<ReturnType<typeof setInterval> | null>(null);
@@ -86,13 +87,15 @@
 		eventsLoading = true;
 		eventsError = '';
 		try {
-			const params: FetchLogEventsParams = { limit: eventsLimit, offset: eventsOffset };
+			const params: FetchLogEventsParams = { limit: eventsLimit };
+			if (eventsCursor) params.cursor = eventsCursor;
 			if (filterLevel) params.level = filterLevel;
 			if (filterPattern) params.pattern = filterPattern;
 			if (filterStream) params.stream = filterStream;
 			const result = await fetchLogEvents(selectedGroup, params);
 			events = result.events ?? [];
 			eventsTotal = result.total ?? 0;
+			nextCursor = result.nextCursor || null;
 		} catch (err) {
 			eventsError = err instanceof Error ? err.message : 'Failed to load log events';
 		} finally {
@@ -115,7 +118,8 @@
 	}
 
 	function applyFilters() {
-		eventsOffset = 0;
+		eventsCursor = null;
+		prevCursors = [];
 		loadEvents();
 	}
 
@@ -123,18 +127,29 @@
 		filterLevel = '';
 		filterPattern = '';
 		filterStream = '';
-		eventsOffset = 0;
+		eventsCursor = null;
+		prevCursors = [];
 		loadEvents();
 	}
 
+	let nextCursor: string | null = null;
 	function nextPage() {
-		eventsOffset += eventsLimit;
-		loadEvents();
+		if (nextCursor) {
+			prevCursors = [...prevCursors, eventsCursor || ''];
+			eventsCursor = nextCursor;
+			loadEvents();
+		}
 	}
 
 	function prevPage() {
-		eventsOffset = Math.max(0, eventsOffset - eventsLimit);
-		loadEvents();
+		if (prevCursors.length > 0) {
+			eventsCursor = prevCursors[prevCursors.length - 1] || null;
+			prevCursors = prevCursors.slice(0, -1);
+			loadEvents();
+		} else {
+			eventsCursor = null;
+			loadEvents();
+		}
 	}
 
 	function levelColor(level: string): 'default' | 'destructive' | 'amber' | 'secondary' | 'outline' {
@@ -185,30 +200,16 @@
 		return name.startsWith('/aws/lambda/');
 	}
 
-	function isLambdaLifecycleMessage(message: string): boolean {
-		const upper = message.trim().toUpperCase();
-		return (
-			upper.startsWith('START REQUESTID') ||
-			upper.startsWith('START REQUEST') ||
-			upper.startsWith('END REQUESTID') ||
-			upper.startsWith('END REQUEST') ||
-			upper.startsWith('REPORT REQUESTID') ||
-			upper.startsWith('REPORT REQUEST') ||
-			upper.startsWith('INIT START') ||
-			upper.startsWith('INIT REPORT')
-		);
-	}
-
 	function isLambdaOutputEvent(event: LogEvent): boolean {
-		return isLambdaGroup(selectedGroup) && !isLambdaLifecycleMessage(event.message);
+		return isLambdaGroup(selectedGroup) && event.source === 'output';
 	}
 
-	const hasNextPage = $derived(eventsOffset + eventsLimit < eventsTotal);
-	const hasPrevPage = $derived(eventsOffset > 0);
+	const hasNextPage = $derived(!!nextCursor && events.length === eventsLimit);
+	const hasPrevPage = $derived(prevCursors.length > 0 || !!eventsCursor);
 	const selectedGroupIsLambda = $derived(isLambdaGroup(selectedGroup));
 	const pageInfo = $derived(
-		eventsTotal > 0
-			? `${eventsOffset + 1}\u2013${Math.min(eventsOffset + eventsLimit, eventsTotal)} of ${eventsTotal}`
+		eventsTotal > 0 && events.length > 0
+			? `${events[0].timestamp} – ${events[events.length - 1].timestamp} (${events.length} events)`
 			: 'No events'
 	);
 	const serviceOptions = $derived((() => {

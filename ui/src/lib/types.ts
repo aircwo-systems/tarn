@@ -14,12 +14,16 @@ export interface OverviewResponse {
     functions: number;
     queues: number;
     secrets: number;
+    buckets: number;
     logGroups: number;
+    eventSourceMappings: number;
   };
   gateways: GatewaySummary[];
   functions: FunctionSummary[];
   queues: QueueSummary[];
   secrets: SecretSummary[];
+  buckets: BucketSummary[];
+  eventSourceMappings: EventSourceMappingSummary[];
   infrastructure: InfraProbe[];
   connections?: InfraConnection[];
   warnings?: string[];
@@ -127,6 +131,22 @@ export interface SecretValueResult {
   valueType: 'string' | 'binary' | 'empty' | string;
 }
 
+export interface BucketSummary {
+  name: string;
+  objects: number;
+  totalSize: number;
+  createdDate: string;
+}
+
+export interface EventSourceMappingSummary {
+  uuid: string;
+  queueName: string;
+  functionName: string;
+  batchSize: number;
+  state: string;
+  lastResult: string;
+}
+
 export interface LogGroupSummary {
   name: string;
   createdAt: string;
@@ -139,6 +159,7 @@ export interface LogEvent {
   timestamp: string;
   message: string;
   level: string;
+  source?: string;
   streamName: string;
 }
 
@@ -149,4 +170,5 @@ export interface LogGroupsResponse {
 export interface LogEventsResponse {
   events: LogEvent[];
   total: number;
+  nextCursor?: string;
 }

@@ -9,6 +9,10 @@ export default defineConfig(({ mode }) => {
     '/_openstack': {
       target: proxyTarget,
       changeOrigin: false
+    },
+    '/_s3': {
+      target: proxyTarget,
+      changeOrigin: false
     }
   };
 

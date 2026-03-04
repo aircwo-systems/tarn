@@ -34,6 +34,9 @@
 		filteredSecrets.reduce((sum, s) => sum + s.tagCount, 0)
 	);
 
+	const eventMappings = $derived(dashboard.data?.eventSourceMappings ?? []);
+	const eventMappingsEnabled = $derived(eventMappings.filter((m) => m.state === 'Enabled').length);
+
 	const infraConnected = $derived(
 		dashboard.data?.infrastructure?.filter((p) => p.status === 'connected').length ?? 0
 	);
@@ -72,7 +75,7 @@
 	</div>
 
 	<!-- Stat cards -->
-	<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-3">
+	<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-8 gap-3">
 		<StatCard
 			label="API Gateways"
 			value={filteredGateways.length}
@@ -96,6 +99,18 @@
 			value={filteredSecrets.length}
 			subtitle="{secretTagTotal} tags total"
 			accentColor="default"
+		/>
+		<StatCard
+			label="S3 Buckets"
+			value={dashboard.data?.counts.buckets ?? 0}
+			subtitle="{dashboard.data?.buckets?.reduce((sum, b) => sum + b.objects, 0) ?? 0} objects total"
+			accentColor="accent"
+		/>
+		<StatCard
+			label="Event Mappings"
+			value={eventMappings.length}
+			subtitle="{eventMappingsEnabled} enabled"
+			accentColor={eventMappings.length > 0 ? 'amber' : 'default'}
 		/>
 		<StatCard
 			label="Infrastructure"

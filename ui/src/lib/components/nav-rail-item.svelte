@@ -19,15 +19,25 @@
 <button
 	type="button"
 	class={cn(
-		'group flex items-center gap-2.5 w-full px-2.5 py-1.5 rounded-md text-sm transition-colors relative',
+		'group flex items-center w-full py-1.5 rounded-md text-sm transition-colors relative',
+		collapsed
+			? 'justify-center px-0'
+			: 'gap-2.5 px-2.5',
 		active
-			? 'text-text bg-bg-surface border-l-2 border-l-accent pl-2'
-			: 'text-text-muted hover:text-text hover:bg-bg-surface/50 border-l-2 border-l-transparent pl-2'
+			? collapsed
+				? 'text-text bg-bg-surface'
+				: 'text-text bg-bg-surface border-l-2 border-l-accent pl-2'
+			: collapsed
+				? 'text-text-muted hover:text-text hover:bg-bg-surface/50'
+				: 'text-text-muted hover:text-text hover:bg-bg-surface/50 border-l-2 border-l-transparent pl-2'
 	)}
 	{onclick}
 	aria-current={active ? 'page' : undefined}
+	title={collapsed ? label : undefined}
 >
-	<Icon size={16} weight={active ? 'fill' : 'regular'} />
+	<span class="shrink-0 flex items-center justify-center" class:w-8={collapsed}>
+		<Icon size={16} weight={active ? 'fill' : 'regular'} />
+	</span>
 	{#if !collapsed}
 		<span class="truncate">{label}</span>
 	{/if}

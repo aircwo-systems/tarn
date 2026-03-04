@@ -137,10 +137,11 @@ export async function fetchLogGroups(signal?: AbortSignal): Promise<LogGroupSumm
 
 export interface FetchLogEventsParams {
   limit?: number;
-  offset?: number;
+  offset?: number; // Deprecated
   level?: string;
   pattern?: string;
   stream?: string;
+  cursor?: string;
 }
 
 export async function fetchLogEvents(
@@ -150,10 +151,11 @@ export async function fetchLogEvents(
 ): Promise<LogEventsResponse> {
   const query = new URLSearchParams();
   if (params.limit) query.set('limit', String(params.limit));
-  if (params.offset) query.set('offset', String(params.offset));
+  if (params.offset) query.set('offset', String(params.offset)); // Deprecated
   if (params.level) query.set('level', params.level);
   if (params.pattern) query.set('pattern', params.pattern);
   if (params.stream) query.set('stream', params.stream);
+  if (params.cursor) query.set('cursor', params.cursor);
 
   const qs = query.toString();
   const url = endpoint(`/_openstack/admin/logs/events/${encodeURIComponent(groupName)}${qs ? '?' + qs : ''}`);

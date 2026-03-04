@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { GlobeHemisphereWest, Lightning, ChatCircle, Key, HardDrives } from 'phosphor-svelte';
+	import { GlobeHemisphereWest, Lightning, ChatCircle, Key, HardDrive, HardDrives, ArrowsClockwise } from 'phosphor-svelte';
 	import LedDot from './led-dot.svelte';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import { getDashboard, getDashboardFilters, matchesTagFilter } from '$lib/state.svelte';
@@ -12,8 +12,10 @@
 	const functions = $derived((dashboard.data?.functions ?? []).filter((fn) => matchesTagFilter(fn.tags, filters.tagFilter)));
 	const queues = $derived((dashboard.data?.queues ?? []).filter((queue) => matchesTagFilter(queue.tags, filters.tagFilter)));
 	const secrets = $derived((dashboard.data?.secrets ?? []).filter((secret) => matchesTagFilter(secret.tags, filters.tagFilter)));
+	const buckets = $derived(dashboard.data?.buckets ?? []);
+	const eventMappings = $derived(dashboard.data?.eventSourceMappings ?? []);
 	const infra = $derived(dashboard.data?.infrastructure ?? []);
-	const totalCount = $derived(gateways.length + functions.length + queues.length + secrets.length + infra.length);
+	const totalCount = $derived(gateways.length + functions.length + queues.length + secrets.length + buckets.length + eventMappings.length + infra.length);
 
 	function fnLedColor(state: string): 'green' | 'amber' | 'red' | 'gray' {
 		const s = state.toLowerCase();
@@ -35,7 +37,7 @@
 			<p class="text-xs font-mono">No resources deployed</p>
 		</div>
 	{:else}
-		<div class="grid grid-cols-1 lg:grid-cols-5 divide-y lg:divide-y-0 lg:divide-x divide-border">
+		<div class="grid grid-cols-1 lg:grid-cols-7 divide-y lg:divide-y-0 lg:divide-x divide-border">
 			<!-- API Gateway -->
 			<div class="p-3">
 				<div class="flex items-center gap-2 mb-2">
@@ -122,6 +124,52 @@
 								<LedDot color="green" />
 								<span class="text-xs text-text truncate flex-1" title={s.arn}>{s.name}</span>
 								<span class="text-[10px] font-mono text-text-faint shrink-0">v{s.versionId.slice(0, 8)}</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+
+			<!-- S3 -->
+			<div class="p-3">
+				<div class="flex items-center gap-2 mb-2">
+					<HardDrive size={13} weight="fill" class="text-accent" />
+					<span class="text-[10px] font-mono uppercase tracking-wider text-text-muted">S3</span>
+					<span class="ml-auto text-[10px] font-mono text-text-faint">{buckets.length}</span>
+				</div>
+				{#if buckets.length === 0}
+					<p class="text-[11px] text-text-faint py-2">No buckets</p>
+				{:else}
+					<ul class="space-y-1.5">
+						{#each buckets as bucket}
+							<li class="flex items-center gap-2 group">
+								<LedDot color="green" />
+								<span class="text-xs text-text truncate flex-1">{bucket.name}</span>
+								<span class="text-[10px] font-mono text-text-faint shrink-0">{bucket.objects} obj</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</div>
+
+			<!-- Event Mappings -->
+			<div class="p-3">
+				<div class="flex items-center gap-2 mb-2">
+					<ArrowsClockwise size={13} weight="fill" class="text-amber" />
+					<span class="text-[10px] font-mono uppercase tracking-wider text-text-muted">Triggers</span>
+					<span class="ml-auto text-[10px] font-mono text-text-faint">{eventMappings.length}</span>
+				</div>
+				{#if eventMappings.length === 0}
+					<p class="text-[11px] text-text-faint py-2">No mappings</p>
+				{:else}
+					<ul class="space-y-1.5">
+						{#each eventMappings as esm}
+							<li class="flex items-center gap-2 group">
+								<LedDot color={esm.state === 'Enabled' ? 'green' : 'gray'} />
+								<span class="text-xs text-text truncate flex-1" title="{esm.queueName} → {esm.functionName}">
+									{esm.queueName} → {esm.functionName}
+								</span>
+								<span class="text-[10px] font-mono text-text-faint shrink-0">×{esm.batchSize}</span>
 							</li>
 						{/each}
 					</ul>

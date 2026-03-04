@@ -7,11 +7,13 @@
 	import FunctionsSection from '$lib/components/functions-section.svelte';
 	import QueuesSection from '$lib/components/queues-section.svelte';
 	import SecretsSection from '$lib/components/secrets-section.svelte';
+	import TriggersSection from '$lib/components/triggers-section.svelte';
+	import StorageSection from '$lib/components/storage-section.svelte';
 	import LogsSection from '$lib/components/logs-section.svelte';
 	import { getDashboard } from '$lib/state.svelte';
 
 	const dashboard = getDashboard();
-	const validTabs = ['overview', 'gateways', 'functions', 'queues', 'secrets', 'logs'];
+	const validTabs = ['overview', 'gateways', 'functions', 'queues', 'secrets', 'triggers', 'storage', 'logs'];
 
 	let activeTab = $state('overview');
 	let logsInitialGroup = $state('');
@@ -59,6 +61,10 @@
 			<QueuesSection />
 		{:else if activeTab === 'secrets'}
 			<SecretsSection />
+		{:else if activeTab === 'triggers'}
+			<TriggersSection />
+		{:else if activeTab === 'storage'}
+			<StorageSection />
 		{:else if activeTab === 'logs'}
 			<LogsSection initialGroup={logsInitialGroup} />
 		{/if}
