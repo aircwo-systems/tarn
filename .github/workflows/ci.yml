@@ -2,32 +2,21 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop-mvp]
   pull_request:
-    branches: [main]
+    branches: [main, develop-mvp]
 
 jobs:
-  build:
+  go-build-test:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        go-version: ['1.22', '1.23']
-
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
-
-      - name: Cache Go modules
-        uses: actions/cache@v4
-        with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
+          go-version: '1.24'
+          cache: true
 
       - name: Download dependencies
         run: go mod download
@@ -35,11 +24,14 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Build
+      - name: Build openstack
         run: go build -o ./build/openstack ./cmd/openstack
 
+      - name: Build secrets-proxy
+        run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./build/secrets-proxy-linux ./cmd/secrets-proxy
+
       - name: Test
-        run: go test ./... -v -race -count=1
+        run: go test ./... -v -race -count=1 -short
 
   lint:
     runs-on: ubuntu-latest
@@ -49,9 +41,32 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.24'
+          cache: true
 
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v4
+        uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+
+  ui-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: bun install --frozen-lockfile
+
+      - name: Type check UI
+        working-directory: ui
+        run: bun run check
+
+      - name: Build UI
+        working-directory: ui
+        run: bun run build

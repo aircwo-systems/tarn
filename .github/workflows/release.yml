@@ -9,7 +9,31 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build-ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: bun install --frozen-lockfile
+
+      - name: Build UI
+        working-directory: ui
+        run: bun run build
+
+      - name: Upload UI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-build
+          path: ui/build/
+
+  build-binaries:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -31,17 +55,28 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.23'
+          go-version: '1.24'
+          cache: true
 
-      - name: Build
+      - name: Build openstack
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           EXT=""
           if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
-          CGO_ENABLED=0 go build -ldflags="-s -w -X github.com/openstack-project/openstack/internal/cli.version=${{ github.ref_name }}" \
-            -o ./build/openstack-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} ./cmd/openstack
+          CGO_ENABLED=0 go build \
+            -ldflags="-s -w -X github.com/openstack-project/openstack/internal/cli.version=${{ github.ref_name }}" \
+            -o ./build/openstack-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
+            ./cmd/openstack
+
+      - name: Build secrets-proxy (linux/amd64 only)
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          CGO_ENABLED=0 go build \
+            -ldflags="-s -w" \
+            -o ./build/secrets-proxy-linux-amd64 \
+            ./cmd/secrets-proxy
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -49,14 +84,22 @@ jobs:
           name: openstack-${{ matrix.goos }}-${{ matrix.goarch }}
           path: ./build/openstack-*
 
+      - name: Upload secrets-proxy artifact
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        uses: actions/upload-artifact@v4
+        with:
+          name: secrets-proxy-linux-amd64
+          path: ./build/secrets-proxy-*
+
   create-release:
-    needs: release
+    needs: [build-ui, build-binaries]
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
+          merge-multiple: true
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
