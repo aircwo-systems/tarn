@@ -2,22 +2,28 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/openstack-project/openstack/internal/api"
 	"github.com/openstack-project/openstack/internal/apigateway"
 	"github.com/openstack-project/openstack/internal/config"
 	"github.com/openstack-project/openstack/internal/engine"
+	"github.com/openstack-project/openstack/internal/eventsource"
 	"github.com/openstack-project/openstack/internal/infrastructure"
 	"github.com/openstack-project/openstack/internal/lambda"
 	"github.com/openstack-project/openstack/internal/logs"
+	s3store "github.com/openstack-project/openstack/internal/s3"
 	"github.com/openstack-project/openstack/internal/secrets"
 	"github.com/openstack-project/openstack/internal/sqs"
+	"github.com/openstack-project/openstack/pkg/types"
 	"github.com/spf13/cobra"
 )
 
@@ -104,11 +110,56 @@ func startServer(cfg *config.Config) error {
 		return fmt.Errorf("failed to initialize secrets store: %w", err)
 	}
 
-	// Initialize API Gateway service
-	gatewaySvc := apigateway.NewService(cfg, lambdaSvc)
+	// Initialize S3 service
+	s3Svc := s3store.NewService(cfg)
+	if err := s3Svc.Init(); err != nil {
+		return fmt.Errorf("failed to initialize s3 store: %w", err)
+	}
+
+	// Initialize API Gateway service (with SQS send function)
+	sqsSend := apigateway.SQSSendFunc(func(queueName, body string) (string, string, error) {
+		msg, err := sqsSvc.SendMessage(queueName, body, 0, nil, "", "")
+		if err != nil {
+			return "", "", err
+		}
+		return msg.MessageId, msg.MD5OfBody, nil
+	})
+	gatewaySvc := apigateway.NewService(cfg, lambdaSvc, sqsSend)
 	if err := gatewaySvc.Init(); err != nil {
 		return fmt.Errorf("failed to initialize api gateway store: %w", err)
 	}
+
+	// Initialize event source mapping service
+	esmStore := eventsource.NewStore(cfg)
+	esmSvc := eventsource.NewService(cfg, esmStore, lambdaSvc, sqsSvc)
+	if err := esmSvc.Init(); err != nil {
+		return fmt.Errorf("failed to initialize event source store: %w", err)
+	}
+	esmSvc.Start()
+	defer esmSvc.Stop()
+
+	// Wire S3 event callback for bucket notifications
+	s3Svc.SetEventCallback(func(eventName string, bucket, key string, size int64, etag string) {
+		notifCfg := s3Svc.GetBucketNotificationConfiguration(bucket)
+		if notifCfg == nil {
+			return
+		}
+		for _, lc := range notifCfg.LambdaConfigurations {
+			if !matchesNotification(lc, eventName, key) {
+				continue
+			}
+			payload := buildS3EventPayload(eventName, bucket, key, size, etag, cfg.Region)
+			go func(fnName string, p []byte) {
+				invokeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				lambdaSvc.Invoke(invokeCtx, &types.InvokeInput{
+					FunctionName:   fnName,
+					Payload:        p,
+					InvocationType: "Event",
+				})
+			}(lc.LambdaFunctionName, payload)
+		}
+	})
 
 	// Initialize infrastructure probe service
 	infraSvc := infrastructure.NewService(cfg.InfraProbeTargets, cfg.InfraProbeEnabled)
@@ -132,7 +183,7 @@ func startServer(cfg *config.Config) error {
 	})
 
 	// Create and start API server
-	server := api.NewServer(cfg, gatewaySvc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc)
+	server := api.NewServer(cfg, gatewaySvc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc)
 
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -152,6 +203,63 @@ func startServer(cfg *config.Config) error {
 		return nil
 	}
 	return err
+}
+
+func matchesNotification(lc types.S3LambdaNotification, eventName, key string) bool {
+	eventMatch := false
+	for _, evt := range lc.Events {
+		if matchEventPattern(string(evt), eventName) {
+			eventMatch = true
+			break
+		}
+	}
+	if !eventMatch {
+		return false
+	}
+	if lc.FilterPrefix != "" && !strings.HasPrefix(key, lc.FilterPrefix) {
+		return false
+	}
+	if lc.FilterSuffix != "" && !strings.HasSuffix(key, lc.FilterSuffix) {
+		return false
+	}
+	return true
+}
+
+func matchEventPattern(pattern, eventName string) bool {
+	p := strings.TrimSpace(pattern)
+	if p == "" {
+		return false
+	}
+	if p == "*" {
+		return true
+	}
+	if strings.HasSuffix(p, "*") {
+		return strings.HasPrefix(eventName, strings.TrimSuffix(p, "*"))
+	}
+	return p == eventName
+}
+
+func buildS3EventPayload(eventName, bucket, key string, size int64, etag, region string) []byte {
+	record := map[string]any{
+		"eventVersion": "2.1",
+		"eventSource":  "aws:s3",
+		"awsRegion":    region,
+		"eventTime":    time.Now().UTC().Format(time.RFC3339),
+		"eventName":    eventName,
+		"s3": map[string]any{
+			"bucket": map[string]any{
+				"name": bucket,
+				"arn":  "arn:aws:s3:::" + bucket,
+			},
+			"object": map[string]any{
+				"key":  key,
+				"size": size,
+				"eTag": etag,
+			},
+		},
+	}
+	data, _ := json.Marshal(map[string]any{"Records": []any{record}})
+	return data
 }
 
 func displayHost(host string) string {

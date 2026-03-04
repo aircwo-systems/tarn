@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/openstack-project/openstack/internal/cli/lambda"
+	s3cli "github.com/openstack-project/openstack/internal/cli/s3"
 	"github.com/openstack-project/openstack/internal/cli/secrets"
 	"github.com/openstack-project/openstack/internal/cli/sqs"
 	"github.com/spf13/cobra"
@@ -35,6 +36,14 @@ Manage SQS queues:
   openstack sqs list
   openstack sqs delete-queue --name my-queue
 
+Manage S3 buckets:
+  openstack s3 mb --name my-bucket
+  openstack s3 ls
+  openstack s3 cp --bucket my-bucket --key file.txt --file ./file.txt
+  openstack s3 get --bucket my-bucket --key file.txt
+  openstack s3 rm --bucket my-bucket --key file.txt
+  openstack s3 rb --name my-bucket
+
 Manage Secrets Manager:
   openstack secrets create --name my-secret --value "password123"
   openstack secrets get --name my-secret
@@ -45,13 +54,15 @@ Manage Secrets Manager:
 Flush provisioned resources:
   openstack flush
   openstack flush --tag feature=r10
-  openstack flush --tag r10 --dry-run`,
+  openstack flush --tag r10 --dry-run
+	openstack flush --storage`,
 	}
 
 	root.AddCommand(newStartCmd())
 	root.AddCommand(newFlushCmd())
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(lambda.NewLambdaCmd())
+	root.AddCommand(s3cli.NewS3Cmd())
 	root.AddCommand(sqs.NewSQSCmd())
 	root.AddCommand(secrets.NewSecretsCmd())
 
@@ -103,7 +114,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Region:   %s\n", cfg.Region)
 	fmt.Fprintf(os.Stderr, "Endpoint: %s\n", cfg.Endpoint())
 	fmt.Fprintf(os.Stderr, "Data Dir: %s\n", cfg.DataDir)
-	fmt.Fprintln(os.Stderr, "Services: apigatewayv2, lambda, sqs, secretsmanager")
+	fmt.Fprintln(os.Stderr, "Services: apigatewayv2, lambda, s3, sqs, secretsmanager")
 	if cfg.UIEnabled {
 		fmt.Fprintf(os.Stderr, "Dashboard: http://%s:%d/\n", displayHost(cfg.Host), cfg.Port)
 		fmt.Fprintf(os.Stderr, "UI Dir:    %s\n", cfg.UIDir)

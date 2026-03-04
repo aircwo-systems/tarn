@@ -56,9 +56,9 @@ func TestRunFlushDeletesOnlyMatchingTaggedResources(t *testing.T) {
 			switch {
 			case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_openstack/admin/overview":
 				return jsonResponse(http.StatusOK, `{
-					"config":{"accountId":"000000000000"},
-					"gateways":[
-						{"apiId":"gw-r10","name":"r10-api","tags":{"feature":"r10"}},
+						"config":{"accountId":"000000000000"},
+						"gateways":[
+							{"apiId":"gw-r10","name":"r10-api","tags":{"feature":"r10"}},
 						{"apiId":"gw-r9","name":"r9-api","tags":{"feature":"r9"}}
 					],
 					"functions":[
@@ -69,11 +69,18 @@ func TestRunFlushDeletesOnlyMatchingTaggedResources(t *testing.T) {
 						{"name":"r10-queue","url":"`+endpoint+`/000000000000/r10-queue","tags":{"feature":"r10"}},
 						{"name":"other-queue","url":"`+endpoint+`/000000000000/other-queue","tags":{"feature":"r9"}}
 					],
-					"secrets":[
-						{"name":"r10-secret","tags":{"feature":"r10"}},
-						{"name":"other-secret","tags":{"feature":"r9"}}
-					]
-				}`)
+						"secrets":[
+							{"name":"r10-secret","tags":{"feature":"r10"}},
+							{"name":"other-secret","tags":{"feature":"r9"}}
+						],
+						"eventSourceMappings":[
+							{"uuid":"esm-r10","queueName":"r10-queue","functionName":"arn:aws:lambda:us-east-1:000000000000:function:r10-fn"},
+							{"uuid":"esm-r9","queueName":"other-queue","functionName":"other-fn"}
+						]
+					}`)
+			case r.Method == http.MethodDelete && r.URL.String() == endpoint+"/2015-03-31/event-source-mappings/esm-r10":
+				deleted = append(deleted, "mapping:esm-r10")
+				return jsonResponse(http.StatusNoContent, "")
 			case r.Method == http.MethodDelete && r.URL.String() == endpoint+"/v2/apis/gw-r10":
 				deleted = append(deleted, "gateway:gw-r10")
 				return jsonResponse(http.StatusNoContent, "")
@@ -106,6 +113,7 @@ func TestRunFlushDeletesOnlyMatchingTaggedResources(t *testing.T) {
 	gotDeleted := strings.Join(deleted, ",")
 	for _, want := range []string{
 		"gateway:gw-r10",
+		"mapping:esm-r10",
 		"queue:r10-queue",
 		"secret:r10-secret",
 		"function:r10-fn",
@@ -116,6 +124,7 @@ func TestRunFlushDeletesOnlyMatchingTaggedResources(t *testing.T) {
 	}
 	for _, unwanted := range []string{
 		"gw-r9",
+		"esm-r9",
 		"other-queue",
 		"other-secret",
 		"other-fn",

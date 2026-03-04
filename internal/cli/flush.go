@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,7 @@ var cliHTTPClient = http.DefaultClient
 type flushOptions struct {
 	TagFilter string
 	DryRun    bool
+	Storage   bool
 }
 
 type flushOverview struct {
@@ -42,6 +44,16 @@ type flushOverview struct {
 		Name string            `json:"name"`
 		Tags map[string]string `json:"tags"`
 	} `json:"secrets"`
+	EventSourceMappings []struct {
+		UUID         string `json:"uuid"`
+		QueueName    string `json:"queueName"`
+		FunctionName string `json:"functionName"`
+	} `json:"eventSourceMappings"`
+	Buckets []struct {
+		Name      string `json:"name"`
+		Objects   int    `json:"objects"`
+		TotalSize int64  `json:"totalSize"`
+	} `json:"buckets"`
 }
 
 func newFlushCmd() *cobra.Command {
@@ -50,13 +62,16 @@ func newFlushCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "flush",
 		Short: "Delete provisioned resources from the current OpenStack instance",
-		Long: `Flush deletes provisioned API Gateways, Lambda functions, SQS queues, and Secrets Manager secrets
+		Long: `Flush deletes provisioned API Gateways, Lambda functions, SQS queues, event source mappings, and Secrets Manager secrets
 from the current OpenStack instance.
 
-Use --tag to scope deletion to a feature slice such as feature=r10.`,
+Use --tag to scope deletion to a feature slice such as feature=r10.
+Use --storage to also purge S3 bucket contents and delete buckets.`,
 		Example: `  openstack flush
+  openstack flush --storage
   openstack flush --tag feature=r10
-  openstack flush --tag r10 --dry-run`,
+  openstack flush --tag r10 --dry-run
+  openstack flush --tag develop-mvp --storage`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runFlush(cmd, os.Stdout, opts)
 		},
@@ -64,6 +79,7 @@ Use --tag to scope deletion to a feature slice such as feature=r10.`,
 
 	cmd.Flags().StringVar(&opts.TagFilter, "tag", "", "Filter resources by tag query, e.g. feature=r10 or r10")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Print resources that would be deleted without deleting them")
+	cmd.Flags().BoolVar(&opts.Storage, "storage", false, "Also flush S3 buckets and objects")
 	return cmd
 }
 
@@ -78,8 +94,17 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	filteredFunctions := filterFunctions(overview.Functions, opts.TagFilter)
 	filteredQueues := filterQueues(overview.Queues, opts.TagFilter)
 	filteredSecrets := filterSecrets(overview.Secrets, opts.TagFilter)
+	filteredMappings := filterEventSourceMappings(overview.EventSourceMappings, opts.TagFilter, filteredQueues, filteredFunctions)
+	filteredBuckets := []struct {
+		Name      string
+		Objects   int
+		TotalSize int64
+	}{}
+	if opts.Storage {
+		filteredBuckets = filterBuckets(overview.Buckets, opts.TagFilter)
+	}
 
-	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredSecrets)
+	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredSecrets) + len(filteredMappings) + len(filteredBuckets)
 	if total == 0 {
 		if opts.TagFilter != "" {
 			_, _ = fmt.Fprintf(out, "No resources matched tag filter %q\n", opts.TagFilter)
@@ -95,7 +120,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	}
 	_, _ = fmt.Fprintln(out)
 
-	if err := printFlushPlan(out, filteredGateways, filteredFunctions, filteredQueues, filteredSecrets); err != nil {
+	if err := printFlushPlan(out, filteredGateways, filteredFunctions, filteredQueues, filteredSecrets, filteredMappings, filteredBuckets); err != nil {
 		return err
 	}
 	if opts.DryRun {
@@ -103,6 +128,12 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		return nil
 	}
 
+	for _, mapping := range filteredMappings {
+		if err := deleteEventSourceMapping(endpoint, mapping.UUID); err != nil {
+			return fmt.Errorf("delete event source mapping %s: %w", mapping.UUID, err)
+		}
+		_, _ = fmt.Fprintf(out, "Deleted Trigger: %s (%s -> %s)\n", mapping.UUID, mapping.QueueName, mapping.FunctionName)
+	}
 	for _, api := range filteredGateways {
 		if err := deleteAPIGateway(endpoint, api.APIID); err != nil {
 			return fmt.Errorf("delete api gateway %s: %w", api.Name, err)
@@ -126,6 +157,12 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 			return fmt.Errorf("delete function %s: %w", fn.Name, err)
 		}
 		_, _ = fmt.Fprintf(out, "Deleted Lambda: %s\n", fn.Name)
+	}
+	for _, bucket := range filteredBuckets {
+		if err := flushS3Bucket(endpoint, bucket.Name); err != nil {
+			return fmt.Errorf("flush s3 bucket %s: %w", bucket.Name, err)
+		}
+		_, _ = fmt.Fprintf(out, "Deleted S3 Bucket: %s\n", bucket.Name)
 	}
 
 	_, _ = fmt.Fprintln(out, "Flush complete.")
@@ -169,6 +206,14 @@ func printFlushPlan(out io.Writer, gateways []struct {
 }, secrets []struct {
 	Name string
 	Tags map[string]string
+}, mappings []struct {
+	UUID         string
+	QueueName    string
+	FunctionName string
+}, buckets []struct {
+	Name      string
+	Objects   int
+	TotalSize int64
 }) error {
 	if len(gateways) > 0 {
 		if _, err := fmt.Fprintln(out, "API Gateways:"); err != nil {
@@ -206,6 +251,26 @@ func printFlushPlan(out io.Writer, gateways []struct {
 		}
 		for _, secret := range secrets {
 			if _, err := fmt.Fprintf(out, "  - %s\n", secret.Name); err != nil {
+				return err
+			}
+		}
+	}
+	if len(mappings) > 0 {
+		if _, err := fmt.Fprintln(out, "Event Source Mappings:"); err != nil {
+			return err
+		}
+		for _, mapping := range mappings {
+			if _, err := fmt.Fprintf(out, "  - %s (%s -> %s)\n", mapping.UUID, mapping.QueueName, mapping.FunctionName); err != nil {
+				return err
+			}
+		}
+	}
+	if len(buckets) > 0 {
+		if _, err := fmt.Fprintln(out, "S3 Buckets:"); err != nil {
+			return err
+		}
+		for _, bucket := range buckets {
+			if _, err := fmt.Fprintf(out, "  - %s (%d objects, %d bytes)\n", bucket.Name, bucket.Objects, bucket.TotalSize); err != nil {
 				return err
 			}
 		}
@@ -306,6 +371,150 @@ func filterSecrets(items []struct {
 			}{Name: item.Name, Tags: item.Tags})
 		}
 	}
+	return out
+}
+
+func filterBuckets(items []struct {
+	Name      string `json:"name"`
+	Objects   int    `json:"objects"`
+	TotalSize int64  `json:"totalSize"`
+}, query string) []struct {
+	Name      string
+	Objects   int
+	TotalSize int64
+} {
+	var out []struct {
+		Name      string
+		Objects   int
+		TotalSize int64
+	}
+	for _, item := range items {
+		if matchesBucketSelector(item.Name, query) {
+			out = append(out, struct {
+				Name      string
+				Objects   int
+				TotalSize int64
+			}{Name: item.Name, Objects: item.Objects, TotalSize: item.TotalSize})
+		}
+	}
+	return out
+}
+
+func matchesBucketSelector(name, query string) bool {
+	nameLower := strings.ToLower(strings.TrimSpace(name))
+	normalized := strings.ToLower(strings.TrimSpace(query))
+	if normalized == "" {
+		return true
+	}
+	if strings.Contains(nameLower, normalized) {
+		return true
+	}
+	if key, value, ok := splitTagSelector(normalized); ok {
+		if key != "" && strings.Contains(nameLower, key) {
+			return true
+		}
+		if value != "" && strings.Contains(nameLower, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitTagSelector(query string) (key, value string, ok bool) {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return "", "", false
+	}
+	var sep string
+	if strings.Contains(query, ":") {
+		sep = ":"
+	} else if strings.Contains(query, "=") {
+		sep = "="
+	}
+	if sep == "" {
+		return "", "", false
+	}
+	parts := strings.SplitN(query, sep, 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	key = strings.TrimSpace(parts[0])
+	value = strings.TrimSpace(parts[1])
+	ok = key != "" || value != ""
+	return
+}
+
+func filterEventSourceMappings(items []struct {
+	UUID         string `json:"uuid"`
+	QueueName    string `json:"queueName"`
+	FunctionName string `json:"functionName"`
+}, query string, queues []struct {
+	Name string
+	URL  string
+	Tags map[string]string
+}, functions []struct {
+	Name string
+	Tags map[string]string
+}) []struct {
+	UUID         string
+	QueueName    string
+	FunctionName string
+} {
+	var out []struct {
+		UUID         string
+		QueueName    string
+		FunctionName string
+	}
+
+	// Without a tag filter, flush all mappings.
+	if strings.TrimSpace(query) == "" {
+		for _, item := range items {
+			out = append(out, struct {
+				UUID         string
+				QueueName    string
+				FunctionName string
+			}{
+				UUID:         item.UUID,
+				QueueName:    item.QueueName,
+				FunctionName: item.FunctionName,
+			})
+		}
+		return out
+	}
+
+	// With a tag filter, mappings are selected when attached to a selected
+	// queue or function. Event source mappings are currently untagged.
+	queueNames := make(map[string]struct{}, len(queues))
+	for _, queue := range queues {
+		queueNames[queue.Name] = struct{}{}
+	}
+	functionNames := make(map[string]struct{}, len(functions))
+	for _, fn := range functions {
+		functionNames[fn.Name] = struct{}{}
+	}
+
+	for _, item := range items {
+		_, queueMatch := queueNames[item.QueueName]
+
+		normalizedFunctionName := normalizeLambdaRef(item.FunctionName)
+		_, functionMatch := functionNames[item.FunctionName]
+		if !functionMatch {
+			_, functionMatch = functionNames[normalizedFunctionName]
+		}
+
+		if queueMatch || functionMatch {
+			out = append(out, struct {
+				UUID         string
+				QueueName    string
+				FunctionName string
+			}{
+				UUID:         item.UUID,
+				QueueName:    item.QueueName,
+				FunctionName: item.FunctionName,
+			})
+		}
+	}
+
 	return out
 }
 
@@ -436,6 +645,197 @@ func deleteSecret(endpoint, name string) error {
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("error (%d): %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
+func deleteEventSourceMapping(endpoint, uuid string) error {
+	req, err := http.NewRequest(http.MethodDelete, endpoint+"/2015-03-31/event-source-mappings/"+uuid, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := cliHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("error (%d): %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+func normalizeLambdaRef(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ref
+	}
+
+	const marker = ":function:"
+	if !strings.HasPrefix(ref, "arn:") {
+		return ref
+	}
+	i := strings.Index(ref, marker)
+	if i == -1 {
+		return ref
+	}
+
+	name := ref[i+len(marker):]
+	if j := strings.IndexByte(name, ':'); j != -1 {
+		name = name[:j]
+	}
+	if name == "" {
+		return ref
+	}
+	return name
+}
+
+type listBucketResult struct {
+	XMLName               xml.Name `xml:"ListBucketResult"`
+	IsTruncated           bool     `xml:"IsTruncated"`
+	NextContinuationToken string   `xml:"NextContinuationToken"`
+	Contents              []struct {
+		Key string `xml:"Key"`
+	} `xml:"Contents"`
+}
+
+type deleteObjectsRequest struct {
+	XMLName xml.Name `xml:"Delete"`
+	Objects []struct {
+		Key string `xml:"Key"`
+	} `xml:"Object"`
+}
+
+func flushS3Bucket(endpoint, bucket string) error {
+	keys, err := listAllBucketObjectKeys(endpoint, bucket)
+	if err != nil {
+		return err
+	}
+
+	for start := 0; start < len(keys); start += 1000 {
+		end := start + 1000
+		if end > len(keys) {
+			end = len(keys)
+		}
+		if err := deleteBucketObjectBatch(endpoint, bucket, keys[start:end]); err != nil {
+			return err
+		}
+	}
+
+	return deleteS3Bucket(endpoint, bucket)
+}
+
+func listAllBucketObjectKeys(endpoint, bucket string) ([]string, error) {
+	all := make([]string, 0)
+	token := ""
+
+	for {
+		page, err := listBucketObjectPage(endpoint, bucket, token)
+		if err != nil {
+			return nil, err
+		}
+		for _, item := range page.Contents {
+			all = append(all, item.Key)
+		}
+		if !page.IsTruncated || strings.TrimSpace(page.NextContinuationToken) == "" {
+			break
+		}
+		token = page.NextContinuationToken
+	}
+
+	return all, nil
+}
+
+func listBucketObjectPage(endpoint, bucket, continuationToken string) (*listBucketResult, error) {
+	query := url.Values{}
+	query.Set("max-keys", "1000")
+	if continuationToken != "" {
+		query.Set("continuation-token", continuationToken)
+	}
+
+	requestURL := endpoint + "/_s3/" + url.PathEscape(bucket)
+	if encoded := query.Encode(); encoded != "" {
+		requestURL += "?" + encoded
+	}
+
+	req, err := http.NewRequest(http.MethodGet, requestURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := cliHTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("list bucket objects error (%d): %s", resp.StatusCode, string(body))
+	}
+
+	var result listBucketResult
+	if err := xml.Unmarshal(body, &result); err != nil {
+		return nil, fmt.Errorf("parse bucket object list: %w", err)
+	}
+	return &result, nil
+}
+
+func deleteBucketObjectBatch(endpoint, bucket string, keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	reqBody := deleteObjectsRequest{
+		Objects: make([]struct {
+			Key string `xml:"Key"`
+		}, len(keys)),
+	}
+	for i, key := range keys {
+		reqBody.Objects[i] = struct {
+			Key string `xml:"Key"`
+		}{Key: key}
+	}
+
+	payload, err := xml.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("marshal delete objects request: %w", err)
+	}
+
+	requestURL := endpoint + "/_s3/" + url.PathEscape(bucket) + "?delete"
+	req, err := http.NewRequest(http.MethodPost, requestURL, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/xml")
+	resp, err := cliHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("delete bucket objects error (%d): %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+func deleteS3Bucket(endpoint, bucket string) error {
+	req, err := http.NewRequest(http.MethodDelete, endpoint+"/_s3/"+url.PathEscape(bucket), nil)
+	if err != nil {
+		return err
+	}
+	resp, err := cliHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("delete bucket error (%d): %s", resp.StatusCode, string(body))
 	}
 	return nil
 }
