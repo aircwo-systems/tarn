@@ -50,7 +50,6 @@
 
 	$effect(() => {
 		if (selectedGroup) {
-			eventsOffset = 0;
 			loadEvents();
 		}
 	});

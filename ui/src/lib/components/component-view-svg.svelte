@@ -1,29 +1,31 @@
 <script lang="ts">
-	export let gateways;
-	export let functions;
-	export let queues;
-	export let secrets;
-	export let buckets;
-	export let infra;
-	export let gwPositions;
-	export let fnPositions;
-	export let qPositions;
-	export let sPositions;
-	export let s3Positions;
-	export let infraPositions;
-	export let hasData;
-	export let endpoint;
-	export let serviceX;
-	export let laneY;
-	export let W;
-	export let H;
-	export let CX;
-	export let openGateway;
-	export let handleGatewayKeydown;
-	export let selectedGatewayId;
-	export let stateColor;
-	export let ledColorMap;
-	export let canvasExpanded;
+	let {
+		gateways,
+		functions,
+		queues,
+		secrets,
+		buckets,
+		infra,
+		gwPositions,
+		fnPositions,
+		qPositions,
+		sPositions,
+		s3Positions,
+		infraPositions,
+		hasData,
+		endpoint,
+		serviceX,
+		laneY,
+		W,
+		H,
+		CX,
+		openGateway,
+		handleGatewayKeydown,
+		selectedGatewayId,
+		stateColor,
+		ledColorMap,
+		canvasExpanded,
+	}: any = $props();
 </script>
 
 <svg
@@ -142,8 +144,8 @@
 				tabindex="0"
 				aria-label={`Open API Gateway details for ${gw.name}`}
 				class="cursor-pointer"
-				on:click={() => openGateway(gw.apiId)}
-				on:keydown={(event) => handleGatewayKeydown(event, gw.apiId)}
+				onclick={() => openGateway(gw.apiId)}
+				onkeydown={(event) => handleGatewayKeydown(event, gw.apiId)}
 			>
 				<rect x={pos.x - 18} y={pos.y - 10} width="36" height="20" rx="4"
 					class="fill-bg-overlay" stroke="var(--color-red)" stroke-width="0.75" opacity="0.7" />

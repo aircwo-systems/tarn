@@ -1,36 +1,38 @@
 <script lang="ts">
-	export let connGateways;
-	export let connQueues;
-	export let connBuckets;
-	export let connFunctions;
-	export let connSecrets;
-	export let apigwToQueueEdges;
-	export let apigwToFnEdges;
-	export let queueToFnEdges;
-	export let s3ToFnEdges;
-	export let fnToCacheEdges;
-	export let cacheToSecretEdges;
-	export let fnToInfraEdges;
-	export let connCacheExtension;
-	export let connInfraNodes;
-	export let connInfraLane;
-	export let connInfraRouteX;
-	export let connInfraRouteY;
-	export let infra;
-	export let infraNodeHalfWidth;
-	export let connNodeHalfWidth;
-	export let cacheNodeHalfWidth;
-	export let CW;
-	export let CH;
-	export let openGateway;
-	export let handleGatewayKeydown;
-	export let canvasExpanded;
-	export let hasData;
-	export let connGatewayX;
-	export let connQueueX;
-	export let connBucketX;
-	export let connFunctionX;
-	export let connSecretX;
+	let {
+		connGateways,
+		connQueues,
+		connBuckets,
+		connFunctions,
+		connSecrets,
+		apigwToQueueEdges,
+		apigwToFnEdges,
+		queueToFnEdges,
+		s3ToFnEdges,
+		fnToCacheEdges,
+		cacheToSecretEdges,
+		fnToInfraEdges,
+		connCacheExtension,
+		connInfraNodes,
+		connInfraLane,
+		connInfraRouteX,
+		connInfraRouteY,
+		infra,
+		infraNodeHalfWidth,
+		connNodeHalfWidth,
+		cacheNodeHalfWidth,
+		CW,
+		CH,
+		openGateway,
+		handleGatewayKeydown,
+		canvasExpanded,
+		hasData,
+		connGatewayX,
+		connQueueX,
+		connBucketX,
+		connFunctionX,
+		connSecretX,
+	}: any = $props();
 </script>
 
 <svg
