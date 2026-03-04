@@ -39,6 +39,8 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		h.createSecret(w, r)
 	case "GetSecretValue":
 		h.getSecretValue(w, r)
+	case "GetResourcePolicy":
+		h.getResourcePolicy(w, r)
 	case "DescribeSecret":
 		h.describeSecret(w, r)
 	case "UpdateSecret":
@@ -144,6 +146,45 @@ func (h *Handler) getSecretValue(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, resp)
 }
 
+// getResourcePolicy returns an empty policy for existing secrets.
+// Terraform's AWS provider probes this during refresh and expects a successful read.
+func (h *Handler) getResourcePolicy(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SecretId string `json:"SecretId"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, 400, "InvalidParameterException", err.Error())
+		return
+	}
+	if req.SecretId == "" {
+		writeError(w, 400, "InvalidParameterException", "SecretId is required")
+		return
+	}
+
+	secret, err := h.svc.DescribeSecret(req.SecretId)
+	if err != nil {
+		writeError(w, 400, "ResourceNotFoundException", err.Error())
+		return
+	}
+
+	writeJSON(w, 200, map[string]interface{}{
+		"ARN":  secret.ARN,
+		"Name": secret.Name,
+		"ResourcePolicy": `{
+  "Version":"2012-10-17",
+  "Statement":[
+    {
+      "Sid":"OpenStackDefaultSecretPolicy",
+      "Effect":"Allow",
+      "Principal":{"AWS":"*"},
+      "Action":["secretsmanager:GetSecretValue","secretsmanager:DescribeSecret"],
+      "Resource":"*"
+    }
+  ]
+}`,
+	})
+}
+
 func (h *Handler) describeSecret(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SecretId string `json:"SecretId"`
@@ -160,9 +201,9 @@ func (h *Handler) describeSecret(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]interface{}{
-		"ARN":              secret.ARN,
-		"Name":             secret.Name,
-		"Description":      secret.Description,
+		"ARN":         secret.ARN,
+		"Name":        secret.Name,
+		"Description": secret.Description,
 		"VersionIdsToStages": map[string][]string{
 			secret.VersionId: secret.VersionStages,
 		},
