@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { GlobeHemisphereWestIcon, LightningIcon, ChatCircleIcon, KeyIcon, HardDriveIcon, HardDrivesIcon, ArrowsClockwiseIcon } from 'phosphor-svelte';
-	import LedDot from './led-dot.svelte';
+	import LedDot from '$lib/components/common/led-dot.svelte';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import { getDashboard, getDashboardFilters, matchesTagFilter } from '$lib/state.svelte';
 	import { formatBytes } from '$lib/utils';

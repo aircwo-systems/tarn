@@ -2,9 +2,9 @@
 	 import { SquaresFourIcon, GlobeHemisphereWestIcon, LightningIcon, ChatCircleIcon, KeyIcon, HardDriveIcon,  ScrollIcon, SidebarSimpleIcon, ArrowsClockwiseIcon, GearIcon, XIcon } from 'phosphor-svelte';
 	import NavRailItem from './nav-rail-item.svelte';
 	import ThemeToggle from './theme-toggle.svelte';
-	import StatusIndicator from './status-indicator.svelte';
-	import ConnectionPanel from './connection-panel.svelte';
-	import LedDot from './led-dot.svelte';
+	import StatusIndicator from '$lib/components/common/status-indicator.svelte';
+	import ConnectionPanel from '$lib/components/topology/connection-panel.svelte';
+	import LedDot from '$lib/components/common/led-dot.svelte';
 	import { Separator } from '$lib/components/ui/separator';
 	import { getDashboard, getUISettings, refresh, setPersistenceEnabled, setPollingIntervalSeconds, setThemeMode, type ThemeMode } from '$lib/state.svelte';
 

@@ -2,8 +2,8 @@
 	import { LightningIcon } from 'phosphor-svelte';
 	import { TableRow, TableCell } from '$lib/components/ui/table';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
-	import ResourceTable from './resource-table.svelte';
-	import ArnCell from './arn-cell.svelte';
+	import ResourceTable from '$lib/components/common/resource-table.svelte';
+	import ArnCell from '$lib/components/common/arn-cell.svelte';
 	import { getDashboard, getDashboardFilters, matchesTagFilter } from '$lib/state.svelte';
 	import { formatBytes, formatDate } from '$lib/utils';
 

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { Package, HardDrive, ArrowClockwise, Eye, Code, CopySimple, Check } from 'phosphor-svelte';
-  import LedDot from './led-dot.svelte';
+  import LedDot from '$lib/components/common/led-dot.svelte';
   import { getDashboard } from '$lib/state.svelte';
   import { formatBytes } from '$lib/utils';
 

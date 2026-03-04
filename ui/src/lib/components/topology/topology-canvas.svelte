@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { ArrowsInSimpleIcon, ArrowsOutSimpleIcon, CaretDownIcon, CaretUpIcon } from 'phosphor-svelte';
-	import GatewayDetailsPanel from '$lib/components/gateway-details-panel.svelte';
+	import GatewayDetailsPanel from '$lib/components/topology/gateway-details-panel.svelte';
 	import { getDashboard, getDashboardFilters, matchesTagFilter } from '$lib/state.svelte';
 
 	import type { InfraConnection, InfraProbe } from '$lib/types';

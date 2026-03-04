@@ -1,15 +1,15 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import NavRail from '$lib/components/nav-rail.svelte';
-	import DashboardFilterBar from '$lib/components/dashboard-filter-bar.svelte';
-	import OverviewSection from '$lib/components/overview-section.svelte';
-	import APIGatewaysSection from '$lib/components/api-gateways-section.svelte';
-	import FunctionsSection from '$lib/components/functions-section.svelte';
-	import QueuesSection from '$lib/components/queues-section.svelte';
-	import SecretsSection from '$lib/components/secrets-section.svelte';
-	import TriggersSection from '$lib/components/triggers-section.svelte';
-	import StorageSection from '$lib/components/storage-section.svelte';
-	import LogsSection from '$lib/components/logs-section.svelte';
+	import NavRail from '$lib/components/layout/nav-rail.svelte';
+	import DashboardFilterBar from '$lib/components/layout/dashboard-filter-bar.svelte';
+	import OverviewSection from '$lib/components/sections/overview-section.svelte';
+	import APIGatewaysSection from '$lib/components/sections/api-gateways-section.svelte';
+	import FunctionsSection from '$lib/components/sections/functions-section.svelte';
+	import QueuesSection from '$lib/components/sections/queues-section.svelte';
+	import SecretsSection from '$lib/components/sections/secrets-section.svelte';
+	import TriggersSection from '$lib/components/sections/triggers-section.svelte';
+	import StorageSection from '$lib/components/sections/storage-section.svelte';
+	import LogsSection from '$lib/components/sections/logs-section.svelte';
 	import { getDashboard } from '$lib/state.svelte';
 
 	const dashboard = getDashboard();

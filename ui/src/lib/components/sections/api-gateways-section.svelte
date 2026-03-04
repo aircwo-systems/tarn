@@ -2,9 +2,9 @@
 	import { GlobeHemisphereWestIcon } from 'phosphor-svelte';
 	import { TableRow, TableCell } from '$lib/components/ui/table';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
-	import ResourceTable from './resource-table.svelte';
-	import ArnCell from './arn-cell.svelte';
-	import GatewayDetailsPanel from './gateway-details-panel.svelte';
+	import ResourceTable from '$lib/components/common/resource-table.svelte';
+	import ArnCell from '$lib/components/common/arn-cell.svelte';
+	import GatewayDetailsPanel from '$lib/components/topology/gateway-details-panel.svelte';
 	import { getDashboard, getDashboardFilters, matchesTagFilter } from '$lib/state.svelte';
 
 	const dashboard = getDashboard();

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { WarningIcon } from 'phosphor-svelte';
-	import StatCard from './stat-card.svelte';
-	import LedDot from './led-dot.svelte';
-	import TopologyCanvas from './topology-canvas.svelte';
+	import StatCard from '$lib/components/common/stat-card.svelte';
+	import LedDot from '$lib/components/common/led-dot.svelte';
+	import TopologyCanvas from '$lib/components/topology/topology-canvas.svelte';
 	import ActiveComponents from './active-components.svelte';
 	import { getDashboard, getDashboardFilters, getUISettings, matchesTagFilter } from '$lib/state.svelte';
 

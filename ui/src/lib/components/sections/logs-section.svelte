@@ -2,7 +2,7 @@
 	import { ScrollIcon, MagnifyingGlassIcon, FunnelIcon, ArrowLeftIcon, ArrowsClockwiseIcon, CaretDownIcon } from 'phosphor-svelte';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import EmptyState from './empty-state.svelte';
+	import EmptyState from '$lib/components/common/empty-state.svelte';
 	import { fetchLogGroups, fetchLogEvents, type FetchLogEventsParams } from '$lib/api';
 	import type { LogGroupSummary, LogEvent } from '$lib/types';
 

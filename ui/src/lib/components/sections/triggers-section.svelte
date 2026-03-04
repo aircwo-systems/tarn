@@ -2,8 +2,8 @@
 	import { ArrowsClockwise, ChatCircle, GlobeHemisphereWest, Lightning } from 'phosphor-svelte';
 	import { TableCell, TableRow } from '$lib/components/ui/table';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
-	import ArnCell from './arn-cell.svelte';
-	import ResourceTable from './resource-table.svelte';
+	import ArnCell from '$lib/components/common/arn-cell.svelte';
+	import ResourceTable from '$lib/components/common/resource-table.svelte';
 	import { getDashboard, getDashboardFilters, matchesTagFilter } from '$lib/state.svelte';
 
 	type TriggerRow = {
