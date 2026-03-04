@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Sun, Moon } from 'phosphor-svelte';
+	import { SunIcon, MoonIcon } from 'phosphor-svelte';
 	import { getUISettings, setThemeMode } from '$lib/state.svelte';
 
 	const settings = getUISettings();
@@ -17,8 +17,8 @@
 	aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
 >
 	{#if dark}
-		<Sun size={15} />
+		<SunIcon size={15} />
 	{:else}
-		<Moon size={15} />
+		<MoonIcon size={15} />
 	{/if}
 </button>

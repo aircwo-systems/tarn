@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ArrowsInSimple, ArrowsOutSimple, CaretDown, CaretUp } from 'phosphor-svelte';
+	import { ArrowsInSimpleIcon, ArrowsOutSimpleIcon, CaretDownIcon, CaretUpIcon } from 'phosphor-svelte';
 	import GatewayDetailsPanel from '$lib/components/gateway-details-panel.svelte';
 	import { getDashboard, getDashboardFilters, matchesTagFilter } from '$lib/state.svelte';
 
@@ -528,9 +528,9 @@
 				onclick={() => (canvasExpanded = !canvasExpanded)}
 			>
 				{#if canvasExpanded}
-					<ArrowsInSimple size={13} />
+					<ArrowsInSimpleIcon size={13} />
 				{:else}
-					<ArrowsOutSimple size={13} />
+					<ArrowsOutSimpleIcon size={13} />
 				{/if}
 			</button>
 		</div>
@@ -551,7 +551,7 @@
 								onclick={() => moveInfraNode(node.id, -1)}
 								aria-label={`Move ${node.label} up`}
 							>
-								<CaretUp size={10} />
+								<CaretUpIcon size={10} />
 							</button>
 							<button
 								type="button"
@@ -560,7 +560,7 @@
 								onclick={() => moveInfraNode(node.id, 1)}
 								aria-label={`Move ${node.label} down`}
 							>
-								<CaretDown size={10} />
+								<CaretDownIcon size={10} />
 							</button>
 						</div>
 					</div>

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Warning } from 'phosphor-svelte';
+	import { WarningIcon } from 'phosphor-svelte';
 	import StatCard from './stat-card.svelte';
 	import LedDot from './led-dot.svelte';
 	import TopologyCanvas from './topology-canvas.svelte';
@@ -130,7 +130,7 @@
 	{#if dashboard.data?.warnings?.length}
 		<div class="rounded-lg border border-red/20 bg-red-muted px-4 py-3">
 			<div class="flex items-center gap-2 mb-2">
-				<Warning size={14} class="text-red" />
+				<WarningIcon size={14} class="text-red" />
 				<h3 class="text-sm font-semibold text-red">Warnings</h3>
 			</div>
 			<ul class="space-y-1 text-xs text-red/80 pl-5 list-disc">

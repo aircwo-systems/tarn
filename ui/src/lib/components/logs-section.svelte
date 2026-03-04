@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Scroll, MagnifyingGlass, Funnel, ArrowLeft, ArrowsClockwise, CaretDown } from 'phosphor-svelte';
+	import { ScrollIcon, MagnifyingGlassIcon, FunnelIcon, ArrowLeftIcon, ArrowsClockwiseIcon, CaretDownIcon } from 'phosphor-svelte';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from './empty-state.svelte';
@@ -261,7 +261,7 @@
 					class="flex items-center justify-center h-7 w-7 rounded-md text-text-muted hover:text-text hover:bg-bg-surface transition-colors shrink-0"
 					aria-label="Back to log groups"
 				>
-					<ArrowLeft size={16} />
+					<ArrowLeftIcon size={16} />
 				</button>
 				<div class="min-w-0">
 					<h2 class="text-sm font-semibold text-text truncate">{selectedGroup}</h2>
@@ -274,7 +274,7 @@
 					onclick={() => autoRefresh = !autoRefresh}
 					class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors {autoRefresh ? 'border-accent-strong bg-accent-muted text-accent' : 'border-border text-text-muted hover:text-text'}"
 				>
-					<ArrowsClockwise size={12} class={autoRefresh ? 'animate-spin' : ''} />
+					<ArrowsClockwiseIcon size={12} class={autoRefresh ? 'animate-spin' : ''} />
 					{autoRefresh ? 'Live' : 'Auto'}
 				</button>
 				<button
@@ -282,9 +282,9 @@
 					onclick={() => showFilters = !showFilters}
 					class="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-text-muted hover:text-text transition-colors"
 				>
-					<Funnel size={12} />
+					<FunnelIcon size={12} />
 					Filters
-					<CaretDown size={10} class="transition-transform {showFilters ? 'rotate-180' : ''}" />
+					<CaretDownIcon size={10} class="transition-transform {showFilters ? 'rotate-180' : ''}" />
 				</button>
 				<button
 					type="button"
@@ -292,7 +292,7 @@
 					disabled={eventsLoading}
 					class="inline-flex items-center gap-1.5 rounded-md border border-accent-strong bg-accent-muted px-2.5 py-1 text-xs text-accent hover:bg-accent/20 transition-colors disabled:opacity-50"
 				>
-					<ArrowsClockwise size={12} class={eventsLoading ? 'animate-spin' : ''} />
+					<ArrowsClockwiseIcon size={12} class={eventsLoading ? 'animate-spin' : ''} />
 					Refresh
 				</button>
 			</div>
@@ -319,7 +319,7 @@
 					<div class="space-y-1">
 						<label class="text-[10px] font-medium uppercase tracking-wider text-text-faint" for="log-pattern">Search pattern</label>
 						<div class="relative">
-							<MagnifyingGlass size={12} class="absolute left-2 top-1/2 -translate-y-1/2 text-text-faint" />
+							<MagnifyingGlassIcon size={12} class="absolute left-2 top-1/2 -translate-y-1/2 text-text-faint" />
 							<input
 								id="log-pattern"
 								type="text"
@@ -375,7 +375,7 @@
 				</div>
 			</div>
 		{:else if events.length === 0}
-			<EmptyState message="No log events found. Try adjusting your filters or invoke a function." icon={Scroll} />
+			<EmptyState message="No log events found. Try adjusting your filters or invoke a function." icon={ScrollIcon} />
 		{:else}
 			<div class="rounded-lg border border-border overflow-hidden">
 				<div class="divide-y divide-border max-h-[calc(100vh-16rem)] overflow-y-auto font-mono text-xs">
@@ -452,7 +452,7 @@
 		<div class="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-raised px-4 py-3">
 			<div class="flex items-center gap-3">
 				<div class="flex items-center justify-center h-8 w-8 rounded-md bg-accent/10">
-					<Scroll size={16} class="text-accent" />
+					<ScrollIcon size={16} class="text-accent" />
 				</div>
 				<div>
 					<h2 class="text-sm font-semibold text-text">Log Groups</h2>
@@ -465,14 +465,14 @@
 				disabled={groupsLoading}
 				class="inline-flex items-center gap-1.5 rounded-md border border-accent-strong bg-accent-muted px-2.5 py-1 text-xs text-accent hover:bg-accent/20 transition-colors disabled:opacity-50"
 			>
-				<ArrowsClockwise size={12} class={groupsLoading ? 'animate-spin' : ''} />
+				<ArrowsClockwiseIcon size={12} class={groupsLoading ? 'animate-spin' : ''} />
 				Refresh
 			</button>
 		</div>
 
 		<div class="rounded-lg border border-border bg-bg-raised px-4 py-3 space-y-3">
 			<div class="relative">
-				<MagnifyingGlass size={12} class="absolute left-2 top-1/2 -translate-y-1/2 text-text-faint" />
+				<MagnifyingGlassIcon size={12} class="absolute left-2 top-1/2 -translate-y-1/2 text-text-faint" />
 				<input
 					type="text"
 					placeholder="Search services or log groups..."
@@ -509,9 +509,9 @@
 				{/each}
 			</div>
 		{:else if groups.length === 0}
-			<EmptyState message="No log groups yet. Create a Lambda function or invoke one to see logs." icon={Scroll} />
+			<EmptyState message="No log groups yet. Create a Lambda function or invoke one to see logs." icon={ScrollIcon} />
 		{:else if filteredGroups.length === 0}
-			<EmptyState message="No log groups match the current service or search filters." icon={Scroll} />
+			<EmptyState message="No log groups match the current service or search filters." icon={ScrollIcon} />
 		{:else}
 			<div class="grid grid-cols-1 gap-2">
 				{#each filteredGroups as group (group.name)}

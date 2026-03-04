@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { FunnelSimple, MagnifyingGlass, X } from 'phosphor-svelte';
+	import { FunnelSimpleIcon, MagnifyingGlassIcon, XIcon } from 'phosphor-svelte';
 	import { getDashboardFilters, setDashboardTagFilter } from '$lib/state.svelte';
 
 	const filters = getDashboardFilters();
@@ -22,11 +22,11 @@
 <section class="rounded-lg border border-border bg-bg-raised px-4 py-3">
 	<div class="flex flex-wrap items-center gap-3">
 		<div class="flex items-center gap-2 text-xs font-medium text-text">
-			<FunnelSimple size={14} class="text-accent" />
+			<FunnelSimpleIcon size={14} class="text-accent" />
 			<span>Tag Filter</span>
 		</div>
 		<div class="relative min-w-[16rem] flex-1">
-			<MagnifyingGlass size={12} class="absolute left-2 top-1/2 -translate-y-1/2 text-text-faint" />
+			<MagnifyingGlassIcon size={12} class="absolute left-2 top-1/2 -translate-y-1/2 text-text-faint" />
 			<input
 				type="text"
 				placeholder="Filter by tag value or key:value"
@@ -43,7 +43,7 @@
 					onclick={clear}
 					aria-label="Clear tag filter"
 				>
-					<X size={12} />
+					<XIcon size={12} />
 				</button>
 			{/if}
 		</div>

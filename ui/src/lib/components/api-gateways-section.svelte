@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { GlobeHemisphereWest } from 'phosphor-svelte';
+	import { GlobeHemisphereWestIcon } from 'phosphor-svelte';
 	import { TableRow, TableCell } from '$lib/components/ui/table';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import ResourceTable from './resource-table.svelte';
@@ -44,7 +44,7 @@
 		loading={dashboard.loading && !dashboard.data}
 		empty={gateways.length === 0}
 		emptyMessage="No API Gateways created yet."
-		emptyIcon={GlobeHemisphereWest}
+		emptyIcon={GlobeHemisphereWestIcon}
 		columns={['Name', 'Protocol', 'Routes', 'Integrations', 'Stages', 'Default Stage', 'Invoke URL', 'Route Keys']}
 	>
 		{#each gateways as gateway}

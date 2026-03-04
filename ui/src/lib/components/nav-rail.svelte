@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { SquaresFour, GlobeHemisphereWest, Lightning, ChatCircle, Key, HardDrive, Scroll, SidebarSimple, ArrowsClockwise, Gear, X } from 'phosphor-svelte';
+	 import { SquaresFourIcon, GlobeHemisphereWestIcon, LightningIcon, ChatCircleIcon, KeyIcon, HardDriveIcon,  ScrollIcon, SidebarSimpleIcon, ArrowsClockwiseIcon, GearIcon, XIcon } from 'phosphor-svelte';
 	import NavRailItem from './nav-rail-item.svelte';
 	import ThemeToggle from './theme-toggle.svelte';
 	import StatusIndicator from './status-indicator.svelte';
@@ -34,16 +34,16 @@
 		localStorage.setItem('openstack-nav-collapsed', String(collapsed));
 	}
 
-	const tabs = [
-		{ id: 'overview', label: 'Overview', icon: SquaresFour },
-		{ id: 'gateways', label: 'Gateways', icon: GlobeHemisphereWest },
-		{ id: 'functions', label: 'Functions', icon: Lightning },
-		{ id: 'queues', label: 'Queues', icon: ChatCircle },
-		{ id: 'secrets', label: 'Secrets', icon: Key },
-		{ id: 'triggers', label: 'Triggers', icon: ArrowsClockwise },
-		{ id: 'storage', label: 'Storage', icon: HardDrive },
-		{ id: 'logs', label: 'Logs', icon: Scroll }
-	];
+	 const tabs = [
+	 	{ id: 'overview', label: 'Overview', icon: SquaresFourIcon },
+	 	{ id: 'gateways', label: 'Gateways', icon: GlobeHemisphereWestIcon },
+	 	{ id: 'functions', label: 'Functions', icon: LightningIcon },
+	 	{ id: 'queues', label: 'Queues', icon: ChatCircleIcon },
+	 	{ id: 'secrets', label: 'Secrets', icon: KeyIcon },
+	 	{ id: 'triggers', label: 'Triggers', icon: ArrowsClockwiseIcon },
+	 	{ id: 'storage', label: 'Storage', icon: HardDriveIcon },
+	 	{ id: 'logs', label: 'Logs', icon: ScrollIcon }
+	 ];
 
 	const connectionStatus = $derived(
 		dashboard.error ? 'error' as const :
@@ -148,7 +148,7 @@
 				disabled={refreshing || dashboard.loading}
 				class="flex items-center justify-center gap-1.5 w-full h-7 rounded-md border border-accent-strong bg-accent-muted text-xs text-accent hover:bg-accent/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
 			>
-				<ArrowsClockwise size={12} class={refreshing ? 'animate-spin' : ''} />
+				 <ArrowsClockwiseIcon size={12} class={refreshing ? 'animate-spin' : ''} />
 				{refreshing ? 'Refreshing...' : 'Refresh'}
 			</button>
 		{/if}
@@ -162,7 +162,7 @@
 					class="flex items-center justify-center h-8 w-8 rounded-md text-text-muted hover:text-text hover:bg-bg-surface transition-colors"
 					aria-label="Expand sidebar"
 				>
-					<SidebarSimple size={15} />
+					 <SidebarSimpleIcon size={15} />
 				</button>
 				<ThemeToggle />
 				<button
@@ -171,7 +171,7 @@
 					class="flex items-center justify-center h-8 w-8 rounded-md text-text-muted hover:text-text hover:bg-bg-surface transition-colors"
 					aria-label="Open UI settings"
 				>
-					<Gear size={15} />
+					 <GearIcon size={15} />
 				</button>
 			</div>
 		{:else}
@@ -184,7 +184,7 @@
 						class="flex items-center justify-center h-8 w-8 rounded-md text-text-muted hover:text-text hover:bg-bg-surface transition-colors"
 						aria-label="Open UI settings"
 					>
-						<Gear size={15} />
+						 <GearIcon size={15} />
 					</button>
 				</div>
 				<button
@@ -193,7 +193,7 @@
 					class="flex items-center justify-center h-8 w-8 rounded-md text-text-muted hover:text-text hover:bg-bg-surface transition-colors"
 					aria-label="Collapse sidebar"
 				>
-					<SidebarSimple size={15} weight="fill" />
+					 <SidebarSimpleIcon size={15} weight="fill" />
 				</button>
 			</div>
 		{/if}
@@ -232,7 +232,7 @@
 				class="flex items-center justify-center h-7 w-7 rounded-md text-text-muted hover:text-text hover:bg-bg-surface transition-colors"
 				aria-label="Close settings"
 			>
-				<X size={14} />
+				 <XIcon size={14} />
 			</button>
 		</div>
 

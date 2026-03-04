@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { Tray } from 'phosphor-svelte';
+	import { TrayIcon } from 'phosphor-svelte';
 
 	let {
-		icon: Icon = Tray,
+		icon: Icon = TrayIcon,
 		message = 'No items yet.'
 	}: {
 		icon?: any;

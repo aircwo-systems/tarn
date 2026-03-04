@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { DownloadSimple, X } from 'phosphor-svelte';
+	import { DownloadSimpleIcon, XIcon } from 'phosphor-svelte';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import type { GatewaySummary } from '$lib/types';
 
@@ -194,7 +194,7 @@
 				class="flex h-7 w-7 items-center justify-center rounded-md text-text-muted hover:bg-bg-overlay hover:text-text"
 				aria-label="Close gateway panel"
 			>
-				<X size={14} />
+				<XIcon size={14} />
 			</button>
 		{/if}
 	</div>
@@ -214,7 +214,7 @@
 						onclick={downloadCollection}
 						class="inline-flex items-center gap-1 rounded-md border border-accent-strong bg-accent-muted px-3 py-1.5 text-xs text-accent hover:bg-accent/20"
 					>
-						<DownloadSimple size={12} />
+						<DownloadSimpleIcon size={12} />
 						Collection
 					</button>
 					<button
@@ -222,7 +222,7 @@
 						onclick={downloadEnvironment}
 						class="inline-flex items-center gap-1 rounded-md border border-border bg-bg-raised px-3 py-1.5 text-xs text-text hover:bg-bg-overlay"
 					>
-						<DownloadSimple size={12} />
+						<DownloadSimpleIcon size={12} />
 						Environment
 					</button>
 				</div>

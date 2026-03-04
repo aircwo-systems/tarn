@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Lightning } from 'phosphor-svelte';
+	import { LightningIcon } from 'phosphor-svelte';
 	import { TableRow, TableCell } from '$lib/components/ui/table';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import ResourceTable from './resource-table.svelte';
@@ -28,7 +28,7 @@
 	loading={dashboard.loading && !dashboard.data}
 	empty={functions.length === 0}
 	emptyMessage="No functions created yet."
-	emptyIcon={Lightning}
+	emptyIcon={LightningIcon}
 	columns={['Name', 'Runtime', 'State', 'Messages Processed', 'Memory', 'Timeout', 'Code', 'Layers', 'Tags', 'Updated']}
 >
 	{#each functions as fn}

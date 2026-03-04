@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Eye, EyeSlash, Key } from 'phosphor-svelte';
+	import { EyeIcon, EyeSlashIcon, KeyIcon } from 'phosphor-svelte';
 	import { TableRow, TableCell } from '$lib/components/ui/table';
 	import ResourceTable from './resource-table.svelte';
 	import ArnCell from './arn-cell.svelte';
@@ -76,7 +76,7 @@
 	loading={dashboard.loading && !dashboard.data}
 	empty={secrets.length === 0}
 	emptyMessage="No secrets created yet."
-	emptyIcon={Key}
+	emptyIcon={KeyIcon}
 	columns={['Name', 'Description', 'Value', 'Version', 'Tags', 'Created', 'Changed']}
 >
 	{#each secrets as secret}
@@ -102,9 +102,9 @@
 							: `View secret value for ${secret.name}`}
 					>
 						{#if secretVisible[secret.name]}
-							<EyeSlash size={14} />
+							<EyeSlashIcon size={14} />
 						{:else}
-							<Eye size={14} />
+							<EyeIcon size={14} />
 						{/if}
 					</button>
 				</div>

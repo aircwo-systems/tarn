@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { GlobeHemisphereWest, Lightning, ChatCircle, Key, HardDrive, HardDrives, ArrowsClockwise } from 'phosphor-svelte';
+	import { GlobeHemisphereWestIcon, LightningIcon, ChatCircleIcon, KeyIcon, HardDriveIcon, HardDrivesIcon, ArrowsClockwiseIcon } from 'phosphor-svelte';
 	import LedDot from './led-dot.svelte';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import { getDashboard, getDashboardFilters, matchesTagFilter } from '$lib/state.svelte';
@@ -41,7 +41,7 @@
 			<!-- API Gateway -->
 			<div class="p-3">
 				<div class="flex items-center gap-2 mb-2">
-					<GlobeHemisphereWest size={13} weight="fill" class="text-blue" />
+					<GlobeHemisphereWestIcon size={13} weight="fill" class="text-blue" />
 					<span class="text-[10px] font-mono uppercase tracking-wider text-text-muted">API Gateway</span>
 					<span class="ml-auto text-[10px] font-mono text-text-faint">{gateways.length}</span>
 				</div>
@@ -63,7 +63,7 @@
 			<!-- Lambda -->
 			<div class="p-3">
 				<div class="flex items-center gap-2 mb-2">
-					<Lightning size={13} weight="fill" class="text-accent" />
+					<LightningIcon size={13} weight="fill" class="text-accent" />
 					<span class="text-[10px] font-mono uppercase tracking-wider text-text-muted">Lambda</span>
 					<span class="ml-auto text-[10px] font-mono text-text-faint">{functions.length}</span>
 				</div>
@@ -86,7 +86,7 @@
 			<!-- SQS -->
 			<div class="p-3">
 				<div class="flex items-center gap-2 mb-2">
-					<ChatCircle size={13} weight="fill" class="text-amber" />
+					<ChatCircleIcon size={13} weight="fill" class="text-amber" />
 					<span class="text-[10px] font-mono uppercase tracking-wider text-text-muted">SQS</span>
 					<span class="ml-auto text-[10px] font-mono text-text-faint">{queues.length}</span>
 				</div>
@@ -111,7 +111,7 @@
 			<!-- Secrets -->
 			<div class="p-3">
 				<div class="flex items-center gap-2 mb-2">
-					<Key size={13} weight="fill" class="text-blue" />
+					<KeyIcon size={13} weight="fill" class="text-blue" />
 					<span class="text-[10px] font-mono uppercase tracking-wider text-text-muted">Secrets</span>
 					<span class="ml-auto text-[10px] font-mono text-text-faint">{secrets.length}</span>
 				</div>
@@ -133,7 +133,7 @@
 			<!-- S3 -->
 			<div class="p-3">
 				<div class="flex items-center gap-2 mb-2">
-					<HardDrive size={13} weight="fill" class="text-accent" />
+					<HardDriveIcon size={13} weight="fill" class="text-accent" />
 					<span class="text-[10px] font-mono uppercase tracking-wider text-text-muted">S3</span>
 					<span class="ml-auto text-[10px] font-mono text-text-faint">{buckets.length}</span>
 				</div>
@@ -155,7 +155,7 @@
 			<!-- Event Mappings -->
 			<div class="p-3">
 				<div class="flex items-center gap-2 mb-2">
-					<ArrowsClockwise size={13} weight="fill" class="text-amber" />
+					<ArrowsClockwiseIcon size={13} weight="fill" class="text-amber" />
 					<span class="text-[10px] font-mono uppercase tracking-wider text-text-muted">Triggers</span>
 					<span class="ml-auto text-[10px] font-mono text-text-faint">{eventMappings.length}</span>
 				</div>
@@ -179,7 +179,7 @@
 			<!-- Infrastructure -->
 			<div class="p-3">
 				<div class="flex items-center gap-2 mb-2">
-					<HardDrives size={13} weight="fill" class="text-accent" />
+					<HardDrivesIcon size={13} weight="fill" class="text-accent" />
 					<span class="text-[10px] font-mono uppercase tracking-wider text-text-muted">Infrastructure</span>
 					<span class="ml-auto text-[10px] font-mono text-text-faint">{infra.length}</span>
 				</div>

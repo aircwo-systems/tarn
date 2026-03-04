@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChatCircle } from 'phosphor-svelte';
+	import { ChatCircleIcon } from 'phosphor-svelte';
 	import { TableRow, TableCell } from '$lib/components/ui/table';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import ResourceTable from './resource-table.svelte';
@@ -87,7 +87,7 @@
 		loading={dashboard.loading && !dashboard.data}
 		empty={queues.length === 0}
 		emptyMessage="No queues created yet."
-		emptyIcon={ChatCircle}
+		emptyIcon={ChatCircleIcon}
 		columns={['Queue', 'Type', 'Visible', 'In Flight', 'Delayed', 'Messages', 'Visibility', 'Long Poll', 'Created']}
 	>
 		{#each queues as queue}
