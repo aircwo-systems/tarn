@@ -78,7 +78,7 @@ func (e *Engine) PullImage(ctx context.Context, runtime types.Runtime) error {
 	if err != nil {
 		return fmt.Errorf("failed to pull image %s: %w", img, err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	_, err = io.Copy(io.Discard, reader)
 	if err == nil {
@@ -331,7 +331,7 @@ func (e *Engine) ContainerLogs(ctx context.Context, containerID string) (string,
 	if err != nil {
 		return "", err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	logs, err := readContainerLogStream(reader)
 	if err != nil {
@@ -344,8 +344,8 @@ func (e *Engine) ContainerLogs(ctx context.Context, containerID string) (string,
 		if err2 != nil {
 			return "", err2
 		}
-		defer reader2.Close()
-		io.Copy(&raw, reader2)
+		defer func() { _ = reader2.Close() }()
+		_, _ = io.Copy(&raw, reader2)
 		return raw.String(), nil
 	}
 

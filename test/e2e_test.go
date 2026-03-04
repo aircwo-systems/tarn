@@ -79,7 +79,7 @@ func TestMain(m *testing.M) {
 	}
 	if !ready {
 		fmt.Println("Server did not become ready in time")
-		syscall.Kill(-server.Process.Pid, syscall.SIGTERM)
+		_ = syscall.Kill(-server.Process.Pid, syscall.SIGTERM)
 		os.Exit(1)
 	}
 
@@ -87,8 +87,8 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 
 	// Stop server
-	syscall.Kill(-server.Process.Pid, syscall.SIGTERM)
-	server.Wait()
+	_ = syscall.Kill(-server.Process.Pid, syscall.SIGTERM)
+	_ = server.Wait()
 
 	os.Exit(code)
 }
@@ -173,7 +173,9 @@ func TestNodeJSLambdaE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer invokeResp.Body.Close()
+	defer func() {
+		_ = invokeResp.Body.Close()
+	}()
 	invokeBody, _ := io.ReadAll(invokeResp.Body)
 
 	t.Logf("Invoke response (%d): %s", invokeResp.StatusCode, string(invokeBody))
@@ -209,7 +211,9 @@ func TestNodeJSLambdaE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer invokeResp2.Body.Close()
+	defer func() {
+		_ = invokeResp2.Body.Close()
+	}()
 	invokeBody2, _ := io.ReadAll(invokeResp2.Body)
 	t.Logf("Warm invoke response (%d): %s", invokeResp2.StatusCode, string(invokeBody2))
 
@@ -223,7 +227,7 @@ func TestNodeJSLambdaE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delResp.Body.Close()
+	_ = delResp.Body.Close()
 	if delResp.StatusCode != 204 {
 		t.Fatalf("delete failed: %d", delResp.StatusCode)
 	}
@@ -293,10 +297,10 @@ func TestLambdaLogsAppearInAdminLogs(t *testing.T) {
 			} `json:"events"`
 		}
 		if err := json.NewDecoder(logResp.Body).Decode(&payload); err != nil {
-			logResp.Body.Close()
+			_ = logResp.Body.Close()
 			t.Fatalf("decode logs response: %v", err)
 		}
-		logResp.Body.Close()
+		_ = logResp.Body.Close()
 
 		for _, event := range payload.Events {
 			if strings.Contains(event.Message, "[e2e-log-test] hello from lambda logs") {
@@ -320,7 +324,7 @@ func TestLambdaLogsAppearInAdminLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	delResp.Body.Close()
+	_ = delResp.Body.Close()
 	if delResp.StatusCode != 204 {
 		t.Fatalf("delete failed: %d", delResp.StatusCode)
 	}
@@ -372,7 +376,9 @@ def lambda_handler(event, context):
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer invokeResp.Body.Close()
+	defer func() {
+		_ = invokeResp.Body.Close()
+	}()
 	invokeBody, _ := io.ReadAll(invokeResp.Body)
 
 	t.Logf("Python invoke response (%d): %s", invokeResp.StatusCode, string(invokeBody))
@@ -397,7 +403,7 @@ def lambda_handler(event, context):
 	// Cleanup
 	delReq, _ := http.NewRequest("DELETE", endpoint+"/2015-03-31/functions/e2e-python-test", nil)
 	delResp, _ := http.DefaultClient.Do(delReq)
-	delResp.Body.Close()
+	_ = delResp.Body.Close()
 }
 
 func TestDryRunInvoke(t *testing.T) {
@@ -425,7 +431,7 @@ func TestDryRunInvoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dryResp.Body.Close()
+	_ = dryResp.Body.Close()
 
 	if dryResp.StatusCode != 204 {
 		t.Fatalf("expected 204 for DryRun, got %d", dryResp.StatusCode)
@@ -434,7 +440,7 @@ func TestDryRunInvoke(t *testing.T) {
 	// Cleanup
 	delReq, _ := http.NewRequest("DELETE", endpoint+"/2015-03-31/functions/e2e-dryrun", nil)
 	delResp, _ := http.DefaultClient.Do(delReq)
-	delResp.Body.Close()
+	_ = delResp.Body.Close()
 }
 
 func TestAPIGatewayLambdaE2E(t *testing.T) {
@@ -529,7 +535,9 @@ func TestAPIGatewayLambdaE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer routeResp.Body.Close()
+	defer func() {
+		_ = routeResp.Body.Close()
+	}()
 	routeRespBody, _ := io.ReadAll(routeResp.Body)
 	if routeResp.StatusCode != 201 {
 		t.Fatalf("create route failed (%d): %s", routeResp.StatusCode, string(routeRespBody))
@@ -577,7 +585,7 @@ func TestAPIGatewayLambdaE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	patchResp.Body.Close()
+	_ = patchResp.Body.Close()
 	if patchResp.StatusCode != 200 {
 		t.Fatalf("patch route failed: %d", patchResp.StatusCode)
 	}

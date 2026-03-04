@@ -28,7 +28,7 @@ func newDeleteQueueCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
 			}
-			defer resp.Body.Close()
+			defer func() { _ = resp.Body.Close() }()
 
 			body, _ := io.ReadAll(resp.Body)
 			if resp.StatusCode != http.StatusOK {
@@ -41,7 +41,7 @@ func newDeleteQueueCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&name, "name", "", "Queue name (required)")
-	cmd.MarkFlagRequired("name")
+	_ = cmd.MarkFlagRequired("name")
 
 	return cmd
 }

@@ -59,7 +59,9 @@ func TestS3EventCallbackOnDeleteObject(t *testing.T) {
 	if _, err := svc.CreateBucket("test-bucket"); err != nil {
 		t.Fatalf("create bucket: %v", err)
 	}
-	svc.PutObject("test-bucket", "file.txt", "text/plain", strings.NewReader("data"), nil)
+	if _, err := svc.PutObject("test-bucket", "file.txt", "text/plain", strings.NewReader("data"), nil); err != nil {
+		t.Fatalf("put object: %v", err)
+	}
 
 	var gotEvent string
 	svc.SetEventCallback(func(eventName, bucket, key string, size int64, etag string) {
@@ -155,7 +157,9 @@ func TestBucketNotificationConfigPersistence(t *testing.T) {
 			},
 		},
 	}
-	svc.PutBucketNotificationConfiguration("persist-bucket", notifCfg)
+	if err := svc.PutBucketNotificationConfiguration("persist-bucket", notifCfg); err != nil {
+		t.Fatalf("put notification config: %v", err)
+	}
 
 	// Reload from disk
 	svc2 := NewService(cfg)

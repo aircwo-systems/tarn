@@ -17,7 +17,7 @@ func TestInvokerInvoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	port := fmt.Sprintf("%d", listener.Addr().(*net.TCPAddr).Port)
 
@@ -26,12 +26,12 @@ func TestInvokerInvoke(t *testing.T) {
 		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
-		fmt.Fprintf(w, `{"received":%s}`, string(body))
+		_, _ = fmt.Fprintf(w, `{"received":%s}`, string(body))
 	})
 
 	server := &http.Server{Handler: mux}
-	go server.Serve(listener)
-	defer server.Close()
+	go func() { _ = server.Serve(listener) }()
+	defer func() { _ = server.Close() }()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -62,7 +62,7 @@ func TestInvokerInvokeWithFunctionError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	port := fmt.Sprintf("%d", listener.Addr().(*net.TCPAddr).Port)
 
@@ -71,12 +71,12 @@ func TestInvokerInvokeWithFunctionError(t *testing.T) {
 		w.Header().Set("X-Amz-Function-Error", "Unhandled")
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
-		fmt.Fprint(w, `{"errorMessage":"something broke","errorType":"Error"}`)
+		_, _ = fmt.Fprint(w, `{"errorMessage":"something broke","errorType":"Error"}`)
 	})
 
 	server := &http.Server{Handler: mux}
-	go server.Serve(listener)
-	defer server.Close()
+	go func() { _ = server.Serve(listener) }()
+	defer func() { _ = server.Close() }()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -97,7 +97,7 @@ func TestInvokerTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	port := fmt.Sprintf("%d", listener.Addr().(*net.TCPAddr).Port)
 
@@ -105,12 +105,12 @@ func TestInvokerTimeout(t *testing.T) {
 	mux.HandleFunc(rieInvokePath, func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(5 * time.Second)
 		w.WriteHeader(200)
-		fmt.Fprint(w, `{"result":"too slow"}`)
+		_, _ = fmt.Fprint(w, `{"result":"too slow"}`)
 	})
 
 	server := &http.Server{Handler: mux}
-	go server.Serve(listener)
-	defer server.Close()
+	go func() { _ = server.Serve(listener) }()
+	defer func() { _ = server.Close() }()
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -138,7 +138,7 @@ func TestWaitForReady(t *testing.T) {
 		t.Fatal(err)
 	}
 	port := fmt.Sprintf("%d", listener.Addr().(*net.TCPAddr).Port)
-	listener.Close() // close — will reopen after delay
+	_ = listener.Close() // close — will reopen after delay
 
 	go func() {
 		time.Sleep(300 * time.Millisecond)
@@ -147,14 +147,14 @@ func TestWaitForReady(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer l.Close()
+		defer func() { _ = l.Close() }()
 		// Accept connections to keep the listener alive
 		for {
 			conn, err := l.Accept()
 			if err != nil {
 				return
 			}
-			conn.Close()
+			_ = conn.Close()
 		}
 	}()
 
@@ -187,7 +187,7 @@ func TestInvokerEmptyPayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	port := fmt.Sprintf("%d", listener.Addr().(*net.TCPAddr).Port)
 
@@ -197,12 +197,12 @@ func TestInvokerEmptyPayload(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(200)
 		// Echo back what was received
-		fmt.Fprintf(w, `{"received":%s}`, string(body))
+		_, _ = fmt.Fprintf(w, `{"received":%s}`, string(body))
 	})
 
 	server := &http.Server{Handler: mux}
-	go server.Serve(listener)
-	defer server.Close()
+	go func() { _ = server.Serve(listener) }()
+	defer func() { _ = server.Close() }()
 
 	time.Sleep(50 * time.Millisecond)
 

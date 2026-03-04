@@ -113,7 +113,9 @@ func TestPollerStartStop(t *testing.T) {
 		Enabled:                        true,
 		State:                          "Enabled",
 	}
-	store.Save(mapping)
+	if err := store.Save(mapping); err != nil {
+		t.Fatalf("save mapping: %v", err)
+	}
 
 	sqsMock := &mockSQS{
 		messages: []*types.SQSMessage{
@@ -164,7 +166,9 @@ func TestPollerNormalizesFunctionARN(t *testing.T) {
 		Enabled:                        true,
 		State:                          "Enabled",
 	}
-	store.Save(mapping)
+	if err := store.Save(mapping); err != nil {
+		t.Fatalf("save mapping: %v", err)
+	}
 
 	sqsMock := &mockSQS{
 		messages: []*types.SQSMessage{
@@ -206,7 +210,9 @@ func TestPollerDisablesOnMissingQueue(t *testing.T) {
 		Enabled:                        true,
 		State:                          "Enabled",
 	}
-	store.Save(mapping)
+	if err := store.Save(mapping); err != nil {
+		t.Fatalf("save mapping: %v", err)
+	}
 
 	sqsMock := &mockSQS{receiveErr: errors.New("queue orders not found")}
 	lambdaMock := &mockLambda{}
@@ -247,7 +253,9 @@ func TestPollerDisablesOnMissingFunction(t *testing.T) {
 		Enabled:                        true,
 		State:                          "Enabled",
 	}
-	store.Save(mapping)
+	if err := store.Save(mapping); err != nil {
+		t.Fatalf("save mapping: %v", err)
+	}
 
 	sqsMock := &mockSQS{
 		messages: []*types.SQSMessage{

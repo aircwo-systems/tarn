@@ -72,7 +72,9 @@ func TestCreateSecretBinary(t *testing.T) {
 func TestUpdateSecret(t *testing.T) {
 	svc := newTestService()
 
-	svc.CreateSecret("update-me", "", "old-value", nil, nil)
+	if _, err := svc.CreateSecret("update-me", "", "old-value", nil, nil); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
 
 	updated, err := svc.UpdateSecret("update-me", "new-value", nil)
 	if err != nil {
@@ -92,7 +94,9 @@ func TestUpdateSecret(t *testing.T) {
 func TestDeleteSecret(t *testing.T) {
 	svc := newTestService()
 
-	svc.CreateSecret("delete-me", "", "value", nil, nil)
+	if _, err := svc.CreateSecret("delete-me", "", "value", nil, nil); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
 
 	err := svc.DeleteSecret("delete-me")
 	if err != nil {
@@ -108,8 +112,12 @@ func TestDeleteSecret(t *testing.T) {
 func TestListSecrets(t *testing.T) {
 	svc := newTestService()
 
-	svc.CreateSecret("secret-1", "first", "val1", nil, nil)
-	svc.CreateSecret("secret-2", "second", "val2", nil, nil)
+	if _, err := svc.CreateSecret("secret-1", "first", "val1", nil, nil); err != nil {
+		t.Fatalf("create secret-1: %v", err)
+	}
+	if _, err := svc.CreateSecret("secret-2", "second", "val2", nil, nil); err != nil {
+		t.Fatalf("create secret-2: %v", err)
+	}
 
 	list := svc.ListSecrets()
 	if len(list) != 2 {
@@ -128,7 +136,9 @@ func TestListSecrets(t *testing.T) {
 func TestDescribeSecret(t *testing.T) {
 	svc := newTestService()
 
-	svc.CreateSecret("describe-me", "test description", "value", nil, nil)
+	if _, err := svc.CreateSecret("describe-me", "test description", "value", nil, nil); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
 
 	secret, err := svc.DescribeSecret("describe-me")
 	if err != nil {
@@ -147,7 +157,9 @@ func TestSecretTags(t *testing.T) {
 		{Key: "env", Value: "test"},
 		{Key: "team", Value: "backend"},
 	}
-	svc.CreateSecret("tagged-secret", "", "value", nil, tags)
+	if _, err := svc.CreateSecret("tagged-secret", "", "value", nil, tags); err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
 
 	secret, _ := svc.DescribeSecret("tagged-secret")
 	if len(secret.Tags) != 2 {
@@ -155,14 +167,18 @@ func TestSecretTags(t *testing.T) {
 	}
 
 	// Add tag
-	svc.TagResource("tagged-secret", []types.SecretTag{{Key: "version", Value: "1.0"}})
+	if err := svc.TagResource("tagged-secret", []types.SecretTag{{Key: "version", Value: "1.0"}}); err != nil {
+		t.Fatalf("tag resource: %v", err)
+	}
 	secret, _ = svc.DescribeSecret("tagged-secret")
 	if len(secret.Tags) != 3 {
 		t.Fatalf("expected 3 tags after add, got %d", len(secret.Tags))
 	}
 
 	// Update existing tag
-	svc.TagResource("tagged-secret", []types.SecretTag{{Key: "env", Value: "prod"}})
+	if err := svc.TagResource("tagged-secret", []types.SecretTag{{Key: "env", Value: "prod"}}); err != nil {
+		t.Fatalf("tag resource update: %v", err)
+	}
 	secret, _ = svc.DescribeSecret("tagged-secret")
 	for _, tag := range secret.Tags {
 		if tag.Key == "env" && tag.Value != "prod" {
@@ -171,7 +187,9 @@ func TestSecretTags(t *testing.T) {
 	}
 
 	// Remove tag
-	svc.UntagResource("tagged-secret", []string{"team"})
+	if err := svc.UntagResource("tagged-secret", []string{"team"}); err != nil {
+		t.Fatalf("untag resource: %v", err)
+	}
 	secret, _ = svc.DescribeSecret("tagged-secret")
 	if len(secret.Tags) != 2 {
 		t.Fatalf("expected 2 tags after remove, got %d", len(secret.Tags))

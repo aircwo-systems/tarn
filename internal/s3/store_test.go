@@ -53,10 +53,16 @@ func TestBucketCRUD(t *testing.T) {
 
 func TestDeleteNonEmptyBucketFails(t *testing.T) {
 	store := NewStore(t.TempDir())
-	store.Init()
+	if err := store.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
 
-	store.CreateBucket("bucket", "us-east-1")
-	store.PutObject("bucket", "key", "text/plain", strings.NewReader("data"), nil)
+	if _, err := store.CreateBucket("bucket", "us-east-1"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
+	if _, err := store.PutObject("bucket", "key", "text/plain", strings.NewReader("data"), nil); err != nil {
+		t.Fatalf("put object: %v", err)
+	}
 
 	err := store.DeleteBucket("bucket")
 	if err == nil || !strings.Contains(err.Error(), "BucketNotEmpty") {
@@ -66,8 +72,12 @@ func TestDeleteNonEmptyBucketFails(t *testing.T) {
 
 func TestObjectPutGetHeadDelete(t *testing.T) {
 	store := NewStore(t.TempDir())
-	store.Init()
-	store.CreateBucket("bucket", "us-east-1")
+	if err := store.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := store.CreateBucket("bucket", "us-east-1"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
 
 	// Put
 	obj, err := store.PutObject("bucket", "hello.txt", "text/plain", strings.NewReader("hello world"), map[string]string{"author": "test"})
@@ -90,7 +100,9 @@ func TestObjectPutGetHeadDelete(t *testing.T) {
 		t.Fatalf("get: %v", err)
 	}
 	data, _ := io.ReadAll(reader)
-	reader.Close()
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close reader: %v", err)
+	}
 	if string(data) != "hello world" {
 		t.Fatalf("body = %q, want %q", string(data), "hello world")
 	}
@@ -124,8 +136,12 @@ func TestObjectPutGetHeadDelete(t *testing.T) {
 
 func TestListObjectsWithPrefixDelimiter(t *testing.T) {
 	store := NewStore(t.TempDir())
-	store.Init()
-	store.CreateBucket("bucket", "us-east-1")
+	if err := store.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := store.CreateBucket("bucket", "us-east-1"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
 
 	keys := []string{
 		"photos/2024/jan.jpg",
@@ -134,7 +150,9 @@ func TestListObjectsWithPrefixDelimiter(t *testing.T) {
 		"docs/readme.txt",
 	}
 	for _, key := range keys {
-		store.PutObject("bucket", key, "application/octet-stream", strings.NewReader("x"), nil)
+		if _, err := store.PutObject("bucket", key, "application/octet-stream", strings.NewReader("x"), nil); err != nil {
+			t.Fatalf("put object %q: %v", key, err)
+		}
 	}
 
 	// List all
@@ -170,11 +188,19 @@ func TestListObjectsWithPrefixDelimiter(t *testing.T) {
 
 func TestCopyObject(t *testing.T) {
 	store := NewStore(t.TempDir())
-	store.Init()
-	store.CreateBucket("src", "us-east-1")
-	store.CreateBucket("dst", "us-east-1")
+	if err := store.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := store.CreateBucket("src", "us-east-1"); err != nil {
+		t.Fatalf("create src bucket: %v", err)
+	}
+	if _, err := store.CreateBucket("dst", "us-east-1"); err != nil {
+		t.Fatalf("create dst bucket: %v", err)
+	}
 
-	store.PutObject("src", "file.txt", "text/plain", strings.NewReader("copy me"), nil)
+	if _, err := store.PutObject("src", "file.txt", "text/plain", strings.NewReader("copy me"), nil); err != nil {
+		t.Fatalf("put object: %v", err)
+	}
 
 	obj, err := store.CopyObject("src", "file.txt", "dst", "copied.txt")
 	if err != nil {
@@ -190,7 +216,9 @@ func TestCopyObject(t *testing.T) {
 		t.Fatalf("get copied: %v", err)
 	}
 	data, _ := io.ReadAll(reader)
-	reader.Close()
+	if err := reader.Close(); err != nil {
+		t.Fatalf("close reader: %v", err)
+	}
 	if string(data) != "copy me" {
 		t.Fatalf("body = %q, want %q", string(data), "copy me")
 	}
@@ -198,11 +226,17 @@ func TestCopyObject(t *testing.T) {
 
 func TestBatchDelete(t *testing.T) {
 	store := NewStore(t.TempDir())
-	store.Init()
-	store.CreateBucket("bucket", "us-east-1")
+	if err := store.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := store.CreateBucket("bucket", "us-east-1"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
 
 	for _, key := range []string{"a.txt", "b.txt", "c.txt"} {
-		store.PutObject("bucket", key, "text/plain", strings.NewReader("x"), nil)
+		if _, err := store.PutObject("bucket", key, "text/plain", strings.NewReader("x"), nil); err != nil {
+			t.Fatalf("put object %q: %v", key, err)
+		}
 	}
 
 	errs := store.DeleteObjects("bucket", []string{"a.txt", "c.txt"})
@@ -222,10 +256,17 @@ func TestBatchDelete(t *testing.T) {
 
 func TestETagIsMD5(t *testing.T) {
 	store := NewStore(t.TempDir())
-	store.Init()
-	store.CreateBucket("bucket", "us-east-1")
+	if err := store.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := store.CreateBucket("bucket", "us-east-1"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
 
-	obj, _ := store.PutObject("bucket", "key", "", bytes.NewReader([]byte("")), nil)
+	obj, err := store.PutObject("bucket", "key", "", bytes.NewReader([]byte("")), nil)
+	if err != nil {
+		t.Fatalf("put object: %v", err)
+	}
 	// MD5 of empty string is d41d8cd98f00b204e9800998ecf8427e
 	expected := "\"d41d8cd98f00b204e9800998ecf8427e\""
 	if obj.ETag != expected {
@@ -235,11 +276,19 @@ func TestETagIsMD5(t *testing.T) {
 
 func TestObjectCountAndTotalSize(t *testing.T) {
 	store := NewStore(t.TempDir())
-	store.Init()
-	store.CreateBucket("bucket", "us-east-1")
+	if err := store.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := store.CreateBucket("bucket", "us-east-1"); err != nil {
+		t.Fatalf("create bucket: %v", err)
+	}
 
-	store.PutObject("bucket", "a", "", strings.NewReader("hello"), nil)
-	store.PutObject("bucket", "b", "", strings.NewReader("world!"), nil)
+	if _, err := store.PutObject("bucket", "a", "", strings.NewReader("hello"), nil); err != nil {
+		t.Fatalf("put object a: %v", err)
+	}
+	if _, err := store.PutObject("bucket", "b", "", strings.NewReader("world!"), nil); err != nil {
+		t.Fatalf("put object b: %v", err)
+	}
 
 	if c := store.ObjectCount("bucket"); c != 2 {
 		t.Fatalf("count = %d, want 2", c)

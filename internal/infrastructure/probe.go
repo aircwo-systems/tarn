@@ -74,7 +74,9 @@ func parseTargets(raw string) []ProbeTarget {
 		kind := strings.ToLower(parts[0])
 		host := parts[1]
 		port := 0
-		fmt.Sscanf(parts[2], "%d", &port)
+		if _, err := fmt.Sscanf(parts[2], "%d", &port); err != nil {
+			continue
+		}
 		if port == 0 {
 			continue
 		}
@@ -187,7 +189,7 @@ func (s *Service) Targets() []ProbeTarget {
 }
 
 func probe(ctx context.Context, t ProbeTarget) ProbeResult {
-	addr := fmt.Sprintf("%s:%d", t.Host, t.Port)
+	addr := net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))
 	now := time.Now()
 	result := ProbeResult{
 		Name:     t.Name,
@@ -206,7 +208,7 @@ func probe(ctx context.Context, t ProbeTarget) ProbeResult {
 		result.Error = err.Error()
 		return result
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	result.Status = "connected"
 
@@ -231,7 +233,7 @@ func classifyError(err error) string {
 
 // probePgVersion sends a minimal PostgreSQL startup message to extract the server version.
 func probePgVersion(conn net.Conn) string {
-	conn.SetDeadline(time.Now().Add(1 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(1 * time.Second))
 
 	// Send SSLRequest (8 bytes: length=8, code=80877103)
 	sslReq := make([]byte, 8)

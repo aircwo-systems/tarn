@@ -49,10 +49,6 @@ func (s *Service) validateBucketName(name string) error {
 	return nil
 }
 
-func (s *Service) generateARN(bucketName string) string {
-	return fmt.Sprintf("arn:aws:s3:::%s", bucketName)
-}
-
 // CreateBucket creates a new bucket.
 func (s *Service) CreateBucket(name string) (*types.Bucket, error) {
 	if err := s.validateBucketName(name); err != nil {

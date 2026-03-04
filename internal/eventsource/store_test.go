@@ -60,8 +60,12 @@ func TestStoreGetNotFound(t *testing.T) {
 func TestStoreList(t *testing.T) {
 	s := testStore(t)
 
-	s.Save(&types.EventSourceMapping{UUID: "a", FunctionName: "fn-a"})
-	s.Save(&types.EventSourceMapping{UUID: "b", FunctionName: "fn-b"})
+	if err := s.Save(&types.EventSourceMapping{UUID: "a", FunctionName: "fn-a"}); err != nil {
+		t.Fatalf("save a: %v", err)
+	}
+	if err := s.Save(&types.EventSourceMapping{UUID: "b", FunctionName: "fn-b"}); err != nil {
+		t.Fatalf("save b: %v", err)
+	}
 
 	list := s.List()
 	if len(list) != 2 {
@@ -72,7 +76,9 @@ func TestStoreList(t *testing.T) {
 func TestStoreDelete(t *testing.T) {
 	s := testStore(t)
 
-	s.Save(&types.EventSourceMapping{UUID: "del-1"})
+	if err := s.Save(&types.EventSourceMapping{UUID: "del-1"}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
 
 	if err := s.Delete("del-1"); err != nil {
 		t.Fatalf("delete: %v", err)
@@ -100,13 +106,15 @@ func TestStorePersistenceRoundTrip(t *testing.T) {
 		t.Fatalf("init s1: %v", err)
 	}
 
-	s1.Save(&types.EventSourceMapping{
+	if err := s1.Save(&types.EventSourceMapping{
 		UUID:         "persist-1",
 		FunctionName: "fn-persist",
 		QueueName:    "q-persist",
 		BatchSize:    7,
 		State:        "Enabled",
-	})
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
 
 	// Create a new store instance to verify it loads from disk
 	s2 := NewStore(cfg)

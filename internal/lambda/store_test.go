@@ -13,6 +13,8 @@ import (
 	"github.com/openstack-project/openstack/pkg/types"
 )
 
+const errFailedInitStore = "failed to init store: %v"
+
 func TestExtractCode(t *testing.T) {
 	// Create a temp data dir
 	tmpDir := t.TempDir()
@@ -32,8 +34,10 @@ func TestExtractCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	handlerCode := `exports.handler = async (event) => { return { statusCode: 200, body: "hello" }; };`
-	f.Write([]byte(handlerCode))
-	zw.Close()
+	_, _ = f.Write([]byte(handlerCode))
+	if err := zw.Close(); err != nil {
+		t.Fatalf("failed to close zip writer: %v", err)
+	}
 
 	// Save the zip
 	hash, err := store.SaveCode(fnName, buf.Bytes())
@@ -126,7 +130,9 @@ func TestExtractCodeZipSlip(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{DataDir: tmpDir}
 	store := NewStore(cfg)
-	store.Init()
+	if err := store.Init(); err != nil {
+		t.Fatalf(errFailedInitStore, err)
+	}
 
 	fnName := "slip-func"
 
@@ -135,13 +141,17 @@ func TestExtractCodeZipSlip(t *testing.T) {
 	zw := zip.NewWriter(&buf)
 	// This should be skipped during extraction
 	f, _ := zw.Create("../../etc/evil.txt")
-	f.Write([]byte("malicious"))
+	_, _ = f.Write([]byte("malicious"))
 	// This is legitimate
 	f2, _ := zw.Create("handler.py")
-	f2.Write([]byte("def handler(event, context): pass"))
-	zw.Close()
+	_, _ = f2.Write([]byte("def handler(event, context): pass"))
+	if err := zw.Close(); err != nil {
+		t.Fatalf("failed to close zip writer: %v", err)
+	}
 
-	store.SaveCode(fnName, buf.Bytes())
+	if _, err := store.SaveCode(fnName, buf.Bytes()); err != nil {
+		t.Fatalf("failed to save code: %v", err)
+	}
 	extractDir, err := store.ExtractCode(fnName)
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +172,9 @@ func TestExtractCodeNested(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{DataDir: tmpDir}
 	store := NewStore(cfg)
-	store.Init()
+	if err := store.Init(); err != nil {
+		t.Fatalf(errFailedInitStore, err)
+	}
 
 	fnName := "nested-func"
 
@@ -170,12 +182,12 @@ func TestExtractCodeNested(t *testing.T) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	f1, _ := zw.Create("src/utils/helper.js")
-	f1.Write([]byte("module.exports = {}"))
+	_, _ = f1.Write([]byte("module.exports = {}"))
 	f2, _ := zw.Create("index.js")
-	f2.Write([]byte("require('./src/utils/helper')"))
-	zw.Close()
+	_, _ = f2.Write([]byte("require('./src/utils/helper')"))
+	_ = zw.Close()
 
-	store.SaveCode(fnName, buf.Bytes())
+	_, _ = store.SaveCode(fnName, buf.Bytes())
 	extractDir, err := store.ExtractCode(fnName)
 	if err != nil {
 		t.Fatal(err)
@@ -193,7 +205,9 @@ func TestSaveAndGetLayer(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{DataDir: tmpDir}
 	store := NewStore(cfg)
-	store.Init()
+	if err := store.Init(); err != nil {
+		t.Fatalf(errFailedInitStore, err)
+	}
 
 	layerCfg := &types.LayerConfig{
 		LayerName:     "my-layer",
@@ -206,8 +220,8 @@ func TestSaveAndGetLayer(t *testing.T) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	f, _ := zw.Create("python/lib.py")
-	f.Write([]byte("def helper(): return 42"))
-	zw.Close()
+	_, _ = f.Write([]byte("def helper(): return 42"))
+	_ = zw.Close()
 
 	hash, err := store.SaveLayer("my-layer", 1, buf.Bytes(), layerCfg)
 	if err != nil {
@@ -234,7 +248,9 @@ func TestExtractLayer(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{DataDir: tmpDir}
 	store := NewStore(cfg)
-	store.Init()
+	if err := store.Init(); err != nil {
+		t.Fatalf(errFailedInitStore, err)
+	}
 
 	layerCfg := &types.LayerConfig{
 		LayerName:     "extract-layer",
@@ -244,10 +260,10 @@ func TestExtractLayer(t *testing.T) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	f, _ := zw.Create("python/utils.py")
-	f.Write([]byte("VALUE = 'hello'"))
-	zw.Close()
+	_, _ = f.Write([]byte("VALUE = 'hello'"))
+	_ = zw.Close()
 
-	store.SaveLayer("extract-layer", 1, buf.Bytes(), layerCfg)
+	_, _ = store.SaveLayer("extract-layer", 1, buf.Bytes(), layerCfg)
 
 	dir, err := store.ExtractLayer("extract-layer", 1)
 	if err != nil {
@@ -267,7 +283,9 @@ func TestDeleteLayerVersion(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{DataDir: tmpDir}
 	store := NewStore(cfg)
-	store.Init()
+	if err := store.Init(); err != nil {
+		t.Fatalf(errFailedInitStore, err)
+	}
 
 	layerCfg := &types.LayerConfig{
 		LayerName:     "del-layer",
@@ -277,10 +295,10 @@ func TestDeleteLayerVersion(t *testing.T) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	f, _ := zw.Create("lib.js")
-	f.Write([]byte("module.exports = {}"))
-	zw.Close()
+	_, _ = f.Write([]byte("module.exports = {}"))
+	_ = zw.Close()
 
-	store.SaveLayer("del-layer", 1, buf.Bytes(), layerCfg)
+	_, _ = store.SaveLayer("del-layer", 1, buf.Bytes(), layerCfg)
 
 	// Delete
 	if err := store.DeleteLayerVersion("del-layer", 1); err != nil {
@@ -298,7 +316,9 @@ func TestNextLayerVersion(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := &config.Config{DataDir: tmpDir}
 	store := NewStore(cfg)
-	store.Init()
+	if err := store.Init(); err != nil {
+		t.Fatalf(errFailedInitStore, err)
+	}
 
 	// First version should be 1
 	v := store.NextLayerVersion("new-layer")
@@ -311,17 +331,17 @@ func TestNextLayerVersion(t *testing.T) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 	f, _ := zw.Create("a.txt")
-	f.Write([]byte("v1"))
-	zw.Close()
-	store.SaveLayer("new-layer", 1, buf.Bytes(), layerCfg)
+	_, _ = f.Write([]byte("v1"))
+	_ = zw.Close()
+	_, _ = store.SaveLayer("new-layer", 1, buf.Bytes(), layerCfg)
 
 	layerCfg2 := &types.LayerConfig{LayerName: "new-layer", VersionNumber: 2}
 	buf.Reset()
 	zw = zip.NewWriter(&buf)
 	f, _ = zw.Create("a.txt")
-	f.Write([]byte("v2"))
-	zw.Close()
-	store.SaveLayer("new-layer", 2, buf.Bytes(), layerCfg2)
+	_, _ = f.Write([]byte("v2"))
+	_ = zw.Close()
+	_, _ = store.SaveLayer("new-layer", 2, buf.Bytes(), layerCfg2)
 
 	v = store.NextLayerVersion("new-layer")
 	if v != 3 {

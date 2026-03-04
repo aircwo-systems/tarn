@@ -68,7 +68,7 @@ func (inv *Invoker) WaitForReady(ctx context.Context, hostPort string) error {
 				lastErr = err
 				continue
 			}
-			conn.Close()
+			_ = conn.Close()
 			log.Printf("[invoker] RIE accepting connections on port %s", hostPort)
 			return nil
 		}
@@ -104,7 +104,7 @@ func (inv *Invoker) Invoke(ctx context.Context, hostPort string, input *types.In
 		}
 		return nil, fmt.Errorf("RIE invocation failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {

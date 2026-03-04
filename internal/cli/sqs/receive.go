@@ -80,7 +80,7 @@ func newReceiveCmd() *cobra.Command {
 	cmd.Flags().StringVar(&queue, "queue", "", "Queue name (required)")
 	cmd.Flags().IntVar(&max, "max", 1, "Maximum number of messages to receive (1-10)")
 	cmd.Flags().IntVar(&wait, "wait", 0, "Long poll wait time in seconds (0-20)")
-	cmd.MarkFlagRequired("queue")
+	_ = cmd.MarkFlagRequired("queue")
 
 	return cmd
 }

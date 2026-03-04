@@ -32,7 +32,10 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.ParseForm()
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	action := r.FormValue("Action")
 	if action == "" {
 		writeXMLError(w, 400, "MissingAction", "No Action parameter provided")
@@ -335,7 +338,7 @@ func (h *Handler) receiveMessage(w http.ResponseWriter, r *http.Request) {
 	var msgsXML string
 	for _, m := range msgs {
 		attrsXML := ""
-		attrsXML += fmt.Sprintf("      <Attribute><Name>SenderId</Name><Value>000000000000</Value></Attribute>\n")
+		attrsXML += "      <Attribute><Name>SenderId</Name><Value>000000000000</Value></Attribute>\n"
 		attrsXML += fmt.Sprintf("      <Attribute><Name>SentTimestamp</Name><Value>%d</Value></Attribute>\n", m.SentTimestamp)
 		attrsXML += fmt.Sprintf("      <Attribute><Name>ApproximateReceiveCount</Name><Value>%d</Value></Attribute>\n", m.ApproximateReceiveCount)
 		attrsXML += fmt.Sprintf("      <Attribute><Name>ApproximateFirstReceiveTimestamp</Name><Value>%d</Value></Attribute>\n", m.ApproximateFirstReceiveTimestamp)
@@ -633,8 +636,8 @@ func parseMessageAttributes(r *http.Request) map[string]*types.MessageAttribute 
 func writeXML(w http.ResponseWriter, status int, body string) {
 	w.Header().Set("Content-Type", "text/xml")
 	w.WriteHeader(status)
-	fmt.Fprint(w, `<?xml version="1.0"?>`)
-	fmt.Fprint(w, body)
+	_, _ = fmt.Fprint(w, `<?xml version="1.0"?>`)
+	_, _ = fmt.Fprint(w, body)
 }
 
 func writeXMLError(w http.ResponseWriter, status int, code, message string) {

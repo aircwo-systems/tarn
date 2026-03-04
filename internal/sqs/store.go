@@ -599,10 +599,10 @@ func (s *Store) Reap() {
 
 func applyQueueAttributes(cfg *types.QueueConfig, attrs map[string]string) {
 	if v, ok := attrs["VisibilityTimeout"]; ok {
-		fmt.Sscanf(v, "%d", &cfg.VisibilityTimeout)
+		_, _ = fmt.Sscanf(v, "%d", &cfg.VisibilityTimeout)
 	}
 	if v, ok := attrs["MessageRetentionPeriod"]; ok {
-		fmt.Sscanf(v, "%d", &cfg.MessageRetentionPeriod)
+		_, _ = fmt.Sscanf(v, "%d", &cfg.MessageRetentionPeriod)
 	}
 	if v, ok := attrs["DelaySeconds"]; ok {
 		fmt.Sscanf(v, "%d", &cfg.DelaySeconds)

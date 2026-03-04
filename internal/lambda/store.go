@@ -18,6 +18,9 @@ import (
 	"github.com/openstack-project/openstack/pkg/types"
 )
 
+const functionZipName = "function.zip"
+const configFileName = "config.json"
+
 // Store persists Lambda function configurations and code to disk.
 type Store struct {
 	cfg *config.Config
@@ -58,7 +61,7 @@ func (s *Store) SaveFunction(fn *types.FunctionConfig) error {
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(fnDir, "config.json"), data, 0644)
+	return os.WriteFile(filepath.Join(fnDir, configFileName), data, 0644)
 }
 
 // GetFunction loads a function configuration from disk.
@@ -66,7 +69,7 @@ func (s *Store) GetFunction(name string) (*types.FunctionConfig, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	configPath := filepath.Join(s.cfg.FunctionsDir(), name, "config.json")
+	configPath := filepath.Join(s.cfg.FunctionsDir(), name, configFileName)
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -101,7 +104,7 @@ func (s *Store) ListFunctions() ([]*types.FunctionConfig, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		configPath := filepath.Join(fnDir, entry.Name(), "config.json")
+		configPath := filepath.Join(fnDir, entry.Name(), configFileName)
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			continue
@@ -137,7 +140,7 @@ func (s *Store) SaveCode(name string, code []byte) (string, error) {
 		return "", err
 	}
 
-	codePath := filepath.Join(codeDir, "function.zip")
+	codePath := filepath.Join(codeDir, functionZipName)
 	if err := os.WriteFile(codePath, code, 0644); err != nil {
 		return "", err
 	}
@@ -153,7 +156,7 @@ func (s *Store) GetCodeDir(name string) string {
 
 // GetCodePath returns the path to the function's zip file.
 func (s *Store) GetCodePath(name string) string {
-	return filepath.Join(s.cfg.FunctionsDir(), name, "code", "function.zip")
+	return filepath.Join(s.cfg.FunctionsDir(), name, "code", functionZipName)
 }
 
 // FunctionExists checks if a function exists in the store.
@@ -173,7 +176,7 @@ func (s *Store) ExtractCode(name string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	zipPath := filepath.Join(s.cfg.FunctionsDir(), name, "code", "function.zip")
+	zipPath := filepath.Join(s.cfg.FunctionsDir(), name, "code", functionZipName)
 	extractDir := filepath.Join(s.cfg.FunctionsDir(), name, "code", "extracted")
 
 	zipInfo, err := os.Stat(zipPath)
@@ -191,7 +194,7 @@ func (s *Store) ExtractCode(name string) (string, error) {
 	}
 
 	// Remove stale extraction
-	os.RemoveAll(extractDir)
+	_ = os.RemoveAll(extractDir)
 	if err := os.MkdirAll(extractDir, 0755); err != nil {
 		return "", err
 	}
@@ -200,7 +203,7 @@ func (s *Store) ExtractCode(name string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to open zip: %w", err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	for _, f := range r.File {
 		target := filepath.Join(extractDir, f.Name)
@@ -211,7 +214,9 @@ func (s *Store) ExtractCode(name string) (string, error) {
 		}
 
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(target, f.Mode())
+			if err := os.MkdirAll(target, f.Mode()); err != nil {
+				return "", err
+			}
 			continue
 		}
 
@@ -226,20 +231,20 @@ func (s *Store) ExtractCode(name string) (string, error) {
 
 		rc, err := f.Open()
 		if err != nil {
-			outFile.Close()
+			_ = outFile.Close()
 			return "", err
 		}
 
 		_, err = io.Copy(outFile, rc)
-		rc.Close()
-		outFile.Close()
+		_ = rc.Close()
+		_ = outFile.Close()
 		if err != nil {
 			return "", err
 		}
 	}
 
 	// Write marker
-	os.WriteFile(markerPath, []byte(zipInfo.ModTime().String()), 0644)
+	_ = os.WriteFile(markerPath, []byte(zipInfo.ModTime().String()), 0644)
 
 	return extractDir, nil
 }
@@ -273,7 +278,7 @@ func (s *Store) SaveLayer(name string, version int64, code []byte, cfg *types.La
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(versionDir, "config.json"), data, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(versionDir, configFileName), data, 0644); err != nil {
 		return "", err
 	}
 
@@ -285,7 +290,7 @@ func (s *Store) GetLayer(name string, version int64) (*types.LayerConfig, error)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	configPath := filepath.Join(s.cfg.LayersDir(), name, strconv.FormatInt(version, 10), "config.json")
+	configPath := filepath.Join(s.cfg.LayersDir(), name, strconv.FormatInt(version, 10), configFileName)
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -379,7 +384,7 @@ func (s *Store) listLayerVersionsUnsafe(name string) ([]*types.LayerConfig, erro
 		if !entry.IsDir() {
 			continue
 		}
-		configPath := filepath.Join(layerDir, entry.Name(), "config.json")
+		configPath := filepath.Join(layerDir, entry.Name(), configFileName)
 		data, err := os.ReadFile(configPath)
 		if err != nil {
 			continue
@@ -431,7 +436,7 @@ func (s *Store) ExtractLayer(name string, version int64) (string, error) {
 		}
 	}
 
-	os.RemoveAll(extractDir)
+	_ = os.RemoveAll(extractDir)
 	if err := os.MkdirAll(extractDir, 0755); err != nil {
 		return "", err
 	}
@@ -440,7 +445,7 @@ func (s *Store) ExtractLayer(name string, version int64) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to open layer zip: %w", err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 
 	for _, f := range r.File {
 		target := filepath.Join(extractDir, f.Name)
@@ -448,7 +453,9 @@ func (s *Store) ExtractLayer(name string, version int64) (string, error) {
 			continue
 		}
 		if f.FileInfo().IsDir() {
-			os.MkdirAll(target, f.Mode())
+			if err := os.MkdirAll(target, f.Mode()); err != nil {
+				return "", err
+			}
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
@@ -460,17 +467,17 @@ func (s *Store) ExtractLayer(name string, version int64) (string, error) {
 		}
 		rc, err := f.Open()
 		if err != nil {
-			outFile.Close()
+			_ = outFile.Close()
 			return "", err
 		}
 		_, err = io.Copy(outFile, rc)
-		rc.Close()
-		outFile.Close()
+		_ = rc.Close()
+		_ = outFile.Close()
 		if err != nil {
 			return "", err
 		}
 	}
 
-	os.WriteFile(markerPath, []byte(zipInfo.ModTime().String()), 0644)
+	_ = os.WriteFile(markerPath, []byte(zipInfo.ModTime().String()), 0644)
 	return extractDir, nil
 }

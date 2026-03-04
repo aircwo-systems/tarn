@@ -102,6 +102,6 @@ func (s *Service) generateARN(name string) string {
 
 func randomHex(n int) string {
 	b := make([]byte, n)
-	rand.Read(b)
+	_, _ = rand.Read(b)
 	return fmt.Sprintf("%x", b)[:n]
 }

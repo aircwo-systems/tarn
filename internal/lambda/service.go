@@ -456,7 +456,7 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 		}
 
 		if err := s.engine.StartContainer(ctx, info); err != nil {
-			s.engine.RemoveContainer(ctx, info.ID)
+			_ = s.engine.RemoveContainer(ctx, info.ID)
 			fnMu.Unlock()
 			return nil, fmt.Errorf("failed to start container: %w", err)
 		}

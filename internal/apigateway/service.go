@@ -115,7 +115,7 @@ func (s *Service) Init() error {
 // CreateAPI creates a new HTTP API and an auto-deployed $default stage.
 func (s *Service) CreateAPI(name, description, protocolType, routeSelectionExpression string, tags map[string]string) (*types.APIGatewayAPI, error) {
 	if name == "" {
-		return nil, errors.New("Name is required")
+		return nil, errors.New("name is required")
 	}
 	if protocolType == "" {
 		protocolType = protocolHTTP
@@ -175,7 +175,7 @@ func (s *Service) UpdateAPI(apiID string, input APIUpdateInput) (*types.APIGatew
 	}
 	if input.Name != nil {
 		if *input.Name == "" {
-			return nil, errors.New("Name cannot be empty")
+			return nil, errors.New("name cannot be empty")
 		}
 		api.Name = *input.Name
 	}
@@ -338,7 +338,7 @@ func (s *Service) CreateRoute(apiID string, input RouteCreateInput) (*types.APIG
 		return nil, errors.New("RouteKey is required")
 	}
 	if input.Target == "" {
-		return nil, errors.New("Target is required")
+		return nil, errors.New("target is required")
 	}
 	if _, _, err := parseRouteKey(input.RouteKey); err != nil {
 		return nil, err
@@ -417,7 +417,7 @@ func (s *Service) UpdateRoute(apiID, routeID string, input RouteUpdateInput) (*t
 
 	if input.Target != nil {
 		if *input.Target == "" {
-			return nil, errors.New("Target cannot be empty")
+			return nil, errors.New("target cannot be empty")
 		}
 		integrationID, err := parseIntegrationTarget(*input.Target)
 		if err != nil {
@@ -774,7 +774,7 @@ func normalizeRouteKey(routeKey string) string {
 func parseIntegrationTarget(target string) (string, error) {
 	target = strings.TrimSpace(target)
 	if target == "" {
-		return "", errors.New("Target is required")
+		return "", errors.New("target is required")
 	}
 	if !strings.HasPrefix(target, "integrations/") {
 		return "", fmt.Errorf("unsupported Target %q (expected integrations/{integrationId})", target)
@@ -880,7 +880,6 @@ func matchRoutePath(templatePath, actualPath string) (params map[string]string, 
 				}
 				params[name] = strings.Join(actualSeg[j:], "/")
 				j = len(actualSeg)
-				i++
 				break
 			}
 			if j >= len(actualSeg) {

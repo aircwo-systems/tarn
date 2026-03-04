@@ -107,14 +107,6 @@ func encodeKey(key string) string {
 	return url.PathEscape(key)
 }
 
-func decodeKey(encoded string) string {
-	decoded, err := url.PathUnescape(encoded)
-	if err != nil {
-		return encoded
-	}
-	return decoded
-}
-
 // CreateBucket creates a new bucket.
 func (s *Store) CreateBucket(name, region string) (*types.Bucket, error) {
 	s.mu.Lock()
@@ -176,7 +168,7 @@ func (s *Store) DeleteBucket(name string) error {
 		return fmt.Errorf("BucketNotEmpty")
 	}
 
-	os.RemoveAll(s.bucketDir(name))
+	_ = os.RemoveAll(s.bucketDir(name))
 	delete(s.buckets, name)
 	return nil
 }
@@ -218,9 +210,9 @@ func (s *Store) PutObject(bucket, key, contentType string, body io.Reader, metad
 	hash := md5.New()
 	w := io.MultiWriter(f, hash)
 	size, err := io.Copy(w, body)
-	f.Close()
+	_ = f.Close()
 	if err != nil {
-		os.Remove(objPath)
+		_ = os.Remove(objPath)
 		return nil, fmt.Errorf("write object: %w", err)
 	}
 
@@ -248,7 +240,7 @@ func (s *Store) PutObject(bucket, key, contentType string, body io.Reader, metad
 	}
 	data, _ := json.Marshal(meta)
 	if err := os.WriteFile(metaPath, data, 0644); err != nil {
-		os.Remove(objPath)
+		_ = os.Remove(objPath)
 		return nil, fmt.Errorf("write object meta: %w", err)
 	}
 
@@ -346,8 +338,8 @@ func (s *Store) DeleteObject(bucket, key string) error {
 	defer bs.mu.Unlock()
 
 	encoded := encodeKey(key)
-	os.Remove(filepath.Join(s.objectsDir(bucket), encoded))
-	os.Remove(filepath.Join(s.objmetaDir(bucket), encoded+".json"))
+	_ = os.Remove(filepath.Join(s.objectsDir(bucket), encoded))
+	_ = os.Remove(filepath.Join(s.objmetaDir(bucket), encoded+".json"))
 	return nil
 }
 
@@ -370,8 +362,8 @@ func (s *Store) DeleteObjects(bucket string, keys []string) []types.DeleteError 
 	var errs []types.DeleteError
 	for _, key := range keys {
 		encoded := encodeKey(key)
-		os.Remove(filepath.Join(s.objectsDir(bucket), encoded))
-		os.Remove(filepath.Join(s.objmetaDir(bucket), encoded+".json"))
+		_ = os.Remove(filepath.Join(s.objectsDir(bucket), encoded))
+		_ = os.Remove(filepath.Join(s.objmetaDir(bucket), encoded+".json"))
 	}
 	return errs
 }
@@ -382,7 +374,7 @@ func (s *Store) CopyObject(srcBucket, srcKey, dstBucket, dstKey string) (*types.
 	if err != nil {
 		return nil, err
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 
 	return s.PutObject(dstBucket, dstKey, obj.ContentType, reader, obj.Metadata)
 }

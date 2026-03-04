@@ -76,7 +76,9 @@ func TestCreateFIFOQueue(t *testing.T) {
 
 func TestSendAndReceive(t *testing.T) {
 	s := newTestStore()
-	s.CreateQueue("q1", nil, nil)
+	if _, err := s.CreateQueue("q1", nil, nil); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
 
 	msg, err := s.SendMessage("q1", "hello world", 0, nil, "", "")
 	if err != nil {
@@ -110,9 +112,13 @@ func TestSendAndReceive(t *testing.T) {
 
 func TestVisibilityTimeout(t *testing.T) {
 	s := newTestStore()
-	s.CreateQueue("q2", nil, nil)
+	if _, err := s.CreateQueue("q2", nil, nil); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
 
-	s.SendMessage("q2", "hidden msg", 0, nil, "", "")
+	if _, err := s.SendMessage("q2", "hidden msg", 0, nil, "", ""); err != nil {
+		t.Fatalf("send message: %v", err)
+	}
 
 	// Receive with 1 second visibility timeout
 	msgs, _ := s.ReceiveMessage("q2", 1, 1)
@@ -141,9 +147,13 @@ func TestVisibilityTimeout(t *testing.T) {
 
 func TestDeleteMessage(t *testing.T) {
 	s := newTestStore()
-	s.CreateQueue("q3", nil, nil)
+	if _, err := s.CreateQueue("q3", nil, nil); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
 
-	s.SendMessage("q3", "to delete", 0, nil, "", "")
+	if _, err := s.SendMessage("q3", "to delete", 0, nil, "", ""); err != nil {
+		t.Fatalf("send message: %v", err)
+	}
 
 	msgs, _ := s.ReceiveMessage("q3", 1, 30)
 	if len(msgs) != 1 {
@@ -168,7 +178,9 @@ func TestPurgeQueue(t *testing.T) {
 	s.CreateQueue("q4", nil, nil)
 
 	for i := 0; i < 5; i++ {
-		s.SendMessage("q4", "msg", 0, nil, "", "")
+		if _, err := s.SendMessage("q4", "msg", 0, nil, "", ""); err != nil {
+			t.Fatalf("send message: %v", err)
+		}
 	}
 
 	err := s.PurgeQueue("q4")
@@ -288,14 +300,18 @@ func TestQueueTags(t *testing.T) {
 	}
 
 	// Add tag
-	s.TagQueue("tagged", map[string]string{"team": "backend"})
+	if err := s.TagQueue("tagged", map[string]string{"team": "backend"}); err != nil {
+		t.Fatalf("tag queue: %v", err)
+	}
 	tags2, _ := s.ListQueueTags("tagged")
 	if tags2["team"] != "backend" {
 		t.Fatalf("expected tag team=backend, got %v", tags2)
 	}
 
 	// Remove tag
-	s.UntagQueue("tagged", []string{"env"})
+	if err := s.UntagQueue("tagged", []string{"env"}); err != nil {
+		t.Fatalf("untag queue: %v", err)
+	}
 	tags3, _ := s.ListQueueTags("tagged")
 	if _, exists := tags3["env"]; exists {
 		t.Fatal("tag 'env' should have been removed")
@@ -365,11 +381,15 @@ func TestGetQueueAttributes(t *testing.T) {
 func TestMessageRetentionExpiry(t *testing.T) {
 	s := newTestStore()
 	// Create queue with 1 second retention
-	s.CreateQueue("expire-queue", map[string]string{
+	if _, err := s.CreateQueue("expire-queue", map[string]string{
 		"MessageRetentionPeriod": "1",
-	}, nil)
+	}, nil); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
 
-	s.SendMessage("expire-queue", "ephemeral", 0, nil, "", "")
+	if _, err := s.SendMessage("expire-queue", "ephemeral", 0, nil, "", ""); err != nil {
+		t.Fatalf("send message: %v", err)
+	}
 
 	// Should be available immediately
 	msgs, _ := s.ReceiveMessage("expire-queue", 1, 0)
@@ -377,7 +397,9 @@ func TestMessageRetentionExpiry(t *testing.T) {
 		t.Fatal("expected 1 message before expiry")
 	}
 	// Make it visible again immediately
-	s.ChangeMessageVisibility("expire-queue", msgs[0].ReceiptHandle, 0)
+	if err := s.ChangeMessageVisibility("expire-queue", msgs[0].ReceiptHandle, 0); err != nil {
+		t.Fatalf("change message visibility: %v", err)
+	}
 
 	// Wait for retention to expire
 	time.Sleep(1100 * time.Millisecond)
