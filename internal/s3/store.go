@@ -18,9 +18,10 @@ import (
 
 // Store is a filesystem-backed S3 object store.
 type Store struct {
-	mu      sync.RWMutex
-	baseDir string
-	buckets map[string]*bucketState
+	mu            sync.RWMutex
+	baseDir       string
+	buckets       map[string]*bucketState
+	notifications map[string]*types.BucketNotificationConfiguration
 }
 
 type bucketState struct {
@@ -40,8 +41,9 @@ type objectMeta struct {
 // NewStore creates a new filesystem-backed S3 store.
 func NewStore(baseDir string) *Store {
 	return &Store{
-		baseDir: baseDir,
-		buckets: make(map[string]*bucketState),
+		baseDir:       baseDir,
+		buckets:       make(map[string]*bucketState),
+		notifications: make(map[string]*types.BucketNotificationConfiguration),
 	}
 }
 
@@ -74,6 +76,16 @@ func (s *Store) Init() error {
 			continue
 		}
 		s.buckets[name] = &bucketState{meta: &bucket}
+
+		// Load notification config if present
+		notifPath := filepath.Join(s.baseDir, name, ".notifications.json")
+		notifData, err := os.ReadFile(notifPath)
+		if err == nil {
+			var cfg types.BucketNotificationConfiguration
+			if err := json.Unmarshal(notifData, &cfg); err == nil {
+				s.notifications[name] = &cfg
+			}
+		}
 	}
 
 	return nil
@@ -551,4 +563,33 @@ func (s *Store) TotalSize(bucket string) int64 {
 		total += info.Size()
 	}
 	return total
+}
+
+// PutBucketNotification stores notification config for a bucket.
+func (s *Store) PutBucketNotification(bucket string, cfg *types.BucketNotificationConfiguration) error {
+	s.mu.RLock()
+	_, exists := s.buckets[bucket]
+	s.mu.RUnlock()
+	if !exists {
+		return fmt.Errorf("NoSuchBucket")
+	}
+
+	s.mu.Lock()
+	s.notifications[bucket] = cfg
+	s.mu.Unlock()
+
+	// Persist to disk
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	notifPath := filepath.Join(s.baseDir, bucket, ".notifications.json")
+	return os.WriteFile(notifPath, data, 0644)
+}
+
+// GetBucketNotification returns notification config for a bucket.
+func (s *Store) GetBucketNotification(bucket string) *types.BucketNotificationConfiguration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.notifications[bucket]
 }

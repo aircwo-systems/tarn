@@ -11,10 +11,14 @@ import (
 
 var bucketNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$`)
 
+// S3EventCallback is called when an S3 event occurs (PutObject, DeleteObject).
+type S3EventCallback func(eventName string, bucket, key string, size int64, etag string)
+
 // Service implements S3 business logic.
 type Service struct {
-	cfg   *config.Config
-	store *Store
+	cfg           *config.Config
+	store         *Store
+	eventCallback S3EventCallback
 }
 
 // NewService creates a new S3 service.
@@ -23,6 +27,11 @@ func NewService(cfg *config.Config) *Service {
 		cfg:   cfg,
 		store: NewStore(cfg.S3Dir()),
 	}
+}
+
+// SetEventCallback sets the callback invoked on PutObject/DeleteObject events.
+func (s *Service) SetEventCallback(cb S3EventCallback) {
+	s.eventCallback = cb
 }
 
 // Init ensures the S3 storage directory exists and loads state.
@@ -69,7 +78,14 @@ func (s *Service) ListBuckets() []types.Bucket {
 
 // PutObject stores an object.
 func (s *Service) PutObject(bucket, key, contentType string, body io.Reader, metadata map[string]string) (*types.Object, error) {
-	return s.store.PutObject(bucket, key, contentType, body, metadata)
+	obj, err := s.store.PutObject(bucket, key, contentType, body, metadata)
+	if err != nil {
+		return nil, err
+	}
+	if s.eventCallback != nil {
+		s.eventCallback("s3:ObjectCreated:Put", bucket, key, obj.Size, obj.ETag)
+	}
+	return obj, nil
 }
 
 // GetObject retrieves an object.
@@ -84,7 +100,14 @@ func (s *Service) HeadObject(bucket, key string) (*types.Object, error) {
 
 // DeleteObject removes an object.
 func (s *Service) DeleteObject(bucket, key string) error {
-	return s.store.DeleteObject(bucket, key)
+	err := s.store.DeleteObject(bucket, key)
+	if err != nil {
+		return err
+	}
+	if s.eventCallback != nil {
+		s.eventCallback("s3:ObjectRemoved:Delete", bucket, key, 0, "")
+	}
+	return nil
 }
 
 // DeleteObjects removes multiple objects.
@@ -110,4 +133,14 @@ func (s *Service) ObjectCount(bucket string) int {
 // TotalSize returns the total size of objects in a bucket.
 func (s *Service) TotalSize(bucket string) int64 {
 	return s.store.TotalSize(bucket)
+}
+
+// PutBucketNotificationConfiguration stores notification config for a bucket.
+func (s *Service) PutBucketNotificationConfiguration(bucket string, cfg *types.BucketNotificationConfiguration) error {
+	return s.store.PutBucketNotification(bucket, cfg)
+}
+
+// GetBucketNotificationConfiguration returns notification config for a bucket.
+func (s *Service) GetBucketNotificationConfiguration(bucket string) *types.BucketNotificationConfiguration {
+	return s.store.GetBucketNotification(bucket)
 }

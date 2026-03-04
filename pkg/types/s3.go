@@ -38,3 +38,26 @@ type DeleteError struct {
 	Code    string `json:"Code"`
 	Message string `json:"Message"`
 }
+
+// S3EventName is a type for S3 event notification event names.
+type S3EventName string
+
+const (
+	S3EventObjectCreatedPut    S3EventName = "s3:ObjectCreated:Put"
+	S3EventObjectRemovedDelete S3EventName = "s3:ObjectRemoved:Delete"
+)
+
+// S3LambdaNotification configures Lambda invocation on S3 events.
+type S3LambdaNotification struct {
+	ID                 string        `json:"Id"`
+	LambdaFunctionArn  string        `json:"LambdaFunctionArn"`
+	LambdaFunctionName string        `json:"LambdaFunctionName"`
+	Events             []S3EventName `json:"Events"`
+	FilterPrefix       string        `json:"FilterPrefix,omitempty"`
+	FilterSuffix       string        `json:"FilterSuffix,omitempty"`
+}
+
+// BucketNotificationConfiguration holds all notification configs for a bucket.
+type BucketNotificationConfiguration struct {
+	LambdaConfigurations []S3LambdaNotification `json:"LambdaFunctionConfigurations,omitempty"`
+}
