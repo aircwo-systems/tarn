@@ -23,11 +23,11 @@ func NewHandler(svc *apisvc.Service) *Handler {
 // CreateAPI handles POST /v2/apis.
 func (h *Handler) CreateAPI(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name                     string            `json:"Name"`
-		Description              string            `json:"Description"`
-		ProtocolType             string            `json:"ProtocolType"`
-		RouteSelectionExpression string            `json:"RouteSelectionExpression"`
-		Tags                     map[string]string `json:"Tags"`
+		Name                     string            `json:"name"`
+		Description              string            `json:"description"`
+		ProtocolType             string            `json:"protocolType"`
+		RouteSelectionExpression string            `json:"routeSelectionExpression"`
+		Tags                     map[string]string `json:"tags"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
@@ -44,7 +44,7 @@ func (h *Handler) CreateAPI(w http.ResponseWriter, r *http.Request) {
 
 // ListAPIs handles GET /v2/apis.
 func (h *Handler) ListAPIs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"Items": h.svc.ListAPIs()})
+	writeJSON(w, http.StatusOK, map[string]any{"items": h.svc.ListAPIs()})
 }
 
 // GetAPI handles GET /v2/apis/{apiId}.
@@ -62,8 +62,8 @@ func (h *Handler) GetAPI(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateAPI(w http.ResponseWriter, r *http.Request) {
 	apiID := r.PathValue("apiId")
 	var req struct {
-		Name        *string `json:"Name"`
-		Description *string `json:"Description"`
+		Name        *string `json:"name"`
+		Description *string `json:"description"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
@@ -101,10 +101,11 @@ func (h *Handler) DeleteAPI(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateIntegration(w http.ResponseWriter, r *http.Request) {
 	apiID := r.PathValue("apiId")
 	var req struct {
-		IntegrationType      string `json:"IntegrationType"`
-		IntegrationURI       string `json:"IntegrationUri"`
-		PayloadFormatVersion string `json:"PayloadFormatVersion"`
-		TimeoutInMillis      int    `json:"TimeoutInMillis"`
+		IntegrationType      string            `json:"integrationType"`
+		IntegrationURI       string            `json:"integrationUri"`
+		PayloadFormatVersion string            `json:"payloadFormatVersion"`
+		TimeoutInMillis      int               `json:"timeoutInMillis"`
+		RequestParameters    map[string]string `json:"requestParameters"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
@@ -116,6 +117,7 @@ func (h *Handler) CreateIntegration(w http.ResponseWriter, r *http.Request) {
 		IntegrationURI:       req.IntegrationURI,
 		PayloadFormatVersion: req.PayloadFormatVersion,
 		TimeoutInMillis:      req.TimeoutInMillis,
+		RequestParameters:    req.RequestParameters,
 	})
 	if err != nil {
 		status := http.StatusBadRequest
@@ -138,7 +140,7 @@ func (h *Handler) ListIntegrations(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NotFoundException", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"Items": items})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // GetIntegration handles GET /v2/apis/{apiId}/integrations/{integrationId}.
@@ -158,9 +160,10 @@ func (h *Handler) UpdateIntegration(w http.ResponseWriter, r *http.Request) {
 	apiID := r.PathValue("apiId")
 	integrationID := r.PathValue("integrationId")
 	var req struct {
-		IntegrationURI       *string `json:"IntegrationUri"`
-		PayloadFormatVersion *string `json:"PayloadFormatVersion"`
-		TimeoutInMillis      *int    `json:"TimeoutInMillis"`
+		IntegrationURI       *string           `json:"integrationUri"`
+		PayloadFormatVersion *string           `json:"payloadFormatVersion"`
+		TimeoutInMillis      *int              `json:"timeoutInMillis"`
+		RequestParameters    map[string]string `json:"requestParameters"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
@@ -171,6 +174,7 @@ func (h *Handler) UpdateIntegration(w http.ResponseWriter, r *http.Request) {
 		IntegrationURI:       req.IntegrationURI,
 		PayloadFormatVersion: req.PayloadFormatVersion,
 		TimeoutInMillis:      req.TimeoutInMillis,
+		RequestParameters:    req.RequestParameters,
 	})
 	if err != nil {
 		status := http.StatusBadRequest
@@ -206,8 +210,8 @@ func (h *Handler) DeleteIntegration(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateRoute(w http.ResponseWriter, r *http.Request) {
 	apiID := r.PathValue("apiId")
 	var req struct {
-		RouteKey string `json:"RouteKey"`
-		Target   string `json:"Target"`
+		RouteKey string `json:"routeKey"`
+		Target   string `json:"target"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
@@ -235,7 +239,7 @@ func (h *Handler) ListRoutes(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NotFoundException", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"Items": items})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // GetRoute handles GET /v2/apis/{apiId}/routes/{routeId}.
@@ -255,8 +259,8 @@ func (h *Handler) UpdateRoute(w http.ResponseWriter, r *http.Request) {
 	apiID := r.PathValue("apiId")
 	routeID := r.PathValue("routeId")
 	var req struct {
-		RouteKey *string `json:"RouteKey"`
-		Target   *string `json:"Target"`
+		RouteKey *string `json:"routeKey"`
+		Target   *string `json:"target"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
@@ -296,7 +300,7 @@ func (h *Handler) ListStages(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "NotFoundException", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"Items": items})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 // GetStage handles GET /v2/apis/{apiId}/stages/{stageName}.
@@ -316,8 +320,8 @@ func (h *Handler) UpdateStage(w http.ResponseWriter, r *http.Request) {
 	apiID := r.PathValue("apiId")
 	stageName := r.PathValue("stageName")
 	var req struct {
-		Description          *string        `json:"Description"`
-		DefaultRouteSettings map[string]any `json:"DefaultRouteSettings"`
+		Description          *string        `json:"description"`
+		DefaultRouteSettings map[string]any `json:"defaultRouteSettings"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())

@@ -4,50 +4,53 @@ import "time"
 
 // APIGatewayAPI represents an API Gateway HTTP API (v2).
 type APIGatewayAPI struct {
-	APIID                    string            `json:"ApiId"`
-	Name                     string            `json:"Name"`
-	Description              string            `json:"Description,omitempty"`
-	ProtocolType             string            `json:"ProtocolType"`
-	RouteSelectionExpression string            `json:"RouteSelectionExpression,omitempty"`
-	APIEndpoint              string            `json:"ApiEndpoint,omitempty"`
-	APIArn                   string            `json:"ApiArn,omitempty"`
-	Tags                     map[string]string `json:"Tags,omitempty"`
-	CreatedDate              time.Time         `json:"CreatedDate"`
+	APIID                    string            `json:"apiId"`
+	Name                     string            `json:"name"`
+	Description              string            `json:"description,omitempty"`
+	ProtocolType             string            `json:"protocolType"`
+	RouteSelectionExpression string            `json:"routeSelectionExpression,omitempty"`
+	APIEndpoint              string            `json:"apiEndpoint,omitempty"`
+	APIArn                   string            `json:"apiArn,omitempty"`
+	Tags                     map[string]string `json:"tags,omitempty"`
+	CreatedDate              time.Time         `json:"createdDate"`
 }
 
 // APIGatewayIntegration represents an integration attached to an HTTP API.
 type APIGatewayIntegration struct {
-	IntegrationID        string    `json:"IntegrationId"`
-	APIID                string    `json:"ApiId,omitempty"`
-	IntegrationType      string    `json:"IntegrationType"`
-	IntegrationMethod    string    `json:"IntegrationMethod,omitempty"`
-	IntegrationURI       string    `json:"IntegrationUri"`
-	PayloadFormatVersion string    `json:"PayloadFormatVersion,omitempty"`
-	TimeoutInMillis      int       `json:"TimeoutInMillis,omitempty"`
-	LambdaFunctionArn    string    `json:"LambdaFunctionArn,omitempty"`
-	LambdaFunctionName   string    `json:"LambdaFunctionName,omitempty"`
-	IntegrationArn       string    `json:"IntegrationArn,omitempty"`
-	CreatedDate          time.Time `json:"CreatedDate"`
+	IntegrationID        string            `json:"integrationId"`
+	APIID                string            `json:"apiId,omitempty"`
+	IntegrationType      string            `json:"integrationType"`
+	IntegrationMethod    string            `json:"integrationMethod,omitempty"`
+	IntegrationURI       string            `json:"integrationUri"`
+	PayloadFormatVersion string            `json:"payloadFormatVersion,omitempty"`
+	TimeoutInMillis      int               `json:"timeoutInMillis,omitempty"`
+	RequestParameters    map[string]string `json:"requestParameters,omitempty"`
+	LambdaFunctionArn    string            `json:"lambdaFunctionArn,omitempty"`
+	LambdaFunctionName   string            `json:"lambdaFunctionName,omitempty"`
+	SQSQueueArn          string            `json:"sqsQueueArn,omitempty"`
+	SQSQueueName         string            `json:"sqsQueueName,omitempty"`
+	IntegrationArn       string            `json:"integrationArn,omitempty"`
+	CreatedDate          time.Time         `json:"createdDate"`
 }
 
 // APIGatewayRoute represents an API route.
 type APIGatewayRoute struct {
-	RouteID     string    `json:"RouteId"`
-	APIID       string    `json:"ApiId,omitempty"`
-	RouteKey    string    `json:"RouteKey"`
-	Target      string    `json:"Target,omitempty"`
-	RouteArn    string    `json:"RouteArn,omitempty"`
-	CreatedDate time.Time `json:"CreatedDate"`
+	RouteID     string    `json:"routeId"`
+	APIID       string    `json:"apiId,omitempty"`
+	RouteKey    string    `json:"routeKey"`
+	Target      string    `json:"target,omitempty"`
+	RouteArn    string    `json:"routeArn,omitempty"`
+	CreatedDate time.Time `json:"createdDate"`
 }
 
 // APIGatewayStage represents an API stage.
 type APIGatewayStage struct {
-	StageName       string    `json:"StageName"`
-	APIID           string    `json:"ApiId,omitempty"`
-	AutoDeploy      bool      `json:"AutoDeploy"`
-	Description     string    `json:"Description,omitempty"`
-	InvokeURL       string    `json:"InvokeUrl,omitempty"`
-	StageArn        string    `json:"StageArn,omitempty"`
-	CreatedDate     time.Time `json:"CreatedDate"`
-	LastUpdatedDate time.Time `json:"LastUpdatedDate"`
+	StageName       string    `json:"stageName"`
+	APIID           string    `json:"apiId,omitempty"`
+	AutoDeploy      bool      `json:"autoDeploy"`
+	Description     string    `json:"description,omitempty"`
+	InvokeURL       string    `json:"invokeUrl,omitempty"`
+	StageArn        string    `json:"stageArn,omitempty"`
+	CreatedDate     time.Time `json:"createdDate"`
+	LastUpdatedDate time.Time `json:"lastUpdatedDate"`
 }

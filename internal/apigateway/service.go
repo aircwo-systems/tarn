@@ -22,15 +22,20 @@ import (
 const (
 	protocolHTTP                    = "HTTP"
 	integrationTypeAWSProxy         = "AWS_PROXY"
+	integrationTypeAWS              = "AWS"
 	defaultPayloadFormatVersion     = "2.0"
 	defaultRouteSelectionExpression = "$request.method $request.path"
 )
 
+// SQSSendFunc is a function type for sending SQS messages.
+type SQSSendFunc func(queueName, body string) (messageID, md5 string, err error)
+
 // Service implements API Gateway HTTP API (v2) behavior.
 type Service struct {
-	cfg    *config.Config
-	lambda *lambdasvc.Service
-	store  *Store
+	cfg      *config.Config
+	lambda   *lambdasvc.Service
+	sqsSend  SQSSendFunc
+	store    *Store
 }
 
 // APIUpdateInput contains mutable API fields.
@@ -45,6 +50,7 @@ type IntegrationCreateInput struct {
 	IntegrationURI       string
 	PayloadFormatVersion string
 	TimeoutInMillis      int
+	RequestParameters    map[string]string
 }
 
 // IntegrationUpdateInput contains mutable integration fields.
@@ -52,6 +58,7 @@ type IntegrationUpdateInput struct {
 	IntegrationURI       *string
 	PayloadFormatVersion *string
 	TimeoutInMillis      *int
+	RequestParameters    map[string]string
 }
 
 // RouteCreateInput contains create parameters for routes.
@@ -91,11 +98,12 @@ type InvokeOutput struct {
 }
 
 // NewService creates a new API Gateway service.
-func NewService(cfg *config.Config, lambdaSvc *lambdasvc.Service) *Service {
+func NewService(cfg *config.Config, lambdaSvc *lambdasvc.Service, sqsSend SQSSendFunc) *Service {
 	return &Service{
-		cfg:    cfg,
-		lambda: lambdaSvc,
-		store:  NewStore(cfg),
+		cfg:     cfg,
+		lambda:  lambdaSvc,
+		sqsSend: sqsSend,
+		store:   NewStore(cfg),
 	}
 }
 
@@ -185,13 +193,13 @@ func (s *Service) DeleteAPI(apiID string) error {
 	return s.store.DeleteAPI(apiID)
 }
 
-// CreateIntegration creates a Lambda AWS_PROXY integration.
+// CreateIntegration creates a Lambda AWS_PROXY or SQS AWS integration.
 func (s *Service) CreateIntegration(apiID string, input IntegrationCreateInput) (*types.APIGatewayIntegration, error) {
 	if input.IntegrationType == "" {
 		input.IntegrationType = integrationTypeAWSProxy
 	}
-	if input.IntegrationType != integrationTypeAWSProxy {
-		return nil, fmt.Errorf("unsupported IntegrationType %q (only AWS_PROXY is supported)", input.IntegrationType)
+	if input.IntegrationType != integrationTypeAWSProxy && input.IntegrationType != integrationTypeAWS {
+		return nil, fmt.Errorf("unsupported IntegrationType %q (only AWS_PROXY and AWS are supported)", input.IntegrationType)
 	}
 	if input.IntegrationURI == "" {
 		return nil, errors.New("IntegrationUri is required")
@@ -204,14 +212,6 @@ func (s *Service) CreateIntegration(apiID string, input IntegrationCreateInput) 
 	}
 	if input.TimeoutInMillis < 50 || input.TimeoutInMillis > 30000 {
 		return nil, errors.New("TimeoutInMillis must be between 50 and 30000")
-	}
-
-	lambdaArn, lambdaName, err := parseLambdaIntegrationURI(input.IntegrationURI)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := s.lambda.GetFunction(lambdaName); err != nil {
-		return nil, fmt.Errorf("invalid IntegrationUri: %w", err)
 	}
 
 	if _, err := s.store.GetAPI(apiID); err != nil {
@@ -228,10 +228,30 @@ func (s *Service) CreateIntegration(apiID string, input IntegrationCreateInput) 
 		IntegrationURI:       input.IntegrationURI,
 		PayloadFormatVersion: input.PayloadFormatVersion,
 		TimeoutInMillis:      input.TimeoutInMillis,
-		LambdaFunctionArn:    lambdaArn,
-		LambdaFunctionName:   lambdaName,
+		RequestParameters:    input.RequestParameters,
 		IntegrationArn:       fmt.Sprintf("arn:aws:apigateway:%s::/apis/%s/integrations/%s", s.cfg.Region, apiID, integrationID),
 		CreatedDate:          now,
+	}
+
+	switch input.IntegrationType {
+	case integrationTypeAWSProxy:
+		lambdaArn, lambdaName, err := parseLambdaIntegrationURI(input.IntegrationURI)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := s.lambda.GetFunction(lambdaName); err != nil {
+			return nil, fmt.Errorf("invalid IntegrationUri: %w", err)
+		}
+		integration.LambdaFunctionArn = lambdaArn
+		integration.LambdaFunctionName = lambdaName
+
+	case integrationTypeAWS:
+		sqsArn, queueName, err := parseSQSIntegrationURI(input.IntegrationURI)
+		if err != nil {
+			return nil, err
+		}
+		integration.SQSQueueArn = sqsArn
+		integration.SQSQueueName = queueName
 	}
 
 	if err := s.store.CreateIntegration(apiID, integration); err != nil {
@@ -285,6 +305,10 @@ func (s *Service) UpdateIntegration(apiID, integrationID string, input Integrati
 			return nil, errors.New("TimeoutInMillis must be between 50 and 30000")
 		}
 		integration.TimeoutInMillis = *input.TimeoutInMillis
+	}
+
+	if input.RequestParameters != nil {
+		integration.RequestParameters = input.RequestParameters
 	}
 
 	if err := s.store.SaveIntegration(apiID, integration); err != nil {
@@ -475,6 +499,14 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 	integration, err := s.store.GetIntegration(input.APIID, integrationID)
 	if err != nil {
 		return nil, err
+	}
+
+	// Branch on integration type
+	switch integration.IntegrationType {
+	case integrationTypeAWS:
+		return s.invokeSQSIntegration(integration, input, pathParams)
+	default:
+		// AWS_PROXY — Lambda
 	}
 
 	eventPayload, err := buildLambdaProxyEvent(input, matched, pathParams)
@@ -921,6 +953,111 @@ func cloneTags(src map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+func (s *Service) invokeSQSIntegration(integration *types.APIGatewayIntegration, input *InvokeInput, pathParams map[string]string) (*InvokeOutput, error) {
+	if s.sqsSend == nil {
+		return nil, errors.New("SQS service not configured for AWS integration type")
+	}
+
+	// Resolve message body: use RequestParameters["MessageBody"] expression if present,
+	// otherwise fall back to the raw request body.
+	body := string(input.Body)
+	if expr, ok := integration.RequestParameters["MessageBody"]; ok {
+		body = evaluateExpression(expr, input, pathParams)
+	}
+
+	messageID, md5, err := s.sqsSend(integration.SQSQueueName, body)
+	if err != nil {
+		return nil, fmt.Errorf("SQS send failed: %w", err)
+	}
+
+	respBody, _ := json.Marshal(map[string]string{
+		"MessageId":        messageID,
+		"MD5OfMessageBody": md5,
+	})
+
+	return &InvokeOutput{
+		StatusCode: http.StatusOK,
+		Headers:    map[string]string{"Content-Type": "application/json"},
+		Body:       respBody,
+	}, nil
+}
+
+// evaluateExpression evaluates an HTTP API v2 request parameter expression against
+// the incoming request. Supported forms:
+//
+//	$request.body              — full request body as string
+//	$request.body.field        — top-level JSON field extracted from body
+//	$request.header.name       — request header value
+//	$request.querystring.name  — query string parameter
+//	$request.path.name         — path parameter captured by the route
+//	'literal'                  — static string (single-quoted)
+func evaluateExpression(expr string, input *InvokeInput, pathParams map[string]string) string {
+	expr = strings.TrimSpace(expr)
+
+	// Static literal: 'value'
+	if len(expr) >= 2 && expr[0] == '\'' && expr[len(expr)-1] == '\'' {
+		return expr[1 : len(expr)-1]
+	}
+
+	switch {
+	case expr == "$request.body":
+		return string(input.Body)
+
+	case strings.HasPrefix(expr, "$request.body."):
+		field := expr[len("$request.body."):]
+		return extractJSONField(input.Body, field)
+
+	case strings.HasPrefix(expr, "$request.header."):
+		name := expr[len("$request.header."):]
+		return input.Headers.Get(name)
+
+	case strings.HasPrefix(expr, "$request.querystring."):
+		name := expr[len("$request.querystring."):]
+		return input.Query.Get(name)
+
+	case strings.HasPrefix(expr, "$request.path."):
+		name := expr[len("$request.path."):]
+		if pathParams != nil {
+			return pathParams[name]
+		}
+	}
+
+	return expr
+}
+
+// extractJSONField extracts a top-level string or scalar field from a JSON object body.
+func extractJSONField(body []byte, field string) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(body, &obj); err != nil {
+		return ""
+	}
+	raw, ok := obj[field]
+	if !ok {
+		return ""
+	}
+	// Unwrap JSON strings; return other scalars as-is.
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	return string(raw)
+}
+
+func parseSQSIntegrationURI(uri string) (sqsArn string, queueName string, err error) {
+	uri = strings.TrimSpace(uri)
+	if !strings.HasPrefix(uri, "arn:aws:sqs:") {
+		return "", "", fmt.Errorf("invalid SQS IntegrationUri %q (expected arn:aws:sqs:...)", uri)
+	}
+	parts := strings.Split(uri, ":")
+	if len(parts) < 6 || parts[5] == "" {
+		return "", "", fmt.Errorf("invalid SQS ARN in IntegrationUri: %q", uri)
+	}
+	return uri, parts[5], nil
 }
 
 func isTransientInvokeError(err error) bool {

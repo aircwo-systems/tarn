@@ -183,7 +183,7 @@ func TestAPIGatewayStatePersistsToDisk(t *testing.T) {
 		t.Fatalf("save function: %v", err)
 	}
 
-	svc := NewService(cfg, lambdaSvc)
+	svc := NewService(cfg, lambdaSvc, nil)
 	if err := svc.Init(); err != nil {
 		t.Fatalf("init apigateway: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestAPIGatewayStatePersistsToDisk(t *testing.T) {
 		t.Fatalf("create route: %v", err)
 	}
 
-	reloaded := NewService(cfg, lambdaSvc)
+	reloaded := NewService(cfg, lambdaSvc, nil)
 	if err := reloaded.Init(); err != nil {
 		t.Fatalf("reload apigateway: %v", err)
 	}
@@ -247,5 +247,5 @@ func newTestService(t *testing.T) *Service {
 		}
 	}
 
-	return NewService(cfg, lambdaSvc)
+	return NewService(cfg, lambdaSvc, nil)
 }

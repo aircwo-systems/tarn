@@ -190,10 +190,4 @@ func newTestHandler(t *testing.T) *Handler {
 		Handler:      "index.handler",
 		Role:         "arn:aws:iam::000000000000:role/lambda-role",
 		State:        types.FunctionStateActive,
-	}); err != nil {
-		t.Fatalf("save function: %v", err)
-	}
-
-	service := apisvc.NewService(cfg, lambdaSvc)
-	return NewHandler(service)
-}
+			LastUpdateStatus: types.LastUpdateStatusSuccessful,
