@@ -90,8 +90,54 @@ func (h *Handler) GetFunction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
 		return
 	}
+	// ensure field is populated for clients that don't know about it
+	if fn.LastUpdateStatus == "" {
+		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"Configuration": fn,
+		// Terraform AWS provider (v5/v6) treats GetFunction output as empty when
+		// either Configuration or Code is missing.
+		"Code": map[string]interface{}{
+			"RepositoryType": "S3",
+		},
+	})
+}
+
+// GetFunctionConfiguration handles GET /2015-03-31/functions/{name}/configuration.
+// Returns the configuration object at the root level (no "Configuration" wrapper).
+// Used by the TF AWS provider v5 waiter (WaitUntilFunctionActiveV2) to poll State.
+func (h *Handler) GetFunctionConfiguration(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	fn, err := h.svc.GetFunction(name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
+		return
+	}
+	if fn.LastUpdateStatus == "" {
+		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
+	}
+	writeJSON(w, http.StatusOK, fn)
+}
+
+// ListVersionsByFunction handles GET /2015-03-31/functions/{name}/versions.
+// Terraform uses this to resolve the latest published (or $LATEST) version
+// during Lambda function reads.
+func (h *Handler) ListVersionsByFunction(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	fn, err := h.svc.GetFunction(name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
+		return
+	}
+	if fn.Version == "" {
+		fn.Version = "$LATEST"
+	}
+	if fn.LastUpdateStatus == "" {
+		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"Versions": []*types.FunctionConfig{fn},
 	})
 }
 
@@ -215,6 +261,17 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 	w.Write(output.Payload)
 }
 
+// NotFound returns a well-formed AWS ResourceNotFoundException for any Lambda
+// sub-resource endpoint we don't emulate (e.g. code-signing-config, concurrency,
+// policy).  The Terraform AWS provider v5 calls several optional-feature endpoints
+// during every function read and tolerates ResourceNotFoundException but treats any
+// other error as fatal.  Without this, the Go mux returns a plain-text 404 that
+// the AWS SDK cannot parse, causing terraform apply to fail after creation.
+func (h *Handler) NotFound(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
+}
+
 // GetAccountSettings handles GET /2015-03-31/account-settings
 func (h *Handler) GetAccountSettings(w http.ResponseWriter, r *http.Request) {
 	functions, _ := h.svc.ListFunctions()
@@ -224,11 +281,11 @@ func (h *Handler) GetAccountSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"AccountLimit": map[string]interface{}{
-			"TotalCodeSize":                    80530636800,
-			"CodeSizeUnzipped":                 262144000,
-			"CodeSizeZipped":                   52428800,
-			"ConcurrentExecutions":             1000,
-			"UnreservedConcurrentExecutions":   1000,
+			"TotalCodeSize":                  80530636800,
+			"CodeSizeUnzipped":               262144000,
+			"CodeSizeZipped":                 52428800,
+			"ConcurrentExecutions":           1000,
+			"UnreservedConcurrentExecutions": 1000,
 		},
 		"AccountUsage": map[string]interface{}{
 			"TotalCodeSize": totalCodeSize,
@@ -418,9 +475,9 @@ type updateCodeRequest struct {
 }
 
 type publishLayerRequest struct {
-	Description        string      `json:"Description,omitempty"`
-	CompatibleRuntimes []string    `json:"CompatibleRuntimes,omitempty"`
-	Content            *codeInput  `json:"Content,omitempty"`
+	Description        string     `json:"Description,omitempty"`
+	CompatibleRuntimes []string   `json:"CompatibleRuntimes,omitempty"`
+	Content            *codeInput `json:"Content,omitempty"`
 }
 
 // --- Helpers ---

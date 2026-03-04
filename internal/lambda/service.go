@@ -39,6 +39,8 @@ type FunctionMetrics struct {
 	LastInvokedAt     time.Time `json:"lastInvokedAt"`
 }
 
+const pendingToActiveDelay = 750 * time.Millisecond
+
 // NewService creates a new Lambda service.
 func NewService(cfg *config.Config, store *Store, eng *engine.Engine, pool *engine.WarmPool, logsSvc *logssvc.Service) *Service {
 	return &Service{
@@ -54,10 +56,15 @@ func NewService(cfg *config.Config, store *Store, eng *engine.Engine, pool *engi
 }
 
 // CreateFunction creates a new Lambda function.
+// If a function with the same name already exists on disk (e.g. from a previous
+// run that was not cleanly destroyed), it is overwritten.  Returning
+// ResourceConflictException in that case causes the Terraform AWS provider v5
+// to retry until timeout and taint the resource, which is unhelpful for a local
+// emulator where disk state can outlive Terraform state.
 func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, code []byte) (*types.FunctionConfig, error) {
-	if s.store.FunctionExists(fn.FunctionName) {
-		return nil, fmt.Errorf("function %s already exists", fn.FunctionName)
-	}
+	// Evict any warm container for a pre-existing function so the next invoke
+	// picks up the new code and config.
+	s.evictWarmContainer(ctx, fn.FunctionName)
 
 	if fn.Timeout == 0 {
 		fn.Timeout = s.cfg.LambdaDefaultTimeout
@@ -70,7 +77,14 @@ func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, 
 	}
 
 	fn.FunctionArn = fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", s.cfg.Region, s.cfg.AccountID, fn.FunctionName)
-	fn.State = types.FunctionStateActive
+	// AWS starts a newly created function in the "Pending" state; the
+	// SDK/client waiters observe a transition to "Active".  We mimic that
+	// behavior so that the Terraform AWS provider's waiter sees a change
+	// and exits promptly.  The create response itself still returns the
+	// pending values but we mark the stored config as pending and switch
+	// to active on the first subsequent lookup.
+	fn.State = types.FunctionStatePending
+	fn.LastUpdateStatus = types.LastUpdateStatusPending
 	fn.LastModified = time.Now()
 
 	if len(code) > 0 {
@@ -90,6 +104,7 @@ func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, 
 	if err := s.store.SaveFunction(fn); err != nil {
 		return nil, fmt.Errorf("failed to save function: %w", err)
 	}
+	s.schedulePendingActivation(fn.FunctionName)
 	s.ensureFunctionMetrics(fn.FunctionName)
 	if s.logsSvc != nil {
 		s.logsSvc.CreateLogGroup(fmt.Sprintf("/aws/lambda/%s", fn.FunctionName))
@@ -109,6 +124,40 @@ func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, 
 	return fn, nil
 }
 
+func (s *Service) schedulePendingActivation(name string) {
+	go func() {
+		timer := time.NewTimer(pendingToActiveDelay)
+		defer timer.Stop()
+		<-timer.C
+
+		if err := s.promoteFunctionToActiveIfPending(name); err != nil && !strings.Contains(err.Error(), "not found") {
+			log.Printf("[lambda] warning: failed to promote function %s to active: %v", name, err)
+		}
+	}()
+}
+
+func (s *Service) promoteFunctionToActiveIfPending(name string) error {
+	fn, err := s.store.GetFunction(name)
+	if err != nil {
+		return err
+	}
+
+	if fn.LastUpdateStatus == "" {
+		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
+	}
+
+	if fn.State != types.FunctionStatePending {
+		if fn.LastUpdateStatus == types.LastUpdateStatusSuccessful {
+			return nil
+		}
+		return s.store.SaveFunction(fn)
+	}
+
+	fn.State = types.FunctionStateActive
+	fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
+	return s.store.SaveFunction(fn)
+}
+
 // getFunctionMutex returns a per-function mutex (created lazily) to serialize cold starts.
 func (s *Service) getFunctionMutex(name string) *sync.Mutex {
 	v, _ := s.startMu.LoadOrStore(name, &sync.Mutex{})
@@ -117,7 +166,32 @@ func (s *Service) getFunctionMutex(name string) *sync.Mutex {
 
 // GetFunction retrieves a function by name.
 func (s *Service) GetFunction(name string) (*types.FunctionConfig, error) {
-	return s.store.GetFunction(name)
+	fn, err := s.store.GetFunction(name)
+	if err != nil {
+		return nil, err
+	}
+	// older functions may not have the field populated
+	if fn.LastUpdateStatus == "" {
+		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
+	}
+
+	// If we are still in the pending state, return that value once and
+	// transition the persisted configuration to active.  This ensures the
+	// first observer sees "Pending" and subsequent callers observe the
+	// expected AWS-like progression.
+	if fn.State == types.FunctionStatePending {
+		// copy before mutating so we don't modify the object returned to
+		// the caller.
+		original := *fn
+		fn.State = types.FunctionStateActive
+		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
+		// persist the updated state synchronously so the next read
+		// immediately sees Active (an async save races with the next poll).
+		_ = s.store.SaveFunction(fn)
+		return &original, nil
+	}
+
+	return fn, nil
 }
 
 // ListFunctions returns all functions.
@@ -150,10 +224,11 @@ func (s *Service) UpdateFunctionCode(ctx context.Context, name string, code []by
 	fn.CodeSHA256 = hash
 	fn.CodeSize = int64(len(code))
 	fn.LastModified = time.Now()
+	fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
 
-	// Re-extract code
+	// Pre-extract so the first invoke is faster; failure is non-fatal.
 	if _, err := s.store.ExtractCode(name); err != nil {
-		return nil, fmt.Errorf("failed to extract code: %w", err)
+		log.Printf("[lambda] warning: failed to pre-extract code for %s: %v", name, err)
 	}
 
 	// Evict warm container so next invoke uses new code
@@ -306,6 +381,7 @@ func (s *Service) UpdateFunctionConfiguration(ctx context.Context, name string, 
 	}
 
 	fn.LastModified = time.Now()
+	fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
 
 	// Evict warm container since config changed
 	s.evictWarmContainer(ctx, name)
@@ -322,6 +398,16 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	fn, err := s.store.GetFunction(input.FunctionName)
 	if err != nil {
 		return nil, err
+	}
+
+	if fn.State == types.FunctionStatePending {
+		if err := s.promoteFunctionToActiveIfPending(fn.FunctionName); err != nil {
+			return nil, fmt.Errorf("failed to promote function %s to active: %w", fn.FunctionName, err)
+		}
+		fn, err = s.store.GetFunction(input.FunctionName)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if fn.State != types.FunctionStateActive {
