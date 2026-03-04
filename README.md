@@ -144,6 +144,22 @@ For a feature-scoped dashboard demo, use `examples/feature-r10`. It provisions a
 ./examples/feature-r10/cleanup.sh
 ```
 
+For a Terraform-based end-to-end stack tagged `feature=develop-mvp`, use `examples/terraform/develop-mvp-content-pipeline`. It provisions API Gateway, SQS, Lambda, S3 notifications, and Secrets Manager so the canvas shows queue and storage triggers in one slice:
+
+```bash
+cd examples/terraform/develop-mvp-content-pipeline
+terraform init
+terraform apply -auto-approve
+```
+
+For a second end-to-end example with Redis-backed image processing, use `examples/terraform/develop-mvp-media-redis-pipeline`. It provisions API Gateway, SQS, Lambda, S3 notifications, Secrets Manager, and a Redis-backed image status/index path:
+
+```bash
+cd examples/terraform/develop-mvp-media-redis-pipeline
+terraform init
+terraform apply -auto-approve
+```
+
 The example accepts `API_STAGE`, but only `$default` is supported today because OpenStack auto-creates a single auto-deployed HTTP API stage.
 
 ### Supported API Gateway v2 operations
