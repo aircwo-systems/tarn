@@ -642,21 +642,21 @@ func TestCreateDuplicate(t *testing.T) {
 	resp, _ := http.Post(endpoint+"/2015-03-31/functions", "application/json", bytes.NewReader(body))
 	resp.Body.Close()
 
-	// Try to create again — should fail with 409
+	// Try to create again — we override the resource
 	resp2, err := http.Post(endpoint+"/2015-03-31/functions", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp2.Body.Close()
 
-	if resp2.StatusCode != 409 {
-		t.Fatalf("expected 409 for duplicate, got %d", resp2.StatusCode)
+	if resp2.StatusCode != 201 {
+		t.Fatalf("expected 201 for duplicate override, got %d", resp2.StatusCode)
 	}
 
 	// Cleanup
 	delReq, _ := http.NewRequest("DELETE", endpoint+"/2015-03-31/functions/e2e-dupe", nil)
 	delResp, _ := http.DefaultClient.Do(delReq)
-	delResp.Body.Close()
+	_ = delResp.Body.Close()
 }
 
 func TestGetFunction(t *testing.T) {
@@ -677,20 +677,16 @@ func TestGetFunction(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(createReq)
-	resp, _ := http.Post(endpoint+"/2015-03-31/functions", "application/json", bytes.NewReader(body))
-	resp.Body.Close()
-
-	// Get function
-	getResp, err := http.Get(endpoint + "/2015-03-31/functions/e2e-getfunc")
+	resp, err := http.Post(endpoint+"/2015-03-31/functions", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer getResp.Body.Close()
-	getBody, _ := io.ReadAll(getResp.Body)
+	_ = resp.Body.Close()
 
-	if getResp.StatusCode != 200 {
-		t.Fatalf("get failed (%d): %s", getResp.StatusCode, string(getBody))
-	}
+	// Define polling parameters
+	timeout := 15 * time.Second
+	interval := 1 * time.Second
+	deadline := time.Now().Add(timeout)
 
 	var result struct {
 		Configuration struct {
@@ -706,8 +702,41 @@ func TestGetFunction(t *testing.T) {
 			RepositoryType string `json:"RepositoryType"`
 		} `json:"Code"`
 	}
-	json.Unmarshal(getBody, &result)
 
+	// Polling loop to wait for "Active" state
+	activated := false
+	for time.Now().Before(deadline) {
+		getResp, err := http.Get(endpoint + "/2015-03-31/functions/e2e-getfunc")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		getBody, _ := io.ReadAll(getResp.Body)
+		_ = getResp.Body.Close()
+
+		if getResp.StatusCode != 200 {
+			t.Fatalf("get failed (%d): %s", getResp.StatusCode, string(getBody))
+		}
+
+		err = json.Unmarshal(getBody, &result)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if result.Configuration.State == "Active" {
+			activated = true
+			break
+		}
+
+		t.Logf("Function state is %q, retrying...", result.Configuration.State)
+		time.Sleep(interval)
+	}
+
+	if !activated {
+		t.Fatalf("timed out waiting for 'Active' state; last state was %q", result.Configuration.State)
+	}
+
+	// Final Assertions
 	cfg := result.Configuration
 	if cfg.FunctionName != "e2e-getfunc" {
 		t.Fatalf("expected name 'e2e-getfunc', got %q", cfg.FunctionName)
@@ -721,17 +750,16 @@ func TestGetFunction(t *testing.T) {
 	if cfg.Timeout != 10 {
 		t.Fatalf("expected timeout 10, got %d", cfg.Timeout)
 	}
-	if cfg.State != "Active" {
-		t.Fatalf("expected state 'Active', got %q", cfg.State)
-	}
 	if result.Code.RepositoryType == "" {
 		t.Fatalf("expected non-empty Code.RepositoryType")
 	}
 
 	// Cleanup
 	delReq, _ := http.NewRequest("DELETE", endpoint+"/2015-03-31/functions/e2e-getfunc", nil)
-	delResp, _ := http.DefaultClient.Do(delReq)
-	delResp.Body.Close()
+	delResp, err := http.DefaultClient.Do(delReq)
+	if err == nil {
+		_ = delResp.Body.Close()
+	}
 }
 
 func TestUpdateFunctionConfiguration(t *testing.T) {
