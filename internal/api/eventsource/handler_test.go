@@ -11,6 +11,12 @@ import (
 	eventsourcesvc "github.com/openstack-project/openstack/internal/eventsource"
 )
 
+const (
+	eventSourceMappingsPath = "/2015-03-31/event-source-mappings"
+	eventSourceMappingUUID  = eventSourceMappingsPath + "/"
+	statusCodeMismatch      = "status = %d, want %d"
+)
+
 type mappingResponse struct {
 	UUID         string  `json:"UUID"`
 	FunctionName string  `json:"FunctionName"`
@@ -34,8 +40,8 @@ func newTestHandler(t *testing.T) *Handler {
 func TestCreateAndGetMapping(t *testing.T) {
 	h := newTestHandler(t)
 
-	body := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:orders","FunctionName":"process-order","BatchSize":5}`
-	req := httptest.NewRequest(http.MethodPost, "/2015-03-31/event-source-mappings", bytes.NewBufferString(body))
+	body := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:orders","FunctionName":"process-order","BatchSize":5,"Enabled":false}`
+	req := httptest.NewRequest(http.MethodPost, eventSourceMappingsPath, bytes.NewBufferString(body))
 	rec := httptest.NewRecorder()
 
 	h.Create(rec, req)
@@ -62,7 +68,7 @@ func TestCreateAndGetMapping(t *testing.T) {
 	}
 
 	// GET
-	req2 := httptest.NewRequest(http.MethodGet, "/2015-03-31/event-source-mappings/"+mapping.UUID, nil)
+	req2 := httptest.NewRequest(http.MethodGet, eventSourceMappingUUID+mapping.UUID, nil)
 	req2.SetPathValue("uuid", mapping.UUID)
 	rec2 := httptest.NewRecorder()
 
@@ -77,13 +83,13 @@ func TestCreateMissingEventSourceArn(t *testing.T) {
 	h := newTestHandler(t)
 
 	body := `{"FunctionName":"fn"}`
-	req := httptest.NewRequest(http.MethodPost, "/2015-03-31/event-source-mappings", bytes.NewBufferString(body))
+	req := httptest.NewRequest(http.MethodPost, eventSourceMappingsPath, bytes.NewBufferString(body))
 	rec := httptest.NewRecorder()
 
 	h.Create(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+		t.Fatalf(statusCodeMismatch, rec.Code, http.StatusBadRequest)
 	}
 }
 
@@ -91,31 +97,31 @@ func TestCreateMissingFunctionName(t *testing.T) {
 	h := newTestHandler(t)
 
 	body := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:q"}`
-	req := httptest.NewRequest(http.MethodPost, "/2015-03-31/event-source-mappings", bytes.NewBufferString(body))
+	req := httptest.NewRequest(http.MethodPost, eventSourceMappingsPath, bytes.NewBufferString(body))
 	rec := httptest.NewRecorder()
 
 	h.Create(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+		t.Fatalf(statusCodeMismatch, rec.Code, http.StatusBadRequest)
 	}
 }
 
 func TestListMappings(t *testing.T) {
 	h := newTestHandler(t)
 
-	body := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:q1","FunctionName":"fn1"}`
-	req := httptest.NewRequest(http.MethodPost, "/2015-03-31/event-source-mappings", bytes.NewBufferString(body))
+	body := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:q1","FunctionName":"fn1","Enabled":false}`
+	req := httptest.NewRequest(http.MethodPost, eventSourceMappingsPath, bytes.NewBufferString(body))
 	rec := httptest.NewRecorder()
 	h.Create(rec, req)
 
 	// List all
-	req2 := httptest.NewRequest(http.MethodGet, "/2015-03-31/event-source-mappings", nil)
+	req2 := httptest.NewRequest(http.MethodGet, eventSourceMappingsPath, nil)
 	rec2 := httptest.NewRecorder()
 	h.List(rec2, req2)
 
 	if rec2.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", rec2.Code, http.StatusOK)
+		t.Fatalf(statusCodeMismatch, rec2.Code, http.StatusOK)
 	}
 
 	var result struct {
@@ -132,7 +138,7 @@ func TestListMappings(t *testing.T) {
 func TestDeleteMapping(t *testing.T) {
 	h := newTestHandler(t)
 
-	body := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:q1","FunctionName":"fn1"}`
+	body := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:q1","FunctionName":"fn1","Enabled":false}`
 	req := httptest.NewRequest(http.MethodPost, "/2015-03-31/event-source-mappings", bytes.NewBufferString(body))
 	rec := httptest.NewRecorder()
 	h.Create(rec, req)
@@ -141,7 +147,7 @@ func TestDeleteMapping(t *testing.T) {
 	json.NewDecoder(rec.Body).Decode(&mapping)
 
 	// Delete
-	delReq := httptest.NewRequest(http.MethodDelete, "/2015-03-31/event-source-mappings/"+mapping.UUID, nil)
+	delReq := httptest.NewRequest(http.MethodDelete, eventSourceMappingUUID+mapping.UUID, nil)
 	delReq.SetPathValue("uuid", mapping.UUID)
 	delRec := httptest.NewRecorder()
 	h.Delete(delRec, delReq)
@@ -151,7 +157,7 @@ func TestDeleteMapping(t *testing.T) {
 	}
 
 	// Verify gone
-	getReq := httptest.NewRequest(http.MethodGet, "/2015-03-31/event-source-mappings/"+mapping.UUID, nil)
+	getReq := httptest.NewRequest(http.MethodGet, eventSourceMappingUUID+mapping.UUID, nil)
 	getReq.SetPathValue("uuid", mapping.UUID)
 	getRec := httptest.NewRecorder()
 	h.Get(getRec, getReq)
@@ -186,8 +192,8 @@ func TestGetNotFound(t *testing.T) {
 func TestUpdateMapping(t *testing.T) {
 	h := newTestHandler(t)
 
-	body := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:q1","FunctionName":"fn1","BatchSize":5}`
-	req := httptest.NewRequest(http.MethodPost, "/2015-03-31/event-source-mappings", bytes.NewBufferString(body))
+	body := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:q1","FunctionName":"fn1","BatchSize":5,"Enabled":false}`
+	req := httptest.NewRequest(http.MethodPost, eventSourceMappingsPath, bytes.NewBufferString(body))
 	rec := httptest.NewRecorder()
 	h.Create(rec, req)
 
@@ -196,7 +202,7 @@ func TestUpdateMapping(t *testing.T) {
 
 	// Update batch size
 	updateBody := `{"BatchSize":3}`
-	updateReq := httptest.NewRequest(http.MethodPut, "/2015-03-31/event-source-mappings/"+mapping.UUID, bytes.NewBufferString(updateBody))
+	updateReq := httptest.NewRequest(http.MethodPut, eventSourceMappingUUID+mapping.UUID, bytes.NewBufferString(updateBody))
 	updateReq.SetPathValue("uuid", mapping.UUID)
 	updateRec := httptest.NewRecorder()
 	h.Update(updateRec, updateReq)
@@ -215,16 +221,16 @@ func TestUpdateMapping(t *testing.T) {
 func TestListFilterByFunctionName(t *testing.T) {
 	h := newTestHandler(t)
 
-	body1 := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:q1","FunctionName":"fn-a"}`
-	req1 := httptest.NewRequest(http.MethodPost, "/2015-03-31/event-source-mappings", bytes.NewBufferString(body1))
+	body1 := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:q1","FunctionName":"fn-a","Enabled":false}`
+	req1 := httptest.NewRequest(http.MethodPost, eventSourceMappingsPath, bytes.NewBufferString(body1))
 	h.Create(httptest.NewRecorder(), req1)
 
-	body2 := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:q2","FunctionName":"fn-b"}`
-	req2 := httptest.NewRequest(http.MethodPost, "/2015-03-31/event-source-mappings", bytes.NewBufferString(body2))
+	body2 := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:q2","FunctionName":"fn-b","Enabled":false}`
+	req2 := httptest.NewRequest(http.MethodPost, eventSourceMappingsPath, bytes.NewBufferString(body2))
 	h.Create(httptest.NewRecorder(), req2)
 
 	// Filter by FunctionName
-	listReq := httptest.NewRequest(http.MethodGet, "/2015-03-31/event-source-mappings?FunctionName=fn-a", nil)
+	listReq := httptest.NewRequest(http.MethodGet, eventSourceMappingsPath+"?FunctionName=fn-a", nil)
 	listRec := httptest.NewRecorder()
 	h.List(listRec, listReq)
 
