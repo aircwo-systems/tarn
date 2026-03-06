@@ -23,7 +23,7 @@ func newLambdaHandler(t *testing.T) *Handler {
 		t.Fatalf("init lambda store: %v", err)
 	}
 	svc := lambdasvc.NewService(cfg, store, nil, nil, nil)
-	return NewHandler(svc)
+	return NewHandler(svc, nil)
 }
 
 // ensure the configuration endpoint always returns a LastUpdateStatus field,

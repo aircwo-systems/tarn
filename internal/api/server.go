@@ -45,7 +45,7 @@ func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, lambdaSvc 
 	s := &Server{
 		cfg:         cfg,
 		apigw:       apigatewayhandler.NewHandler(gatewaySvc),
-		lambda:      lambdahandler.NewHandler(lambdaSvc),
+		lambda:      lambdahandler.NewHandler(lambdaSvc, s3Svc),
 		s3:          s3handler.NewHandler(s3Svc),
 		sqs:         sqshandler.NewHandler(sqsSvc),
 		secrets:     secretshandler.NewHandler(cfg, secretsSvc),
@@ -85,12 +85,18 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /_s3/{rest...}", s.s3.Dispatch)
 	mux.HandleFunc("HEAD /_s3/{rest...}", s.s3.Dispatch)
 	mux.HandleFunc("DELETE /_s3/{rest...}", s.s3.Dispatch)
-	// Compatibility surface for AWS SDK clients that normalize away endpoint paths
-	// and issue bucket-level requests as /{bucket}.
+	// Compatibility surface for AWS SDK clients using path-style S3 URLs.
+	// Bucket-level operations: /{bucket}
 	mux.HandleFunc("GET /{bucket}", s.s3.Dispatch)
 	mux.HandleFunc("PUT /{bucket}", s.s3.Dispatch)
 	mux.HandleFunc("HEAD /{bucket}", s.s3.Dispatch)
 	mux.HandleFunc("DELETE /{bucket}", s.s3.Dispatch)
+	// Object-level operations: /{bucket}/{key...}
+	// HEAD is omitted — Go automatically routes HEAD to the GET handler,
+	// keeping r.Method="HEAD" so Dispatch still calls headObject.
+	mux.HandleFunc("GET /{bucket}/{key...}", s.s3.Dispatch)
+	mux.HandleFunc("PUT /{bucket}/{key...}", s.s3.Dispatch)
+	mux.HandleFunc("DELETE /{bucket}/{key...}", s.s3.Dispatch)
 
 	// API Gateway v2 API — AWS-compatible endpoints
 	mux.HandleFunc("POST /v2/apis", s.apigw.CreateAPI)

@@ -92,6 +92,10 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		// Operations on an object
 		switch r.Method {
 		case http.MethodPut:
+			if r.URL.Query().Has("tagging") {
+				h.putObjectTagging(w, r, bucket, key)
+				return
+			}
 			if copySource := r.Header.Get("x-amz-copy-source"); copySource != "" {
 				h.copyObject(w, r, bucket, key, copySource)
 				return
@@ -99,13 +103,21 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 			h.putObject(w, r, bucket, key)
 			return
 		case http.MethodGet:
+			if r.URL.Query().Has("tagging") {
+				h.getObjectTagging(w, r, bucket, key)
+				return
+			}
 			h.getObject(w, r, bucket, key)
+			return
+		case http.MethodDelete:
+			if r.URL.Query().Has("tagging") {
+				h.deleteObjectTagging(w, bucket, key)
+				return
+			}
+			h.deleteObject(w, r, bucket, key)
 			return
 		case http.MethodHead:
 			h.headObject(w, r, bucket, key)
-			return
-		case http.MethodDelete:
-			h.deleteObject(w, r, bucket, key)
 			return
 		}
 	}
@@ -152,7 +164,9 @@ func (h *Handler) createBucket(w http.ResponseWriter, _ *http.Request, bucket st
 		msg := err.Error()
 		switch {
 		case strings.Contains(msg, "BucketAlreadyOwnedByYou"):
-			writeS3Error(w, http.StatusConflict, "BucketAlreadyOwnedByYou", "Your previous request to create the named bucket succeeded and you already own it.")
+			// Matches real AWS us-east-1 behaviour: re-creating a bucket you own is a no-op 200.
+			w.Header().Set("Location", "/"+bucket)
+			w.WriteHeader(http.StatusOK)
 		case strings.Contains(msg, "InvalidBucketName"):
 			writeS3Error(w, http.StatusBadRequest, "InvalidBucketName", msg)
 		default:
@@ -366,6 +380,44 @@ func (h *Handler) headObject(w http.ResponseWriter, _ *http.Request, bucket, key
 
 func (h *Handler) deleteObject(w http.ResponseWriter, _ *http.Request, bucket, key string) {
 	h.svc.DeleteObject(bucket, key)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Object tagging ---
+
+func (h *Handler) getObjectTagging(w http.ResponseWriter, _ *http.Request, bucket, key string) {
+	if _, err := h.svc.HeadObject(bucket, key); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchKey", "The specified key does not exist.")
+		return
+	}
+	type xmlTag struct {
+		Key   string `xml:"Key"`
+		Value string `xml:"Value"`
+	}
+	type xmlTagSet struct {
+		Tags []xmlTag `xml:"Tag"`
+	}
+	type taggingResponse struct {
+		XMLName xml.Name  `xml:"Tagging"`
+		Xmlns   string    `xml:"xmlns,attr"`
+		TagSet  xmlTagSet `xml:"TagSet"`
+	}
+	writeXML(w, http.StatusOK, taggingResponse{Xmlns: s3Namespace})
+}
+
+func (h *Handler) putObjectTagging(w http.ResponseWriter, _ *http.Request, bucket, key string) {
+	if _, err := h.svc.HeadObject(bucket, key); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchKey", "The specified key does not exist.")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) deleteObjectTagging(w http.ResponseWriter, bucket, key string) {
+	if _, err := h.svc.HeadObject(bucket, key); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchKey", "The specified key does not exist.")
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

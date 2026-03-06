@@ -13,14 +13,20 @@ import (
 	"github.com/openstack-project/openstack/pkg/types"
 )
 
+// s3Getter is the subset of the S3 service used to fetch Lambda deployment packages.
+type s3Getter interface {
+	GetObject(bucket, key string) (*types.Object, io.ReadCloser, error)
+}
+
 // Handler implements HTTP handlers for the Lambda API.
 type Handler struct {
 	svc *lambdasvc.Service
+	s3  s3Getter
 }
 
 // NewHandler creates a new Lambda API handler.
-func NewHandler(svc *lambdasvc.Service) *Handler {
-	return &Handler{svc: svc}
+func NewHandler(svc *lambdasvc.Service, s3 s3Getter) *Handler {
+	return &Handler{svc: svc, s3: s3}
 }
 
 // CreateFunction handles POST /2015-03-31/functions
@@ -64,12 +70,21 @@ func (h *Handler) CreateFunction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var code []byte
-	if req.Code != nil && req.Code.ZipFile != "" {
-		var err error
-		code, err = base64.StdEncoding.DecodeString(req.Code.ZipFile)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Invalid base64 in Code.ZipFile")
-			return
+	if req.Code != nil {
+		if req.Code.ZipFile != "" {
+			var err error
+			code, err = base64.StdEncoding.DecodeString(req.Code.ZipFile)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Invalid base64 in Code.ZipFile")
+				return
+			}
+		} else if req.Code.S3Bucket != "" && req.Code.S3Key != "" {
+			var err error
+			code, err = h.fetchS3Code(req.Code.S3Bucket, req.Code.S3Key)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Failed to fetch code from S3: "+err.Error())
+				return
+			}
 		}
 	}
 
@@ -182,6 +197,13 @@ func (h *Handler) UpdateFunctionCode(w http.ResponseWriter, r *http.Request) {
 		code, err = base64.StdEncoding.DecodeString(req.ZipFile)
 		if err != nil {
 			writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Invalid base64 in ZipFile")
+			return
+		}
+	} else if req.S3Bucket != "" && req.S3Key != "" {
+		var err error
+		code, err = h.fetchS3Code(req.S3Bucket, req.S3Key)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Failed to fetch code from S3: "+err.Error())
 			return
 		}
 	}
@@ -463,7 +485,9 @@ type createFunctionRequest struct {
 }
 
 type codeInput struct {
-	ZipFile string `json:"ZipFile,omitempty"` // base64-encoded zip
+	ZipFile  string `json:"ZipFile,omitempty"`  // base64-encoded zip
+	S3Bucket string `json:"S3Bucket,omitempty"` // S3 bucket containing deployment package
+	S3Key    string `json:"S3Key,omitempty"`    // S3 key of deployment package zip
 }
 
 type envInput struct {
@@ -471,13 +495,28 @@ type envInput struct {
 }
 
 type updateCodeRequest struct {
-	ZipFile string `json:"ZipFile,omitempty"` // base64-encoded zip
+	ZipFile  string `json:"ZipFile,omitempty"`  // base64-encoded zip
+	S3Bucket string `json:"S3Bucket,omitempty"` // S3 bucket containing deployment package
+	S3Key    string `json:"S3Key,omitempty"`    // S3 key of deployment package zip
 }
 
 type publishLayerRequest struct {
 	Description        string     `json:"Description,omitempty"`
 	CompatibleRuntimes []string   `json:"CompatibleRuntimes,omitempty"`
 	Content            *codeInput `json:"Content,omitempty"`
+}
+
+// fetchS3Code downloads a Lambda deployment package from an S3 bucket.
+func (h *Handler) fetchS3Code(bucket, key string) ([]byte, error) {
+	if h.s3 == nil {
+		return nil, fmt.Errorf("S3 service not available")
+	}
+	_, rc, err := h.s3.GetObject(bucket, key)
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	return io.ReadAll(rc)
 }
 
 // --- Helpers ---
