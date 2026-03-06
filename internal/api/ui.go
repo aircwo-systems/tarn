@@ -11,10 +11,10 @@ import (
 	"time"
 )
 
-const htmlToServe = "200.html"
-
 //go:embed all:ui-dist
 var uiFS embed.FS
+
+const htmlToServe = "200.html"
 
 // Define a package-level boot time for the http.ServeContent modtime
 var bootTime = time.Now()

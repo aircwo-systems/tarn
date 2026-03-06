@@ -54,5 +54,12 @@ vendor/
 /examples/**/bootstrap
 /examples/**/function.zip
 
+# Example UI build output
+internal/api/ui-dist/*
+
+# But DO NOT ignore the .gitkeep or the dummy 200.html
+!internal/api/ui-dist/.gitkeep
+!internal/api/ui-dist/200.html
+
 # Debug
 __debug_bin*
