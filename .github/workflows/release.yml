@@ -30,19 +30,16 @@ jobs:
       - name: Upload UI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ui-build
+          name: ui-dist
           path: ui/build/
 
   build-binaries:
+    needs: build-ui
     runs-on: ubuntu-latest
     strategy:
       matrix:
         include:
           - goos: linux
-            goarch: amd64
-          - goos: linux
-            goarch: arm64
-          - goos: darwin
             goarch: amd64
           - goos: darwin
             goarch: arm64
@@ -51,6 +48,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download UI Dist
+        uses: actions/download-artifact@v4
+        with:
+          name: ui-dist
+          path: internal/api/ui-dist
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -78,10 +81,10 @@ jobs:
             -o ./build/secrets-proxy-linux-amd64 \
             ./cmd/secrets-proxy
 
-      - name: Upload artifact
+      - name: Upload Binary
         uses: actions/upload-artifact@v4
         with:
-          name: openstack-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: bin-openstack-${{ matrix.goos }}-${{ matrix.goarch }}
           path: ./build/openstack-*
 
       - name: Upload secrets-proxy artifact
@@ -92,17 +95,32 @@ jobs:
           path: ./build/secrets-proxy-*
 
   create-release:
-    needs: [build-ui, build-binaries]
+    needs: build-binaries
     runs-on: ubuntu-latest
     steps:
-      - name: Download all artifacts
+      - name: Download Binaries
         uses: actions/download-artifact@v4
         with:
-          path: ./artifacts
+          path: ./raw-bins
           merge-multiple: true
+      
+      - name: Package Release
+        run: |
+          mkdir ./to-upload
+          for f in ./raw-bins/openstack-*; do
+            name=$(basename "$f")
+            if [[ "$name" == *.exe ]]; then
+              zip "./to-upload/${name%.exe}.zip" "$f"
+            else
+              tar -czvf "./to-upload/${name}.tar.gz" "$f"
+            fi
+          done
+          if [ -f ./raw-bins/secrets-proxy-linux-amd64 ]; then
+            tar -czvf "./to-upload/secrets-proxy-linux-amd64.tar.gz" ./raw-bins/secrets-proxy-linux-amd64
+          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          files: ./artifacts/**/*
+          files: ./to-upload/*
           generate_release_notes: true
