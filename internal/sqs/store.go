@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -252,6 +253,9 @@ func (s *Store) GetQueueAttributes(name string, attrNames []string) (map[string]
 		if q.config.ContentBasedDeduplication {
 			result["ContentBasedDeduplication"] = "true"
 		}
+	}
+	if (all || contains(attrNames, "RedrivePolicy")) && q.config.RedrivePolicy != "" {
+		result["RedrivePolicy"] = q.config.RedrivePolicy
 	}
 
 	// Computed attributes
@@ -558,20 +562,42 @@ func (s *Store) ListQueueTags(name string) (map[string]string, error) {
 	return tags, nil
 }
 
-// Reap cleans up expired messages, restores visibility, and clears stale FIFO dedup entries.
+// Reap cleans up expired messages, clears stale FIFO dedup entries, and routes
+// messages that exceeded their maxReceiveCount to the configured DLQ.
 func (s *Store) Reap() {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	now := nowMs()
 	changed := false
+
+	type dlqMove struct {
+		dlqName  string
+		messages []*types.SQSMessage
+	}
+	var dlqMoves []dlqMove
+
 	for _, q := range s.queues {
 		q.mu.Lock()
 
-		// Compact: remove deleted and expired messages
-		alive := q.messages[:0]
+		hasDLQ := q.config.MaxReceiveCount > 0 && q.config.DeadLetterTargetArn != ""
+		dlqName := ""
+		if hasDLQ {
+			dlqName = queueNameFromArn(q.config.DeadLetterTargetArn)
+		}
+
+		alive := make([]*types.SQSMessage, 0, len(q.messages))
+		var toMove []*types.SQSMessage
+
 		for _, m := range q.messages {
 			if m.Deleted || m.ExpiresAt <= now {
+				changed = true
+				continue
+			}
+			// Route to DLQ when a message has been received too many times
+			// and its visibility timeout has expired (consumer didn't delete it).
+			if hasDLQ && m.VisibleAt <= now && m.ApproximateReceiveCount >= q.config.MaxReceiveCount {
+				toMove = append(toMove, cloneMessage(m))
 				changed = true
 				continue
 			}
@@ -588,6 +614,34 @@ func (s *Store) Reap() {
 		}
 
 		q.mu.Unlock()
+
+		if len(toMove) > 0 {
+			dlqMoves = append(dlqMoves, dlqMove{dlqName: dlqName, messages: toMove})
+		}
+	}
+
+	// Deliver DLQ messages after releasing all source queue locks (avoids deadlock).
+	for _, move := range dlqMoves {
+		dlq, exists := s.queues[move.dlqName]
+		if !exists {
+			log.Printf("[sqs] DLQ %q not found, dropping %d message(s)", move.dlqName, len(move.messages))
+			continue
+		}
+		dlq.mu.Lock()
+		for _, m := range move.messages {
+			dlq.messages = append(dlq.messages, &types.SQSMessage{
+				MessageId:         uuid.New().String(),
+				Body:              m.Body,
+				MD5OfBody:         m.MD5OfBody,
+				MessageAttributes: m.MessageAttributes,
+				SentTimestamp:     now,
+				VisibleAt:         now,
+				ExpiresAt:         now + int64(dlq.config.MessageRetentionPeriod)*1000,
+				MessageGroupId:    m.MessageGroupId,
+			})
+		}
+		dlq.mu.Unlock()
+		log.Printf("[sqs] moved %d message(s) to DLQ %q", len(move.messages), move.dlqName)
 	}
 
 	if changed {
@@ -619,6 +673,27 @@ func applyQueueAttributes(cfg *types.QueueConfig, attrs map[string]string) {
 	if attrs["ContentBasedDeduplication"] == "true" {
 		cfg.ContentBasedDeduplication = true
 	}
+	if v, ok := attrs["RedrivePolicy"]; ok && v != "" {
+		var policy struct {
+			DeadLetterTargetArn string `json:"deadLetterTargetArn"`
+			MaxReceiveCount     int    `json:"maxReceiveCount"`
+		}
+		if err := json.Unmarshal([]byte(v), &policy); err == nil {
+			cfg.RedrivePolicy = v
+			cfg.DeadLetterTargetArn = policy.DeadLetterTargetArn
+			cfg.MaxReceiveCount = policy.MaxReceiveCount
+		}
+	}
+}
+
+// queueNameFromArn extracts the queue name from an SQS ARN.
+// e.g. "arn:aws:sqs:us-east-1:000000000000:my-dlq" → "my-dlq"
+func queueNameFromArn(arn string) string {
+	parts := strings.Split(arn, ":")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return arn
 }
 
 func md5Hash(s string) string {

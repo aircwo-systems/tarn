@@ -55,15 +55,16 @@ func (h *Handler) CreateFunction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	fn := &types.FunctionConfig{
-		FunctionName: req.FunctionName,
-		Runtime:      types.Runtime(req.Runtime),
-		Handler:      req.Handler,
-		Role:         req.Role,
-		Description:  req.Description,
-		Timeout:      req.Timeout,
-		MemorySize:   req.MemorySize,
-		Layers:       req.Layers,
-		Tags:         req.Tags,
+		FunctionName:     req.FunctionName,
+		Runtime:          types.Runtime(req.Runtime),
+		Handler:          req.Handler,
+		Role:             req.Role,
+		Description:      req.Description,
+		Timeout:          req.Timeout,
+		MemorySize:       req.MemorySize,
+		Layers:           req.Layers,
+		Tags:             req.Tags,
+		DeadLetterConfig: req.DeadLetterConfig,
 	}
 	if req.Environment != nil {
 		fn.Environment = req.Environment.Variables
@@ -471,17 +472,18 @@ func (h *Handler) DeleteLayerVersion(w http.ResponseWriter, r *http.Request) {
 // --- Request/Response types ---
 
 type createFunctionRequest struct {
-	FunctionName string            `json:"FunctionName"`
-	Runtime      string            `json:"Runtime"`
-	Handler      string            `json:"Handler"`
-	Role         string            `json:"Role"`
-	Description  string            `json:"Description,omitempty"`
-	Timeout      int               `json:"Timeout,omitempty"`
-	MemorySize   int               `json:"MemorySize,omitempty"`
-	Code         *codeInput        `json:"Code,omitempty"`
-	Environment  *envInput         `json:"Environment,omitempty"`
-	Layers       []string          `json:"Layers,omitempty"`
-	Tags         map[string]string `json:"Tags,omitempty"`
+	FunctionName     string                   `json:"FunctionName"`
+	Runtime          string                   `json:"Runtime"`
+	Handler          string                   `json:"Handler"`
+	Role             string                   `json:"Role"`
+	Description      string                   `json:"Description,omitempty"`
+	Timeout          int                      `json:"Timeout,omitempty"`
+	MemorySize       int                      `json:"MemorySize,omitempty"`
+	Code             *codeInput               `json:"Code,omitempty"`
+	Environment      *envInput                `json:"Environment,omitempty"`
+	Layers           []string                 `json:"Layers,omitempty"`
+	Tags             map[string]string        `json:"Tags,omitempty"`
+	DeadLetterConfig *types.DeadLetterConfig  `json:"DeadLetterConfig,omitempty"`
 }
 
 type codeInput struct {

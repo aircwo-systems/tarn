@@ -11,6 +11,7 @@ import (
 	adminhandler "github.com/openstack-project/openstack/internal/api/admin"
 	apigatewayhandler "github.com/openstack-project/openstack/internal/api/apigateway"
 	eventsourcehandler "github.com/openstack-project/openstack/internal/api/eventsource"
+	iamhandler "github.com/openstack-project/openstack/internal/api/iam"
 	lambdahandler "github.com/openstack-project/openstack/internal/api/lambda"
 	s3handler "github.com/openstack-project/openstack/internal/api/s3"
 	secretshandler "github.com/openstack-project/openstack/internal/api/secrets"
@@ -212,11 +213,15 @@ func (s *Server) postAccountDispatch(w http.ResponseWriter, r *http.Request) {
 	s.sqs.Dispatch(w, r)
 }
 
-// postRootDispatch routes POST / between Secrets Manager and SQS.
-// Secrets Manager uses X-Amz-Target header; SQS uses Action form parameter.
+// postRootDispatch routes POST / between Secrets Manager, IAM, and SQS.
+// Secrets Manager uses X-Amz-Target; IAM uses Version=2010-05-08; SQS uses Action.
 func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
 	if secretshandler.IsSecretsManagerRequest(r) {
 		s.secrets.Dispatch(w, r)
+		return
+	}
+	if iamhandler.IsIAMRequest(r) {
+		iamhandler.Dispatch(w, r)
 		return
 	}
 	s.sqs.Dispatch(w, r)

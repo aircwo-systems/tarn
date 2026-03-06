@@ -379,6 +379,9 @@ func (s *Service) UpdateFunctionConfiguration(ctx context.Context, name string, 
 	if update.Layers != nil {
 		fn.Layers = update.Layers
 	}
+	if update.DeadLetterConfig != nil {
+		fn.DeadLetterConfig = update.DeadLetterConfig
+	}
 
 	fn.LastModified = time.Now()
 	fn.LastUpdateStatus = types.LastUpdateStatusSuccessful

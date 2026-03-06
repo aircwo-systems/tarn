@@ -2,19 +2,23 @@ package types
 
 // QueueConfig holds the configuration for an SQS queue.
 type QueueConfig struct {
-	QueueName                 string            `json:"QueueName"`
-	QueueUrl                  string            `json:"QueueUrl"`
-	QueueArn                  string            `json:"QueueArn"`
-	VisibilityTimeout         int               `json:"VisibilityTimeout"`
-	MessageRetentionPeriod    int               `json:"MessageRetentionPeriod"`
-	DelaySeconds              int               `json:"DelaySeconds"`
-	MaximumMessageSize        int               `json:"MaximumMessageSize"`
-	ReceiveMessageWaitTimeSeconds int           `json:"ReceiveMessageWaitTimeSeconds"`
-	FifoQueue                 bool              `json:"FifoQueue"`
-	ContentBasedDeduplication bool              `json:"ContentBasedDeduplication"`
-	CreatedTimestamp          int64             `json:"CreatedTimestamp"`
-	LastModifiedTimestamp     int64             `json:"LastModifiedTimestamp"`
-	Tags                      map[string]string `json:"Tags,omitempty"`
+	QueueName                     string            `json:"QueueName"`
+	QueueUrl                      string            `json:"QueueUrl"`
+	QueueArn                      string            `json:"QueueArn"`
+	VisibilityTimeout             int               `json:"VisibilityTimeout"`
+	MessageRetentionPeriod        int               `json:"MessageRetentionPeriod"`
+	DelaySeconds                  int               `json:"DelaySeconds"`
+	MaximumMessageSize            int               `json:"MaximumMessageSize"`
+	ReceiveMessageWaitTimeSeconds int               `json:"ReceiveMessageWaitTimeSeconds"`
+	FifoQueue                     bool              `json:"FifoQueue"`
+	ContentBasedDeduplication     bool              `json:"ContentBasedDeduplication"`
+	CreatedTimestamp              int64             `json:"CreatedTimestamp"`
+	LastModifiedTimestamp         int64             `json:"LastModifiedTimestamp"`
+	Tags                          map[string]string `json:"Tags,omitempty"`
+	// Dead Letter Queue support
+	RedrivePolicy       string `json:"RedrivePolicy,omitempty"`       // raw JSON redrive policy
+	DeadLetterTargetArn string `json:"DeadLetterTargetArn,omitempty"` // parsed DLQ ARN
+	MaxReceiveCount     int    `json:"MaxReceiveCount,omitempty"`      // parsed max receive count
 }
 
 // SQSMessage represents a message in an SQS queue.

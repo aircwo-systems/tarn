@@ -70,6 +70,11 @@ const (
 	LastUpdateStatusFailed     = "Failed"
 )
 
+// DeadLetterConfig specifies the DLQ (SQS queue or SNS topic) for failed async invocations.
+type DeadLetterConfig struct {
+	TargetArn string `json:"TargetArn,omitempty"`
+}
+
 // FunctionConfig holds the configuration for a Lambda function.
 type FunctionConfig struct {
 	FunctionName     string            `json:"FunctionName"`
@@ -83,6 +88,7 @@ type FunctionConfig struct {
 	Environment      map[string]string `json:"Environment,omitempty"`
 	Layers           []string          `json:"Layers,omitempty"`
 	Tags             map[string]string `json:"Tags,omitempty"`
+	DeadLetterConfig *DeadLetterConfig `json:"DeadLetterConfig,omitempty"`
 	State            FunctionState     `json:"State"`
 	LastUpdateStatus string            `json:"LastUpdateStatus,omitempty"`
 	CodeSHA256       string            `json:"CodeSha256"`
@@ -113,14 +119,15 @@ type LayerVersionContent struct {
 // FunctionConfigUpdate holds optional fields for updating function configuration.
 // Pointer types and zero-value checks allow distinguishing "not provided" from "set to zero."
 type FunctionConfigUpdate struct {
-	Handler     string   `json:"Handler,omitempty"`
-	Description *string  `json:"Description,omitempty"`
-	Timeout     int      `json:"Timeout,omitempty"`
-	MemorySize  int      `json:"MemorySize,omitempty"`
-	Role        string   `json:"Role,omitempty"`
-	Runtime     string   `json:"Runtime,omitempty"`
-	Environment *EnvVars `json:"Environment,omitempty"`
-	Layers      []string `json:"Layers,omitempty"`
+	Handler          string            `json:"Handler,omitempty"`
+	Description      *string           `json:"Description,omitempty"`
+	Timeout          int               `json:"Timeout,omitempty"`
+	MemorySize       int               `json:"MemorySize,omitempty"`
+	Role             string            `json:"Role,omitempty"`
+	Runtime          string            `json:"Runtime,omitempty"`
+	Environment      *EnvVars          `json:"Environment,omitempty"`
+	Layers           []string          `json:"Layers,omitempty"`
+	DeadLetterConfig *DeadLetterConfig `json:"DeadLetterConfig,omitempty"`
 }
 
 // EnvVars wraps environment variable maps (matches AWS API shape).
