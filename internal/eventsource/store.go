@@ -53,7 +53,14 @@ func (store *Store) Init() error {
 
 	var mappings []*types.EventSourceMapping
 	if err := json.Unmarshal(data, &mappings); err != nil {
-		return fmt.Errorf("unmarshal eventsource state: %w", err)
+		// Legacy: state may have been persisted as a map[uuid]->mapping object.
+		var legacy map[string]*types.EventSourceMapping
+		if err2 := json.Unmarshal(data, &legacy); err2 != nil {
+			return fmt.Errorf("unmarshal eventsource state: %w", err)
+		}
+		for _, m := range legacy {
+			mappings = append(mappings, m)
+		}
 	}
 
 	store.mu.Lock()
@@ -126,5 +133,9 @@ func (store *Store) persist() error {
 		return fmt.Errorf("marshal eventsource state: %w", err)
 	}
 	statePath := filepath.Join(store.cfg.EventSourceDir(), "state.json")
-	return os.WriteFile(statePath, data, 0644)
+	tmpPath := statePath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return fmt.Errorf("write eventsource state: %w", err)
+	}
+	return os.Rename(tmpPath, statePath)
 }

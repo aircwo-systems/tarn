@@ -197,6 +197,7 @@ func (p *poller) poll() {
 		p.collector.Begin(functionName)
 	}
 	lambdaStart := time.Now()
+	sqsDurationMs := lambdaStart.Sub(pollStart).Milliseconds()
 	output, err := p.lambda.Invoke(ctx, &types.InvokeInput{
 		FunctionName:   functionName,
 		Payload:        payload,
@@ -216,7 +217,7 @@ func (p *poller) poll() {
 		}
 		log.Printf("[eventsource] %s: invoke error: %v", p.mapping.UUID, err)
 		p.updateResult(fmt.Sprintf("ERROR: %v", err))
-		p.recordTrace(pollStart, functionName, lambdaDurationMs, len(msgs), 0, subSpans)
+		p.recordTrace(pollStart, functionName, sqsDurationMs, lambdaDurationMs, len(msgs), 0, subSpans)
 		return
 	}
 
@@ -253,14 +254,14 @@ func (p *poller) poll() {
 		errMsg := lambdaErrorMessage(output.Payload)
 		log.Printf("[eventsource] %s: %d/%d message(s) failed (%s)", p.mapping.UUID, failCount, len(msgs), errMsg)
 		p.updateResult(fmt.Sprintf("ERROR: %d/%d messages failed", failCount, len(msgs)))
-		p.recordTrace(pollStart, functionName, lambdaDurationMs, len(msgs), failCount, subSpans)
+		p.recordTrace(pollStart, functionName, sqsDurationMs, lambdaDurationMs, len(msgs), failCount, subSpans)
 	} else {
 		p.updateResult("OK")
-		p.recordTrace(pollStart, functionName, lambdaDurationMs, len(msgs), 0, subSpans)
+		p.recordTrace(pollStart, functionName, sqsDurationMs, lambdaDurationMs, len(msgs), 0, subSpans)
 	}
 }
 
-func (p *poller) recordTrace(start time.Time, functionName string, lambdaDurationMs int64, msgCount, failCount int, subSpans []tracesvc.Span) {
+func (p *poller) recordTrace(start time.Time, functionName string, sqsDurationMs, lambdaDurationMs int64, msgCount, failCount int, subSpans []tracesvc.Span) {
 	if p.traceStore == nil {
 		return
 	}
@@ -275,7 +276,7 @@ func (p *poller) recordTrace(start time.Time, functionName string, lambdaDuratio
 		{
 			Kind:       "queue",
 			Name:       p.mapping.QueueName,
-			DurationMs: lambdaDurationMs,
+			DurationMs: sqsDurationMs,
 			Status:     queueStatus,
 			Meta:       map[string]string{"msgCount": fmt.Sprintf("%d", msgCount)},
 		},
