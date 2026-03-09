@@ -38,7 +38,7 @@ func TestNewServerRegistersRoutes(t *testing.T) {
 	infraSvc := infrastructure.NewService("", false)
 	esmStore := eventsource.NewStore(cfg)
 	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil)
-	s := NewServer(cfg, gatewaySvc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc)
+	s := NewServer(cfg, gatewaySvc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, nil, nil)
 	if s == nil {
 		t.Fatal("NewServer returned nil")
 	}

@@ -154,6 +154,31 @@ func (s *Service) ChangeMessageVisibility(queueName, receiptHandle string, timeo
 	return s.store.ChangeMessageVisibility(queueName, receiptHandle, timeout)
 }
 
+// MoveToDLQIfExceeded checks whether msg has exceeded the queue's maxReceiveCount.
+// If so, it delivers the message to the configured DLQ and deletes it from srcQueue.
+// Returns (true, dlqName, nil) when moved, (false, "", nil) when below threshold or no DLQ configured.
+func (s *Service) MoveToDLQIfExceeded(srcQueue string, msg *types.SQSMessage) (bool, string, error) {
+	q, err := s.store.GetQueue(srcQueue)
+	if err != nil {
+		return false, "", err
+	}
+	if q.MaxReceiveCount <= 0 || q.DeadLetterTargetArn == "" {
+		return false, "", nil
+	}
+	if msg.ApproximateReceiveCount < q.MaxReceiveCount {
+		return false, "", nil
+	}
+
+	dlqName := queueNameFromArn(q.DeadLetterTargetArn)
+	if _, err := s.SendMessage(dlqName, msg.Body, 0, msg.MessageAttributes, "", ""); err != nil {
+		return false, "", fmt.Errorf("send to DLQ %q: %w", dlqName, err)
+	}
+	if err := s.DeleteMessage(srcQueue, msg.ReceiptHandle); err != nil {
+		return false, "", fmt.Errorf("delete from source queue: %w", err)
+	}
+	return true, dlqName, nil
+}
+
 // PurgeQueue removes all messages from a queue.
 func (s *Service) PurgeQueue(queueName string) error {
 	return s.store.PurgeQueue(queueName)

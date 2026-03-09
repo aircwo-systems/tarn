@@ -19,33 +19,36 @@ import (
 	s3svc "github.com/openstack-project/openstack/internal/s3"
 	secretssvc "github.com/openstack-project/openstack/internal/secrets"
 	sqssvc "github.com/openstack-project/openstack/internal/sqs"
+	tracesvc "github.com/openstack-project/openstack/internal/trace"
 	"github.com/openstack-project/openstack/pkg/types"
 )
 
 // Handler serves JSON endpoints used by the dashboard UI.
 type Handler struct {
-	cfg     *config.Config
-	apigw   *apigatewaysvc.Service
-	lambda  *lambdasvc.Service
-	logs    *logssvc.Service
-	s3      *s3svc.Service
-	sqs     *sqssvc.Service
-	secrets *secretssvc.Service
-	infra   *infrasvc.Service
-	esm     *eventsourcesvc.Service
+	cfg        *config.Config
+	apigw      *apigatewaysvc.Service
+	lambda     *lambdasvc.Service
+	logs       *logssvc.Service
+	s3         *s3svc.Service
+	sqs        *sqssvc.Service
+	secrets    *secretssvc.Service
+	infra      *infrasvc.Service
+	esm        *eventsourcesvc.Service
+	traceStore *tracesvc.Store
 }
 
-func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service) *Handler {
+func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, traceStore *tracesvc.Store) *Handler {
 	return &Handler{
-		cfg:     cfg,
-		apigw:   apigw,
-		lambda:  lambda,
-		logs:    logs,
-		s3:      s3,
-		sqs:     sqs,
-		secrets: secrets,
-		infra:   infra,
-		esm:     esm,
+		cfg:        cfg,
+		apigw:      apigw,
+		lambda:     lambda,
+		logs:       logs,
+		s3:         s3,
+		sqs:        sqs,
+		secrets:    secrets,
+		infra:      infra,
+		esm:        esm,
+		traceStore: traceStore,
 	}
 }
 
@@ -63,6 +66,7 @@ type overviewResponse struct {
 	EventSourceMappings []esmSummary           `json:"eventSourceMappings"`
 	Infrastructure      []infrasvc.ProbeResult `json:"infrastructure"`
 	Connections         []infraConnection      `json:"connections,omitempty"`
+	RecentTraces        []*tracesvc.Trace      `json:"recentTraces,omitempty"`
 	Warnings            []string               `json:"warnings,omitempty"`
 }
 
@@ -85,12 +89,13 @@ type overviewCounts struct {
 }
 
 type esmSummary struct {
-	UUID         string `json:"uuid"`
-	QueueName    string `json:"queueName"`
-	FunctionName string `json:"functionName"`
-	BatchSize    int    `json:"batchSize"`
-	State        string `json:"state"`
-	LastResult   string `json:"lastResult,omitempty"`
+	UUID           string                `json:"uuid"`
+	QueueName      string                `json:"queueName"`
+	FunctionName   string                `json:"functionName"`
+	BatchSize      int                   `json:"batchSize"`
+	State          string                `json:"state"`
+	LastResult     string                `json:"lastResult,omitempty"`
+	FilterCriteria *types.FilterCriteria `json:"filterCriteria,omitempty"`
 }
 
 type s3BucketSummary struct {
@@ -134,14 +139,15 @@ type functionSummary struct {
 }
 
 type infraConnection struct {
-	SourceFunction string `json:"sourceFunction"`
-	TargetID       string `json:"targetId"`
-	TargetName     string `json:"targetName"`
-	TargetKind     string `json:"targetKind"`
-	TargetHost     string `json:"targetHost"`
-	TargetPort     int    `json:"targetPort"`
-	Evidence       string `json:"evidence"`
-	Source         string `json:"source"`
+	SourceFunction string                `json:"sourceFunction"`
+	TargetID       string                `json:"targetId"`
+	TargetName     string                `json:"targetName"`
+	TargetKind     string                `json:"targetKind"`
+	TargetHost     string                `json:"targetHost"`
+	TargetPort     int                   `json:"targetPort"`
+	Evidence       string                `json:"evidence"`
+	Source         string                `json:"source"`
+	FilterCriteria *types.FilterCriteria `json:"filterCriteria,omitempty"`
 }
 
 type queueSummary struct {
@@ -155,6 +161,7 @@ type queueSummary struct {
 	ApproxInFlight   int               `json:"approxInFlight"`
 	ApproxDelayed    int               `json:"approxDelayed"`
 	CreatedTimestamp int64             `json:"createdTimestamp"`
+	DLQName          string            `json:"dlqName,omitempty"`
 	Tags             map[string]string `json:"tags,omitempty"`
 	TagCount         int               `json:"tagCount"`
 	RecentMessages   []queueMessage    `json:"recentMessages,omitempty"`
@@ -231,17 +238,19 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		EventSourceMappings: make([]esmSummary, 0, len(esmMappings)),
 		Infrastructure:      infraResults,
 		Connections:         inferInfraConnections(functions, infraResults),
+		RecentTraces:        h.recentTraces(),
 	}
 
 	// Event source mappings
 	for _, m := range esmMappings {
 		resp.EventSourceMappings = append(resp.EventSourceMappings, esmSummary{
-			UUID:         m.UUID,
-			QueueName:    m.QueueName,
-			FunctionName: m.FunctionName,
-			BatchSize:    m.BatchSize,
-			State:        m.State,
-			LastResult:   m.LastProcessingResult,
+			UUID:           m.UUID,
+			QueueName:      m.QueueName,
+			FunctionName:   m.FunctionName,
+			BatchSize:      m.BatchSize,
+			State:          m.State,
+			LastResult:     m.LastProcessingResult,
+			FilterCriteria: m.FilterCriteria,
 		})
 
 		// Add SQS→Lambda connection
@@ -252,6 +261,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			TargetKind:     "sqs-lambda",
 			Evidence:       "esm",
 			Source:         m.UUID,
+			FilterCriteria: m.FilterCriteria,
 		})
 	}
 
@@ -380,6 +390,13 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(resp.Functions, func(i, j int) bool { return resp.Functions[i].Name < resp.Functions[j].Name })
 
 	for _, q := range queues {
+		dlqName := ""
+		if q.DeadLetterTargetArn != "" {
+			parts := strings.Split(q.DeadLetterTargetArn, ":")
+			if len(parts) > 0 {
+				dlqName = parts[len(parts)-1]
+			}
+		}
 		summary := queueSummary{
 			Name:             q.QueueName,
 			URL:              q.QueueUrl,
@@ -388,8 +405,20 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			VisibilitySec:    q.VisibilityTimeout,
 			WaitTimeSec:      q.ReceiveMessageWaitTimeSeconds,
 			CreatedTimestamp: q.CreatedTimestamp,
+			DLQName:          dlqName,
 			Tags:             cloneStringMap(q.Tags),
 			TagCount:         len(q.Tags),
+		}
+
+		if dlqName != "" {
+			resp.Connections = append(resp.Connections, infraConnection{
+				SourceFunction: q.QueueName,
+				TargetID:       dlqName,
+				TargetName:     dlqName,
+				TargetKind:     "queue-dlq",
+				Evidence:       "dlq-config",
+				Source:         q.QueueArn,
+			})
 		}
 
 		attrs, err := h.sqs.GetQueueAttributes(q.QueueName, []string{
@@ -459,6 +488,18 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// recentTraces returns the last 50 traces from the store, or nil if none.
+func (h *Handler) recentTraces() []*tracesvc.Trace {
+	if h.traceStore == nil {
+		return nil
+	}
+	t := h.traceStore.Recent(50)
+	if len(t) == 0 {
+		return nil
+	}
+	return t
 }
 
 // SecretValue returns a single secret value by secret name.
@@ -832,7 +873,8 @@ func looksLikeDatabaseEnvKey(key string) bool {
 		strings.Contains(key, "POSTGRES") ||
 		strings.HasPrefix(key, "PG") ||
 		strings.Contains(key, "MYSQL") ||
-		strings.Contains(key, "REDIS")
+		strings.Contains(key, "REDIS") ||
+		strings.Contains(key, "MONGO")
 }
 
 func kindHintFromEnvKey(key string) string {
@@ -843,6 +885,8 @@ func kindHintFromEnvKey(key string) string {
 		return "mysql"
 	case strings.Contains(key, "REDIS"):
 		return "redis"
+	case strings.Contains(key, "MONGO"):
+		return "mongodb"
 	default:
 		return ""
 	}
@@ -920,6 +964,8 @@ func normalizeDatabaseKind(kind string) string {
 		return "mysql"
 	case "redis", "rediss":
 		return "redis"
+	case "mongodb", "mongo":
+		return "mongodb"
 	default:
 		return ""
 	}
@@ -933,6 +979,8 @@ func defaultPortForKind(kind string) int {
 		return 3306
 	case "redis":
 		return 6379
+	case "mongodb":
+		return 27017
 	default:
 		return 0
 	}
@@ -940,7 +988,7 @@ func defaultPortForKind(kind string) int {
 
 func isDatabaseKind(kind string) bool {
 	switch normalizeDatabaseKind(kind) {
-	case "postgresql", "mysql", "redis":
+	case "postgresql", "mysql", "redis", "mongodb":
 		return true
 	default:
 		return false

@@ -62,7 +62,7 @@ func Default() *Config {
 		LogsMaxEventsPerGroup: 10000,
 		LogsPersistToDisk:     false,
 		InfraProbeEnabled:     true,
-		InfraProbeTargets:     "postgresql:localhost:5432,redis:localhost:6379,mysql:localhost:3306",
+		InfraProbeTargets:     "postgresql:localhost:5432,redis:localhost:6379,mysql:localhost:3306,mongodb:localhost:27017",
 	}
 }
 

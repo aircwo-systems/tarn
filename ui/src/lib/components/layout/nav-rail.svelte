@@ -1,12 +1,12 @@
 <script lang="ts">
-	 import { SquaresFourIcon, GlobeHemisphereWestIcon, LightningIcon, ChatCircleIcon, KeyIcon, HardDriveIcon,  ScrollIcon, SidebarSimpleIcon, ArrowsClockwiseIcon, GearIcon, XIcon } from 'phosphor-svelte';
+	 import { SquaresFourIcon, GlobeHemisphereWestIcon, LightningIcon, ChatCircleIcon, KeyIcon, HardDriveIcon, ScrollIcon, DetectiveIcon, SidebarSimpleIcon, ArrowsClockwiseIcon, GearIcon, XIcon, PlusIcon, TrashIcon } from 'phosphor-svelte';
 	import NavRailItem from './nav-rail-item.svelte';
 	import ThemeToggle from './theme-toggle.svelte';
 	import StatusIndicator from '$lib/components/common/status-indicator.svelte';
 	import ConnectionPanel from '$lib/components/topology/connection-panel.svelte';
 	import LedDot from '$lib/components/common/led-dot.svelte';
 	import { Separator } from '$lib/components/ui/separator';
-	import { getDashboard, getUISettings, refresh, setPersistenceEnabled, setPollingIntervalSeconds, setThemeMode, type ThemeMode } from '$lib/state.svelte';
+	import { getDashboard, getUISettings, getInfraSettings, setInfraEnabledKinds, setInfraFrontendTargets, refresh, setPersistenceEnabled, setPollingIntervalSeconds, setThemeMode, type ThemeMode, type InfraProbeKind, type FrontendTarget } from '$lib/state.svelte';
 
 	let {
 		activeTab = 'overview',
@@ -18,12 +18,25 @@
 
 	const dashboard = getDashboard();
 	const uiSettings = getUISettings();
+	const infraSettings = getInfraSettings();
+
+	const INFRA_KINDS: Array<{ id: InfraProbeKind; label: string; detail: string }> = [
+		{ id: 'docker', label: 'Docker', detail: 'daemon' },
+		{ id: 'postgresql', label: 'PostgreSQL', detail: ':5432' },
+		{ id: 'redis', label: 'Redis', detail: ':6379' },
+		{ id: 'mysql', label: 'MySQL', detail: ':3306' },
+		{ id: 'mongodb', label: 'MongoDB', detail: ':27017' },
+	];
 
 	let collapsed = $state(false);
 	let settingsOpen = $state(false);
 	let pollingIntervalDraft = $state(uiSettings.pollingIntervalSeconds);
 	let themeModeDraft = $state<ThemeMode>(uiSettings.themeMode);
 	let persistenceDraft = $state(uiSettings.persistenceEnabled);
+	let infraEnabledKindsDraft = $state<InfraProbeKind[]>([]);
+	let infraFrontendTargetsDraft = $state<FrontendTarget[]>([]);
+	let newTargetName = $state('');
+	let newTargetPort = $state('');
 
 	if (typeof window !== 'undefined') {
 		collapsed = localStorage.getItem('openstack-nav-collapsed') === 'true';
@@ -42,7 +55,8 @@
 	 	{ id: 'secrets', label: 'Secrets', icon: KeyIcon },
 	 	{ id: 'triggers', label: 'Triggers', icon: ArrowsClockwiseIcon },
 	 	{ id: 'storage', label: 'Storage', icon: HardDriveIcon },
-	 	{ id: 'logs', label: 'Logs', icon: ScrollIcon }
+	 	{ id: 'logs', label: 'Logs', icon: ScrollIcon },
+	 	{ id: 'xray', label: 'Traces', icon: DetectiveIcon }
 	 ];
 
 	const connectionStatus = $derived(
@@ -70,6 +84,10 @@
 		pollingIntervalDraft = uiSettings.pollingIntervalSeconds;
 		themeModeDraft = uiSettings.themeMode;
 		persistenceDraft = uiSettings.persistenceEnabled;
+		infraEnabledKindsDraft = [...infraSettings.enabledKinds];
+		infraFrontendTargetsDraft = infraSettings.frontendTargets.map((t) => ({ ...t }));
+		newTargetName = '';
+		newTargetPort = '';
 		settingsOpen = true;
 	}
 
@@ -81,7 +99,29 @@
 		setPollingIntervalSeconds(pollingIntervalDraft);
 		setThemeMode(themeModeDraft);
 		setPersistenceEnabled(persistenceDraft);
+		setInfraEnabledKinds(infraEnabledKindsDraft);
+		setInfraFrontendTargets(infraFrontendTargetsDraft);
 		settingsOpen = false;
+	}
+
+	function addFrontendTarget() {
+		const name = newTargetName.trim();
+		const port = parseInt(newTargetPort, 10);
+		if (!name || isNaN(port) || port < 1 || port > 65535) return;
+		infraFrontendTargetsDraft = [
+			...infraFrontendTargetsDraft,
+			{ id: crypto.randomUUID(), name, host: 'localhost', port }
+		];
+		newTargetName = '';
+		newTargetPort = '';
+	}
+
+	function removeFrontendTarget(id: string) {
+		infraFrontendTargetsDraft = infraFrontendTargetsDraft.filter((t) => t.id !== id);
+	}
+
+	function handleNewTargetKeydown(event: KeyboardEvent) {
+		if (event.key === 'Enter') addFrontendTarget();
 	}
 
 	function handleWindowKeydown(event: KeyboardEvent) {
@@ -236,8 +276,8 @@
 			</button>
 		</div>
 
-		<div class="space-y-4 px-4 py-4">
-			<p class="text-xs text-text-faint">These preferences are saved in a browser cookie.</p>
+		<div class="space-y-4 px-4 py-4 max-h-[70vh] overflow-y-auto">
+			<p class="text-xs text-text-faint">These preferences are saved in a browser cookie and local storage.</p>
 
 			<div class="space-y-1.5">
 				<label class="text-xs font-medium text-text" for="polling-interval">Polling Interval (seconds)</label>
@@ -286,6 +326,81 @@
 				</div>
 				<div class="mt-2 text-[11px] font-mono text-text-faint">
 					{persistenceDraft ? 'true' : 'false'}
+				</div>
+			</div>
+
+			<!-- Infrastructure Probes -->
+			<div class="rounded-md border border-border bg-bg-surface/70 p-3 space-y-2">
+				<p class="text-xs font-semibold uppercase tracking-wide text-text-faint">Infrastructure Probes</p>
+				<p class="text-[11px] text-text-faint leading-relaxed">
+					Show local services probed by the backend. Docker is checked by default.
+				</p>
+				<div class="space-y-1.5 pt-0.5">
+					{#each INFRA_KINDS as k}
+						<label class="flex items-center gap-2.5 cursor-pointer group">
+							<input
+								type="checkbox"
+								bind:group={infraEnabledKindsDraft}
+								value={k.id}
+								class="h-3.5 w-3.5 cursor-pointer rounded"
+								style="accent-color: var(--color-accent)"
+							/>
+							<span class="text-xs text-text group-hover:text-text flex-1">{k.label}</span>
+							<span class="text-[10px] font-mono text-text-faint">{k.detail}</span>
+						</label>
+					{/each}
+				</div>
+			</div>
+
+			<!-- Frontend Services -->
+			<div class="rounded-md border border-border bg-bg-surface/70 p-3 space-y-2">
+				<p class="text-xs font-semibold uppercase tracking-wide text-text-faint">Frontend Services</p>
+				<p class="text-[11px] text-text-faint leading-relaxed">
+					Add locally running apps to probe from the browser (localhost).
+				</p>
+				{#if infraFrontendTargetsDraft.length > 0}
+					<ul class="space-y-1 pt-0.5">
+						{#each infraFrontendTargetsDraft as target (target.id)}
+							<li class="flex items-center gap-2 group">
+								<span class="text-xs text-text flex-1 truncate">{target.name}</span>
+								<span class="text-[10px] font-mono text-text-faint shrink-0">:{target.port}</span>
+								<button
+									type="button"
+									onclick={() => removeFrontendTarget(target.id)}
+									class="flex items-center justify-center h-5 w-5 rounded text-text-faint hover:text-red hover:bg-red/10 transition-colors opacity-0 group-hover:opacity-100"
+									aria-label="Remove {target.name}"
+								>
+									<TrashIcon size={11} />
+								</button>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+				<div class="flex items-center gap-1.5 pt-0.5">
+					<input
+						type="text"
+						bind:value={newTargetName}
+						onkeydown={handleNewTargetKeydown}
+						placeholder="Name"
+						class="flex-1 min-w-0 rounded border border-border bg-bg-surface px-2 py-1 text-xs text-text placeholder:text-text-faint outline-none focus:ring-1 focus:ring-accent"
+					/>
+					<input
+						type="number"
+						bind:value={newTargetPort}
+						onkeydown={handleNewTargetKeydown}
+						placeholder="Port"
+						min="1"
+						max="65535"
+						class="w-16 rounded border border-border bg-bg-surface px-2 py-1 text-xs text-text placeholder:text-text-faint outline-none focus:ring-1 focus:ring-accent"
+					/>
+					<button
+						type="button"
+						onclick={addFrontendTarget}
+						class="flex items-center justify-center h-6 w-6 shrink-0 rounded border border-accent-strong bg-accent-muted text-accent hover:bg-accent/20 transition-colors"
+						aria-label="Add frontend service"
+					>
+						<PlusIcon size={12} />
+					</button>
 				</div>
 			</div>
 

@@ -45,6 +45,14 @@ func (m *mockSQS) DeleteMessage(queueName, receiptHandle string) error {
 	return nil
 }
 
+func (m *mockSQS) ChangeMessageVisibility(queueName, receiptHandle string, timeout int) error {
+	return nil
+}
+
+func (m *mockSQS) MoveToDLQIfExceeded(srcQueue string, msg *types.SQSMessage) (bool, string, error) {
+	return false, "", nil
+}
+
 // mockLambda implements LambdaInterface for testing.
 type mockLambda struct {
 	mu          sync.Mutex
@@ -124,7 +132,7 @@ func TestPollerStartStop(t *testing.T) {
 	}
 	lambdaMock := &mockLambda{}
 
-	p := newPoller(mapping, sqsMock, lambdaMock, store)
+	p := newPoller(mapping, sqsMock, lambdaMock, store, nil, nil)
 	p.start()
 
 	// Give the poller time to tick at least once
@@ -177,7 +185,7 @@ func TestPollerNormalizesFunctionARN(t *testing.T) {
 	}
 	lambdaMock := &mockLambda{}
 
-	p := newPoller(mapping, sqsMock, lambdaMock, store)
+	p := newPoller(mapping, sqsMock, lambdaMock, store, nil, nil)
 	p.start()
 
 	time.Sleep(1500 * time.Millisecond)
@@ -193,7 +201,7 @@ func TestPollerNormalizesFunctionARN(t *testing.T) {
 	}
 }
 
-func TestPollerDisablesOnMissingQueue(t *testing.T) {
+func TestPollerPausesOnMissingQueue(t *testing.T) {
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
 	cfg.PersistenceEnabled = false
@@ -217,25 +225,26 @@ func TestPollerDisablesOnMissingQueue(t *testing.T) {
 	sqsMock := &mockSQS{receiveErr: errors.New("queue orders not found")}
 	lambdaMock := &mockLambda{}
 
-	p := newPoller(mapping, sqsMock, lambdaMock, store)
+	p := newPoller(mapping, sqsMock, lambdaMock, store, nil, nil)
 	p.poll()
 
-	if mapping.Enabled {
-		t.Fatal("expected mapping to be disabled")
+	// Mapping must stay enabled — poller records the error but keeps running.
+	if !mapping.Enabled {
+		t.Fatal("expected mapping to remain enabled after missing-queue error")
 	}
-	if mapping.State != "Disabled" {
-		t.Fatalf("state = %q, want %q", mapping.State, "Disabled")
+	if mapping.State != "Enabled" {
+		t.Fatalf("state = %q, want %q", mapping.State, "Enabled")
 	}
 	if mapping.LastProcessingResult == "" {
 		t.Fatal("expected LastProcessingResult to be populated")
 	}
 
-	// stop should be idempotent even if poll already stopped it.
+	// poller must still be stoppable after a not-found error.
 	p.stop()
 	p.stop()
 }
 
-func TestPollerDisablesOnMissingFunction(t *testing.T) {
+func TestPollerPausesOnMissingFunction(t *testing.T) {
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
 	cfg.PersistenceEnabled = false
@@ -264,16 +273,141 @@ func TestPollerDisablesOnMissingFunction(t *testing.T) {
 	}
 	lambdaMock := &mockLambda{invokeErr: errors.New("function order-logger not found")}
 
-	p := newPoller(mapping, sqsMock, lambdaMock, store)
+	p := newPoller(mapping, sqsMock, lambdaMock, store, nil, nil)
 	p.poll()
 
-	if mapping.Enabled {
-		t.Fatal("expected mapping to be disabled")
+	// Mapping must stay enabled so the poller restarts on next boot.
+	if !mapping.Enabled {
+		t.Fatal("expected mapping to remain enabled after missing-function error")
 	}
-	if mapping.State != "Disabled" {
-		t.Fatalf("state = %q, want %q", mapping.State, "Disabled")
+	if mapping.State != "Enabled" {
+		t.Fatalf("state = %q, want %q", mapping.State, "Enabled")
 	}
 	if mapping.LastProcessingResult == "" {
 		t.Fatal("expected LastProcessingResult to be populated")
+	}
+}
+
+// TestPollerRetriesAfterMissingQueue verifies that a not-found error on the queue
+// does not permanently kill the poller — it should recover when the queue appears.
+func TestPollerRetriesAfterMissingQueue(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.PersistenceEnabled = false
+
+	store := NewStore(cfg)
+	store.Init()
+
+	mapping := &types.EventSourceMapping{
+		UUID:                           "poll-retry",
+		QueueName:                      "orders",
+		FunctionName:                   "order-processor",
+		BatchSize:                      10,
+		MaximumBatchingWindowInSeconds: 1,
+		Enabled:                        true,
+		State:                          "Enabled",
+	}
+	if err := store.Save(mapping); err != nil {
+		t.Fatalf("save mapping: %v", err)
+	}
+
+	sqsMock := &mockSQS{receiveErr: errors.New("queue orders not found")}
+	lambdaMock := &mockLambda{}
+
+	p := newPoller(mapping, sqsMock, lambdaMock, store, nil, nil)
+	p.start()
+
+	// Wait for at least one failing poll.
+	time.Sleep(1500 * time.Millisecond)
+
+	// Now "create" the queue by clearing the error and adding a message.
+	sqsMock.mu.Lock()
+	sqsMock.receiveErr = nil
+	sqsMock.messages = []*types.SQSMessage{
+		{MessageId: "m1", ReceiptHandle: "rh1", Body: "hello", MD5OfBody: "md5"},
+	}
+	sqsMock.mu.Unlock()
+
+	// Give the poller time to retry and process.
+	time.Sleep(1500 * time.Millisecond)
+	p.stop()
+
+	lambdaMock.mu.Lock()
+	invCount := len(lambdaMock.invocations)
+	lambdaMock.mu.Unlock()
+
+	if invCount < 1 {
+		t.Fatalf("expected at least 1 lambda invocation after queue appeared, got %d", invCount)
+	}
+}
+
+// TestServiceRestartStartsPollers simulates a full server restart where the
+// persisted state.json has mappings with Enabled=false (corrupted by old code).
+// The new service must re-enable them and process messages.
+func TestServiceRestartStartsPollers(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.PersistenceEnabled = true
+
+	// --- First "boot": create a mapping and simulate a poller error
+	// that left Enabled=false on disk (old bug behavior).
+	store1 := NewStore(cfg)
+	if err := store1.Init(); err != nil {
+		t.Fatalf("store1 Init: %v", err)
+	}
+
+	mapping := &types.EventSourceMapping{
+		UUID:                           "restart-test-uuid",
+		EventSourceArn:                 "arn:aws:sqs:us-east-1:000000000000:orders",
+		QueueName:                      "orders",
+		FunctionName:                   "order-processor",
+		BatchSize:                      10,
+		MaximumBatchingWindowInSeconds: 1,
+		Enabled:                        false, // simulates old bug: saved as disabled
+		State:                          "Disabled",
+		LastProcessingResult:           "ERROR: function order-processor not found",
+	}
+	if err := store1.Save(mapping); err != nil {
+		t.Fatalf("save mapping: %v", err)
+	}
+
+	// --- Second "boot": new service instance reads the same state.json.
+	store2 := NewStore(cfg)
+	if err := store2.Init(); err != nil {
+		t.Fatalf("store2 Init: %v", err)
+	}
+
+	sqsMock := &mockSQS{
+		messages: []*types.SQSMessage{
+			{MessageId: "m1", ReceiptHandle: "rh1", Body: "hello", MD5OfBody: "md5"},
+		},
+	}
+	lambdaMock := &mockLambda{}
+
+	svc := NewService(cfg, store2, lambdaMock, sqsMock)
+	svc.Start()
+
+	// Give pollers time to process.
+	time.Sleep(1500 * time.Millisecond)
+	svc.Stop()
+
+	// Mapping must have been re-enabled.
+	reloaded, err := store2.Get("restart-test-uuid")
+	if err != nil {
+		t.Fatalf("get mapping after restart: %v", err)
+	}
+	if !reloaded.Enabled {
+		t.Fatal("expected mapping to be re-enabled after restart")
+	}
+	if reloaded.State != "Enabled" {
+		t.Fatalf("state = %q, want %q", reloaded.State, "Enabled")
+	}
+
+	// Lambda must have been invoked.
+	lambdaMock.mu.Lock()
+	invCount := len(lambdaMock.invocations)
+	lambdaMock.mu.Unlock()
+	if invCount < 1 {
+		t.Fatalf("expected at least 1 lambda invocation after restart, got %d", invCount)
 	}
 }

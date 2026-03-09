@@ -41,6 +41,63 @@ func TestParseTargetsInvalid(t *testing.T) {
 	}
 }
 
+func TestParseTargetsHTTP(t *testing.T) {
+	// 4-part format with display name
+	targets := parseTargets("http:My Frontend:localhost:5173")
+	if len(targets) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(targets))
+	}
+	if targets[0].Kind != "http" {
+		t.Fatalf("kind = %q, want http", targets[0].Kind)
+	}
+	if targets[0].Name != "My Frontend" {
+		t.Fatalf("name = %q, want My Frontend", targets[0].Name)
+	}
+	if targets[0].Host != "localhost" {
+		t.Fatalf("host = %q, want localhost", targets[0].Host)
+	}
+	if targets[0].Port != 5173 {
+		t.Fatalf("port = %d, want 5173", targets[0].Port)
+	}
+
+	// 3-part format — name auto-derived from kind
+	targets2 := parseTargets("http:localhost:3000")
+	if len(targets2) != 1 {
+		t.Fatalf("expected 1 target, got %d", len(targets2))
+	}
+	if targets2[0].Name != "HTTP" {
+		t.Fatalf("name = %q, want HTTP", targets2[0].Name)
+	}
+	if targets2[0].Port != 3000 {
+		t.Fatalf("port = %d, want 3000", targets2[0].Port)
+	}
+
+	// Mixed with DB targets
+	targets3 := parseTargets("postgresql:localhost:5432,http:Admin UI:localhost:4000")
+	if len(targets3) != 2 {
+		t.Fatalf("expected 2 targets, got %d", len(targets3))
+	}
+	if targets3[1].Kind != "http" || targets3[1].Name != "Admin UI" || targets3[1].Port != 4000 {
+		t.Fatalf("http target = %+v", targets3[1])
+	}
+}
+
+func TestProbeHTTPUnreachable(t *testing.T) {
+	target := ProbeTarget{
+		Name: "My App",
+		Host: "localhost",
+		Port: 59998,
+		Kind: "http",
+	}
+	result := probe(context.Background(), target)
+	if result.Status == "connected" {
+		t.Skip("port 59998 unexpectedly open")
+	}
+	if result.Status != "refused" && result.Status != "unreachable" {
+		t.Fatalf("status = %q, want refused or unreachable", result.Status)
+	}
+}
+
 func TestProbeUnreachableHost(t *testing.T) {
 	target := ProbeTarget{
 		Name: "PostgreSQL",

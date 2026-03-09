@@ -9,18 +9,21 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/openstack-project/openstack/internal/config"
+	tracesvc "github.com/openstack-project/openstack/internal/trace"
 	"github.com/openstack-project/openstack/pkg/types"
 )
 
 // Service manages event source mappings and their background pollers.
 type Service struct {
-	cfg     *config.Config
-	store   *Store
-	lambda  LambdaInterface
-	sqs     SQSInterface
-	mu      sync.Mutex
-	pollers map[string]*poller
-	done    chan struct{}
+	cfg        *config.Config
+	store      *Store
+	lambda     LambdaInterface
+	sqs        SQSInterface
+	traceStore *tracesvc.Store
+	collector  *tracesvc.Collector
+	mu         sync.Mutex
+	pollers    map[string]*poller
+	done       chan struct{}
 }
 
 // NewService creates a new event source mapping service.
@@ -35,22 +38,36 @@ func NewService(cfg *config.Config, store *Store, lambdaSvc LambdaInterface, sqs
 	}
 }
 
+// SetTraceStore attaches a trace store so ESM invocations are recorded.
+func (s *Service) SetTraceStore(ts *tracesvc.Store) { s.traceStore = ts }
+
+// SetCollector attaches a trace collector so sub-spans during ESM invocations are captured.
+func (s *Service) SetCollector(c *tracesvc.Collector) { s.collector = c }
+
 // Init loads persisted state.
 func (s *Service) Init() error {
 	return s.store.Init()
 }
 
-// Start begins pollers for all enabled mappings.
+// Start begins pollers for all mappings.
+// Any mapping that was auto-disabled by a previous error is re-enabled on startup
+// so that transient failures (missing queue/function) do not permanently break
+// pollers across restarts.
 func (s *Service) Start() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for _, m := range s.store.List() {
-		if m.Enabled && m.State == "Enabled" {
-			p := newPoller(m, s.sqs, s.lambda, s.store)
-			p.start()
-			s.pollers[m.UUID] = p
+		// Re-enable any mapping that was auto-disabled. In a local emulator
+		// each restart is a fresh opportunity to try again.
+		if !m.Enabled || m.State != "Enabled" {
+			m.Enabled = true
+			m.State = "Enabled"
+			_ = s.store.Save(m)
 		}
+		p := newPoller(m, s.sqs, s.lambda, s.store, s.traceStore, s.collector)
+		p.start()
+		s.pollers[m.UUID] = p
 	}
 	log.Printf("[eventsource] service started with %d active pollers", len(s.pollers))
 }
@@ -68,7 +85,7 @@ func (s *Service) Stop() {
 }
 
 // CreateMapping creates and starts a new event source mapping.
-func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string, batchSize, maxBatchingWindow int, enabled bool) (*types.EventSourceMapping, error) {
+func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string, batchSize, maxBatchingWindow int, enabled bool, filterCriteria *types.FilterCriteria) (*types.EventSourceMapping, error) {
 	queueName, err := parseQueueNameFromArn(eventSourceArn)
 	if err != nil {
 		return nil, err
@@ -102,6 +119,7 @@ func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string
 		Enabled:                        enabled,
 		State:                          state,
 		LastModified:                   now,
+		FilterCriteria:                 filterCriteria,
 	}
 
 	if err := s.store.Save(mapping); err != nil {
@@ -141,7 +159,7 @@ func (s *Service) ListMappings(eventSourceArn, functionName string) []*types.Eve
 }
 
 // UpdateMapping updates a mapping's configuration.
-func (s *Service) UpdateMapping(uuid string, batchSize *int, maxBatchingWindow *int, enabled *bool, functionName *string) (*types.EventSourceMapping, error) {
+func (s *Service) UpdateMapping(uuid string, batchSize *int, maxBatchingWindow *int, enabled *bool, functionName *string, filterCriteria *types.FilterCriteria) (*types.EventSourceMapping, error) {
 	mapping, err := s.store.Get(uuid)
 	if err != nil {
 		return nil, err
@@ -179,6 +197,9 @@ func (s *Service) UpdateMapping(uuid string, batchSize *int, maxBatchingWindow *
 			mapping.State = "Disabled"
 		}
 	}
+	if filterCriteria != nil {
+		mapping.FilterCriteria = filterCriteria
+	}
 
 	mapping.LastModified = time.Now().UTC()
 
@@ -193,7 +214,7 @@ func (s *Service) UpdateMapping(uuid string, batchSize *int, maxBatchingWindow *
 		delete(s.pollers, uuid)
 	}
 	if mapping.Enabled {
-		p := newPoller(mapping, s.sqs, s.lambda, s.store)
+		p := newPoller(mapping, s.sqs, s.lambda, s.store, s.traceStore, s.collector)
 		p.start()
 		s.pollers[uuid] = p
 	}
@@ -218,7 +239,7 @@ func (s *Service) startPoller(mapping *types.EventSourceMapping) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	p := newPoller(mapping, s.sqs, s.lambda, s.store)
+	p := newPoller(mapping, s.sqs, s.lambda, s.store, s.traceStore, s.collector)
 	p.start()
 	s.pollers[mapping.UUID] = p
 }

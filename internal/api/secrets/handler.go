@@ -6,22 +6,28 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/openstack-project/openstack/internal/config"
 	secretssvc "github.com/openstack-project/openstack/internal/secrets"
+	tracesvc "github.com/openstack-project/openstack/internal/trace"
 	"github.com/openstack-project/openstack/pkg/types"
 )
 
 // Handler handles Secrets Manager API requests using JSON-RPC style (X-Amz-Target header).
 type Handler struct {
-	cfg *config.Config
-	svc *secretssvc.Service
+	cfg       *config.Config
+	svc       *secretssvc.Service
+	collector *tracesvc.Collector
 }
 
 // NewHandler creates a new Secrets Manager API handler.
 func NewHandler(cfg *config.Config, svc *secretssvc.Service) *Handler {
 	return &Handler{cfg: cfg, svc: svc}
 }
+
+// SetCollector attaches a trace collector so secrets fetches are recorded as sub-spans.
+func (h *Handler) SetCollector(c *tracesvc.Collector) { h.collector = c }
 
 // IsSecretsManagerRequest checks if a request targets the Secrets Manager service.
 func IsSecretsManagerRequest(r *http.Request) bool {
@@ -122,7 +128,15 @@ func (h *Handler) getSecretValue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	start := time.Now()
 	secret, err := h.svc.GetSecretValue(req.SecretId)
+	if h.collector != nil {
+		status := "ok"
+		if err != nil {
+			status = "error"
+		}
+		h.collector.RecordAnon("secrets", req.SecretId, time.Since(start).Milliseconds(), status, nil)
+	}
 	if err != nil {
 		writeError(w, 404, "ResourceNotFoundException", err.Error())
 		return

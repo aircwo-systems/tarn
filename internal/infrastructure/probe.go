@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -67,20 +68,30 @@ func parseTargets(raw string) []ProbeTarget {
 		if entry == "" {
 			continue
 		}
-		parts := strings.SplitN(entry, ":", 3)
-		if len(parts) != 3 {
+		// Supports two formats:
+		//   kind:host:port           (e.g. postgresql:localhost:5432)
+		//   kind:name:host:port      (e.g. http:My App:localhost:5173)
+		parts := strings.SplitN(entry, ":", 4)
+		var kind, name, host, portStr string
+		switch len(parts) {
+		case 3:
+			kind, host, portStr = strings.ToLower(parts[0]), parts[1], parts[2]
+			name = kindDisplayName(kind)
+		case 4:
+			kind, name, host, portStr = strings.ToLower(parts[0]), parts[1], parts[2], parts[3]
+		default:
 			continue
 		}
-		kind := strings.ToLower(parts[0])
-		host := parts[1]
 		port := 0
-		if _, err := fmt.Sscanf(parts[2], "%d", &port); err != nil {
+		if _, err := fmt.Sscanf(portStr, "%d", &port); err != nil {
 			continue
 		}
 		if port == 0 {
 			continue
 		}
-		name := kindDisplayName(kind)
+		if name == "" {
+			name = kindDisplayName(kind)
+		}
 		targets = append(targets, ProbeTarget{
 			Name: name,
 			Host: host,
@@ -101,6 +112,12 @@ func kindDisplayName(kind string) string {
 		return "MySQL"
 	case "docker":
 		return "Docker"
+	case "http":
+		return "HTTP"
+	case "https":
+		return "HTTPS"
+	case "mongodb", "mongo":
+		return "MongoDB"
 	default:
 		return kind
 	}
@@ -189,6 +206,9 @@ func (s *Service) Targets() []ProbeTarget {
 }
 
 func probe(ctx context.Context, t ProbeTarget) ProbeResult {
+	if t.Kind == "http" || t.Kind == "https" {
+		return probeHTTP(ctx, t)
+	}
 	addr := net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))
 	now := time.Now()
 	result := ProbeResult{
@@ -221,6 +241,65 @@ func probe(ctx context.Context, t ProbeTarget) ProbeResult {
 	}
 
 	return result
+}
+
+func probeHTTP(ctx context.Context, t ProbeTarget) ProbeResult {
+	targetURL := fmt.Sprintf("%s://%s:%d/", t.Kind, t.Host, t.Port)
+	now := time.Now()
+	result := ProbeResult{
+		Name:     t.Name,
+		Kind:     t.Kind,
+		Host:     t.Host,
+		Port:     t.Port,
+		ProbedAt: now.UTC().Format(time.RFC3339),
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		result.Status = "unreachable"
+		result.Error = err.Error()
+		return result
+	}
+	req.Header.Set("User-Agent", "OpenStack-Probe/1.0")
+
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+
+	resp, err := client.Do(req)
+	result.LatencyMs = float64(time.Since(now).Microseconds()) / 1000.0
+
+	if err != nil {
+		result.Status = classifyHTTPError(err)
+		result.Error = err.Error()
+		return result
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	result.Status = "connected"
+	if server := resp.Header.Get("Server"); server != "" {
+		result.Version = server
+	} else {
+		result.Version = resp.Status
+	}
+	return result
+}
+
+func classifyHTTPError(err error) string {
+	s := err.Error()
+	if strings.Contains(s, "connection refused") {
+		return "refused"
+	}
+	return "unreachable"
 }
 
 func classifyError(err error) string {

@@ -55,8 +55,7 @@ data "archive_file" "processor_zip" {
   source {
     content  = <<-JS
       exports.handler = async (event) => {
-        console.log("Processing", event.Records.length, "record(s)");
-        // Throw to simulate a processing failure so messages hit the DLQ
+        console.log("Processing", event.Records?.length, "record(s)");
         throw new Error("simulated processing failure");
       };
     JS
@@ -79,7 +78,7 @@ resource "aws_s3_object" "processor_code" {
 
 resource "aws_lambda_function" "processor" {
   function_name    = "order-processor"
-  runtime          = "nodejs24.x"
+  runtime          = "nodejs20.x"
   handler          = "index.handler"
   role             = "arn:aws:iam::000000000000:role/lambda-role"
   s3_bucket        = aws_s3_bucket.artifacts.id

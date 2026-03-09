@@ -4,7 +4,7 @@
 	import LedDot from '$lib/components/common/led-dot.svelte';
 	import TopologyCanvas from '$lib/components/topology/topology-canvas.svelte';
 	import ActiveComponents from './active-components.svelte';
-	import { getDashboard, getDashboardFilters, getUISettings, matchesTagFilter } from '$lib/state.svelte';
+	import { getDashboard, getDashboardFilters, getUISettings, getVisibleInfra, matchesTagFilter } from '$lib/state.svelte';
 
 	const dashboard = getDashboard();
 	const filters = getDashboardFilters();
@@ -37,15 +37,11 @@
 	const eventMappings = $derived(dashboard.data?.eventSourceMappings ?? []);
 	const eventMappingsEnabled = $derived(eventMappings.filter((m) => m.state === 'Enabled').length);
 
-	const infraConnected = $derived(
-		dashboard.data?.infrastructure?.filter((p) => p.status === 'connected').length ?? 0
-	);
-	const infraTotal = $derived(dashboard.data?.infrastructure?.length ?? 0);
+	const visibleInfra = $derived(getVisibleInfra(dashboard.data?.infrastructure ?? []));
+	const infraConnected = $derived(visibleInfra.filter((p) => p.status === 'connected').length);
+	const infraTotal = $derived(visibleInfra.length);
 	const infraNames = $derived(
-		dashboard.data?.infrastructure
-			?.filter((p) => p.status === 'connected')
-			.map((p) => p.name)
-			.join(', ') ?? ''
+		visibleInfra.filter((p) => p.status === 'connected').map((p) => p.name).join(', ')
 	);
 </script>
 

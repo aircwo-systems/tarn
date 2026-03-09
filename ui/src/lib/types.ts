@@ -26,7 +26,28 @@ export interface OverviewResponse {
   eventSourceMappings: EventSourceMappingSummary[];
   infrastructure: InfraProbe[];
   connections?: InfraConnection[];
+  recentTraces?: RequestTrace[];
   warnings?: string[];
+}
+
+export interface TraceSpan {
+  kind: 'gateway' | 'lambda' | 'queue' | 'dlq' | string;
+  name: string;
+  durationMs: number;
+  status: 'ok' | 'error' | 'client_error' | string;
+  meta?: Record<string, string>;
+}
+
+export interface RequestTrace {
+  id: string;
+  startedAt: string;
+  durationMs: number;
+  status: number;
+  method?: string;
+  path?: string;
+  gatewayId?: string;
+  gatewayName?: string;
+  spans: TraceSpan[];
 }
 
 export interface InfraProbe {
@@ -41,6 +62,14 @@ export interface InfraProbe {
   probedAt: string;
 }
 
+export interface FilterCriteriaFilter {
+  Pattern: string;
+}
+
+export interface FilterCriteria {
+  Filters: FilterCriteriaFilter[];
+}
+
 export interface InfraConnection {
   sourceFunction: string;
   targetId: string;
@@ -50,6 +79,7 @@ export interface InfraConnection {
   targetPort: number;
   evidence: string;
   source: string;
+  filterCriteria?: FilterCriteria;
 }
 
 export interface GatewaySummary {
@@ -96,6 +126,7 @@ export interface QueueSummary {
   approxInFlight: number;
   approxDelayed: number;
   createdTimestamp: number;
+  dlqName?: string;
   tags?: Record<string, string>;
   tagCount: number;
   recentMessages?: QueueMessageSummary[];
@@ -145,6 +176,7 @@ export interface EventSourceMappingSummary {
   batchSize: number;
   state: string;
   lastResult: string;
+  filterCriteria?: FilterCriteria;
 }
 
 export interface LogGroupSummary {

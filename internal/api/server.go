@@ -25,6 +25,7 @@ import (
 	s3svc "github.com/openstack-project/openstack/internal/s3"
 	secretssvc "github.com/openstack-project/openstack/internal/secrets"
 	sqssvc "github.com/openstack-project/openstack/internal/sqs"
+	tracesvc "github.com/openstack-project/openstack/internal/trace"
 )
 
 // Server is the main OpenStack API server.
@@ -42,16 +43,23 @@ type Server struct {
 }
 
 // NewServer creates a new API server.
-func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, lambdaSvc *lambdasvc.Service, logsSvc *logssvc.Service, sqsSvc *sqssvc.Service, secretsSvc *secretssvc.Service, infraSvc *infrasvc.Service, s3Svc *s3svc.Service, esmSvc *eventsourcesvc.Service) *Server {
+func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, lambdaSvc *lambdasvc.Service, logsSvc *logssvc.Service, sqsSvc *sqssvc.Service, secretsSvc *secretssvc.Service, infraSvc *infrasvc.Service, s3Svc *s3svc.Service, esmSvc *eventsourcesvc.Service, traceStore *tracesvc.Store, collector *tracesvc.Collector) *Server {
+	lambdaHandler := lambdahandler.NewHandler(lambdaSvc, s3Svc)
+	lambdaHandler.SetTraceStore(traceStore)
+	lambdaHandler.SetCollector(collector)
+
+	secretsHandler := secretshandler.NewHandler(cfg, secretsSvc)
+	secretsHandler.SetCollector(collector)
+
 	s := &Server{
 		cfg:         cfg,
 		apigw:       apigatewayhandler.NewHandler(gatewaySvc),
-		lambda:      lambdahandler.NewHandler(lambdaSvc, s3Svc),
+		lambda:      lambdaHandler,
 		s3:          s3handler.NewHandler(s3Svc),
 		sqs:         sqshandler.NewHandler(sqsSvc),
-		secrets:     secretshandler.NewHandler(cfg, secretsSvc),
+		secrets:     secretsHandler,
 		eventsource: eventsourcehandler.NewHandler(esmSvc),
-		admin:       adminhandler.NewHandler(cfg, gatewaySvc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc),
+		admin:       adminhandler.NewHandler(cfg, gatewaySvc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, traceStore),
 		logsSvc:     logsSvc,
 	}
 

@@ -8,8 +8,11 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/google/uuid"
 	lambdasvc "github.com/openstack-project/openstack/internal/lambda"
+	tracesvc "github.com/openstack-project/openstack/internal/trace"
 	"github.com/openstack-project/openstack/pkg/types"
 )
 
@@ -20,14 +23,22 @@ type s3Getter interface {
 
 // Handler implements HTTP handlers for the Lambda API.
 type Handler struct {
-	svc *lambdasvc.Service
-	s3  s3Getter
+	svc        *lambdasvc.Service
+	s3         s3Getter
+	traceStore *tracesvc.Store
+	collector  *tracesvc.Collector
 }
 
 // NewHandler creates a new Lambda API handler.
 func NewHandler(svc *lambdasvc.Service, s3 s3Getter) *Handler {
 	return &Handler{svc: svc, s3: s3}
 }
+
+// SetTraceStore attaches a trace store so direct invocations are recorded.
+func (h *Handler) SetTraceStore(ts *tracesvc.Store) { h.traceStore = ts }
+
+// SetCollector attaches a trace collector so sub-spans during invocation are captured.
+func (h *Handler) SetCollector(c *tracesvc.Collector) { h.collector = c }
 
 // CreateFunction handles POST /2015-03-31/functions
 func (h *Handler) CreateFunction(w http.ResponseWriter, r *http.Request) {
@@ -263,7 +274,36 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 		input.InvocationType = "RequestResponse"
 	}
 
+	if h.collector != nil {
+		h.collector.Begin(name)
+	}
+	start := time.Now()
 	output, err := h.svc.Invoke(r.Context(), input)
+	durationMs := time.Since(start).Milliseconds()
+
+	var subSpans []tracesvc.Span
+	if h.collector != nil {
+		subSpans = tracesvc.SubSpansToSpans(h.collector.Collect(name))
+	}
+
+	if h.traceStore != nil {
+		status := 200
+		spanStatus := "ok"
+		if err != nil {
+			status = 500
+			spanStatus = "error"
+		} else if output != nil && output.FunctionError != "" {
+			spanStatus = "error"
+		}
+		h.traceStore.Add(&tracesvc.Trace{
+			ID:         uuid.NewString()[:8],
+			StartedAt:  start,
+			DurationMs: durationMs,
+			Status:     status,
+			Spans:      append([]tracesvc.Span{{Kind: "lambda", Name: name, DurationMs: durationMs, Status: spanStatus}}, subSpans...),
+		})
+	}
+
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "ServiceException", err.Error())
 		return

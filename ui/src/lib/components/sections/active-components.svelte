@@ -2,7 +2,7 @@
 	import { GlobeHemisphereWestIcon, LightningIcon, ChatCircleIcon, KeyIcon, HardDriveIcon, HardDrivesIcon, ArrowsClockwiseIcon } from 'phosphor-svelte';
 	import LedDot from '$lib/components/common/led-dot.svelte';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
-	import { getDashboard, getDashboardFilters, matchesTagFilter } from '$lib/state.svelte';
+	import { getDashboard, getDashboardFilters, getVisibleInfra, matchesTagFilter } from '$lib/state.svelte';
 	import { formatBytes } from '$lib/utils';
 
 	const dashboard = getDashboard();
@@ -14,7 +14,7 @@
 	const secrets = $derived((dashboard.data?.secrets ?? []).filter((secret) => matchesTagFilter(secret.tags, filters.tagFilter)));
 	const buckets = $derived(dashboard.data?.buckets ?? []);
 	const eventMappings = $derived(dashboard.data?.eventSourceMappings ?? []);
-	const infra = $derived(dashboard.data?.infrastructure ?? []);
+	const infra = $derived(getVisibleInfra(dashboard.data?.infrastructure ?? []));
 	const totalCount = $derived(gateways.length + functions.length + queues.length + secrets.length + buckets.length + eventMappings.length + infra.length);
 
 	function fnLedColor(state: string): 'green' | 'amber' | 'red' | 'gray' {
@@ -164,11 +164,15 @@
 				{:else}
 					<ul class="space-y-1.5">
 						{#each eventMappings as esm}
-							<li class="flex items-center gap-2 group">
+							{@const hasFilter = (esm.filterCriteria?.Filters?.length ?? 0) > 0}
+							<li class="flex items-center gap-2 group" title={hasFilter ? `Filter: ${esm.filterCriteria!.Filters[0].Pattern}` : `${esm.queueName} → ${esm.functionName}`}>
 								<LedDot color={esm.state === 'Enabled' ? 'green' : 'gray'} />
-								<span class="text-xs text-text truncate flex-1" title="{esm.queueName} → {esm.functionName}">
+								<span class="text-xs text-text truncate flex-1">
 									{esm.queueName} → {esm.functionName}
 								</span>
+								{#if hasFilter}
+									<Badge variant="amber" class="text-[9px] px-1 py-0 shrink-0">filter</Badge>
+								{/if}
 								<span class="text-[10px] font-mono text-text-faint shrink-0">×{esm.batchSize}</span>
 							</li>
 						{/each}
@@ -184,13 +188,23 @@
 					<span class="ml-auto text-[10px] font-mono text-text-faint">{infra.length}</span>
 				</div>
 				{#if infra.length === 0}
-					<p class="text-[11px] text-text-faint py-2">No probes configured</p>
+					<p class="text-[11px] text-text-faint py-2">No probes selected</p>
 				{:else}
 					<ul class="space-y-1.5">
 						{#each infra as probe (probe.kind + probe.host + probe.port)}
 							<li class="flex items-center gap-2 group">
 								<LedDot color={probe.status === 'connected' ? 'green' : 'red'} />
-								<span class="text-xs text-text truncate flex-1" title="{probe.host}:{probe.port}">{probe.name}</span>
+								{#if probe.kind === 'http' || probe.kind === 'https'}
+									<a
+										href="{probe.kind}://{probe.host}:{probe.port}"
+										target="_blank"
+										rel="noreferrer"
+										class="text-xs text-accent truncate flex-1 hover:underline"
+										title="{probe.host}:{probe.port}"
+									>{probe.name}</a>
+								{:else}
+									<span class="text-xs text-text truncate flex-1" title="{probe.host}:{probe.port}">{probe.name}</span>
+								{/if}
 								{#if probe.version}
 									<Badge variant="secondary" class="text-[10px] px-1.5 py-0">{probe.version}</Badge>
 								{/if}

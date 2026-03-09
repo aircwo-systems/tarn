@@ -384,5 +384,5 @@ func newTestHandler(t *testing.T) *Handler {
 	infra := infrasvc.NewService("", false)
 	esmStore := eventsourcesvc.NewStore(cfg)
 	esm := eventsourcesvc.NewService(cfg, esmStore, nil, nil)
-	return NewHandler(cfg, apigw, lambda, logs, sqs, secrets, infra, s3, esm)
+	return NewHandler(cfg, apigw, lambda, logs, sqs, secrets, infra, s3, esm, nil)
 }

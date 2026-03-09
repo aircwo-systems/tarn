@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openstack-project/openstack/internal/config"
 	lambdasvc "github.com/openstack-project/openstack/internal/lambda"
+	tracesvc "github.com/openstack-project/openstack/internal/trace"
 	"github.com/openstack-project/openstack/pkg/types"
 )
 
@@ -32,11 +33,19 @@ type SQSSendFunc func(queueName, body string) (messageID, md5 string, err error)
 
 // Service implements API Gateway HTTP API (v2) behavior.
 type Service struct {
-	cfg      *config.Config
-	lambda   *lambdasvc.Service
-	sqsSend  SQSSendFunc
-	store    *Store
+	cfg        *config.Config
+	lambda     *lambdasvc.Service
+	sqsSend    SQSSendFunc
+	store      *Store
+	traceStore *tracesvc.Store
+	collector  *tracesvc.Collector
 }
+
+// SetTraceStore attaches a trace store for recording request traces.
+func (s *Service) SetTraceStore(ts *tracesvc.Store) { s.traceStore = ts }
+
+// SetCollector attaches a trace collector so sub-spans during lambda invocations are captured.
+func (s *Service) SetCollector(c *tracesvc.Collector) { s.collector = c }
 
 // APIUpdateInput contains mutable API fields.
 type APIUpdateInput struct {
@@ -469,6 +478,8 @@ func (s *Service) UpdateStage(apiID, stageName string, input StageUpdateInput) (
 
 // Invoke resolves an incoming request to a route+integration and invokes Lambda.
 func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput, error) {
+	traceStart := time.Now()
+
 	if input.APIID == "" {
 		return nil, errors.New("api id is required")
 	}
@@ -504,7 +515,20 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 	// Branch on integration type
 	switch integration.IntegrationType {
 	case integrationTypeAWS:
-		return s.invokeSQSIntegration(integration, input, pathParams)
+		sqsStart := time.Now()
+		out, sqsErr := s.invokeSQSIntegration(integration, input, pathParams)
+		if s.traceStore != nil {
+			status, spanStatus := 200, "ok"
+			if sqsErr != nil {
+				status, spanStatus = 500, "error"
+			} else if out != nil {
+				status = out.StatusCode
+			}
+			s.recordTrace(input, traceStart, status, []tracesvc.Span{
+				{Kind: "queue", Name: integration.SQSQueueName, DurationMs: time.Since(sqsStart).Milliseconds(), Status: spanStatus},
+			})
+		}
+		return out, sqsErr
 	default:
 		// AWS_PROXY — Lambda
 	}
@@ -514,6 +538,10 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 		return nil, err
 	}
 
+	if s.collector != nil {
+		s.collector.Begin(integration.LambdaFunctionName)
+	}
+	lambdaStart := time.Now()
 	invokeOut, err := s.lambda.Invoke(ctx, &types.InvokeInput{
 		FunctionName:   integration.LambdaFunctionName,
 		Payload:        eventPayload,
@@ -531,11 +559,67 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 			})
 		}
 		if err != nil {
+			var subSpans []tracesvc.Span
+			if s.collector != nil {
+				subSpans = tracesvc.SubSpansToSpans(s.collector.Collect(integration.LambdaFunctionName))
+			}
+			if s.traceStore != nil {
+				s.recordTrace(input, traceStart, 500, append([]tracesvc.Span{
+					{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: time.Since(lambdaStart).Milliseconds(), Status: "error"},
+				}, subSpans...))
+			}
 			return nil, fmt.Errorf("invoke failed: %w", err)
 		}
 	}
+	var subSpans []tracesvc.Span
+	if s.collector != nil {
+		subSpans = tracesvc.SubSpansToSpans(s.collector.Collect(integration.LambdaFunctionName))
+	}
+	lambdaDurationMs := time.Since(lambdaStart).Milliseconds()
 
-	return mapLambdaProxyResponse(invokeOut.Payload)
+	out, mapErr := mapLambdaProxyResponse(invokeOut.Payload)
+	if mapErr != nil {
+		if s.traceStore != nil {
+			s.recordTrace(input, traceStart, 500, append([]tracesvc.Span{
+				{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: lambdaDurationMs, Status: "error"},
+			}, subSpans...))
+		}
+		return nil, mapErr
+	}
+
+	if s.traceStore != nil {
+		spanStatus := "ok"
+		if out.StatusCode >= 500 {
+			spanStatus = "error"
+		} else if out.StatusCode >= 400 {
+			spanStatus = "client_error"
+		}
+		s.recordTrace(input, traceStart, out.StatusCode, append([]tracesvc.Span{
+			{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: lambdaDurationMs, Status: spanStatus},
+		}, subSpans...))
+	}
+
+	return out, nil
+}
+
+// recordTrace stores a completed trace in the trace store.
+func (s *Service) recordTrace(input *InvokeInput, start time.Time, status int, spans []tracesvc.Span) {
+	api, _ := s.store.GetAPI(input.APIID)
+	gwName := input.APIID
+	if api != nil {
+		gwName = api.Name
+	}
+	s.traceStore.Add(&tracesvc.Trace{
+		ID:          uuid.NewString()[:8],
+		StartedAt:   start,
+		DurationMs:  time.Since(start).Milliseconds(),
+		Status:      status,
+		Method:      strings.ToUpper(input.Method),
+		Path:        input.Path,
+		GatewayID:   input.APIID,
+		GatewayName: gwName,
+		Spans:       spans,
+	})
 }
 
 type lambdaProxyResponse struct {

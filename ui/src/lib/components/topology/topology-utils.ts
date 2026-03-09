@@ -21,4 +21,11 @@ export function stateColor(state: string): 'green' | 'amber' | 'red' | 'gray' {
 	return 'gray';
 }
 
+export const ledColorMap: Record<string, string> = {
+	green: 'var(--color-accent)',
+	amber: 'var(--color-amber)',
+	red: 'var(--color-red)',
+	gray: 'var(--color-text-faint)'
+};
+
 // laneAwarePath, infraLadderPath can be added here as needed

@@ -164,6 +164,26 @@ func (s *Service) getFunctionMutex(name string) *sync.Mutex {
 	return v.(*sync.Mutex)
 }
 
+// ActivatePendingFunctions promotes all persisted functions from Pending to Active
+// on startup, so functions saved mid-create (before the 750ms timer fired) are
+// immediately invokable and show as Active in the UI.
+func (s *Service) ActivatePendingFunctions() {
+	fns, err := s.store.ListFunctions()
+	if err != nil {
+		log.Printf("[lambda] warning: could not list functions for startup activation: %v", err)
+		return
+	}
+	for _, fn := range fns {
+		if fn.State == types.FunctionStatePending {
+			if err := s.promoteFunctionToActiveIfPending(fn.FunctionName); err != nil {
+				log.Printf("[lambda] warning: could not activate %s on startup: %v", fn.FunctionName, err)
+			} else {
+				log.Printf("[lambda] activated pending function %s on startup", fn.FunctionName)
+			}
+		}
+	}
+}
+
 // GetFunction retrieves a function by name.
 func (s *Service) GetFunction(name string) (*types.FunctionConfig, error) {
 	fn, err := s.store.GetFunction(name)

@@ -1,5 +1,14 @@
 import { fetchOverview } from '$lib/api';
-import type { OverviewResponse } from '$lib/types';
+import type { InfraProbe, OverviewResponse } from '$lib/types';
+
+export type InfraProbeKind = 'docker' | 'postgresql' | 'redis' | 'mysql' | 'mongodb';
+
+export interface FrontendTarget {
+	id: string;
+	name: string;
+	host: string;
+	port: number;
+}
 
 let data = $state<OverviewResponse | null>(null);
 let loading = $state(true);
@@ -10,6 +19,7 @@ let pollHandle: ReturnType<typeof setInterval> | null = null;
 let inFlight = false;
 
 const SETTINGS_COOKIE = 'openstack-ui-settings';
+const INFRA_SETTINGS_KEY = 'openstack-infra-settings';
 const DEFAULT_POLLING_INTERVAL_SECONDS = 5;
 const MIN_POLLING_INTERVAL_SECONDS = 1;
 const MAX_POLLING_INTERVAL_SECONDS = 120;
@@ -23,6 +33,10 @@ let resolvedTheme = $state<'light' | 'dark'>('dark');
 let persistenceEnabled = $state(DEFAULT_PERSISTENCE_ENABLED);
 let dashboardTagFilter = $state('');
 let settingsInitialized = false;
+
+let infraEnabledKinds = $state<InfraProbeKind[]>(['docker']);
+let infraFrontendTargets = $state<FrontendTarget[]>([]);
+let infraFrontendResults = $state<InfraProbe[]>([]);
 
 let systemThemeMediaQuery: MediaQueryList | null = null;
 let systemThemeListener: ((event: MediaQueryListEvent) => void) | null = null;
@@ -71,6 +85,7 @@ export async function refresh() {
 export function startPolling() {
 	initUISettings();
 	refresh();
+	probeFrontendTargets();
 	schedulePolling();
 }
 
@@ -90,6 +105,31 @@ export function initUISettings() {
 	themeMode = normalizeThemeMode(settings.themeMode);
 	persistenceEnabled = normalizePersistenceEnabled(settings.persistenceEnabled);
 	applyTheme(themeMode);
+	initInfraSettings();
+}
+
+export function getInfraSettings() {
+	return {
+		get enabledKinds() { return infraEnabledKinds; },
+		get frontendTargets() { return infraFrontendTargets; },
+		get frontendResults() { return infraFrontendResults; }
+	};
+}
+
+export function setInfraEnabledKinds(kinds: InfraProbeKind[]) {
+	infraEnabledKinds = kinds;
+	persistInfraSettings();
+}
+
+export function setInfraFrontendTargets(targets: FrontendTarget[]) {
+	infraFrontendTargets = targets;
+	persistInfraSettings();
+	probeFrontendTargets();
+}
+
+export function getVisibleInfra(backendInfra: InfraProbe[]): InfraProbe[] {
+	const filtered = backendInfra.filter((p) => (infraEnabledKinds as string[]).includes(p.kind));
+	return [...filtered, ...infraFrontendResults];
 }
 
 export function setPollingIntervalSeconds(next: number) {
@@ -166,6 +206,7 @@ function schedulePolling() {
 	pollHandle = setInterval(() => {
 		if (!document.hidden) {
 			refresh();
+			probeFrontendTargets();
 		}
 	}, pollingIntervalSeconds * 1000);
 }
@@ -267,4 +308,82 @@ function normalizeThemeMode(value: unknown): ThemeMode {
 
 function normalizePersistenceEnabled(value: unknown): boolean {
 	return value === true;
+}
+
+function initInfraSettings() {
+	if (typeof localStorage === 'undefined') return;
+	try {
+		const raw = localStorage.getItem(INFRA_SETTINGS_KEY);
+		if (!raw) return;
+		const parsed = JSON.parse(raw) as { enabledKinds?: unknown[]; frontendTargets?: unknown[] };
+		if (Array.isArray(parsed.enabledKinds)) {
+			infraEnabledKinds = parsed.enabledKinds.filter(isValidInfraKind);
+		}
+		if (Array.isArray(parsed.frontendTargets)) {
+			infraFrontendTargets = parsed.frontendTargets.filter(isValidFrontendTarget);
+		}
+	} catch {
+		// ignore corrupt data
+	}
+}
+
+function persistInfraSettings() {
+	if (typeof localStorage === 'undefined') return;
+	localStorage.setItem(
+		INFRA_SETTINGS_KEY,
+		JSON.stringify({ enabledKinds: infraEnabledKinds, frontendTargets: infraFrontendTargets })
+	);
+}
+
+async function probeFrontendTargets() {
+	if (typeof window === 'undefined' || infraFrontendTargets.length === 0) {
+		infraFrontendResults = [];
+		return;
+	}
+	const results = await Promise.all(
+		infraFrontendTargets.map(async (target): Promise<InfraProbe> => {
+			const url = `http://${target.host}:${target.port}/`;
+			const start = performance.now();
+			try {
+				await fetch(url, { signal: AbortSignal.timeout(2000), mode: 'no-cors' });
+				return {
+					name: target.name,
+					kind: 'http',
+					host: target.host,
+					port: target.port,
+					status: 'connected',
+					latencyMs: Math.round(performance.now() - start),
+					probedAt: new Date().toISOString()
+				};
+			} catch {
+				return {
+					name: target.name,
+					kind: 'http',
+					host: target.host,
+					port: target.port,
+					status: 'refused',
+					latencyMs: 0,
+					probedAt: new Date().toISOString()
+				};
+			}
+		})
+	);
+	infraFrontendResults = results;
+}
+
+const VALID_INFRA_KINDS = new Set<InfraProbeKind>(['docker', 'postgresql', 'redis', 'mysql', 'mongodb']);
+
+function isValidInfraKind(v: unknown): v is InfraProbeKind {
+	return typeof v === 'string' && VALID_INFRA_KINDS.has(v as InfraProbeKind);
+}
+
+function isValidFrontendTarget(v: unknown): v is FrontendTarget {
+	return (
+		typeof v === 'object' &&
+		v !== null &&
+		'id' in v && typeof (v as FrontendTarget).id === 'string' &&
+		'name' in v && typeof (v as FrontendTarget).name === 'string' &&
+		'host' in v && typeof (v as FrontendTarget).host === 'string' &&
+		'port' in v && typeof (v as FrontendTarget).port === 'number'
+	);
 }

@@ -3,6 +3,7 @@ package eventsource
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -26,8 +27,12 @@ func NewStore(cfg *config.Config) *Store {
 	}
 }
 
-// Init loads persisted state if available.
+// Init loads persisted state if persistence is enabled.
 func (store *Store) Init() error {
+	if !store.cfg.PersistenceEnabled {
+		return nil
+	}
+
 	dir := store.cfg.EventSourceDir()
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create eventsource dir: %w", err)
@@ -56,6 +61,7 @@ func (store *Store) Init() error {
 	for _, m := range mappings {
 		store.mappings[m.UUID] = m
 	}
+	log.Printf("[eventsource] loaded %d event source mapping(s) from disk", len(store.mappings))
 	return nil
 }
 

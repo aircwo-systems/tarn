@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/openstack-project/openstack/internal/api"
 	"github.com/openstack-project/openstack/internal/apigateway"
 	"github.com/openstack-project/openstack/internal/config"
@@ -23,6 +24,7 @@ import (
 	s3store "github.com/openstack-project/openstack/internal/s3"
 	"github.com/openstack-project/openstack/internal/secrets"
 	"github.com/openstack-project/openstack/internal/sqs"
+	"github.com/openstack-project/openstack/internal/trace"
 	"github.com/openstack-project/openstack/pkg/types"
 	"github.com/spf13/cobra"
 )
@@ -95,6 +97,7 @@ func startServer(cfg *config.Config) error {
 		return fmt.Errorf("failed to initialize store: %w", err)
 	}
 	lambdaSvc := lambda.NewService(cfg, store, eng, pool, logsSvc)
+	lambdaSvc.ActivatePendingFunctions()
 
 	// Initialize SQS service
 	sqsSvc := sqs.NewService(cfg)
@@ -135,6 +138,16 @@ func startServer(cfg *config.Config) error {
 	if err := esmSvc.Init(); err != nil {
 		return fmt.Errorf("failed to initialize event source store: %w", err)
 	}
+
+	// Initialize request trace store and sub-span collector. Attach both to gateway
+	// and ESM before starting pollers so boot-time invocations are fully traced.
+	traceStore := trace.NewStore()
+	collector := trace.NewCollector()
+	gatewaySvc.SetTraceStore(traceStore)
+	gatewaySvc.SetCollector(collector)
+	esmSvc.SetTraceStore(traceStore)
+	esmSvc.SetCollector(collector)
+
 	esmSvc.Start()
 	defer esmSvc.Stop()
 
@@ -150,12 +163,32 @@ func startServer(cfg *config.Config) error {
 			}
 			payload := buildS3EventPayload(eventName, bucket, key, size, etag, cfg.Region)
 			go func(fnName string, p []byte) {
+				collector.Begin(fnName)
+				traceStart := time.Now()
 				invokeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
-				lambdaSvc.Invoke(invokeCtx, &types.InvokeInput{
+				out, err := lambdaSvc.Invoke(invokeCtx, &types.InvokeInput{
 					FunctionName:   fnName,
 					Payload:        p,
 					InvocationType: "Event",
+				})
+				durationMs := time.Since(traceStart).Milliseconds()
+				subSpans := trace.SubSpansToSpans(collector.Collect(fnName))
+				status := 200
+				spanStatus := "ok"
+				if err != nil || (out != nil && out.FunctionError != "") {
+					status = 500
+					spanStatus = "error"
+				}
+				traceStore.Add(&trace.Trace{
+					ID:         uuid.NewString()[:8],
+					StartedAt:  traceStart,
+					DurationMs: durationMs,
+					Status:     status,
+					Spans: append([]trace.Span{
+						{Kind: "s3", Name: bucket + "/" + key, DurationMs: 0, Status: "ok", Meta: map[string]string{"event": eventName}},
+						{Kind: "lambda", Name: fnName, DurationMs: durationMs, Status: spanStatus},
+					}, subSpans...),
 				})
 			}(lc.LambdaFunctionName, payload)
 		}
@@ -183,7 +216,7 @@ func startServer(cfg *config.Config) error {
 	})
 
 	// Create and start API server
-	server := api.NewServer(cfg, gatewaySvc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc)
+	server := api.NewServer(cfg, gatewaySvc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, traceStore, collector)
 
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)

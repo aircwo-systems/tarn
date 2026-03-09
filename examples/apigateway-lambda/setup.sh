@@ -81,12 +81,25 @@ extract_json_string() {
   printf '%s' "$value"
 }
 
+existing_apis_resp="$(curl -sS "$ENDPOINT/v2/apis")"
+while IFS= read -r del_id; do
+  [[ -z "$del_id" ]] && continue
+  echo "API exists; deleting: $API_NAME ($del_id)"
+  curl -sS -X DELETE "$ENDPOINT/v2/apis/$del_id" >/dev/null
+done < <(printf '%s' "$existing_apis_resp" | python3 -c "
+import json, sys
+data = json.loads(sys.stdin.read())
+for item in data.get('items', []):
+    if item.get('name') == sys.argv[1]:
+        print(item.get('apiId', ''))
+" "$API_NAME" 2>/dev/null)
+
 api_payload='{"Name":"'"$API_NAME"'","ProtocolType":"HTTP","Description":"API Gateway -> Lambda example"}'
 api_resp="$(curl -sS -X POST "$ENDPOINT/v2/apis" \
   -H 'Content-Type: application/json' \
   -d "$api_payload")"
 
-api_id="$(extract_json_string "$api_resp" "ApiId")"
+api_id="$(extract_json_string "$api_resp" "apiId")"
 
 if [[ -z "$api_id" ]]; then
   echo "failed to create api: $api_resp" >&2
@@ -101,7 +114,7 @@ integration_resp="$(curl -sS -X POST "$ENDPOINT/v2/apis/$api_id/integrations" \
   -H 'Content-Type: application/json' \
   -d "$integration_payload")"
 
-integration_id="$(extract_json_string "$integration_resp" "IntegrationId")"
+integration_id="$(extract_json_string "$integration_resp" "integrationId")"
 
 if [[ -z "$integration_id" ]]; then
   echo "failed to create integration: $integration_resp" >&2
