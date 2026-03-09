@@ -832,7 +832,7 @@
 					{#if probe?.version}
 						<text x={node.x + 4} y={node.y + 9} text-anchor="middle" class="fill-text-faint" font-size="6.5" font-family="var(--font-mono)">{probe.version}</text>
 					{:else if (probe?.latencyMs ?? 0) > 0}
-						<text x={node.x + 4} y={node.y + 9} text-anchor="middle" class="fill-text-faint" font-size="6.5" font-family="var(--font-mono)">{probe.latencyMs.toFixed(0)}ms</text>
+						<text x={node.x + 4} y={node.y + 9} text-anchor="middle" class="fill-text-faint" font-size="6.5" font-family="var(--font-mono)">{probe?.latencyMs?.toFixed(0)}ms</text>
 					{/if}
 				</g>
 			{/each}

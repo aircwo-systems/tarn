@@ -4,7 +4,6 @@
   export let label: string;
   export let color: string;
   export let width = 36;
-  export let status: 'active' | 'inactive' = 'active';
 </script>
 
 <g class="node">
