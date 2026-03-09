@@ -14,16 +14,19 @@ import (
 
 func newCreateQueueCmd() *cobra.Command {
 	var (
-		name string
-		fifo bool
-		tags string
+		name            string
+		fifo            bool
+		tags            string
+		dlq             string
+		maxReceiveCount int
 	)
 
 	cmd := &cobra.Command{
 		Use:   "create-queue",
 		Short: "Create a new SQS queue",
 		Example: `  openstack sqs create-queue --name my-queue
-  openstack sqs create-queue --name my-queue.fifo --fifo`,
+  openstack sqs create-queue --name my-queue.fifo --fifo
+  openstack sqs create-queue --name my-queue --dlq my-queue-dlq --max-receive-count 3`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
@@ -31,10 +34,27 @@ func newCreateQueueCmd() *cobra.Command {
 				"Action":    {"CreateQueue"},
 				"QueueName": {name},
 			}
+
+			attrIdx := 1
 			if fifo {
-				form.Set("Attribute.1.Name", "FifoQueue")
-				form.Set("Attribute.1.Value", "true")
+				form.Set(fmt.Sprintf("Attribute.%d.Name", attrIdx), "FifoQueue")
+				form.Set(fmt.Sprintf("Attribute.%d.Value", attrIdx), "true")
+				attrIdx++
 			}
+			if dlq != "" {
+				if maxReceiveCount <= 0 {
+					maxReceiveCount = 3
+				}
+				region := "us-east-1"
+				accountID := getAccountID()
+				dlqArn := fmt.Sprintf("arn:aws:sqs:%s:%s:%s", region, accountID, dlq)
+				redrivePolicy := fmt.Sprintf(`{"deadLetterTargetArn":"%s","maxReceiveCount":%d}`, dlqArn, maxReceiveCount)
+				form.Set(fmt.Sprintf("Attribute.%d.Name", attrIdx), "RedrivePolicy")
+				form.Set(fmt.Sprintf("Attribute.%d.Value", attrIdx), redrivePolicy)
+				attrIdx++
+			}
+			_ = attrIdx
+
 			if tags != "" {
 				tagMap, err := common.ParseTagMap(tags)
 				if err != nil {
@@ -81,6 +101,8 @@ func newCreateQueueCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "Queue name (required)")
 	cmd.Flags().BoolVar(&fifo, "fifo", false, "Create a FIFO queue")
 	cmd.Flags().StringVar(&tags, "tags", "", "Comma-separated tags in KEY=VALUE form")
+	cmd.Flags().StringVar(&dlq, "dlq", "", "Dead-letter queue name to attach as redrive policy")
+	cmd.Flags().IntVar(&maxReceiveCount, "max-receive-count", 3, "Number of receives before routing to DLQ (used with --dlq)")
 	_ = cmd.MarkFlagRequired("name")
 
 	return cmd

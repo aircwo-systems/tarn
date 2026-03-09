@@ -17,6 +17,7 @@ func NewSQSCmd() *cobra.Command {
 	cmd.AddCommand(newReceiveCmd())
 	cmd.AddCommand(newListCmd())
 	cmd.AddCommand(newDeleteQueueCmd())
+	cmd.AddCommand(newSetDLQCmd())
 
 	return cmd
 }
