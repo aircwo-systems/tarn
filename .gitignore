@@ -2,6 +2,7 @@
 /build/
 /dist/
 /ui/build/
+/openstack
 
 # Go
 *.exe
@@ -43,6 +44,7 @@ vendor/
 
 # Terraform
 **/.terraform/
+**/.terraform.lock.hcl
 *.tfstate
 *.tfstate.backup
 *.tfstate.*.backup
@@ -63,3 +65,7 @@ internal/api/ui-dist/*
 
 # Debug
 __debug_bin*
+
+# Scratch files
+/hello.txt
+/test.sh
