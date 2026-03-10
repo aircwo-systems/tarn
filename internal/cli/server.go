@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/openstack-project/openstack/internal/api"
 	"github.com/openstack-project/openstack/internal/apigateway"
+	"github.com/openstack-project/openstack/internal/apigatewayv1"
 	"github.com/openstack-project/openstack/internal/config"
 	"github.com/openstack-project/openstack/internal/engine"
 	"github.com/openstack-project/openstack/internal/eventsource"
@@ -119,17 +120,31 @@ func startServer(cfg *config.Config) error {
 		return fmt.Errorf("failed to initialize s3 store: %w", err)
 	}
 
-	// Initialize API Gateway service (with SQS send function)
-	sqsSend := apigateway.SQSSendFunc(func(queueName, body string) (string, string, error) {
+	// Initialize API Gateway services (with shared SQS send function)
+	sqsSendFn := func(queueName, body string) (string, string, error) {
 		msg, err := sqsSvc.SendMessage(queueName, body, 0, nil, "", "")
 		if err != nil {
 			return "", "", err
 		}
 		return msg.MessageId, msg.MD5OfBody, nil
-	})
+	}
+	sqsSend := apigateway.SQSSendFunc(sqsSendFn)
 	gatewaySvc := apigateway.NewService(cfg, lambdaSvc, sqsSend)
 	if err := gatewaySvc.Init(); err != nil {
 		return fmt.Errorf("failed to initialize api gateway store: %w", err)
+	}
+
+	// Initialize API Gateway v1 (REST API) service
+	sqsSendV1 := apigatewayv1.SQSSendFunc(func(queueName, body, groupId, dedupId string) (string, string, error) {
+		msg, err := sqsSvc.SendMessage(queueName, body, 0, nil, groupId, dedupId)
+		if err != nil {
+			return "", "", err
+		}
+		return msg.MessageId, msg.MD5OfBody, nil
+	})
+	gatewayV1Svc := apigatewayv1.NewService(cfg, lambdaSvc, sqsSendV1)
+	if err := gatewayV1Svc.Init(); err != nil {
+		return fmt.Errorf("failed to initialize api gateway v1 store: %w", err)
 	}
 
 	// Initialize event source mapping service
@@ -145,6 +160,8 @@ func startServer(cfg *config.Config) error {
 	collector := trace.NewCollector()
 	gatewaySvc.SetTraceStore(traceStore)
 	gatewaySvc.SetCollector(collector)
+	gatewayV1Svc.SetTraceStore(traceStore)
+	gatewayV1Svc.SetCollector(collector)
 	esmSvc.SetTraceStore(traceStore)
 	esmSvc.SetCollector(collector)
 
@@ -173,7 +190,7 @@ func startServer(cfg *config.Config) error {
 					InvocationType: "Event",
 				})
 				durationMs := time.Since(traceStart).Milliseconds()
-				subSpans := trace.SubSpansToSpans(collector.Collect(fnName))
+				subSpans := trace.SubSpansToSpans(collector.CollectWithFlush(fnName))
 				status := 200
 				spanStatus := "ok"
 				if err != nil || (out != nil && out.FunctionError != "") {
@@ -216,7 +233,7 @@ func startServer(cfg *config.Config) error {
 	})
 
 	// Create and start API server
-	server := api.NewServer(cfg, gatewaySvc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, traceStore, collector)
+	server := api.NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, traceStore, collector)
 
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)
