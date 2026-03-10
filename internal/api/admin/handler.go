@@ -11,6 +11,7 @@ import (
 	"time"
 
 	apigatewaysvc "github.com/openstack-project/openstack/internal/apigateway"
+	apigatewayv1svc "github.com/openstack-project/openstack/internal/apigatewayv1"
 	"github.com/openstack-project/openstack/internal/config"
 	eventsourcesvc "github.com/openstack-project/openstack/internal/eventsource"
 	infrasvc "github.com/openstack-project/openstack/internal/infrastructure"
@@ -27,6 +28,7 @@ import (
 type Handler struct {
 	cfg        *config.Config
 	apigw      *apigatewaysvc.Service
+	apigwv1    *apigatewayv1svc.Service
 	lambda     *lambdasvc.Service
 	logs       *logssvc.Service
 	s3         *s3svc.Service
@@ -37,10 +39,11 @@ type Handler struct {
 	traceStore *tracesvc.Store
 }
 
-func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, traceStore *tracesvc.Store) *Handler {
+func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apigatewayv1svc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, traceStore *tracesvc.Store) *Handler {
 	return &Handler{
 		cfg:        cfg,
 		apigw:      apigw,
+		apigwv1:    apigwv1,
 		lambda:     lambda,
 		logs:       logs,
 		s3:         s3,
@@ -105,21 +108,33 @@ type s3BucketSummary struct {
 	CreatedDate time.Time `json:"createdDate"`
 }
 
+type routeDetailSummary struct {
+	RouteKey          string            `json:"routeKey"`
+	Method            string            `json:"method,omitempty"`
+	Path              string            `json:"path,omitempty"`
+	IntegrationType   string            `json:"integrationType,omitempty"`
+	IntegrationTarget string            `json:"integrationTarget,omitempty"`
+	RequestTemplates  map[string]string `json:"requestTemplates,omitempty"`
+	RequestParameters map[string]string `json:"requestParameters,omitempty"`
+}
+
 type gatewaySummary struct {
-	APIID        string            `json:"apiId"`
-	Name         string            `json:"name"`
-	Description  string            `json:"description,omitempty"`
-	ProtocolType string            `json:"protocolType"`
-	Arn          string            `json:"arn"`
-	ApiEndpoint  string            `json:"apiEndpoint"`
-	DefaultStage string            `json:"defaultStage"`
-	InvokeURL    string            `json:"invokeUrl"`
-	Routes       int               `json:"routes"`
-	Integrations int               `json:"integrations"`
-	Stages       int               `json:"stages"`
-	Tags         map[string]string `json:"tags,omitempty"`
-	TagCount     int               `json:"tagCount"`
-	RouteKeys    []string          `json:"routeKeys,omitempty"`
+	APIID        string               `json:"apiId"`
+	Name         string               `json:"name"`
+	Description  string               `json:"description,omitempty"`
+	ProtocolType string               `json:"protocolType"`
+	Version      string               `json:"version"`
+	Arn          string               `json:"arn"`
+	ApiEndpoint  string               `json:"apiEndpoint"`
+	DefaultStage string               `json:"defaultStage"`
+	InvokeURL    string               `json:"invokeUrl"`
+	Routes       int                  `json:"routes"`
+	Integrations int                  `json:"integrations"`
+	Stages       int                  `json:"stages"`
+	Tags         map[string]string    `json:"tags,omitempty"`
+	TagCount     int                  `json:"tagCount"`
+	RouteKeys    []string             `json:"routeKeys,omitempty"`
+	RouteDetails []routeDetailSummary `json:"routeDetails,omitempty"`
 }
 
 type functionSummary struct {
@@ -160,6 +175,7 @@ type queueSummary struct {
 	ApproxVisible    int               `json:"approxVisible"`
 	ApproxInFlight   int               `json:"approxInFlight"`
 	ApproxDelayed    int               `json:"approxDelayed"`
+	ApproxStale      int               `json:"approxStale"`
 	CreatedTimestamp int64             `json:"createdTimestamp"`
 	DLQName          string            `json:"dlqName,omitempty"`
 	Tags             map[string]string `json:"tags,omitempty"`
@@ -189,6 +205,10 @@ type secretSummary struct {
 // Overview returns a dashboard-friendly snapshot of current resources.
 func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	gateways := h.apigw.ListAPIs()
+	var v1APIs []*types.RestAPI
+	if h.apigwv1 != nil {
+		v1APIs = h.apigwv1.ListAPIs()
+	}
 
 	functions, err := h.lambda.ListFunctions()
 	if err != nil {
@@ -213,7 +233,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	resp := overviewResponse{
 		Status:    "running",
 		Timestamp: time.Now().UTC(),
-		Services:  []string{"apigatewayv2", "lambda", "s3", "sqs", "secretsmanager", "eventsource"},
+		Services:  []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "secretsmanager", "eventsource"},
 		Config: overviewConfig{
 			Region:    h.cfg.Region,
 			AccountID: h.cfg.AccountID,
@@ -222,7 +242,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			UIEnabled: h.cfg.UIEnabled,
 		},
 		Counts: overviewCounts{
-			Gateways:            len(gateways),
+			Gateways:            len(gateways) + len(v1APIs),
 			Functions:           len(functions),
 			Queues:              len(queues),
 			Secrets:             len(secrets),
@@ -321,11 +341,40 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			invokeURL = api.APIEndpoint
 		}
 
+		// Build per-route integration detail for the UI
+		integByID := make(map[string]*types.APIGatewayIntegration, len(integrations))
+		for _, ig := range integrations {
+			integByID[ig.IntegrationID] = ig
+		}
+		routeDetails := make([]routeDetailSummary, 0, len(routes))
+		for _, route := range routes {
+			detail := routeDetailSummary{RouteKey: route.RouteKey}
+			if parts := strings.SplitN(route.RouteKey, " ", 2); len(parts) == 2 {
+				detail.Method = parts[0]
+				detail.Path = parts[1]
+			}
+			integID := strings.TrimPrefix(route.Target, "integrations/")
+			if ig, ok := integByID[integID]; ok {
+				detail.IntegrationType = ig.IntegrationType
+				switch {
+				case ig.SQSQueueName != "":
+					detail.IntegrationTarget = "sqs:" + ig.SQSQueueName
+				case ig.LambdaFunctionName != "":
+					detail.IntegrationTarget = "lambda:" + ig.LambdaFunctionName
+				}
+				if len(ig.RequestParameters) > 0 {
+					detail.RequestParameters = ig.RequestParameters
+				}
+			}
+			routeDetails = append(routeDetails, detail)
+		}
+
 		resp.Gateways = append(resp.Gateways, gatewaySummary{
 			APIID:        api.APIID,
 			Name:         api.Name,
 			Description:  api.Description,
 			ProtocolType: api.ProtocolType,
+			Version:      "v2",
 			Arn:          api.APIArn,
 			ApiEndpoint:  api.APIEndpoint,
 			DefaultStage: defaultStage,
@@ -336,6 +385,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			Tags:         cloneStringMap(api.Tags),
 			TagCount:     len(api.Tags),
 			RouteKeys:    routeKeys,
+			RouteDetails: routeDetails,
 		})
 
 		// APIGW→SQS and APIGW→Lambda connections
@@ -362,6 +412,113 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// API Gateway v1 (REST APIs)
+	for _, v1api := range v1APIs {
+		stages, err := h.apigwv1.ListStages(v1api.ID)
+		if err != nil {
+			resp.Warnings = append(resp.Warnings, "v1 gateway stages unavailable for "+v1api.ID)
+			stages = nil
+		}
+		integrations, err := h.apigwv1.ListIntegrations(v1api.ID)
+		if err != nil {
+			resp.Warnings = append(resp.Warnings, "v1 gateway integrations unavailable for "+v1api.ID)
+			integrations = nil
+		}
+		resources, err := h.apigwv1.ListResources(v1api.ID)
+		if err != nil {
+			resp.Warnings = append(resp.Warnings, "v1 gateway resources unavailable for "+v1api.ID)
+			resources = nil
+		}
+
+		defaultStage := ""
+		invokeURL := ""
+		if len(stages) > 0 {
+			defaultStage = stages[0].StageName
+			invokeURL = stages[0].InvokeURL
+		}
+
+		// Collect route-like paths from resources (non-root)
+		routeKeys := make([]string, 0)
+		for _, res := range resources {
+			if res.Path != "/" {
+				routeKeys = append(routeKeys, res.Path)
+			}
+		}
+		sort.Strings(routeKeys)
+
+		// Build per-route integration detail for the UI
+		resourcePathByID := make(map[string]string, len(resources))
+		for _, res := range resources {
+			resourcePathByID[res.ID] = res.Path
+		}
+		v1RouteDetails := make([]routeDetailSummary, 0, len(integrations))
+		for _, integ := range integrations {
+			resPath := resourcePathByID[integ.ResourceID]
+			detail := routeDetailSummary{
+				RouteKey:        integ.MethodHTTPMethod + " " + resPath,
+				Method:          integ.MethodHTTPMethod,
+				Path:            resPath,
+				IntegrationType: integ.Type,
+			}
+			switch {
+			case integ.SQSQueueName != "":
+				detail.IntegrationTarget = "sqs:" + integ.SQSQueueName
+			case integ.LambdaFunctionName != "":
+				detail.IntegrationTarget = "lambda:" + integ.LambdaFunctionName
+			}
+			if len(integ.RequestTemplates) > 0 {
+				detail.RequestTemplates = integ.RequestTemplates
+			}
+			v1RouteDetails = append(v1RouteDetails, detail)
+		}
+		sort.Slice(v1RouteDetails, func(i, j int) bool {
+			return v1RouteDetails[i].RouteKey < v1RouteDetails[j].RouteKey
+		})
+
+		resp.Gateways = append(resp.Gateways, gatewaySummary{
+			APIID:        v1api.ID,
+			Name:         v1api.Name,
+			Description:  v1api.Description,
+			ProtocolType: "REST",
+			Version:      "v1",
+			Arn:          v1api.APIArn,
+			ApiEndpoint:  invokeURL,
+			DefaultStage: defaultStage,
+			InvokeURL:    invokeURL,
+			Routes:       len(resources) - 1, // exclude root
+			Integrations: len(integrations),
+			Stages:       len(stages),
+			Tags:         cloneStringMap(v1api.Tags),
+			TagCount:     len(v1api.Tags),
+			RouteKeys:    routeKeys,
+			RouteDetails: v1RouteDetails,
+		})
+
+		// APIGW v1 → SQS/Lambda connections
+		for _, integ := range integrations {
+			if integ.SQSQueueName != "" {
+				resp.Connections = append(resp.Connections, infraConnection{
+					SourceFunction: v1api.ID,
+					TargetID:       integ.SQSQueueName,
+					TargetName:     integ.SQSQueueName,
+					TargetKind:     "apigw-sqs",
+					Evidence:       "integration",
+					Source:         integ.ResourceID + ":" + integ.MethodHTTPMethod,
+				})
+			}
+			if integ.LambdaFunctionName != "" {
+				resp.Connections = append(resp.Connections, infraConnection{
+					SourceFunction: v1api.ID,
+					TargetID:       integ.LambdaFunctionName,
+					TargetName:     integ.LambdaFunctionName,
+					TargetKind:     "apigw-lambda",
+					Evidence:       "integration",
+					Source:         integ.ResourceID + ":" + integ.MethodHTTPMethod,
+				})
+			}
+		}
+	}
+
 	sort.Slice(resp.Gateways, func(i, j int) bool {
 		if resp.Gateways[i].Name == resp.Gateways[j].Name {
 			return resp.Gateways[i].APIID < resp.Gateways[j].APIID
@@ -425,6 +582,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			"ApproximateNumberOfMessages",
 			"ApproximateNumberOfMessagesNotVisible",
 			"ApproximateNumberOfMessagesDelayed",
+			"ApproximateNumberOfMessagesStale",
 		})
 		if err != nil {
 			resp.Warnings = append(resp.Warnings, "queue metrics unavailable for "+q.QueueName)
@@ -432,6 +590,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			summary.ApproxVisible = parseInt(attrs["ApproximateNumberOfMessages"])
 			summary.ApproxInFlight = parseInt(attrs["ApproximateNumberOfMessagesNotVisible"])
 			summary.ApproxDelayed = parseInt(attrs["ApproximateNumberOfMessagesDelayed"])
+			summary.ApproxStale = parseInt(attrs["ApproximateNumberOfMessagesStale"])
 		}
 
 		msgs, err := h.sqs.PeekMessages(q.QueueName, 8)
@@ -442,7 +601,9 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			summary.RecentMessages = make([]queueMessage, 0, len(msgs))
 			for _, msg := range msgs {
 				state := "visible"
-				if msg.DelayUntil > now {
+				if msg.Stale {
+					state = "stale"
+				} else if msg.DelayUntil > now {
 					state = "delayed"
 				} else if msg.VisibleAt > now {
 					state = "inflight"
@@ -580,14 +741,16 @@ func (h *Handler) QueueMessages(w http.ResponseWriter, r *http.Request) {
 	result := make([]queueMessage, 0, len(msgs))
 	for _, msg := range msgs {
 		state := "visible"
-		if msg.DelayUntil > now {
+		if msg.Stale {
+			state = "stale"
+		} else if msg.DelayUntil > now {
 			state = "delayed"
 		} else if msg.VisibleAt > now {
 			state = "inflight"
 		}
 		result = append(result, queueMessage{
 			ID:           msg.MessageId,
-			Body:         truncateText(msg.Body, 160),
+			Body:         msg.Body,
 			State:        state,
 			SentAt:       msg.SentTimestamp,
 			ReceiveCount: msg.ApproximateReceiveCount,

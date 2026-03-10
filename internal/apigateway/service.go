@@ -561,7 +561,7 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 		if err != nil {
 			var subSpans []tracesvc.Span
 			if s.collector != nil {
-				subSpans = tracesvc.SubSpansToSpans(s.collector.Collect(integration.LambdaFunctionName))
+				subSpans = tracesvc.SubSpansToSpans(s.collector.CollectWithFlush(integration.LambdaFunctionName))
 			}
 			if s.traceStore != nil {
 				s.recordTrace(input, traceStart, 500, append([]tracesvc.Span{
@@ -573,7 +573,7 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 	}
 	var subSpans []tracesvc.Span
 	if s.collector != nil {
-		subSpans = tracesvc.SubSpansToSpans(s.collector.Collect(integration.LambdaFunctionName))
+		subSpans = tracesvc.SubSpansToSpans(s.collector.CollectWithFlush(integration.LambdaFunctionName))
 	}
 	lambdaDurationMs := time.Since(lambdaStart).Milliseconds()
 

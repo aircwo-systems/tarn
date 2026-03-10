@@ -1,6 +1,9 @@
 package trace
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 
 // SubSpan is a service call recorded during a lambda invocation.
 type SubSpan struct {
@@ -42,6 +45,21 @@ func (c *Collector) Collect(functionName string) []SubSpan {
 	}
 	delete(c.inflight, functionName)
 	return spans
+}
+
+// CollectWithFlush waits briefly before collecting to let async telemetry
+// reporters (e.g. the db-proxy) deliver any in-flight spans.
+//
+// The Lambda's HTTP response reaches OpenStack before the db-proxy finishes
+// its reportSpan POST — both happen after the Lambda closes its DB connection,
+// but the HTTP response path is shorter. Without this pause, successful DB
+// calls are invisible in the trace because the inflight entry is cleared
+// before RecordAnon has a chance to run.
+const telemetryFlushWindow = 60 * time.Millisecond
+
+func (c *Collector) CollectWithFlush(functionName string) []SubSpan {
+	time.Sleep(telemetryFlushWindow)
+	return c.Collect(functionName)
 }
 
 // RecordAnon appends a sub-span to all currently in-flight invocations.

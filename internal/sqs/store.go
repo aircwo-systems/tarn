@@ -17,6 +17,12 @@ import (
 	"github.com/openstack-project/openstack/pkg/types"
 )
 
+// defaultStaleReceiveCount is the number of failed receive attempts after which
+// OpenStack marks a message as stale when no DLQ is configured.
+// On real AWS the message would retry indefinitely; here we park it to avoid
+// burning CPU. The message remains visible in the UI with a "stale" indicator.
+const defaultStaleReceiveCount = 5
+
 // Store is an in-memory store for SQS queues and messages.
 type Store struct {
 	mu     sync.RWMutex
@@ -286,6 +292,15 @@ func (s *Store) GetQueueAttributes(name string, attrNames []string) (map[string]
 		}
 		result["ApproximateNumberOfMessagesDelayed"] = fmt.Sprintf("%d", count)
 	}
+	if all || contains(attrNames, "ApproximateNumberOfMessagesStale") {
+		count := 0
+		for _, m := range q.messages {
+			if !m.Deleted && m.Stale && m.ExpiresAt > now {
+				count++
+			}
+		}
+		result["ApproximateNumberOfMessagesStale"] = fmt.Sprintf("%d", count)
+	}
 
 	return result, nil
 }
@@ -375,7 +390,7 @@ func (s *Store) ReceiveMessage(name string, maxCount, visTimeout int) ([]*types.
 		if len(result) >= maxCount {
 			break
 		}
-		if m.Deleted {
+		if m.Deleted || m.Stale {
 			continue
 		}
 		if m.ExpiresAt <= now {
@@ -589,6 +604,11 @@ func (s *Store) Reap() {
 		alive := make([]*types.SQSMessage, 0, len(q.messages))
 		var toMove []*types.SQSMessage
 
+		staleThreshold := defaultStaleReceiveCount
+		if q.config.MaxReceiveCount > 0 {
+			staleThreshold = q.config.MaxReceiveCount
+		}
+
 		for _, m := range q.messages {
 			if m.Deleted || m.ExpiresAt <= now {
 				changed = true
@@ -600,6 +620,13 @@ func (s *Store) Reap() {
 				toMove = append(toMove, cloneMessage(m))
 				changed = true
 				continue
+			}
+			// No DLQ: mark as stale instead of retrying indefinitely.
+			// On real AWS the message would keep retrying until it expires, but in
+			// OpenStack we park it to avoid burning CPU. The UI shows it as "stale".
+			if !hasDLQ && !m.Stale && m.VisibleAt <= now && m.ApproximateReceiveCount >= staleThreshold {
+				m.Stale = true
+				changed = true
 			}
 			alive = append(alive, m)
 		}
@@ -770,6 +797,7 @@ type messageSnapshot struct {
 	DelayUntil                       int64                              `json:"delayUntil"`
 	ExpiresAt                        int64                              `json:"expiresAt"`
 	Deleted                          bool                               `json:"deleted"`
+	Stale                            bool                               `json:"stale,omitempty"`
 }
 
 func toMessageSnapshot(src *types.SQSMessage) messageSnapshot {
@@ -789,6 +817,7 @@ func toMessageSnapshot(src *types.SQSMessage) messageSnapshot {
 		DelayUntil:                       cloned.DelayUntil,
 		ExpiresAt:                        cloned.ExpiresAt,
 		Deleted:                          cloned.Deleted,
+		Stale:                            cloned.Stale,
 	}
 }
 
@@ -808,6 +837,7 @@ func fromMessageSnapshot(src messageSnapshot) *types.SQSMessage {
 		DelayUntil:                       src.DelayUntil,
 		ExpiresAt:                        src.ExpiresAt,
 		Deleted:                          src.Deleted,
+		Stale:                            src.Stale,
 	}
 }
 

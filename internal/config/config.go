@@ -161,14 +161,24 @@ func (c *Config) SecretsStatePath() string {
 	return filepath.Join(c.SecretsDir(), "state.json")
 }
 
-// APIGatewayDir returns the path where API Gateway state is stored.
+// APIGatewayDir returns the path where API Gateway v2 state is stored.
 func (c *Config) APIGatewayDir() string {
 	return filepath.Join(c.DataDir, "apigateway")
 }
 
-// APIGatewayStatePath returns the state snapshot path for API Gateway resources.
+// APIGatewayStatePath returns the state snapshot path for API Gateway v2 resources.
 func (c *Config) APIGatewayStatePath() string {
 	return filepath.Join(c.APIGatewayDir(), "state.json")
+}
+
+// APIGatewayV1Dir returns the path where API Gateway v1 (REST API) state is stored.
+func (c *Config) APIGatewayV1Dir() string {
+	return filepath.Join(c.DataDir, "apigatewayv1")
+}
+
+// APIGatewayV1StatePath returns the state snapshot path for API Gateway v1 resources.
+func (c *Config) APIGatewayV1StatePath() string {
+	return filepath.Join(c.APIGatewayV1Dir(), "state.json")
 }
 
 // S3Dir returns the path where S3 bucket data is stored.

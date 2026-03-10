@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,6 +130,27 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 		return nil, fmt.Errorf("unsupported runtime: %s", fn.Runtime)
 	}
 
+	// Scan function environment for PostgreSQL URLs so db-proxy can observe them.
+	// Build a rewrite map: original key -> rewritten URL pointing to localhost:15432.
+	const dbProxyPort = 15432
+	dbProxyPath := e.findDBProxy()
+	dbURLRewrites := map[string]string{}
+	var dbUpstream, dbName string
+	if dbProxyPath != "" {
+		for k, v := range fn.Environment {
+			if newURL, upstream, name, ok := rewritePostgresURL(v, dbProxyPort); ok {
+				dbURLRewrites[k] = newURL
+				if dbUpstream == "" {
+					dbUpstream = upstream
+					dbName = name
+				}
+			}
+		}
+		if dbUpstream == "" {
+			dbProxyPath = "" // no DB URLs found — skip injection
+		}
+	}
+
 	env := []string{
 		fmt.Sprintf("AWS_LAMBDA_FUNCTION_NAME=%s", fn.FunctionName),
 		fmt.Sprintf("AWS_LAMBDA_FUNCTION_VERSION=%s", fn.Version),
@@ -146,7 +168,11 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 	}
 
 	for k, v := range fn.Environment {
-		env = append(env, fmt.Sprintf("%s=%s", k, v))
+		if rewritten, ok := dbURLRewrites[k]; ok {
+			env = append(env, fmt.Sprintf("%s=%s", k, rewritten))
+		} else {
+			env = append(env, fmt.Sprintf("%s=%s", k, v))
+		}
 	}
 
 	binds := []string{
@@ -156,11 +182,13 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 		binds = append(binds, fmt.Sprintf("%s:/opt:ro", layerDir))
 	}
 
-	// Inject secrets-proxy into the container and launch it alongside the Lambda
-	// runtime. This binary mimics the AWS Parameters and Secrets extension HTTP
-	// endpoint, but it is not a real Lambda extension and does not register with
-	// the Extensions API, so it must not live under /opt/extensions.
-	var entrypoint []string
+	// Inject sidecar binaries alongside the Lambda runtime. Neither binary
+	// registers with the Extensions API, so they must not live under /opt/extensions.
+	//
+	//   secrets-proxy: mimics the AWS Parameters and Secrets extension HTTP API.
+	//   db-proxy: transparent TCP proxy for PostgreSQL — observational only.
+	var bgCmds []string
+
 	secretsProxyPath := e.findSecretsProxy()
 	if secretsProxyPath != "" {
 		binds = append(binds, fmt.Sprintf("%s:/opt/openstack/secrets-proxy:ro", secretsProxyPath))
@@ -168,9 +196,23 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 			"PARAMETERS_SECRETS_EXTENSION_HTTP_PORT=2773",
 			"AWS_SESSION_TOKEN=local-dev-token",
 		)
-		entrypoint = []string{"/bin/sh", "-c",
-			fmt.Sprintf("/opt/openstack/secrets-proxy & exec /lambda-entrypoint.sh %s", fn.Handler),
-		}
+		bgCmds = append(bgCmds, "/opt/openstack/secrets-proxy &")
+	}
+
+	if dbProxyPath != "" {
+		binds = append(binds, fmt.Sprintf("%s:/opt/openstack/db-proxy:ro", dbProxyPath))
+		env = append(env,
+			fmt.Sprintf("OPENSTACK_DB_UPSTREAM=%s", dbUpstream),
+			fmt.Sprintf("OPENSTACK_DB_NAME=%s", dbName),
+			fmt.Sprintf("OPENSTACK_DB_PROXY_PORT=%d", dbProxyPort),
+		)
+		bgCmds = append(bgCmds, "/opt/openstack/db-proxy &")
+	}
+
+	var entrypoint []string
+	if len(bgCmds) > 0 {
+		cmd := strings.Join(bgCmds, " ") + " exec /lambda-entrypoint.sh " + fn.Handler
+		entrypoint = []string{"/bin/sh", "-c", cmd}
 	}
 
 	memoryBytes := int64(fn.MemorySize) * 1024 * 1024
@@ -403,6 +445,56 @@ func (e *Engine) findSecretsProxy() string {
 	}
 
 	return ""
+}
+
+// findDBProxy locates the db-proxy-linux binary using the same strategy as findSecretsProxy.
+func (e *Engine) findDBProxy() string {
+	candidates := []string{
+		"./build/db-proxy-linux",
+	}
+	if exe, err := os.Executable(); err == nil {
+		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "db-proxy-linux"))
+	}
+	for _, path := range candidates {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			continue
+		}
+		if _, err := os.Stat(abs); err == nil {
+			return abs
+		}
+	}
+	return ""
+}
+
+// rewritePostgresURL rewrites a PostgreSQL connection URL to route through the local
+// db-proxy at the given port, returning the new URL, the original host:port (upstream),
+// and the database name. Returns ok=false if the value is not a postgres URL.
+func rewritePostgresURL(rawURL string, proxyPort int) (newURL, upstream, dbName string, ok bool) {
+	// Strip JDBC prefix so the rest of the URL is a standard postgres:// URL.
+	jdbcPrefix := ""
+	parseURL := rawURL
+	if strings.HasPrefix(rawURL, "jdbc:") {
+		jdbcPrefix = "jdbc:"
+		parseURL = rawURL[len("jdbc:"):]
+	}
+
+	u, err := url.Parse(parseURL)
+	if err != nil || (u.Scheme != "postgresql" && u.Scheme != "postgres") {
+		return "", "", "", false
+	}
+	host := u.Hostname()
+	port := u.Port()
+	if port == "" {
+		port = "5432"
+	}
+	upstream = host + ":" + port
+	dbName = strings.TrimPrefix(u.Path, "/")
+	if dbName == "" {
+		dbName = upstream
+	}
+	u.Host = fmt.Sprintf("localhost:%d", proxyPort)
+	return jdbcPrefix + u.String(), upstream, dbName, true
 }
 
 func sanitizeName(name string) string {

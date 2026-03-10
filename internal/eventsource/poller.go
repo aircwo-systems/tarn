@@ -207,7 +207,7 @@ func (p *poller) poll() {
 
 	var subSpans []tracesvc.Span
 	if p.collector != nil {
-		subSpans = tracesvc.SubSpansToSpans(p.collector.Collect(functionName))
+		subSpans = tracesvc.SubSpansToSpans(p.collector.CollectWithFlush(functionName))
 	}
 
 	if err != nil {
@@ -217,7 +217,7 @@ func (p *poller) poll() {
 		}
 		log.Printf("[eventsource] %s: invoke error: %v", p.mapping.UUID, err)
 		p.updateResult(fmt.Sprintf("ERROR: %v", err))
-		p.recordTrace(pollStart, functionName, sqsDurationMs, lambdaDurationMs, len(msgs), 0, subSpans)
+		p.recordTrace(pollStart, functionName, sqsDurationMs, lambdaDurationMs, len(msgs), len(msgs), subSpans)
 		return
 	}
 
@@ -439,27 +439,68 @@ func matchesAllowedValues(actual interface{}, allowed []interface{}) bool {
 	return false
 }
 
+// sqsMessageAttribute is the Lambda-event representation of a user-defined
+// SQS message attribute (camelCase keys, per the AWS Lambda SQS event schema).
+type sqsMessageAttribute struct {
+	StringValue string `json:"stringValue,omitempty"`
+	DataType    string `json:"dataType"`
+}
+
 type sqsEventRecord struct {
-	MessageId      string `json:"messageId"`
-	ReceiptHandle  string `json:"receiptHandle"`
-	Body           string `json:"body"`
-	Md5OfBody      string `json:"md5OfBody"`
-	EventSource    string `json:"eventSource"`
-	EventSourceARN string `json:"eventSourceARN"`
-	AwsRegion      string `json:"awsRegion"`
+	MessageId         string                         `json:"messageId"`
+	ReceiptHandle     string                         `json:"receiptHandle"`
+	Body              string                         `json:"body"`
+	Md5OfBody         string                         `json:"md5OfBody"`
+	EventSource       string                         `json:"eventSource"`
+	EventSourceARN    string                         `json:"eventSourceARN"`
+	AwsRegion         string                         `json:"awsRegion"`
+	// Attributes holds SQS system attributes. The AWS Java SDK calls
+	// getAttributes() and NPEs if this field is null/missing in the JSON,
+	// so we always emit it as a non-null object even when it has no entries.
+	Attributes        map[string]string              `json:"attributes"`
+	MessageAttributes map[string]sqsMessageAttribute `json:"messageAttributes"`
 }
 
 func buildSQSEventPayload(msgs []*types.SQSMessage, eventSourceArn, queueName string) []byte {
 	records := make([]sqsEventRecord, len(msgs))
 	for i, msg := range msgs {
+		// System attributes — always present (non-null) so Java SDKs can call
+		// getAttributes().get(...) without a NullPointerException.
+		attrs := map[string]string{
+			"ApproximateReceiveCount":          fmt.Sprintf("%d", msg.ApproximateReceiveCount),
+			"SentTimestamp":                    fmt.Sprintf("%d", msg.SentTimestamp),
+			"ApproximateFirstReceiveTimestamp": fmt.Sprintf("%d", msg.ApproximateFirstReceiveTimestamp),
+			"SenderId":                         "AIDAIENQZJOLO23YVJ4VO",
+		}
+		// FIFO-specific system attributes
+		if msg.MessageGroupId != "" {
+			attrs["MessageGroupId"] = msg.MessageGroupId
+		}
+		if msg.MessageDeduplicationId != "" {
+			attrs["MessageDeduplicationId"] = msg.MessageDeduplicationId
+		}
+
+		// User-defined message attributes (different field/format from system attrs)
+		msgAttrs := make(map[string]sqsMessageAttribute, len(msg.MessageAttributes))
+		for k, v := range msg.MessageAttributes {
+			if v != nil {
+				msgAttrs[k] = sqsMessageAttribute{
+					StringValue: v.StringValue,
+					DataType:    v.DataType,
+				}
+			}
+		}
+
 		records[i] = sqsEventRecord{
-			MessageId:      msg.MessageId,
-			ReceiptHandle:  msg.ReceiptHandle,
-			Body:           msg.Body,
-			Md5OfBody:      msg.MD5OfBody,
-			EventSource:    "aws:sqs",
-			EventSourceARN: eventSourceArn,
-			AwsRegion:      "us-east-1",
+			MessageId:         msg.MessageId,
+			ReceiptHandle:     msg.ReceiptHandle,
+			Body:              msg.Body,
+			Md5OfBody:         msg.MD5OfBody,
+			EventSource:       "aws:sqs",
+			EventSourceARN:    eventSourceArn,
+			AwsRegion:         "us-east-1",
+			Attributes:        attrs,
+			MessageAttributes: msgAttrs,
 		}
 	}
 	data, _ := json.Marshal(map[string]any{"Records": records})

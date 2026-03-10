@@ -108,6 +108,7 @@ func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, 
 	s.ensureFunctionMetrics(fn.FunctionName)
 	if s.logsSvc != nil {
 		s.logsSvc.CreateLogGroup(fmt.Sprintf("/aws/lambda/%s", fn.FunctionName))
+		s.logsSvc.LogSystemEvent(logssvc.LevelINFO, fmt.Sprintf("Function created: %s (runtime: %s)", fn.FunctionName, fn.Runtime))
 	}
 
 	// Pull runtime image in background
@@ -226,6 +227,9 @@ func (s *Service) DeleteFunction(ctx context.Context, name string) error {
 		return err
 	}
 	s.deleteFunctionMetrics(name)
+	if s.logsSvc != nil {
+		s.logsSvc.LogSystemEvent(logssvc.LevelINFO, fmt.Sprintf("Function deleted: %s", name))
+	}
 	return nil
 }
 
@@ -258,6 +262,9 @@ func (s *Service) UpdateFunctionCode(ctx context.Context, name string, code []by
 		return nil, err
 	}
 
+	if s.logsSvc != nil {
+		s.logsSvc.LogSystemEvent(logssvc.LevelINFO, fmt.Sprintf("Function code updated: %s", name))
+	}
 	return fn, nil
 }
 
@@ -471,6 +478,9 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	info, warm := s.engine.GetContainer(fn.FunctionName)
 	if !warm {
 		log.Printf("[lambda] cold start for %s", fn.FunctionName)
+		if s.logsSvc != nil {
+			s.logsSvc.LogSystemEvent(logssvc.LevelINFO, fmt.Sprintf("Cold start: %s", fn.FunctionName))
+		}
 
 		info, err = s.engine.CreateContainer(ctx, fn, codeDir, layerDirs)
 		if err != nil {
@@ -486,8 +496,15 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 
 		// Wait for the RIE to be ready
 		if err := s.invoker.WaitForReady(ctx, info.HostPort); err != nil {
+			// Capture whatever startup logs exist before evicting the container.
+			// This is especially important for Java/Spring Boot where the JVM may
+			// fail to initialize and all crash output would otherwise be lost.
+			s.ingestContainerLogs(fn.FunctionName, info)
 			s.engine.EvictContainer(ctx, fn.FunctionName)
 			fnMu.Unlock()
+			if s.logsSvc != nil {
+				s.logsSvc.LogSystemEvent(logssvc.LevelERROR, fmt.Sprintf("Container failed to start: %s: %v", fn.FunctionName, err))
+			}
 			return nil, fmt.Errorf("container not ready: %w", err)
 		}
 	} else {

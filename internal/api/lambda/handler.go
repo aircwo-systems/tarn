@@ -283,7 +283,7 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 
 	var subSpans []tracesvc.Span
 	if h.collector != nil {
-		subSpans = tracesvc.SubSpansToSpans(h.collector.Collect(name))
+		subSpans = tracesvc.SubSpansToSpans(h.collector.CollectWithFlush(name))
 	}
 
 	if h.traceStore != nil {

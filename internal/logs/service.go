@@ -127,7 +127,28 @@ func classifyLambdaLogEvent(msg string) (string, LogLevel, LogSource) {
 	if outputMsg, outputLevel, ok := parseLambdaOutputRecord(msg); ok {
 		return outputMsg, outputLevel, SourceOutput
 	}
+	// Spring Boot / Log4j / Logback format: leading whitespace then LEVEL token
+	// e.g. "  INFO 1 --- [main] com.example : message" or "ERROR [main] ..."
+	if level, ok := extractLeadingLevel(msg); ok {
+		return msg, level, SourceOutput
+	}
 	return msg, detectLevel(msg), SourceRuntime
+}
+
+// extractLeadingLevel checks if the message starts with (optional whitespace +) a log level
+// token (INFO, DEBUG, WARN, ERROR, TRACE), as produced by Spring Boot / Log4j / Logback.
+func extractLeadingLevel(msg string) (LogLevel, bool) {
+	trimmed := strings.TrimLeft(msg, " \t")
+	for _, level := range []LogLevel{LevelERROR, LevelWARN, LevelDEBUG, LevelINFO} {
+		token := string(level)
+		if strings.HasPrefix(trimmed, token) && len(trimmed) > len(token) {
+			next := trimmed[len(token)]
+			if next == ' ' || next == '\t' || next == ':' {
+				return level, true
+			}
+		}
+	}
+	return "", false
 }
 
 func parseLambdaOutputRecord(msg string) (string, LogLevel, bool) {
@@ -185,34 +206,79 @@ func cleanDockerLogLine(line string) string {
 
 // parseTimestamp tries to extract a timestamp prefix from a log line.
 // Returns the parsed time and the remaining message.
+// Handles the following formats:
+//   - "2024-01-15T10:30:00.000Z"          (Node.js / Python Lambda, RFC3339 with Z)
+//   - "2024-01-15T10:30:00.000+00:00"     (Spring Boot 3, RFC3339 with offset)
+//   - "2024-01-15 10:30:00.000  INFO ..."  (Spring Boot 2, space separator)
+//   - "2024-01-15T10:30:00.000Z\tReqId\t" (tab-separated Node.js extended)
 func parseTimestamp(line string) (time.Time, string) {
-	// Try ISO 8601 format used by Lambda runtimes: "2024-01-15T10:30:00.000Z"
-	if len(line) >= 24 && line[4] == '-' && line[7] == '-' && line[10] == 'T' {
-		ts, err := time.Parse(time.RFC3339Nano, line[:24])
-		if err == nil {
-			msg := strings.TrimSpace(line[24:])
-			if msg == "" {
-				msg = line
-			}
-			return ts, msg
-		}
-		// Try with variable-length fractional seconds
-		if idx := strings.IndexByte(line, 'Z'); idx > 10 && idx < 35 {
-			ts, err = time.Parse(time.RFC3339Nano, line[:idx+1])
-			if err == nil {
-				msg := strings.TrimSpace(line[idx+1:])
-				if msg == "" {
-					msg = line
+	if len(line) < 19 {
+		return time.Now().UTC(), line
+	}
+
+	// ISO 8601 with T separator: "2024-01-15T..."
+	if line[4] == '-' && line[7] == '-' && line[10] == 'T' {
+		// Scan forward from the time part to find where the timestamp ends.
+		// Valid endings: 'Z' (UTC), '+' or '-' (offset), ' ' or '\t' (no timezone).
+		// Spring Boot 3 uses "+00:00"; Node.js uses "Z"; some runtimes use space.
+		suffix := line[10:]
+		for i, ch := range suffix {
+			if ch == 'Z' {
+				end := 10 + i + 1
+				if ts, err := time.Parse(time.RFC3339Nano, line[:end]); err == nil {
+					msg := strings.TrimSpace(line[end:])
+					if msg == "" {
+						msg = line
+					}
+					return ts, msg
 				}
-				return ts, msg
+			} else if (ch == '+' || ch == '-') && i > 0 {
+				// Could be start of timezone offset like "+00:00"; try consuming 6 more chars
+				if i+7 <= len(suffix) {
+					end := 10 + i + 6
+					if ts, err := time.Parse(time.RFC3339Nano, line[:end]); err == nil {
+						msg := strings.TrimSpace(line[end:])
+						if msg == "" {
+							msg = line
+						}
+						return ts, msg
+					}
+				}
+			} else if (ch == ' ' || ch == '\t') && i >= 8 {
+				// No timezone — try parsing as-is
+				end := 10 + i
+				if ts, err := time.Parse("2006-01-02T15:04:05.999999999", line[:end]); err == nil {
+					msg := strings.TrimSpace(line[end:])
+					if msg == "" {
+						msg = line
+					}
+					return ts, msg
+				}
+				break
 			}
 		}
 	}
 
-	// Try tab-separated timestamp (some runtimes use "2024-01-15T10:30:00.000Z\tRequestId\t...")
+	// Space-separated date: "2024-01-15 10:30:00.000  INFO ..." (Spring Boot 2 / Log4j)
+	if len(line) >= 23 && line[4] == '-' && line[7] == '-' && line[10] == ' ' && line[13] == ':' && line[16] == ':' {
+		// Try parsing "2024-01-15 10:30:00.000" as a local timestamp (no timezone)
+		for _, layout := range []string{"2006-01-02 15:04:05.000", "2006-01-02 15:04:05"} {
+			end := len(layout)
+			if end <= len(line) {
+				if ts, err := time.ParseInLocation(layout, line[:end], time.UTC); err == nil {
+					msg := strings.TrimSpace(line[end:])
+					if msg == "" {
+						msg = line
+					}
+					return ts, msg
+				}
+			}
+		}
+	}
+
+	// Tab-separated timestamp (Node.js extended: "2024-01-15T10:30:00.000Z\tRequestId\t...")
 	if idx := strings.IndexByte(line, '\t'); idx > 10 && idx < 35 {
-		ts, err := time.Parse(time.RFC3339Nano, line[:idx])
-		if err == nil {
+		if ts, err := time.Parse(time.RFC3339Nano, line[:idx]); err == nil {
 			return ts, strings.TrimSpace(line[idx+1:])
 		}
 	}

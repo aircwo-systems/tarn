@@ -214,7 +214,10 @@ func (s *Store) ExtractCode(name string) (string, error) {
 		}
 
 		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, f.Mode()); err != nil {
+			// Always use 0755 for directories regardless of the permissions stored
+			// in the ZIP/JAR entry. Maven fat JARs often have entries with mode 0000
+			// which would make the directory inaccessible for subsequent writes.
+			if err := os.MkdirAll(target, 0755); err != nil {
 				return "", err
 			}
 			continue
@@ -224,7 +227,13 @@ func (s *Store) ExtractCode(name string) (string, error) {
 			return "", err
 		}
 
-		outFile, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+		// Ensure files are at least user-readable/writable (0644).
+		// ZIP entries from some tools (e.g. maven-shade-plugin) may carry mode 0.
+		mode := f.Mode()
+		if mode&0600 == 0 {
+			mode = 0644
+		}
+		outFile, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 		if err != nil {
 			return "", err
 		}
@@ -453,7 +462,7 @@ func (s *Store) ExtractLayer(name string, version int64) (string, error) {
 			continue
 		}
 		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, f.Mode()); err != nil {
+			if err := os.MkdirAll(target, 0755); err != nil {
 				return "", err
 			}
 			continue
@@ -461,7 +470,11 @@ func (s *Store) ExtractLayer(name string, version int64) (string, error) {
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			return "", err
 		}
-		outFile, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, f.Mode())
+		mode := f.Mode()
+		if mode&0600 == 0 {
+			mode = 0644
+		}
+		outFile, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
 		if err != nil {
 			return "", err
 		}

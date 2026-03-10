@@ -58,8 +58,9 @@ func TestRunFlushDeletesOnlyMatchingTaggedResources(t *testing.T) {
 				return jsonResponse(http.StatusOK, `{
 						"config":{"accountId":"000000000000"},
 						"gateways":[
-							{"apiId":"gw-r10","name":"r10-api","tags":{"feature":"r10"}},
-						{"apiId":"gw-r9","name":"r9-api","tags":{"feature":"r9"}}
+							{"apiId":"gw-r10","name":"r10-api","tags":{"feature":"r10"},"version":"v2"},
+							{"apiId":"gw-r10-rest","name":"r10-rest-api","tags":{"feature":"r10"},"version":"v1"},
+						{"apiId":"gw-r9","name":"r9-api","tags":{"feature":"r9"},"version":"v2"}
 					],
 					"functions":[
 						{"name":"r10-fn","tags":{"feature":"r10"}},
@@ -83,6 +84,9 @@ func TestRunFlushDeletesOnlyMatchingTaggedResources(t *testing.T) {
 				return jsonResponse(http.StatusNoContent, "")
 			case r.Method == http.MethodDelete && r.URL.String() == endpoint+"/v2/apis/gw-r10":
 				deleted = append(deleted, "gateway:gw-r10")
+				return jsonResponse(http.StatusNoContent, "")
+			case r.Method == http.MethodDelete && r.URL.String() == endpoint+"/restapis/gw-r10-rest":
+				deleted = append(deleted, "gateway:gw-r10-rest")
 				return jsonResponse(http.StatusNoContent, "")
 			case r.Method == http.MethodDelete && r.URL.String() == endpoint+"/2015-03-31/functions/r10-fn":
 				deleted = append(deleted, "function:r10-fn")
@@ -113,6 +117,7 @@ func TestRunFlushDeletesOnlyMatchingTaggedResources(t *testing.T) {
 	gotDeleted := strings.Join(deleted, ",")
 	for _, want := range []string{
 		"gateway:gw-r10",
+		"gateway:gw-r10-rest",
 		"mapping:esm-r10",
 		"queue:r10-queue",
 		"secret:r10-secret",

@@ -27,9 +27,10 @@ type flushOverview struct {
 		AccountID string `json:"accountId"`
 	} `json:"config"`
 	Gateways []struct {
-		APIID string            `json:"apiId"`
-		Name  string            `json:"name"`
-		Tags  map[string]string `json:"tags"`
+		APIID   string            `json:"apiId"`
+		Name    string            `json:"name"`
+		Tags    map[string]string `json:"tags"`
+		Version string            `json:"version"`
 	} `json:"gateways"`
 	Functions []struct {
 		Name string            `json:"name"`
@@ -135,7 +136,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		_, _ = fmt.Fprintf(out, "Deleted Trigger: %s (%s -> %s)\n", mapping.UUID, mapping.QueueName, mapping.FunctionName)
 	}
 	for _, api := range filteredGateways {
-		if err := deleteAPIGateway(endpoint, api.APIID); err != nil {
+		if err := deleteAPIGateway(endpoint, api.APIID, api.Version); err != nil {
 			return fmt.Errorf("delete api gateway %s: %w", api.Name, err)
 		}
 		_, _ = fmt.Fprintf(out, "Deleted API Gateway: %s\n", api.Name)
@@ -193,9 +194,10 @@ func fetchFlushOverview(endpoint string) (*flushOverview, error) {
 }
 
 func printFlushPlan(out io.Writer, gateways []struct {
-	APIID string
-	Name  string
-	Tags  map[string]string
+	APIID   string
+	Name    string
+	Tags    map[string]string
+	Version string
 }, functions []struct {
 	Name string
 	Tags map[string]string
@@ -279,26 +281,30 @@ func printFlushPlan(out io.Writer, gateways []struct {
 }
 
 func filterGateways(items []struct {
-	APIID string            `json:"apiId"`
-	Name  string            `json:"name"`
-	Tags  map[string]string `json:"tags"`
+	APIID   string            `json:"apiId"`
+	Name    string            `json:"name"`
+	Tags    map[string]string `json:"tags"`
+	Version string            `json:"version"`
 }, query string) []struct {
-	APIID string
-	Name  string
-	Tags  map[string]string
+	APIID   string
+	Name    string
+	Tags    map[string]string
+	Version string
 } {
 	var out []struct {
-		APIID string
-		Name  string
-		Tags  map[string]string
+		APIID   string
+		Name    string
+		Tags    map[string]string
+		Version string
 	}
 	for _, item := range items {
 		if matchesTagSelector(item.Tags, query) {
 			out = append(out, struct {
-				APIID string
-				Name  string
-				Tags  map[string]string
-			}{APIID: item.APIID, Name: item.Name, Tags: item.Tags})
+				APIID   string
+				Name    string
+				Tags    map[string]string
+				Version string
+			}{APIID: item.APIID, Name: item.Name, Tags: item.Tags, Version: item.Version})
 		}
 	}
 	return out
@@ -565,8 +571,12 @@ func matchesTagSelector(tags map[string]string, query string) bool {
 	return false
 }
 
-func deleteAPIGateway(endpoint, apiID string) error {
-	req, err := http.NewRequest(http.MethodDelete, endpoint+"/v2/apis/"+apiID, nil)
+func deleteAPIGateway(endpoint, apiID, version string) error {
+	path := "/v2/apis/" + apiID
+	if version == "v1" {
+		path = "/restapis/" + apiID
+	}
+	req, err := http.NewRequest(http.MethodDelete, endpoint+path, nil)
 	if err != nil {
 		return err
 	}

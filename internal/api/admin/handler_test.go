@@ -9,6 +9,7 @@ import (
 	"time"
 
 	apigatewaysvc "github.com/openstack-project/openstack/internal/apigateway"
+	apigatewayv1svc "github.com/openstack-project/openstack/internal/apigatewayv1"
 	"github.com/openstack-project/openstack/internal/config"
 	eventsourcesvc "github.com/openstack-project/openstack/internal/eventsource"
 	infrasvc "github.com/openstack-project/openstack/internal/infrastructure"
@@ -378,11 +379,12 @@ func newTestHandler(t *testing.T) *Handler {
 	logs := logssvc.NewService(cfg)
 	lambda := lambdasvc.NewService(cfg, store, nil, nil, logs)
 	apigw := apigatewaysvc.NewService(cfg, lambda, nil)
+	apigwv1 := apigatewayv1svc.NewService(cfg, lambda, nil)
 	s3 := s3svc.NewService(cfg)
 	sqs := sqssvc.NewService(cfg)
 	secrets := secretssvc.NewService(cfg)
 	infra := infrasvc.NewService("", false)
 	esmStore := eventsourcesvc.NewStore(cfg)
 	esm := eventsourcesvc.NewService(cfg, esmStore, nil, nil)
-	return NewHandler(cfg, apigw, lambda, logs, sqs, secrets, infra, s3, esm, nil)
+	return NewHandler(cfg, apigw, apigwv1, lambda, logs, sqs, secrets, infra, s3, esm, nil)
 }
