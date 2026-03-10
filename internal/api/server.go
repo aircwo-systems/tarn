@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 
 	adminhandler "github.com/openstack-project/openstack/internal/api/admin"
 	apigatewayhandler "github.com/openstack-project/openstack/internal/api/apigateway"
+	apigatewayv1handler "github.com/openstack-project/openstack/internal/api/apigatewayv1"
 	eventsourcehandler "github.com/openstack-project/openstack/internal/api/eventsource"
 	iamhandler "github.com/openstack-project/openstack/internal/api/iam"
 	lambdahandler "github.com/openstack-project/openstack/internal/api/lambda"
@@ -17,6 +19,7 @@ import (
 	secretshandler "github.com/openstack-project/openstack/internal/api/secrets"
 	sqshandler "github.com/openstack-project/openstack/internal/api/sqs"
 	apigatewaysvc "github.com/openstack-project/openstack/internal/apigateway"
+	apigatewayv1svc "github.com/openstack-project/openstack/internal/apigatewayv1"
 	"github.com/openstack-project/openstack/internal/config"
 	eventsourcesvc "github.com/openstack-project/openstack/internal/eventsource"
 	infrasvc "github.com/openstack-project/openstack/internal/infrastructure"
@@ -33,6 +36,7 @@ type Server struct {
 	cfg         *config.Config
 	httpServer  *http.Server
 	apigw       *apigatewayhandler.Handler
+	apigwv1     *apigatewayv1handler.Handler
 	lambda      *lambdahandler.Handler
 	s3          *s3handler.Handler
 	sqs         *sqshandler.Handler
@@ -40,10 +44,11 @@ type Server struct {
 	eventsource *eventsourcehandler.Handler
 	admin       *adminhandler.Handler
 	logsSvc     *logssvc.Service
+	collector   *tracesvc.Collector
 }
 
 // NewServer creates a new API server.
-func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, lambdaSvc *lambdasvc.Service, logsSvc *logssvc.Service, sqsSvc *sqssvc.Service, secretsSvc *secretssvc.Service, infraSvc *infrasvc.Service, s3Svc *s3svc.Service, esmSvc *eventsourcesvc.Service, traceStore *tracesvc.Store, collector *tracesvc.Collector) *Server {
+func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, gatewayV1Svc *apigatewayv1svc.Service, lambdaSvc *lambdasvc.Service, logsSvc *logssvc.Service, sqsSvc *sqssvc.Service, secretsSvc *secretssvc.Service, infraSvc *infrasvc.Service, s3Svc *s3svc.Service, esmSvc *eventsourcesvc.Service, traceStore *tracesvc.Store, collector *tracesvc.Collector) *Server {
 	lambdaHandler := lambdahandler.NewHandler(lambdaSvc, s3Svc)
 	lambdaHandler.SetTraceStore(traceStore)
 	lambdaHandler.SetCollector(collector)
@@ -54,13 +59,15 @@ func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, lambdaSvc 
 	s := &Server{
 		cfg:         cfg,
 		apigw:       apigatewayhandler.NewHandler(gatewaySvc),
+		apigwv1:     apigatewayv1handler.NewHandler(gatewayV1Svc),
 		lambda:      lambdaHandler,
 		s3:          s3handler.NewHandler(s3Svc),
 		sqs:         sqshandler.NewHandler(sqsSvc),
 		secrets:     secretsHandler,
 		eventsource: eventsourcehandler.NewHandler(esmSvc),
-		admin:       adminhandler.NewHandler(cfg, gatewaySvc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, traceStore),
+		admin:       adminhandler.NewHandler(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, traceStore),
 		logsSvc:     logsSvc,
+		collector:   collector,
 	}
 
 	mux := http.NewServeMux()
@@ -80,6 +87,8 @@ func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, lambdaSvc 
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Health check
 	mux.HandleFunc("GET /_openstack/health", s.healthHandler)
+	// Telemetry — called by in-container proxies to report observability spans
+	mux.HandleFunc("POST /_openstack/telemetry/db", s.telemetryDBHandler)
 	mux.HandleFunc("GET /_openstack/admin/overview", s.admin.Overview)
 	mux.HandleFunc("GET /_openstack/admin/secrets/{name}/value", s.admin.SecretValue)
 	mux.HandleFunc("GET /_openstack/admin/queues/{name}/messages", s.admin.QueueMessages)
@@ -98,7 +107,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Bucket-level operations: /{bucket}
 	mux.HandleFunc("GET /{bucket}", s.s3.Dispatch)
 	mux.HandleFunc("PUT /{bucket}", s.s3.Dispatch)
-	mux.HandleFunc("HEAD /{bucket}", s.s3.Dispatch)
+	// HEAD is omitted — Go automatically routes HEAD to the GET handler,
+	// keeping r.Method="HEAD" so Dispatch still calls headBucket.
 	mux.HandleFunc("DELETE /{bucket}", s.s3.Dispatch)
 	// Object-level operations: /{bucket}/{key...}
 	// HEAD is omitted — Go automatically routes HEAD to the GET handler,
@@ -106,6 +116,55 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /{bucket}/{key...}", s.s3.Dispatch)
 	mux.HandleFunc("PUT /{bucket}/{key...}", s.s3.Dispatch)
 	mux.HandleFunc("DELETE /{bucket}/{key...}", s.s3.Dispatch)
+
+	// API Gateway v1 (REST API) — AWS-compatible management endpoints
+	mux.HandleFunc("POST /restapis", s.apigwv1.CreateRestAPI)
+	mux.HandleFunc("GET /restapis", s.apigwv1.ListRestAPIs)
+	mux.HandleFunc("GET /restapis/{restApiId}", s.apigwv1.GetRestAPI)
+	mux.HandleFunc("DELETE /restapis/{restApiId}", s.apigwv1.DeleteRestAPI)
+
+	mux.HandleFunc("GET /restapis/{restApiId}/resources", s.apigwv1.ListResources)
+	mux.HandleFunc("GET /restapis/{restApiId}/resources/{resourceId}", s.apigwv1.GetResource)
+	mux.HandleFunc("POST /restapis/{restApiId}/resources/{parentId}", s.apigwv1.CreateResource)
+	mux.HandleFunc("DELETE /restapis/{restApiId}/resources/{resourceId}", s.apigwv1.DeleteResource)
+
+	mux.HandleFunc("PUT /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}", s.apigwv1.PutMethod)
+	mux.HandleFunc("GET /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}", s.apigwv1.GetMethod)
+	mux.HandleFunc("DELETE /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}", s.apigwv1.DeleteMethod)
+
+	mux.HandleFunc("PUT /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}/integration", s.apigwv1.PutIntegration)
+	mux.HandleFunc("PATCH /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}/integration", s.apigwv1.PatchIntegration)
+	mux.HandleFunc("GET /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}/integration", s.apigwv1.GetIntegration)
+	mux.HandleFunc("DELETE /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}/integration", s.apigwv1.DeleteIntegration)
+
+	mux.HandleFunc("PUT /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}/responses/{statusCode}", s.apigwv1.PutMethodResponse)
+	mux.HandleFunc("GET /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}/responses/{statusCode}", s.apigwv1.GetMethodResponse)
+
+	mux.HandleFunc("PUT /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}/integration/responses/{statusCode}", s.apigwv1.PutIntegrationResponse)
+	mux.HandleFunc("GET /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}/integration/responses/{statusCode}", s.apigwv1.GetIntegrationResponse)
+
+	mux.HandleFunc("POST /restapis/{restApiId}/deployments", s.apigwv1.CreateDeployment)
+	mux.HandleFunc("GET /restapis/{restApiId}/deployments", s.apigwv1.ListDeployments)
+	mux.HandleFunc("GET /restapis/{restApiId}/deployments/{deploymentId}", s.apigwv1.GetDeployment)
+
+	mux.HandleFunc("POST /restapis/{restApiId}/stages", s.apigwv1.CreateStage)
+	mux.HandleFunc("GET /restapis/{restApiId}/stages", s.apigwv1.ListStages)
+	mux.HandleFunc("GET /restapis/{restApiId}/stages/{stageName}", s.apigwv1.GetStage)
+	mux.HandleFunc("DELETE /restapis/{restApiId}/stages/{stageName}", s.apigwv1.DeleteStage)
+
+	// API Gateway v1 invoke surface: /_aws/execute-api/{apiId}/{stage}/{proxy...}
+	for _, method := range [...]string{
+		http.MethodGet,
+		http.MethodPost,
+		http.MethodPut,
+		http.MethodPatch,
+		http.MethodDelete,
+		http.MethodOptions,
+		http.MethodHead,
+	} {
+		mux.HandleFunc(method+" /_aws/execute-api/{apiId}/{stage}/{proxy...}", s.apigwv1.Invoke)
+		mux.HandleFunc(method+" /_aws/execute-api/{apiId}/{stage}", s.apigwv1.Invoke)
+	}
 
 	// API Gateway v2 API — AWS-compatible endpoints
 	mux.HandleFunc("POST /v2/apis", s.apigw.CreateAPI)
@@ -235,10 +294,31 @@ func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
 	s.sqs.Dispatch(w, r)
 }
 
+func (s *Server) telemetryDBHandler(w http.ResponseWriter, r *http.Request) {
+	if s.collector == nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	var req struct {
+		Name       string `json:"name"`
+		DurationMs int64  `json:"durationMs"`
+		Status     string `json:"status"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.Status == "" {
+		req.Status = "ok"
+	}
+	s.collector.RecordAnon("postgres", req.Name, req.DurationMs, req.Status, nil)
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, `{"status":"running","services":["apigatewayv2","lambda","s3","sqs","secretsmanager","eventsource"]}`)
+	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","secretsmanager","eventsource"]}`)
 }
 
 func (s *Server) withLogging(next http.Handler) http.Handler {
@@ -248,7 +328,7 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 		next.ServeHTTP(wrapped, r)
 		duration := time.Since(start)
 		log.Printf("%s %s %d %s", r.Method, r.URL.Path, wrapped.status, duration)
-		if s.logsSvc != nil {
+		if s.logsSvc != nil && !strings.HasPrefix(r.URL.Path, "/_openstack/") {
 			s.logsSvc.LogAPIRequest(r.Method, r.URL.Path, wrapped.status, duration)
 		}
 	})

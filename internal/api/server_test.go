@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/openstack-project/openstack/internal/apigateway"
+	"github.com/openstack-project/openstack/internal/apigatewayv1"
 	"github.com/openstack-project/openstack/internal/config"
 	"github.com/openstack-project/openstack/internal/eventsource"
 	"github.com/openstack-project/openstack/internal/infrastructure"
@@ -30,6 +31,7 @@ func TestNewServerRegistersRoutes(t *testing.T) {
 	}
 	lambdaSvc := lambda.NewService(cfg, store, nil, nil, nil)
 	gatewaySvc := apigateway.NewService(cfg, lambdaSvc, nil)
+	gatewayV1Svc := apigatewayv1.NewService(cfg, lambdaSvc, nil)
 	logsSvc := logs.NewService(cfg)
 	sqsSvc := sqs.NewService(cfg)
 	secretsSvc := secrets.NewService(cfg)
@@ -38,7 +40,7 @@ func TestNewServerRegistersRoutes(t *testing.T) {
 	infraSvc := infrastructure.NewService("", false)
 	esmStore := eventsource.NewStore(cfg)
 	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil)
-	s := NewServer(cfg, gatewaySvc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, nil, nil)
+	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, nil, nil)
 	if s == nil {
 		t.Fatal("NewServer returned nil")
 	}
