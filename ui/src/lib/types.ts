@@ -82,11 +82,23 @@ export interface InfraConnection {
   filterCriteria?: FilterCriteria;
 }
 
+export interface RouteDetail {
+  routeKey: string;
+  method?: string;
+  path?: string;
+  integrationType?: string;
+  integrationTarget?: string;
+  requestTemplates?: Record<string, string>;
+  requestParameters?: Record<string, string>;
+}
+
 export interface GatewaySummary {
   apiId: string;
   name: string;
   description?: string;
   protocolType: string;
+  /** "v1" for REST API (original), "v2" for HTTP API */
+  version: string;
   arn: string;
   apiEndpoint: string;
   defaultStage: string;
@@ -97,6 +109,7 @@ export interface GatewaySummary {
   tags?: Record<string, string>;
   tagCount: number;
   routeKeys?: string[];
+  routeDetails?: RouteDetail[];
 }
 
 export interface FunctionSummary {
@@ -125,6 +138,7 @@ export interface QueueSummary {
   approxVisible: number;
   approxInFlight: number;
   approxDelayed: number;
+  approxStale: number;
   createdTimestamp: number;
   dlqName?: string;
   tags?: Record<string, string>;

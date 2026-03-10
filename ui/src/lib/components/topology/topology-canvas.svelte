@@ -19,6 +19,10 @@
 	const infraConnections = $derived(dashboard.data?.connections ?? []);
 	const recentTraces = $derived(dashboard.data?.recentTraces ?? []);
 
+	let {
+		onNavigate = (_tab: string) => {}
+	}: { onNavigate?: (tab: string) => void } = $props();
+
 	let viewMode = $state<'components' | 'connections'>('components');
 	let selectedGatewayId = $state('');
 	let canvasExpanded = $state(false);
@@ -111,7 +115,7 @@
 	}
 </script>
 
-<div class="rounded-lg border border-border bg-bg-raised overflow-hidden">
+<div class="rounded-lg border border-border bg-bg overflow-hidden h-full flex flex-col">
 	<!-- Toolbar -->
 	<div class="flex items-center justify-between px-3 py-2 border-b border-border gap-3">
 		<h3 class="text-xs font-mono uppercase tracking-wider text-text-muted">Topology</h3>
@@ -188,8 +192,8 @@
 	{/if}
 
 	<!-- Canvas + detail panel -->
-	<div class="flex flex-col lg:flex-row">
-		<div class="relative min-w-0 flex-1 overflow-x-auto">
+	<div class="flex flex-col lg:flex-row flex-1 min-h-0">
+		<div class="relative min-w-0 flex-1 overflow-auto overscroll-contain">
 			{#if viewMode === 'components'}
 				<TopologyComponentsView
 					{gateways}
@@ -200,6 +204,7 @@
 					{infra}
 					{canvasExpanded}
 					onGatewayClick={openGateway}
+					{onNavigate}
 				/>
 			{:else}
 				<TopologyConnectionView
@@ -215,6 +220,7 @@
 					{recentTraces}
 					{canvasExpanded}
 					onGatewayClick={openGateway}
+					{onNavigate}
 				/>
 			{/if}
 		</div>

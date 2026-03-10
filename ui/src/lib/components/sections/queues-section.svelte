@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ChatCircleIcon } from 'phosphor-svelte';
+	import { ChatCircleIcon, CaretDownIcon, CaretUpIcon } from 'phosphor-svelte';
 	import { TableRow, TableCell } from '$lib/components/ui/table';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import ResourceTable from '$lib/components/common/resource-table.svelte';
@@ -33,6 +33,7 @@
 
 	async function selectQueue(queueName: string) {
 		selectedQueueName = queueName;
+		expandedMessages = new Set();
 		await loadQueueMessages(queueName);
 	}
 
@@ -73,10 +74,41 @@
 		return new Date(ms).toLocaleString();
 	}
 
-	function messageBadgeVariant(state: string): 'default' | 'amber' | 'secondary' {
+	function messageBadgeVariant(state: string): 'default' | 'amber' | 'secondary' | 'destructive' {
 		if (state === 'visible') return 'default';
 		if (state === 'inflight') return 'amber';
+		if (state === 'stale') return 'destructive';
 		return 'secondary';
+	}
+
+	const PREVIEW_LENGTH = 280;
+	let expandedMessages = $state(new Set<string>());
+
+	function toggleExpanded(id: string) {
+		const next = new Set(expandedMessages);
+		if (next.has(id)) {
+			next.delete(id);
+		} else {
+			next.add(id);
+		}
+		expandedMessages = next;
+	}
+
+	function tryFormatJSON(body: string): string | null {
+		try {
+			return JSON.stringify(JSON.parse(body), null, 2);
+		} catch {
+			return null;
+		}
+	}
+
+	function isLargeBody(body: string): boolean {
+		return body.length > PREVIEW_LENGTH;
+	}
+
+	function bodyPreview(body: string): string {
+		if (body.length <= PREVIEW_LENGTH) return body;
+		return body.slice(0, PREVIEW_LENGTH) + '…';
 	}
 </script>
 
@@ -88,7 +120,7 @@
 		empty={queues.length === 0}
 		emptyMessage="No queues created yet."
 		emptyIcon={ChatCircleIcon}
-		columns={['Queue', 'Type', 'Visible', 'In Flight', 'Delayed', 'Messages', 'Visibility', 'Long Poll', 'Created']}
+		columns={['Queue', 'Type', 'Visible', 'In Flight', 'Delayed', 'Stale', 'Messages', 'Visibility', 'Long Poll', 'Created']}
 	>
 		{#each queues as queue}
 			<TableRow
@@ -108,6 +140,13 @@
 				<TableCell class="font-mono text-text-muted">{queue.approxVisible}</TableCell>
 				<TableCell class="font-mono text-text-muted">{queue.approxInFlight}</TableCell>
 				<TableCell class="font-mono text-text-muted">{queue.approxDelayed}</TableCell>
+				<TableCell class="font-mono">
+					{#if (queue.approxStale ?? 0) > 0}
+						<span class="text-red" title="Parked by OpenStack after repeated failures (no DLQ). On real AWS these would retry indefinitely.">{queue.approxStale}</span>
+					{:else}
+						<span class="text-text-muted">0</span>
+					{/if}
+				</TableCell>
 				<TableCell class="min-w-[18rem]">
 					{#if queue.recentMessages?.length}
 						<div class="space-y-1.5">
@@ -163,7 +202,7 @@
 			<div class="border-b border-border px-3 py-2 text-xs text-text-faint">
 				<p class="truncate font-mono text-text">{selectedQueue.name}</p>
 				<p class="mt-1">
-					{selectedQueue.approxVisible} visible, {selectedQueue.approxInFlight} in flight, {selectedQueue.approxDelayed} delayed
+					{selectedQueue.approxVisible} visible, {selectedQueue.approxInFlight} in flight, {selectedQueue.approxDelayed} delayed{#if (selectedQueue.approxStale ?? 0) > 0}, <span class="text-red">{selectedQueue.approxStale} stale</span>{/if}
 				</p>
 			</div>
 
@@ -178,6 +217,9 @@
 					<p class="text-sm text-text-faint">No messages available for this queue.</p>
 				{:else}
 					{#each selectedMessages as message}
+						{@const expanded = expandedMessages.has(message.id)}
+						{@const large = isLargeBody(message.body ?? '')}
+						{@const formatted = expanded ? tryFormatJSON(message.body ?? '') : null}
 						<div class="rounded-md border border-border bg-bg-subtle/70 p-2">
 							<div class="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-text-faint">
 								<Badge variant={messageBadgeVariant(message.state)}>
@@ -187,9 +229,41 @@
 								{#if message.receiveCount > 0}
 									<span class="font-mono">receives: {message.receiveCount}</span>
 								{/if}
+								{#if large}
+									<span>{(message.body ?? '').length} chars</span>
+								{/if}
 							</div>
-							<p class="break-all text-xs text-text-muted">{message.body || '(empty)'}</p>
-							<p class="mt-1 text-[11px] text-text-faint">{formatSentAt(message.sentAt)}</p>
+
+							{#if expanded && formatted}
+								<pre class="max-h-96 overflow-y-auto rounded border border-border bg-bg-base px-2 py-1.5 text-[11px] leading-relaxed text-text-muted">{formatted}</pre>
+							{:else if expanded}
+								<p class="max-h-96 overflow-y-auto break-all whitespace-pre-wrap text-xs text-text-muted">{message.body || '(empty)'}</p>
+							{:else}
+								<p class="break-all text-xs text-text-muted">{bodyPreview(message.body ?? '') || '(empty)'}</p>
+							{/if}
+
+							{#if message.state === 'stale'}
+							<p class="mt-1.5 text-[11px] text-red/80">Parked — failed {message.receiveCount}× with no DLQ. On AWS this would retry indefinitely; OpenStack parks it to prevent wasted invocations.</p>
+						{/if}
+
+						<div class="mt-1.5 flex items-center justify-between">
+								<p class="text-[11px] text-text-faint">{formatSentAt(message.sentAt)}</p>
+								{#if large}
+									<button
+										type="button"
+										class="flex items-center gap-1 text-[11px] text-text-faint hover:text-text"
+										onclick={() => toggleExpanded(message.id)}
+									>
+										{#if expanded}
+											<CaretUpIcon size={12} />
+											Collapse
+										{:else}
+											<CaretDownIcon size={12} />
+											Expand
+										{/if}
+									</button>
+								{/if}
+							</div>
 						</div>
 					{/each}
 				{/if}

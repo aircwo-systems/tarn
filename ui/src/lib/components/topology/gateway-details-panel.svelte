@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { DownloadSimpleIcon, XIcon } from 'phosphor-svelte';
+	import { DownloadSimpleIcon, XIcon, CopyIcon, CheckIcon } from 'phosphor-svelte';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
-	import type { GatewaySummary } from '$lib/types';
+	import type { GatewaySummary, RouteDetail } from '$lib/types';
 
 	let {
 		gateway,
@@ -13,30 +13,61 @@
 		showClose?: boolean;
 	} = $props();
 
+	let urlCopied = $state(false);
+
+	function copyInvokeUrl() {
+		navigator.clipboard.writeText(gateway.invokeUrl).then(() => {
+			urlCopied = true;
+			setTimeout(() => { urlCopied = false; }, 1500);
+		});
+	}
+
 	function routeParts(routeKey: string): { method: string; path: string } {
-		if (routeKey === '$default') {
-			return { method: '$default', path: '/' };
-		}
-
+		if (routeKey === '$default') return { method: '$default', path: '/' };
 		const firstSpace = routeKey.indexOf(' ');
-		if (firstSpace === -1) {
-			return { method: 'ANY', path: routeKey };
-		}
-
-		return {
-			method: routeKey.slice(0, firstSpace),
-			path: routeKey.slice(firstSpace + 1) || '/'
-		};
+		if (firstSpace === -1) return { method: 'ANY', path: routeKey };
+		return { method: routeKey.slice(0, firstSpace), path: routeKey.slice(firstSpace + 1) || '/' };
 	}
 
 	function methodBadgeVariant(method: string): 'default' | 'secondary' | 'amber' | 'outline' | 'destructive' {
-		const normalized = method.toUpperCase();
-		if (normalized === 'GET') return 'default';
-		if (normalized === 'POST' || normalized === 'PUT' || normalized === 'PATCH') return 'amber';
-		if (normalized === 'DELETE') return 'destructive';
-		if (normalized === '$DEFAULT') return 'secondary';
+		const m = method.toUpperCase();
+		if (m === 'GET') return 'default';
+		if (m === 'POST' || m === 'PUT' || m === 'PATCH') return 'amber';
+		if (m === 'DELETE') return 'destructive';
+		if (m === '$DEFAULT') return 'secondary';
 		return 'outline';
 	}
+
+	function integrationLabel(type: string): string {
+		switch (type) {
+			case 'AWS_PROXY': return 'Lambda Proxy';
+			case 'AWS': return 'AWS';
+			case 'HTTP_PROXY': return 'HTTP Proxy';
+			case 'HTTP': return 'HTTP';
+			case 'MOCK': return 'Mock';
+			default: return type;
+		}
+	}
+
+	function parseTarget(target: string): { kind: string; name: string } {
+		if (target.startsWith('sqs:')) return { kind: 'SQS', name: target.slice(4) };
+		if (target.startsWith('lambda:')) return { kind: 'λ', name: target.slice(7) };
+		return { kind: '', name: target };
+	}
+
+	function normalizeTemplate(t: string): string {
+		return t.split('\n').map((l) => l.trim()).filter((l) => l.length > 0).join('\n');
+	}
+
+	function hasTemplates(detail: RouteDetail): boolean {
+		return !!(detail.requestTemplates && Object.keys(detail.requestTemplates).length > 0);
+	}
+
+	function hasParams(detail: RouteDetail): boolean {
+		return !!(detail.requestParameters && Object.keys(detail.requestParameters).length > 0);
+	}
+
+	// ── Postman export (preserved from original) ───────────────────────────────
 
 	function normalizeBaseUrl(raw: string): string {
 		try {
@@ -51,10 +82,7 @@
 	}
 
 	function slugify(value: string): string {
-		return value
-			.toLowerCase()
-			.replace(/[^a-z0-9]+/g, '-')
-			.replace(/^-+|-+$/g, '') || 'gateway';
+		return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'gateway';
 	}
 
 	function postmanPath(path: string): string {
@@ -66,52 +94,45 @@
 		const matches = path.matchAll(/\{([a-zA-Z0-9_]+)\+?\}/g);
 		const names = new Set<string>();
 		for (const match of matches) {
-			if (match[1]) {
-				names.add(match[1]);
-			}
+			if (match[1]) names.add(match[1]);
 		}
 		return Array.from(names);
 	}
 
-	function baseUrl(gateway: GatewaySummary): string {
-		return normalizeBaseUrl(gateway.invokeUrl);
+	function baseUrl(gw: GatewaySummary): string {
+		return normalizeBaseUrl(gw.invokeUrl);
 	}
 
-	function collectionVariables(gateway: GatewaySummary): Array<{ key: string; value: string; type?: string }> {
+	function collectionVariables(gw: GatewaySummary): Array<{ key: string; value: string; type?: string }> {
 		const vars = new Map<string, { key: string; value: string; type?: string }>();
-		vars.set('baseUrl', { key: 'baseUrl', value: baseUrl(gateway), type: 'string' });
-		vars.set('apiId', { key: 'apiId', value: gateway.apiId, type: 'string' });
-		vars.set('stage', { key: 'stage', value: gateway.defaultStage, type: 'string' });
+		vars.set('baseUrl', { key: 'baseUrl', value: baseUrl(gw), type: 'string' });
+		vars.set('apiId', { key: 'apiId', value: gw.apiId, type: 'string' });
+		vars.set('stage', { key: 'stage', value: gw.defaultStage, type: 'string' });
 		vars.set('invokeBase', {
 			key: 'invokeBase',
 			value: '{{baseUrl}}/_apigateway/{{apiId}}/{{stage}}',
 			type: 'string'
 		});
-
-		for (const routeKey of gateway.routeKeys ?? []) {
+		for (const routeKey of gw.routeKeys ?? []) {
 			const route = routeParts(routeKey);
-			for (const variableName of routeVariableNames(route.path)) {
-				if (!vars.has(variableName)) {
-					vars.set(variableName, { key: variableName, value: '', type: 'string' });
-				}
+			for (const v of routeVariableNames(route.path)) {
+				if (!vars.has(v)) vars.set(v, { key: v, value: '', type: 'string' });
 			}
 			if (route.method === '$default' && !vars.has('defaultPath')) {
 				vars.set('defaultPath', { key: 'defaultPath', value: '', type: 'string' });
 			}
 		}
-
 		return Array.from(vars.values());
 	}
 
-	function collectionItems(gateway: GatewaySummary) {
-		return (gateway.routeKeys ?? []).map((routeKey) => {
+	function collectionItems(gw: GatewaySummary) {
+		return (gw.routeKeys ?? []).map((routeKey) => {
 			const route = routeParts(routeKey);
 			const exportedMethod = route.method === 'ANY' || route.method === '$default' ? 'GET' : route.method;
 			const rawPath =
 				route.method === '$default'
 					? '{{invokeBase}}/{{defaultPath}}'
 					: `{{invokeBase}}${postmanPath(route.path)}`;
-
 			return {
 				name: routeKey,
 				request: {
@@ -123,7 +144,7 @@
 					url: rawPath,
 					description:
 						route.method === 'ANY'
-							? `Generated from ${routeKey}. Exported as GET placeholder because Postman requests need a concrete method.`
+							? `Generated from ${routeKey}. Exported as GET placeholder.`
 							: route.method === '$default'
 								? 'Generated from $default route. Set {{defaultPath}} before sending.'
 								: `Generated from ${routeKey}.`
@@ -133,27 +154,22 @@
 		});
 	}
 
-	function buildPostmanCollection(gateway: GatewaySummary) {
+	function buildPostmanCollection(gw: GatewaySummary) {
 		return {
 			info: {
-				name: `${gateway.name} (OpenStack API Gateway)`,
-				description: `Generated from OpenStack API Gateway ${gateway.apiId}.`,
+				name: `${gw.name} (OpenStack API Gateway)`,
+				description: `Generated from OpenStack API Gateway ${gw.apiId}.`,
 				schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
 			},
-			variable: collectionVariables(gateway),
-			item: collectionItems(gateway)
+			variable: collectionVariables(gw),
+			item: collectionItems(gw)
 		};
 	}
 
-	function buildPostmanEnvironment(gateway: GatewaySummary) {
+	function buildPostmanEnvironment(gw: GatewaySummary) {
 		return {
-			name: `${gateway.name} (OpenStack Local)`,
-			values: collectionVariables(gateway).map((variable) => ({
-				key: variable.key,
-				value: variable.value,
-				enabled: true,
-				type: variable.type ?? 'text'
-			})),
+			name: `${gw.name} (OpenStack Local)`,
+			values: collectionVariables(gw).map((v) => ({ key: v.key, value: v.value, enabled: true, type: v.type ?? 'text' })),
 			_postman_variable_scope: 'environment',
 			_postman_exported_at: new Date().toISOString(),
 			_postman_exported_using: 'OpenStack dashboard'
@@ -181,17 +197,27 @@
 	}
 </script>
 
-<section class="rounded-lg border border-border bg-bg-raised">
-	<div class="flex items-center justify-between border-b border-border px-3 py-2">
+<section class="flex flex-col rounded-lg border border-border bg-bg-raised overflow-hidden">
+
+	<!-- Header -->
+	<div class="flex items-center justify-between border-b border-border px-3 py-2 shrink-0">
 		<div class="min-w-0">
-			<p class="truncate text-sm font-semibold text-text">{gateway.name}</p>
-			<p class="text-[10px] font-mono uppercase tracking-wide text-text-faint">{gateway.protocolType} API Gateway</p>
+			<div class="flex items-center gap-2 min-w-0">
+				<p class="truncate text-sm font-semibold text-text">{gateway.name}</p>
+				<Badge variant="secondary" class="shrink-0">{gateway.protocolType}</Badge>
+				<Badge variant="outline" class="shrink-0 text-[10px] px-1 py-0 font-mono">
+					{gateway.version}
+				</Badge>
+			</div>
+			{#if gateway.defaultStage}
+				<p class="mt-0.5 font-mono text-[10px] text-text-faint">stage: {gateway.defaultStage}</p>
+			{/if}
 		</div>
 		{#if showClose}
 			<button
 				type="button"
 				onclick={() => onClose?.()}
-				class="flex h-7 w-7 items-center justify-center rounded-md text-text-muted hover:bg-bg-overlay hover:text-text"
+				class="ml-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted hover:bg-bg-overlay hover:text-text"
 				aria-label="Close gateway panel"
 			>
 				<XIcon size={14} />
@@ -199,106 +225,173 @@
 		{/if}
 	</div>
 
-	<div class="space-y-4 px-3 py-3">
-		<div class="rounded-md border border-border bg-bg-overlay/70 p-3">
-			<div class="flex flex-wrap items-center justify-between gap-2">
-				<div>
-					<p class="text-[10px] font-mono uppercase tracking-wide text-text-faint">Postman Export</p>
-					<p class="mt-1 text-[11px] text-text-faint">
-						Generate a Postman collection and environment for this gateway. Use the Postman Desktop Agent for local requests.
-					</p>
-				</div>
-				<div class="flex flex-wrap gap-2">
-					<button
-						type="button"
-						onclick={downloadCollection}
-						class="inline-flex items-center gap-1 rounded-md border border-accent-strong bg-accent-muted px-3 py-1.5 text-xs text-accent hover:bg-accent/20"
-					>
-						<DownloadSimpleIcon size={12} />
-						Collection
-					</button>
-					<button
-						type="button"
-						onclick={downloadEnvironment}
-						class="inline-flex items-center gap-1 rounded-md border border-border bg-bg-raised px-3 py-1.5 text-xs text-text hover:bg-bg-overlay"
-					>
-						<DownloadSimpleIcon size={12} />
-						Environment
-					</button>
-				</div>
-			</div>
-		</div>
+	<!-- Invoke URL bar -->
+	<div class="flex items-center gap-2 border-b border-border bg-bg px-3 py-2 shrink-0">
+		<span class="font-mono text-[10px] uppercase tracking-wide text-text-faint shrink-0">Invoke</span>
+		<code class="flex-1 truncate font-mono text-[11px] text-text-muted">{gateway.invokeUrl}</code>
+		<button
+			type="button"
+			onclick={copyInvokeUrl}
+			class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-text-faint hover:text-text transition-colors"
+			aria-label="Copy invoke URL"
+			title={urlCopied ? 'Copied!' : 'Copy invoke URL'}
+		>
+			{#if urlCopied}
+				<CheckIcon size={12} class="text-accent" />
+			{:else}
+				<CopyIcon size={12} />
+			{/if}
+		</button>
+	</div>
 
-		<div class="rounded-md border border-border bg-bg-overlay/70 p-3">
-			<p class="mb-2 text-[10px] font-mono uppercase tracking-wide text-text-faint">Endpoints</p>
-			<div class="space-y-2">
-				{#if gateway.routeKeys?.length}
-					{#each gateway.routeKeys as routeKey}
-						{@const route = routeParts(routeKey)}
-						<div class="rounded-md border border-border bg-bg-raised/70 p-2">
-							<div class="flex items-center gap-2">
-								<Badge variant={methodBadgeVariant(route.method)}>{route.method}</Badge>
-								<span class="font-mono text-xs text-text break-all">{route.path}</span>
-							</div>
-							<p class="mt-1 break-all font-mono text-[11px] text-text-faint">
-								{gateway.invokeUrl}{route.path === '/' ? '' : route.path}
-							</p>
-							<p class="mt-1 text-[11px] text-text-faint">Route target mapping not available in dashboard yet.</p>
+	<!-- Routes & Integrations -->
+	<div class="flex-1 overflow-y-auto px-3 py-3 space-y-2">
+		<p class="text-[10px] font-mono uppercase tracking-wide text-text-faint">
+			Routes &amp; Integrations
+			<span class="ml-1 text-text-muted">{gateway.routeDetails?.length ?? gateway.routes}</span>
+		</p>
+
+		{#if gateway.routeDetails?.length}
+			{#each gateway.routeDetails as detail (detail.routeKey)}
+				{@const target = detail.integrationTarget ? parseTarget(detail.integrationTarget) : null}
+				<div class="rounded-md border border-border bg-bg-overlay/60 overflow-hidden">
+
+					<!-- Route row: method · path · integration type -->
+					<div class="flex items-center gap-2 px-2.5 py-2">
+						<Badge variant={methodBadgeVariant(detail.method ?? '')} class="shrink-0">
+							{detail.method ?? '—'}
+						</Badge>
+						<span class="flex-1 truncate font-mono text-xs text-text">
+							{detail.path ?? detail.routeKey}
+						</span>
+						{#if detail.integrationType}
+							<span class="shrink-0 font-mono text-[10px] text-text-faint">
+								{integrationLabel(detail.integrationType)}
+							</span>
+						{/if}
+					</div>
+
+					<!-- Integration target -->
+					{#if target}
+						<div class="flex items-center gap-2 border-t border-border/60 px-2.5 py-1.5">
+							<span class="rounded border border-border bg-bg-raised px-1.5 py-0.5 font-mono text-[10px] text-text-muted shrink-0">
+								{target.kind}
+							</span>
+							<span class="truncate font-mono text-[11px] text-text-muted">{target.name}</span>
 						</div>
-					{/each}
-				{:else}
-					<div class="rounded-md border border-border bg-bg-raised/70 p-2 text-xs text-text-faint">
-						No routes are currently exposed for this gateway.
-					</div>
-				{/if}
-			</div>
-		</div>
+					{/if}
 
-		<div class="rounded-md border border-border bg-bg-overlay/70 p-3">
-			<p class="mb-2 text-[10px] font-mono uppercase tracking-wide text-text-faint">Attributes</p>
-			<div class="space-y-2 text-xs">
-				<div class="grid grid-cols-[6.5rem_1fr] gap-2">
-					<span class="text-text-faint">API ID</span>
-					<span class="font-mono text-text break-all">{gateway.apiId}</span>
+					<!-- Request templates (v1 AWS integrations) -->
+					{#if hasTemplates(detail)}
+						{#each Object.entries(detail.requestTemplates!) as [contentType, template] (contentType)}
+							<div class="border-t border-border/60 overflow-hidden">
+								<div class="flex items-center justify-between bg-bg px-2.5 py-1 border-b border-border/40">
+									<span class="font-mono text-[10px] text-text-faint">{contentType}</span>
+									<span class="font-mono text-[10px] tracking-widest text-text-faint/60">template</span>
+								</div>
+								<pre class="overflow-x-auto bg-bg p-2.5 font-mono text-[11px] leading-relaxed text-text-muted whitespace-pre">{normalizeTemplate(template)}</pre>
+							</div>
+						{/each}
+					{/if}
+
+					<!-- Request parameters (v2 integrations) -->
+					{#if hasParams(detail)}
+						<div class="border-t border-border/60 overflow-hidden">
+							<div class="bg-bg px-2.5 py-1 border-b border-border/40">
+								<span class="font-mono text-[10px] text-text-faint">parameters</span>
+							</div>
+							<div class="bg-bg p-2.5 space-y-1">
+								{#each Object.entries(detail.requestParameters!) as [key, value] (key)}
+									<div class="flex items-baseline gap-2 font-mono text-[11px]">
+										<span class="text-text-faint shrink-0">{key}</span>
+										<span class="text-text-muted break-all">{value}</span>
+									</div>
+								{/each}
+							</div>
+						</div>
+					{/if}
+
 				</div>
-				<div class="grid grid-cols-[6.5rem_1fr] gap-2">
-					<span class="text-text-faint">Invoke URL</span>
-					<span class="font-mono text-text break-all">{gateway.invokeUrl}</span>
+			{/each}
+
+		{:else if gateway.routeKeys?.length}
+			<!-- Fallback when routeDetails not yet populated -->
+			{#each gateway.routeKeys as routeKey (routeKey)}
+				{@const route = routeParts(routeKey)}
+				<div class="flex items-center gap-2 rounded-md border border-border bg-bg-overlay/60 px-2.5 py-2">
+					<Badge variant={methodBadgeVariant(route.method)} class="shrink-0">{route.method}</Badge>
+					<span class="font-mono text-xs text-text">{route.path}</span>
 				</div>
-				<div class="grid grid-cols-[6.5rem_1fr] gap-2">
-					<span class="text-text-faint">API Endpoint</span>
-					<span class="font-mono text-text break-all">{gateway.apiEndpoint}</span>
-				</div>
-				<div class="grid grid-cols-[6.5rem_1fr] gap-2">
-					<span class="text-text-faint">Default Stage</span>
-					<span class="font-mono text-text break-all">{gateway.defaultStage}</span>
-				</div>
-				<div class="grid grid-cols-[6.5rem_1fr] gap-2">
-					<span class="text-text-faint">Routes</span>
-					<span class="font-mono text-text">{gateway.routes}</span>
-				</div>
-				<div class="grid grid-cols-[6.5rem_1fr] gap-2">
-					<span class="text-text-faint">Integrations</span>
-					<span class="font-mono text-text">{gateway.integrations}</span>
-				</div>
-				<div class="grid grid-cols-[6.5rem_1fr] gap-2">
-					<span class="text-text-faint">Stages</span>
-					<span class="font-mono text-text">{gateway.stages}</span>
-				</div>
-				{#if gateway.description}
-					<div class="grid grid-cols-[6.5rem_1fr] gap-2">
-						<span class="text-text-faint">Description</span>
-						<span class="text-text break-words">{gateway.description}</span>
-					</div>
-				{/if}
-				<div class="grid grid-cols-[6.5rem_1fr] gap-2">
-					<span class="text-text-faint">ARN</span>
-					<span class="font-mono text-text break-all">{gateway.arn}</span>
-				</div>
+			{/each}
+
+		{:else}
+			<p class="py-2 text-xs text-text-faint">No routes configured for this gateway.</p>
+		{/if}
+	</div>
+
+	<!-- Attributes -->
+	<div class="border-t border-border px-3 py-3 shrink-0">
+		<p class="mb-2 text-[10px] font-mono uppercase tracking-wide text-text-faint">Attributes</p>
+		<div class="space-y-1.5 text-xs">
+			<div class="grid grid-cols-[5.5rem_1fr] gap-2">
+				<span class="text-text-faint">API ID</span>
+				<span class="font-mono text-text break-all">{gateway.apiId}</span>
 			</div>
-			<p class="mt-3 text-[11px] text-text-faint">
-				Integration and request/response mapping details are not surfaced yet. They will appear here when available.
-			</p>
+			<div class="grid grid-cols-[5.5rem_1fr] gap-2">
+				<span class="text-text-faint">Endpoint</span>
+				<span class="font-mono text-text break-all">{gateway.apiEndpoint || gateway.invokeUrl}</span>
+			</div>
+			<div class="grid grid-cols-[5.5rem_1fr] gap-2">
+				<span class="text-text-faint">Routes</span>
+				<span class="font-mono text-text">{gateway.routes}</span>
+			</div>
+			<div class="grid grid-cols-[5.5rem_1fr] gap-2">
+				<span class="text-text-faint">Integrations</span>
+				<span class="font-mono text-text">{gateway.integrations}</span>
+			</div>
+			<div class="grid grid-cols-[5.5rem_1fr] gap-2">
+				<span class="text-text-faint">Stages</span>
+				<span class="font-mono text-text">{gateway.stages}</span>
+			</div>
+			{#if gateway.description}
+				<div class="grid grid-cols-[5.5rem_1fr] gap-2">
+					<span class="text-text-faint">Description</span>
+					<span class="text-text break-words">{gateway.description}</span>
+				</div>
+			{/if}
+			<div class="grid grid-cols-[5.5rem_1fr] gap-2">
+				<span class="text-text-faint">ARN</span>
+				<span class="font-mono text-[11px] text-text-faint break-all">{gateway.arn}</span>
+			</div>
 		</div>
 	</div>
+
+	<!-- Postman Export -->
+	<div class="border-t border-border px-3 py-3 shrink-0">
+		<div class="flex items-center justify-between gap-2">
+			<div>
+				<p class="text-[10px] font-mono uppercase tracking-wide text-text-faint">Postman Export</p>
+				<p class="mt-0.5 text-[11px] text-text-faint">Use the Postman Desktop Agent for local requests.</p>
+			</div>
+			<div class="flex gap-2 shrink-0">
+				<button
+					type="button"
+					onclick={downloadCollection}
+					class="inline-flex items-center gap-1 rounded-md border border-accent-strong bg-accent-muted px-3 py-1.5 text-xs text-accent hover:bg-accent/20"
+				>
+					<DownloadSimpleIcon size={12} />
+					Collection
+				</button>
+				<button
+					type="button"
+					onclick={downloadEnvironment}
+					class="inline-flex items-center gap-1 rounded-md border border-border bg-bg-raised px-3 py-1.5 text-xs text-text hover:bg-bg-overlay"
+				>
+					<DownloadSimpleIcon size={12} />
+					Env
+				</button>
+			</div>
+		</div>
+	</div>
+
 </section>

@@ -25,7 +25,8 @@
 		infraOrderIds = [],
 		recentTraces = [],
 		canvasExpanded = false,
-		onGatewayClick = (_id: string) => {}
+		onGatewayClick = (_id: string) => {},
+		onNavigate: _onNavigate = (_tab: string) => {}
 	}: {
 		gateways?: GatewaySummary[];
 		functions?: FunctionSummary[];
@@ -39,6 +40,7 @@
 		recentTraces?: RequestTrace[];
 		canvasExpanded?: boolean;
 		onGatewayClick?: (id: string) => void;
+		onNavigate?: (tab: string) => void;
 	} = $props();
 
 	// --- Canvas geometry ---
@@ -494,9 +496,13 @@
 
 <svg
 	viewBox="0 0 {CW} {CH}"
-	class="w-full"
-	style={`min-width: ${canvasExpanded ? 1160 : 720}px; max-height: ${canvasExpanded ? 780 : 480}px;`}
+	class="w-full h-full"
+	preserveAspectRatio="xMidYMin meet"
+	style={`min-width: ${canvasExpanded ? 1300 : 820}px;`}
 >
+	<!-- Canvas background -->
+	<rect x={0} y={0} width={CW} height={CH} class="fill-bg" />
+
 	<!-- Dot grid -->
 	{#each Array(Math.floor(CW / 48)) as _, ix (ix)}
 		{#each Array(Math.floor(CH / 48)) as _, iy (iy)}

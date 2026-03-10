@@ -69,15 +69,24 @@
   --color-bg-overlay: #E8ECF0;
 
   --color-border: rgba(30, 50, 70, 0.12);
-  --color-border-strong: rgba(30, 50, 70, 0.22);
+  --color-border-strong: rgba(30, 50, 70, 0.28);
 
   --color-text: #0F1720;
-  --color-text-muted: #5C6E80;
-  --color-text-faint: #8A9BB0;
+  --color-text-muted: #4A5568;
+  --color-text-faint: #5C6E80;
 
-  --color-accent: #00B880;
-  --color-accent-muted: rgba(0, 184, 128, 0.12);
-  --color-accent-strong: rgba(0, 184, 128, 0.22);
+  /* Accent: dark enough for 4.5:1 on both white and the node bg (#E8ECF0) */
+  --color-accent: #007A5A;
+  --color-accent-muted: rgba(0, 122, 90, 0.12);
+  --color-accent-strong: rgba(0, 122, 90, 0.22);
+
+  /* Semantic colours — dark variants for WCAG AA on light backgrounds */
+  --color-red: #C0162E;
+  --color-red-muted: rgba(192, 22, 46, 0.10);
+  --color-blue: #1D4ED8;
+  --color-blue-muted: rgba(29, 78, 216, 0.10);
+  --color-amber: #B45309;
+  --color-amber-muted: rgba(180, 83, 9, 0.10);
 
   --color-background: #F8FAFB;
   --color-foreground: #0F1720;
@@ -85,19 +94,19 @@
   --color-card-foreground: #0F1720;
   --color-popover: #FFFFFF;
   --color-popover-foreground: #0F1720;
-  --color-primary: #00B880;
+  --color-primary: #007A5A;
   --color-primary-foreground: #FFFFFF;
   --color-secondary: #F1F4F7;
   --color-secondary-foreground: #0F1720;
   --color-muted: #F1F4F7;
-  --color-muted-foreground: #5C6E80;
+  --color-muted-foreground: #4A5568;
   --color-accent-shadcn: #E8ECF0;
   --color-accent-foreground: #0F1720;
-  --color-destructive: #E11D48;
+  --color-destructive: #C0162E;
   --color-destructive-foreground: #FFFFFF;
   --color-border-shadcn: rgba(30, 50, 70, 0.12);
   --color-input: rgba(30, 50, 70, 0.12);
-  --color-ring: rgba(0, 184, 128, 0.35);
+  --color-ring: rgba(0, 122, 90, 0.35);
 }
 
 * {

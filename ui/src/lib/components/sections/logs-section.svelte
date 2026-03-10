@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ScrollIcon, MagnifyingGlassIcon, FunnelIcon, ArrowLeftIcon, ArrowsClockwiseIcon, CaretDownIcon } from 'phosphor-svelte';
+	import { ScrollIcon, MagnifyingGlassIcon, FunnelIcon, ArrowLeftIcon, ArrowsClockwiseIcon, CaretDownIcon, XIcon, CopySimpleIcon } from 'phosphor-svelte';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from '$lib/components/common/empty-state.svelte';
@@ -28,13 +28,20 @@
 	let filterPattern = $state('');
 	let filterStream = $state('');
 	let eventsLimit = $state(100);
-	let eventsCursor = $state<string | null>(null); // Cursor for pagination (timestamp)
-	let prevCursors = $state<string[]>([]); // Stack of previous cursors for back navigation
+	let eventsCursor = $state<string | null>(null);
+	let prevCursors = $state<string[]>([]);
 	let showFilters = $state(false);
 	let autoRefresh = $state(false);
 	let autoRefreshTimer = $state<ReturnType<typeof setInterval> | null>(null);
 	let groupSearch = $state('');
 	let serviceFilter = $state('all');
+
+	// Detail panel
+	let selectedEvent = $state<LogEvent | null>(null);
+	let copiedMessage = $state(false);
+
+	// Newest first for display
+	const displayEvents = $derived([...events].reverse());
 
 	// ── Lifecycle ────────────────────────────────────────────────────────
 	$effect(() => {
@@ -42,7 +49,6 @@
 	});
 
 	$effect(() => {
-		// Sync prop -> local state when parent passes a new group (e.g. deep-link)
 		if (initialGroup) {
 			selectedGroup = initialGroup;
 		}
@@ -105,6 +111,7 @@
 	// ── Helpers ──────────────────────────────────────────────────────────
 	function selectGroup(name: string) {
 		selectedGroup = name;
+		selectedEvent = null;
 		window.location.hash = `logs?group=${encodeURIComponent(name)}`;
 	}
 
@@ -113,12 +120,14 @@
 		events = [];
 		eventsTotal = 0;
 		autoRefresh = false;
+		selectedEvent = null;
 		window.location.hash = 'logs';
 	}
 
 	function applyFilters() {
 		eventsCursor = null;
 		prevCursors = [];
+		selectedEvent = null;
 		loadEvents();
 	}
 
@@ -128,6 +137,7 @@
 		filterStream = '';
 		eventsCursor = null;
 		prevCursors = [];
+		selectedEvent = null;
 		loadEvents();
 	}
 
@@ -136,6 +146,7 @@
 		if (nextCursor) {
 			prevCursors = [...prevCursors, eventsCursor || ''];
 			eventsCursor = nextCursor;
+			selectedEvent = null;
 			loadEvents();
 		}
 	}
@@ -144,12 +155,245 @@
 		if (prevCursors.length > 0) {
 			eventsCursor = prevCursors[prevCursors.length - 1] || null;
 			prevCursors = prevCursors.slice(0, -1);
-			loadEvents();
 		} else {
 			eventsCursor = null;
-			loadEvents();
+		}
+		selectedEvent = null;
+		loadEvents();
+	}
+
+	function selectEvent(event: LogEvent) {
+		if (selectedEvent === event) {
+			selectedEvent = null;
+		} else {
+			selectedEvent = event;
+			copiedMessage = false;
 		}
 	}
+
+	async function copyMessage() {
+		if (!selectedEvent) return;
+		try {
+			await navigator.clipboard.writeText(selectedEvent.message);
+			copiedMessage = true;
+			setTimeout(() => { copiedMessage = false; }, 2000);
+		} catch { /* ignore */ }
+	}
+
+	function formatDetailTimestamp(ts: string): string {
+		try {
+			return new Date(ts).toISOString().replace('T', '  ').replace('Z', '  UTC');
+		} catch {
+			return ts;
+		}
+	}
+
+	// ── Log message analysis ─────────────────────────────────────────────
+
+	interface ParsedSpringBootLog {
+		pid: string;
+		thread: string;
+		logger: string;
+		message: string;
+	}
+
+	/** Parse Spring Boot/Log4j format: LEVEL PID --- [THREAD] LOGGER : MESSAGE */
+	function parseSpringBootLog(raw: string): ParsedSpringBootLog | null {
+		const m = raw.match(/^\w+\s+(\d+)\s+---\s+\[([^\]]+)\]\s+([\w.$]+)\s*:\s([\s\S]+)$/);
+		if (!m) return null;
+		return { pid: m[1], thread: m[2].trim(), logger: m[3], message: m[4] };
+	}
+
+	function hasJavaToString(str: string): boolean {
+		return /[A-Z][a-zA-Z0-9]*\([a-z]/.test(str);
+	}
+
+	function looksLikeJSON(str: string): boolean {
+		const t = str.trim();
+		return t.startsWith('{') || t.startsWith('[');
+	}
+
+	function isComplexMessage(msg: string): boolean {
+		return msg.length > 300 || hasJavaToString(msg) || looksLikeJSON(msg);
+	}
+
+	/**
+	 * Format Java toString output (Lombok/etc) into an indented, readable tree.
+	 * Converts `ClassName(key=value, ...)` and `{key=value}` map literals.
+	 */
+	function formatJavaToString(str: string): string {
+		let indent = 0;
+		let result = '';
+		for (let i = 0; i < str.length; i++) {
+			const ch = str[i];
+			const next = i + 1 < str.length ? str[i + 1] : '';
+			if ((ch === '(' && next === ')') || (ch === '{' && next === '}')) {
+				result += ch + next;
+				i++; // skip the paired closing char
+			} else if (ch === '(' || ch === '{') {
+				result += ch + '\n';
+				indent++;
+				result += '  '.repeat(indent);
+			} else if (ch === ')' || ch === '}') {
+				indent = Math.max(0, indent - 1);
+				result += '\n' + '  '.repeat(indent) + ch;
+			} else if (ch === ',' && next === ' ') {
+				result += ',\n' + '  '.repeat(indent);
+				i++; // skip the trailing space
+			} else if (ch === '=') {
+				result += ': ';
+			} else {
+				result += ch;
+			}
+		}
+		return result.trim();
+	}
+
+	function computeFormattedMessage(content: string): string | null {
+		// JSON first
+		try {
+			return JSON.stringify(JSON.parse(content), null, 2);
+		} catch { /* not JSON */ }
+		// Java toString
+		if (hasJavaToString(content)) {
+			return formatJavaToString(content);
+		}
+		return null;
+	}
+
+	// ── Syntax highlighting ───────────────────────────────────────────────
+
+	function escapeHTML(s: string): string {
+		return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+	}
+
+	const H = {
+		key:   'color:var(--lh-key)',
+		cls:   'color:var(--lh-cls)',
+		null_: 'color:var(--lh-null);font-style:italic',
+		bool:  'color:var(--lh-bool)',
+		num:   'color:var(--lh-num)',
+		str:   'color:var(--lh-str)',
+		punct: 'color:var(--lh-punct)',
+	};
+
+	function jtsValue(rawVal: string): string {
+		const hasComma = rawVal.endsWith(',');
+		const v = hasComma ? rawVal.slice(0, -1) : rawVal;
+		const comma = hasComma ? `<span style="${H.punct}">,</span>` : '';
+		if (v === 'null') return `<span style="${H.null_}">null</span>` + comma;
+		if (v === 'true' || v === 'false') return `<span style="${H.bool}">${escapeHTML(v)}</span>` + comma;
+		if (/^-?\d+(\.\d+)?([Ee][+-]?\d+)?[fFdDlL]?$/.test(v)) return `<span style="${H.num}">${escapeHTML(v)}</span>` + comma;
+		const cm = v.match(/^([A-Z][a-zA-Z0-9$_]*)([({].*)$/);
+		if (cm) return `<span style="${H.cls}">${escapeHTML(cm[1])}</span><span style="${H.punct}">${escapeHTML(cm[2])}</span>` + comma;
+		if (v === '{' || v === '[') return `<span style="${H.punct}">${escapeHTML(v)}</span>` + comma;
+		return `<span style="${H.str}">${escapeHTML(v)}</span>` + comma;
+	}
+
+	function highlightJavaToString(text: string): string {
+		return text.split('\n').map((line) => {
+			const m = line.match(/^(\s*)([\s\S]*)$/);
+			const indent = m?.[1] ?? '';
+			const content = m?.[2] ?? '';
+			if (!content) return escapeHTML(indent);
+			// Closing bracket lines
+			if (/^[)\}]+,?$/.test(content)) {
+				return escapeHTML(indent) + `<span style="${H.punct}">${escapeHTML(content)}</span>`;
+			}
+			// key: value
+			const kv = content.match(/^([a-z_$][a-zA-Z0-9_$]*)(: )([\s\S]*)$/);
+			if (kv) {
+				return escapeHTML(indent)
+					+ `<span style="${H.key}">${escapeHTML(kv[1])}</span>`
+					+ `<span style="${H.punct}">: </span>`
+					+ jtsValue(kv[3]);
+			}
+			// ClassName( or ClassName{
+			const cls = content.match(/^([A-Z][a-zA-Z0-9$_]*)([({,]?.*)$/);
+			if (cls) {
+				return escapeHTML(indent)
+					+ `<span style="${H.cls}">${escapeHTML(cls[1])}</span>`
+					+ (cls[2] ? `<span style="${H.punct}">${escapeHTML(cls[2])}</span>` : '');
+			}
+			if (content === '{' || content === '[') {
+				return escapeHTML(indent) + `<span style="${H.punct}">${escapeHTML(content)}</span>`;
+			}
+			return escapeHTML(indent) + escapeHTML(content);
+		}).join('\n');
+	}
+
+	function jsonValue(raw: string): string {
+		const hasComma = raw.endsWith(',');
+		const v = hasComma ? raw.slice(0, -1) : raw;
+		const comma = hasComma ? `<span style="${H.punct}">,</span>` : '';
+		if (v === 'null') return `<span style="${H.null_}">null</span>` + comma;
+		if (v === 'true' || v === 'false') return `<span style="${H.bool}">${escapeHTML(v)}</span>` + comma;
+		if (/^-?\d+(\.\d+)?([Ee][+-]?\d+)?$/.test(v)) return `<span style="${H.num}">${escapeHTML(v)}</span>` + comma;
+		if (v === '{' || v === '[') return `<span style="${H.punct}">${escapeHTML(v)}</span>` + comma;
+		if (v.startsWith('"') && v.endsWith('"')) {
+			const inner = v.slice(1, -1);
+			return `<span style="color:var(--lh-str-json)">"${escapeHTML(inner)}"</span>` + comma;
+		}
+		return escapeHTML(v) + comma;
+	}
+
+	function highlightJSON(text: string): string {
+		return text.split('\n').map((line) => {
+			const m = line.match(/^(\s*)([\s\S]*)$/);
+			const indent = m?.[1] ?? '';
+			const content = m?.[2] ?? '';
+			if (!content) return escapeHTML(indent);
+			if (/^[{}\[\]],?$/.test(content)) {
+				return escapeHTML(indent) + `<span style="${H.punct}">${escapeHTML(content)}</span>`;
+			}
+			// "key": value
+			const kv = content.match(/^("(?:[^"\\]|\\.)*")(\s*:\s*)([\s\S]*)$/);
+			if (kv) {
+				const keyInner = kv[1].slice(1, -1);
+				return escapeHTML(indent)
+					+ `<span style="${H.key}">"${escapeHTML(keyInner)}"</span>`
+					+ `<span style="${H.punct}">${escapeHTML(kv[2])}</span>`
+					+ jsonValue(kv[3]);
+			}
+			return escapeHTML(indent) + jsonValue(content);
+		}).join('\n');
+	}
+
+	function highlightFormatted(text: string): string {
+		return looksLikeJSON(text) ? highlightJSON(text) : highlightJavaToString(text);
+	}
+
+	// Panel detail expand state — reset whenever a new event is selected
+	let panelRawExpanded = $state(false);
+	let panelFormattedExpanded = $state(true);
+
+	$effect(() => {
+		const ev = selectedEvent; // track changes
+		if (ev !== null) {
+			panelRawExpanded = false;
+			panelFormattedExpanded = true;
+		}
+	});
+
+	const parsedSpringBootLog = $derived(
+		selectedEvent ? parseSpringBootLog(selectedEvent.message) : null
+	);
+	const panelDisplayMessage = $derived(
+		selectedEvent
+			? (parsedSpringBootLog ? parsedSpringBootLog.message : selectedEvent.message)
+			: ''
+	);
+	const panelFormattedMessage = $derived(
+		selectedEvent && isComplexMessage(selectedEvent.message)
+			? computeFormattedMessage(panelDisplayMessage)
+			: null
+	);
+	const panelIsComplex = $derived(
+		selectedEvent ? isComplexMessage(selectedEvent.message) : false
+	);
+	const panelHighlightedHtml = $derived(
+		panelFormattedMessage !== null ? highlightFormatted(panelFormattedMessage) : null
+	);
 
 	function levelColor(level: string): 'default' | 'destructive' | 'amber' | 'secondary' | 'outline' {
 		switch (level) {
@@ -158,6 +402,16 @@
 			case 'DEBUG': return 'secondary';
 			case 'INFO': return 'default';
 			default: return 'outline';
+		}
+	}
+
+	function levelStripColor(level: string): string {
+		switch (level) {
+			case 'ERROR': return 'bg-red-500/70';
+			case 'WARN': return 'bg-amber-400/70';
+			case 'DEBUG': return 'bg-text-faint/40';
+			case 'INFO': return 'bg-accent/60';
+			default: return 'bg-border';
 		}
 	}
 
@@ -248,6 +502,8 @@
 			: `${filteredGroups.length} of ${groups.length} groups`
 	);
 </script>
+
+<svelte:window onkeydown={(e) => { if (e.key === 'Escape' && selectedEvent) selectedEvent = null; }} />
 
 {#if selectedGroup}
 	<!-- ── Event viewer ─────────────────────────────────────────────── -->
@@ -377,45 +633,198 @@
 		{:else if events.length === 0}
 			<EmptyState message="No log events found. Try adjusting your filters or invoke a function." icon={ScrollIcon} />
 		{:else}
-			<div class="rounded-lg border border-border overflow-hidden">
-				<div class="divide-y divide-border max-h-[calc(100vh-16rem)] overflow-y-auto font-mono text-xs">
-					{#each events as event, i (event.timestamp + '-' + i)}
+			<!-- Two-panel layout: event list + detail panel -->
+			<div class="rounded-lg border border-border overflow-hidden flex" style="max-height: calc(100vh - 16rem)">
+				<!-- Event rows -->
+				<div class="flex-1 min-w-0 divide-y divide-border/60 overflow-y-auto font-mono">
+					{#each displayEvents as event, i (event.timestamp + '-' + i)}
+						{@const isSelected = selectedEvent === event}
+						{@const isOutput = isLambdaOutputEvent(event)}
 						<div
-							class={`flex gap-3 px-3 py-1.5 transition-colors items-start border-l-2 ${
-								selectedGroupIsLambda
-									? isLambdaOutputEvent(event)
-										? 'border-accent bg-accent/8 hover:bg-accent/12'
-										: 'border-transparent bg-bg-surface/35 hover:bg-bg-surface/60 opacity-80'
-									: 'border-transparent hover:bg-bg-surface/50'
-							}`}
+							role="button"
+							tabindex="0"
+							onclick={() => selectEvent(event)}
+							onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectEvent(event); } }}
+							class="group relative flex items-start gap-0 cursor-pointer transition-colors duration-100 {
+								isSelected
+									? 'bg-bg-surface'
+									: 'hover:bg-bg-surface/70'
+							}"
 						>
-							<span class="text-text-faint whitespace-nowrap shrink-0 w-[140px] tabular-nums">
-								{new Date(event.timestamp).toLocaleTimeString()}.{String(new Date(event.timestamp).getMilliseconds()).padStart(3, '0')}
-							</span>
-							<span class="shrink-0 w-[52px]">
-								<Badge variant={levelColor(event.level)} class="text-[10px] px-1.5 py-0">{event.level}</Badge>
-							</span>
-							{#if selectedGroupIsLambda}
-								<span
-									class={`hidden xl:inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] uppercase tracking-wide ${
-										isLambdaOutputEvent(event)
+							<!-- Level strip -->
+							<div class="w-0.5 self-stretch shrink-0 {levelStripColor(event.level)} {isSelected ? 'opacity-100' : 'opacity-40 group-hover:opacity-70'} transition-opacity"></div>
+
+							<div class="flex items-start gap-2.5 px-3 py-2 flex-1 min-w-0">
+								<!-- Timestamp -->
+								<span class="text-[11px] text-text-faint whitespace-nowrap shrink-0 w-[130px] tabular-nums pt-px">
+									{new Date(event.timestamp).toLocaleTimeString()}<span class="text-text-faint/50">.{String(new Date(event.timestamp).getMilliseconds()).padStart(3, '0')}</span>
+								</span>
+
+								<!-- Level badge -->
+								<span class="shrink-0 w-[50px] pt-px">
+									<Badge variant={levelColor(event.level)} class="text-[10px] px-1.5 py-0">{event.level}</Badge>
+								</span>
+
+								<!-- Source tag (lambda only) -->
+								{#if selectedGroupIsLambda}
+									<span class="hidden xl:inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] uppercase tracking-wide mt-px {
+										isOutput
 											? 'border-accent-strong bg-accent-muted text-accent'
 											: 'border-border bg-bg-surface text-text-faint'
-									}`}
-								>
-									{isLambdaOutputEvent(event) ? 'Output' : 'Runtime'}
+									}">
+										{isOutput ? 'Output' : 'Runtime'}
+									</span>
+								{/if}
+
+								<!-- Message -->
+								<span class="break-all whitespace-pre-wrap flex-1 min-w-0 text-[13px] leading-snug {
+									isSelected ? 'text-text' : isOutput ? 'text-text' : 'text-text-muted'
+								}">
+									{event.message}
 								</span>
-							{/if}
-							<span class={`break-all whitespace-pre-wrap flex-1 min-w-0 ${selectedGroupIsLambda && isLambdaOutputEvent(event) ? 'text-text font-medium' : 'text-text'}`}>
-								{event.message}
-							</span>
-							{#if event.streamName}
-								<span class="text-text-faint whitespace-nowrap shrink-0 hidden lg:inline" title={event.streamName}>
-									{event.streamName.length > 24 ? event.streamName.slice(-24) : event.streamName}
-								</span>
-							{/if}
+
+								<!-- Stream name (hidden when panel open) -->
+								{#if event.streamName && !selectedEvent}
+									<span class="text-[11px] text-text-faint whitespace-nowrap shrink-0 hidden lg:inline pt-px" title={event.streamName}>
+										{event.streamName.length > 24 ? event.streamName.slice(-24) : event.streamName}
+									</span>
+								{/if}
+							</div>
 						</div>
 					{/each}
+				</div>
+
+				<!-- Detail panel — CSS width transition, no Svelte dependency -->
+				<div
+					class="shrink-0 border-l border-border bg-bg-raised overflow-hidden transition-[width,opacity] duration-200 ease-out {selectedEvent ? 'opacity-100' : 'opacity-0'}"
+					style="width: {selectedEvent ? '400px' : '0px'}"
+				>
+					{#if selectedEvent}
+						{@const ev = selectedEvent}
+						<div class="flex flex-col h-full min-w-[400px]">
+							<!-- Panel header -->
+							<div class="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5 shrink-0 bg-bg-raised">
+								<div class="flex items-center gap-2 min-w-0">
+									<Badge variant={levelColor(ev.level)} class="shrink-0">{ev.level}</Badge>
+									<span class="text-[11px] text-text-faint font-mono tabular-nums truncate">
+										{new Date(ev.timestamp).toLocaleTimeString()}.{String(new Date(ev.timestamp).getMilliseconds()).padStart(3, '0')}
+									</span>
+								</div>
+								<button
+									type="button"
+									onclick={() => selectedEvent = null}
+									class="h-6 w-6 flex items-center justify-center rounded text-text-faint hover:text-text hover:bg-bg-surface transition-colors shrink-0"
+									aria-label="Close detail panel"
+								>
+									<XIcon size={14} />
+								</button>
+							</div>
+
+							<!-- Panel body -->
+							<div class="flex-1 overflow-y-auto p-4 space-y-4">
+								<!-- Message section -->
+								<div>
+									<div class="flex items-center justify-between mb-2">
+										<p class="text-[10px] font-medium uppercase tracking-widest text-text-faint">Message</p>
+										<button
+											type="button"
+											onclick={copyMessage}
+											class="flex items-center gap-1 text-[10px] text-text-faint hover:text-text transition-colors"
+										>
+											<CopySimpleIcon size={11} />
+											{copiedMessage ? 'Copied!' : 'Copy'}
+										</button>
+									</div>
+
+									{#if panelIsComplex}
+										<!-- Formatted view — expanded by default -->
+										<div class="mb-2 rounded-md border border-border overflow-hidden">
+											<button
+												type="button"
+												onclick={() => panelFormattedExpanded = !panelFormattedExpanded}
+												class="flex items-center justify-between w-full bg-bg-surface px-3 py-2 text-[11px] text-text-muted hover:text-text hover:bg-bg-surface/80 transition-colors"
+											>
+												<span class="flex items-center gap-2 font-medium">
+													<span class="h-1.5 w-1.5 rounded-full bg-accent/80 shrink-0"></span>
+													Formatted
+												</span>
+												<CaretDownIcon size={11} class="transition-transform duration-150 {panelFormattedExpanded ? 'rotate-180' : ''}" />
+											</button>
+											{#if panelFormattedExpanded}
+												{#if panelHighlightedHtml !== null}
+													<div class="log-highlight border-t border-border bg-bg-base px-3 py-3 text-[12px] font-mono text-text leading-relaxed whitespace-pre-wrap break-all max-h-[55vh] overflow-y-auto">{@html panelHighlightedHtml}</div>
+												{:else}
+													<pre class="border-t border-border bg-bg-base px-3 py-3 text-[12px] font-mono text-text leading-relaxed whitespace-pre-wrap break-all max-h-[55vh] overflow-y-auto">{panelDisplayMessage}</pre>
+												{/if}
+											{/if}
+										</div>
+
+										<!-- Raw view — collapsed by default -->
+										<div class="rounded-md border border-border overflow-hidden">
+											<button
+												type="button"
+												onclick={() => panelRawExpanded = !panelRawExpanded}
+												class="flex items-center justify-between w-full bg-bg-surface px-3 py-2 text-[11px] text-text-muted hover:text-text hover:bg-bg-surface/80 transition-colors"
+											>
+												<span class="flex items-center gap-2 font-medium">
+													<span class="h-1.5 w-1.5 rounded-full bg-text-faint/50 shrink-0"></span>
+													Raw
+												</span>
+												<CaretDownIcon size={11} class="transition-transform duration-150 {panelRawExpanded ? 'rotate-180' : ''}" />
+											</button>
+											{#if panelRawExpanded}
+												<pre class="border-t border-border bg-bg-base px-3 py-3 text-[11px] font-mono text-text-muted leading-relaxed whitespace-pre-wrap break-all max-h-[40vh] overflow-y-auto">{ev.message}</pre>
+											{/if}
+										</div>
+									{:else}
+										<!-- Simple message — no collapsing needed -->
+										<pre class="rounded-md border border-border bg-bg-base px-3 py-3 text-[13px] font-mono text-text leading-relaxed whitespace-pre-wrap break-all">{ev.message}</pre>
+									{/if}
+								</div>
+
+								<!-- Metadata table -->
+								<div>
+									<p class="text-[10px] font-medium uppercase tracking-widest text-text-faint mb-2">Details</p>
+									<div class="rounded-md border border-border overflow-hidden divide-y divide-border/60">
+										<div class="flex items-start gap-4 px-3 py-2">
+											<span class="text-[10px] uppercase tracking-wider text-text-faint w-20 shrink-0 pt-px">Time</span>
+											<span class="text-[12px] font-mono text-text-muted break-all leading-snug">{formatDetailTimestamp(ev.timestamp)}</span>
+										</div>
+										<div class="flex items-center gap-4 px-3 py-2">
+											<span class="text-[10px] uppercase tracking-wider text-text-faint w-20 shrink-0">Level</span>
+											<Badge variant={levelColor(ev.level)} class="text-[10px]">{ev.level}</Badge>
+										</div>
+										{#if parsedSpringBootLog}
+											<div class="flex items-start gap-4 px-3 py-2">
+												<span class="text-[10px] uppercase tracking-wider text-text-faint w-20 shrink-0 pt-px">Thread</span>
+												<span class="text-[12px] font-mono text-text-muted break-all leading-snug">{parsedSpringBootLog.thread}</span>
+											</div>
+											<div class="flex items-start gap-4 px-3 py-2">
+												<span class="text-[10px] uppercase tracking-wider text-text-faint w-20 shrink-0 pt-px">Logger</span>
+												<span class="text-[12px] font-mono text-text-muted break-all leading-snug">{parsedSpringBootLog.logger}</span>
+											</div>
+											<div class="flex items-center gap-4 px-3 py-2">
+												<span class="text-[10px] uppercase tracking-wider text-text-faint w-20 shrink-0">PID</span>
+												<span class="text-[12px] font-mono text-text-muted">{parsedSpringBootLog.pid}</span>
+											</div>
+										{/if}
+										{#if ev.streamName}
+											<div class="flex items-start gap-4 px-3 py-2">
+												<span class="text-[10px] uppercase tracking-wider text-text-faint w-20 shrink-0 pt-px">Stream</span>
+												<span class="text-[12px] font-mono text-text-muted break-all leading-snug">{ev.streamName}</span>
+											</div>
+										{/if}
+										{#if ev.source}
+											<div class="flex items-center gap-4 px-3 py-2">
+												<span class="text-[10px] uppercase tracking-wider text-text-faint w-20 shrink-0">Source</span>
+												<span class="text-[12px] font-mono text-text-muted">{ev.source}</span>
+											</div>
+										{/if}
+									</div>
+								</div>
+							</div>
+						</div>
+					{/if}
 				</div>
 			</div>
 
@@ -549,3 +958,28 @@
 		{/if}
 	</div>
 {/if}
+
+<style>
+	/* Light mode (default) */
+	.log-highlight {
+		--lh-key:      #1e5a78;
+		--lh-cls:      #1a6a56;
+		--lh-null:     rgba(0,0,0,0.32);
+		--lh-bool:     #1a4e7a;
+		--lh-num:      #5a3a7a;
+		--lh-str:      rgba(0,0,0,0.58);
+		--lh-str-json: #2e5a2a;
+		--lh-punct:    rgba(0,0,0,0.22);
+	}
+	/* Dark mode */
+	:global(.dark) .log-highlight {
+		--lh-key:      #7aa8c0;
+		--lh-cls:      #7fb5a4;
+		--lh-null:     rgba(255,255,255,0.22);
+		--lh-bool:     #8aa6c4;
+		--lh-num:      #a899bb;
+		--lh-str:      rgba(255,255,255,0.62);
+		--lh-str-json: #9baa96;
+		--lh-punct:    rgba(255,255,255,0.18);
+	}
+</style>

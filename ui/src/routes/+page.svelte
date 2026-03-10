@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import NavRail from '$lib/components/layout/nav-rail.svelte';
-	import DashboardFilterBar from '$lib/components/layout/dashboard-filter-bar.svelte';
 	import OverviewSection from '$lib/components/sections/overview-section.svelte';
 	import APIGatewaysSection from '$lib/components/sections/api-gateways-section.svelte';
 	import FunctionsSection from '$lib/components/sections/functions-section.svelte';
@@ -51,9 +50,8 @@
 	<NavRail {activeTab} onTabChange={setTab} />
 
 	<main class="flex-1 min-w-0 px-4 py-4 md:px-6 md:py-5 pb-20 md:pb-5 space-y-4">
-		<DashboardFilterBar />
 		{#if activeTab === 'overview'}
-			<OverviewSection />
+			<OverviewSection onNavigate={setTab} />
 		{:else if activeTab === 'gateways'}
 			<APIGatewaysSection />
 		{:else if activeTab === 'functions'}

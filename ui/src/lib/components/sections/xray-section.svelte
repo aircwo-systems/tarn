@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { DetectiveIcon } from 'phosphor-svelte';
+	import { DetectiveIcon, ArrowUpRightIcon } from 'phosphor-svelte';
 	import { getDashboard } from '$lib/state.svelte';
 	import type { RequestTrace, TraceSpan } from '$lib/types';
 
@@ -126,6 +126,11 @@
 		return `trace:${t.id.slice(0, 8)}`;
 	}
 
+	function viewInLogs(span: TraceSpan) {
+		const group = span.kind === 'lambda' ? `/aws/lambda/${span.name}` : null;
+		if (group) window.location.hash = `logs?group=${encodeURIComponent(group)}`;
+	}
+
 	function statusDotClass(s: number): string {
 		return s >= 500 ? 'fill-red' : s >= 400 ? 'fill-amber' : 'fill-accent';
 	}
@@ -159,22 +164,57 @@
 	const nodeCY = PAD_Y + NODE_H / 2;
 
 	// ─── Waterfall ───
+	// "Sub-spans" are collected from inside the Lambda execution (DB calls, secret
+	// fetches, etc.). They are NESTED within the Lambda span, not sequential after
+	// it. We right-align them within the enclosing Lambda: since the Lambda cannot
+	// return before the sub-span completes, the sub-span's right edge ≈ Lambda's
+	// right edge. This is the best approximation without absolute start timestamps.
+	const SUB_SPAN_KINDS = new Set([
+		'postgres', 'postgresql', 'mysql', 'redis', 'secret', 'secrets'
+	]);
+
 	interface WaterfallRow {
 		span: TraceSpan;
 		offsetPct: number;
 		widthPct: number;
+		nested: boolean;
 	}
+
 	function buildWaterfall(spans: TraceSpan[], total: number): WaterfallRow[] {
+		if (total <= 0) return spans.map(span => ({ span, offsetPct: 0, widthPct: 2, nested: false }));
+
 		let cum = 0;
-		return spans.map((span) => {
-			const row: WaterfallRow = {
+		let lambdaStartMs = 0;
+		let lambdaDurationMs = total;
+		const rows: WaterfallRow[] = [];
+
+		for (const span of spans) {
+			const kind = span.kind.toLowerCase();
+			const nested = SUB_SPAN_KINDS.has(kind);
+
+			let offsetMs: number;
+			if (nested) {
+				// Right-align within enclosing Lambda's time window.
+				const lambdaEnd = lambdaStartMs + lambdaDurationMs;
+				offsetMs = Math.max(lambdaStartMs, lambdaEnd - span.durationMs);
+			} else {
+				offsetMs = cum;
+				if (kind === 'lambda') {
+					lambdaStartMs = cum;
+					lambdaDurationMs = span.durationMs;
+				}
+				cum += span.durationMs;
+			}
+
+			rows.push({
 				span,
-				offsetPct: total > 0 ? (cum / total) * 100 : 0,
-				widthPct: total > 0 ? Math.max(1, (span.durationMs / total) * 100) : 2
-			};
-			cum += span.durationMs;
-			return row;
-		});
+				offsetPct: (offsetMs / total) * 100,
+				widthPct: Math.max(0.5, (span.durationMs / total) * 100),
+				nested,
+			});
+		}
+
+		return rows;
 	}
 
 
@@ -263,36 +303,43 @@
 				</div>
 				<div class="overflow-y-auto max-h-[calc(100vh-18rem)] divide-y divide-border/60">
 					{#each filteredTraces as trace (trace.id)}
-						<button
-							type="button"
-							class="w-full text-left px-3 py-2.5 transition-colors hover:bg-bg-surface {effectiveId === trace.id
-								? 'bg-bg-surface border-l-2 border-accent'
-								: 'border-l-2 border-transparent'}"
-							onclick={() => (selectedTraceId = trace.id)}
-						>
-							<div class="flex items-center gap-2 mb-1 min-w-0">
-								<svg width="6" height="6" viewBox="0 0 6 6" class="shrink-0">
-									<circle cx="3" cy="3" r="3" class={statusDotClass(trace.status)} />
-								</svg>
-								<span class="text-[11px] font-mono text-text truncate flex-1"
-									>{traceTitle(trace)}</span
-								>
-							</div>
-							<div
-								class="flex items-center gap-1.5 pl-3.5 text-[10px] font-mono text-text-faint"
+						{@const lambdaSpan = trace.spans.find((s) => s.kind === 'lambda')}
+						<div class="border-l-2 {effectiveId === trace.id ? 'bg-bg-surface border-accent' : 'border-transparent'}">
+							<button
+								type="button"
+								class="w-full text-left px-3 py-2.5 transition-colors hover:bg-bg-surface/60"
+								onclick={() => (selectedTraceId = trace.id)}
 							>
-								<span
-									class={trace.status >= 500
-										? 'text-red'
-										: trace.status >= 400
-											? 'text-amber'
-											: 'text-text-faint'}>{trace.status}</span
-								>
-								<span>·</span>
-								<span>{formatMs(trace.durationMs)}</span>
-								<span class="ml-auto">{timeAgo(trace.startedAt)}</span>
-							</div>
-						</button>
+								<div class="flex items-center gap-2 mb-1 min-w-0">
+									<svg width="6" height="6" viewBox="0 0 6 6" class="shrink-0">
+										<circle cx="3" cy="3" r="3" class={statusDotClass(trace.status)} />
+									</svg>
+									<span class="text-[11px] font-mono text-text truncate flex-1"
+										>{traceTitle(trace)}</span
+									>
+								</div>
+								<div class="flex items-center gap-1.5 pl-3.5 text-[10px] font-mono text-text-faint">
+									<span class={trace.status >= 500 ? 'text-red' : trace.status >= 400 ? 'text-amber' : 'text-text-faint'}
+										>{trace.status}</span
+									>
+									<span>·</span>
+									<span>{formatMs(trace.durationMs)}</span>
+									<span class="ml-auto">{timeAgo(trace.startedAt)}</span>
+								</div>
+							</button>
+							{#if trace.status >= 500 && lambdaSpan}
+								<div class="px-3 pb-2">
+									<button
+										type="button"
+										onclick={() => viewInLogs(lambdaSpan)}
+										class="inline-flex items-center gap-1 text-[10px] font-mono text-red/70 hover:text-red transition-colors"
+									>
+										<ArrowUpRightIcon size={9} />
+										View in context
+									</button>
+								</div>
+							{/if}
+						</div>
 					{:else}
 						<div class="px-3 py-8 text-center text-xs text-text-faint">No matching traces</div>
 					{/each}
@@ -383,17 +430,18 @@
 												y1={nodeCY}
 												x2={tx - 7}
 												y2={nodeCY}
-												stroke="var(--color-border)"
+												stroke="var(--color-text-faint)"
 												stroke-width="1.5"
 												stroke-dasharray="5 3"
 												stroke-linecap="round"
+												opacity="0.5"
 												class="connector-flow"
 											/>
 											<!-- Arrowhead -->
 											<polygon
 												points="{tx},{nodeCY} {tx - 8},{nodeCY - 4.5} {tx - 8},{nodeCY + 4.5}"
-												fill="var(--color-border)"
-												opacity="0.65"
+												fill="var(--color-text-faint)"
+												opacity="0.5"
 											/>
 										{/if}
 									{/each}
@@ -475,7 +523,6 @@
 											font-size="7.5"
 											font-family="var(--font-mono)"
 											fill={color}
-											opacity="0.85"
 										>{spanKindLabel(span.kind).toUpperCase()}</text>
 
 										<!-- Resource name -->
@@ -486,7 +533,6 @@
 											font-size="8.5"
 											font-family="var(--font-mono)"
 											class="fill-text"
-											opacity="0.95"
 										>{span.name.length > 14 ? span.name.slice(0, 13) + '…' : span.name}</text>
 
 										<!-- Duration -->
@@ -497,7 +543,6 @@
 											font-size="7"
 											font-family="var(--font-mono)"
 											fill={hasErr ? 'var(--color-red)' : 'var(--color-text-faint)'}
-											opacity="0.85"
 										>{formatMs(span.durationMs)}{hasErr ? ' ✕' : ''}</text>
 									{/each}
 								</svg>
@@ -509,14 +554,15 @@
 							<p class="text-[10px] font-mono uppercase tracking-wider text-text-faint mb-3">
 								Timeline
 							</p>
-							<div class="space-y-2">
-								{#each rows as { span, offsetPct, widthPct }, i (i)}
-									<div class="flex items-center gap-2.5">
-										<!-- Step number -->
-										<span
-											class="w-4 text-[10px] font-mono text-text-faint text-right shrink-0"
-											>{i + 1}</span
-										>
+							<div class="space-y-1.5">
+								{#each rows as { span, offsetPct, widthPct, nested }, i (i)}
+									<div class="flex items-center gap-2.5 {nested ? 'pl-4' : ''}">
+										<!-- Step / nesting indicator -->
+										{#if nested}
+											<span class="w-4 text-[10px] font-mono text-text-faint text-right shrink-0 select-none">└</span>
+										{:else}
+											<span class="w-4 text-[10px] font-mono text-text-faint text-right shrink-0">{i + 1}</span>
+										{/if}
 										<!-- Kind badge -->
 										<span
 											class="w-[4.5rem] text-right shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded"
@@ -530,10 +576,10 @@
 											>{span.name}</span
 										>
 										<!-- Bar track -->
-										<div class="flex-1 h-4 rounded bg-bg-surface relative overflow-hidden">
+										<div class="flex-1 {nested ? 'h-3' : 'h-4'} rounded bg-bg-surface relative overflow-hidden">
 											<div
 												class="absolute top-0 h-full rounded"
-												style="left:{offsetPct}%;width:{widthPct}%;background:{spanColor(span.kind)};opacity:{span.status === 'error' ? 0.85 : 0.55};min-width:2px"
+												style="left:{offsetPct}%;width:{widthPct}%;background:{spanColor(span.kind)};opacity:{span.status === 'error' ? 0.85 : nested ? 0.45 : 0.55};min-width:2px"
 											></div>
 										</div>
 										<!-- Duration -->
@@ -591,6 +637,16 @@
 												<span class="ml-auto text-[10px] font-mono text-text-faint"
 													>{formatMs(span.durationMs)}</span
 												>
+												{#if hasErr && span.kind === 'lambda'}
+													<button
+														type="button"
+														onclick={() => viewInLogs(span)}
+														class="inline-flex items-center gap-1 rounded border border-red/30 bg-red/8 px-1.5 py-0.5 text-[10px] font-mono text-red hover:bg-red/14 transition-colors shrink-0"
+													>
+														<ArrowUpRightIcon size={10} />
+														View in context
+													</button>
+												{/if}
 											</div>
 											{#if span.meta && Object.keys(span.meta).length > 0}
 												<div class="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
