@@ -15,6 +15,8 @@ type QueueConfig struct {
 	CreatedTimestamp              int64             `json:"CreatedTimestamp"`
 	LastModifiedTimestamp         int64             `json:"LastModifiedTimestamp"`
 	Tags                          map[string]string `json:"Tags,omitempty"`
+	KmsMasterKeyId                string            `json:"KmsMasterKeyId,omitempty"`
+	KmsDataKeyReusePeriodSeconds  int               `json:"KmsDataKeyReusePeriodSeconds,omitempty"`
 	// Dead Letter Queue support
 	RedrivePolicy       string `json:"RedrivePolicy,omitempty"`       // raw JSON redrive policy
 	DeadLetterTargetArn string `json:"DeadLetterTargetArn,omitempty"` // parsed DLQ ARN

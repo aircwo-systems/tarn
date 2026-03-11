@@ -269,6 +269,12 @@ func (s *Store) GetQueueAttributes(name string, attrNames []string) (map[string]
 	if all || contains(attrNames, "SqsManagedSseEnabled") {
 		result["SqsManagedSseEnabled"] = "true"
 	}
+	if (all || contains(attrNames, "KmsMasterKeyId")) && q.config.KmsMasterKeyId != "" {
+		result["KmsMasterKeyId"] = q.config.KmsMasterKeyId
+	}
+	if (all || contains(attrNames, "KmsDataKeyReusePeriodSeconds")) && q.config.KmsDataKeyReusePeriodSeconds != 0 {
+		result["KmsDataKeyReusePeriodSeconds"] = fmt.Sprintf("%d", q.config.KmsDataKeyReusePeriodSeconds)
+	}
 	if (all || contains(attrNames, "RedrivePolicy")) && q.config.RedrivePolicy != "" {
 		result["RedrivePolicy"] = q.config.RedrivePolicy
 	}
@@ -708,6 +714,12 @@ func applyQueueAttributes(cfg *types.QueueConfig, attrs map[string]string) {
 	}
 	if attrs["ContentBasedDeduplication"] == "true" {
 		cfg.ContentBasedDeduplication = true
+	}
+	if v, ok := attrs["KmsMasterKeyId"]; ok {
+		cfg.KmsMasterKeyId = v
+	}
+	if v, ok := attrs["KmsDataKeyReusePeriodSeconds"]; ok {
+		_, _ = fmt.Sscanf(v, "%d", &cfg.KmsDataKeyReusePeriodSeconds)
 	}
 	if v, ok := attrs["RedrivePolicy"]; ok && v != "" {
 		var policy struct {
