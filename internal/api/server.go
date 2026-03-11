@@ -102,7 +102,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /_openstack/admin/chaos/source", s.admin.ScanChaosSource)
 
 	// S3 API — path-style REST XML protocol
-	// POST is handled via s3PostDispatch to avoid conflict with SQS POST /{account}/{queue}
+	// POST is handled via postAccountDispatch to avoid conflict with SQS POST /{account}/{queue...}
 	mux.HandleFunc("GET /_s3/{rest...}", s.s3.Dispatch)
 	mux.HandleFunc("PUT /_s3/{rest...}", s.s3.Dispatch)
 	mux.HandleFunc("HEAD /_s3/{rest...}", s.s3.Dispatch)

@@ -80,7 +80,7 @@ func (s *Store) Init() error {
 		}
 
 		cfgCopy := cloneQueueConfig(item.Config)
-		cfgCopy.QueueUrl = fmt.Sprintf("http://%s:%d/%s/%s", s.cfg.Host, s.cfg.Port, s.cfg.AccountID, cfgCopy.QueueName)
+		cfgCopy.QueueUrl = fmt.Sprintf("%s/%s/%s", s.cfg.Endpoint(), s.cfg.AccountID, cfgCopy.QueueName)
 		cfgCopy.QueueArn = fmt.Sprintf("arn:aws:sqs:%s:%s:%s", s.cfg.Region, s.cfg.AccountID, cfgCopy.QueueName)
 
 		msgs := make([]*types.SQSMessage, 0, len(item.Messages))
@@ -120,7 +120,7 @@ func (s *Store) CreateQueue(name string, attrs map[string]string, tags map[strin
 	now := time.Now().Unix()
 	qCfg := &types.QueueConfig{
 		QueueName:                     name,
-		QueueUrl:                      fmt.Sprintf("http://%s:%d/%s/%s", s.cfg.Host, s.cfg.Port, s.cfg.AccountID, name),
+		QueueUrl:                      fmt.Sprintf("%s/%s/%s", s.cfg.Endpoint(), s.cfg.AccountID, name),
 		QueueArn:                      fmt.Sprintf("arn:aws:sqs:%s:%s:%s", s.cfg.Region, s.cfg.AccountID, name),
 		VisibilityTimeout:             30,
 		MessageRetentionPeriod:        345600, // 4 days
