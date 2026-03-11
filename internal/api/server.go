@@ -43,6 +43,7 @@ type Server struct {
 	secrets     *secretshandler.Handler
 	eventsource *eventsourcehandler.Handler
 	admin       *adminhandler.Handler
+	iam         *iamhandler.Handler
 	logsSvc     *logssvc.Service
 	collector   *tracesvc.Collector
 }
@@ -66,6 +67,7 @@ func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, gatewayV1S
 		secrets:     secretsHandler,
 		eventsource: eventsourcehandler.NewHandler(esmSvc),
 		admin:       adminhandler.NewHandler(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, traceStore),
+		iam:         iamhandler.NewHandler(cfg.AccountID),
 		logsSvc:     logsSvc,
 		collector:   collector,
 	}
@@ -291,7 +293,7 @@ func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if iamhandler.IsIAMRequest(r) {
-		iamhandler.Dispatch(w, r)
+		s.iam.Dispatch(w, r)
 		return
 	}
 	s.sqs.Dispatch(w, r)
