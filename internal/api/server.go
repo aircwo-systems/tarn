@@ -295,6 +295,11 @@ func (s *Server) postAccountDispatch(w http.ResponseWriter, r *http.Request) {
 		s.s3.Dispatch(w, r)
 		return
 	}
+	q := r.URL.Query()
+	if q.Has("uploads") || q.Has("uploadId") || q.Has("delete") {
+		s.s3.Dispatch(w, r)
+		return
+	}
 	s.sqs.Dispatch(w, r)
 }
 
