@@ -1,11 +1,14 @@
 package s3
 
 import (
+	"bytes"
 	"encoding/xml"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	s3svc "github.com/openstack-project/openstack/internal/s3"
@@ -14,14 +17,28 @@ import (
 
 const s3Namespace = "http://s3.amazonaws.com/doc/2006-03-01/"
 
+// multipartUpload holds in-flight part data for a multipart upload.
+type multipartUpload struct {
+	bucket      string
+	key         string
+	contentType string
+	parts       map[int][]byte
+}
+
 // Handler serves the S3 REST XML API.
 type Handler struct {
-	svc *s3svc.Service
+	svc       *s3svc.Service
+	mu        sync.Mutex
+	uploads   map[string]*multipartUpload
+	uploadSeq int
 }
 
 // NewHandler creates a new S3 API handler.
 func NewHandler(svc *s3svc.Service) *Handler {
-	return &Handler{svc: svc}
+	return &Handler{
+		svc:     svc,
+		uploads: make(map[string]*multipartUpload),
+	}
 }
 
 // Dispatch routes S3 API requests by method, bucket, key and query params.
@@ -92,6 +109,10 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		// Operations on an object
 		switch r.Method {
 		case http.MethodPut:
+			if r.URL.Query().Has("partNumber") {
+				h.uploadPart(w, r, bucket, key)
+				return
+			}
 			if r.URL.Query().Has("tagging") {
 				h.putObjectTagging(w, r, bucket, key)
 				return
@@ -102,6 +123,15 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 			}
 			h.putObject(w, r, bucket, key)
 			return
+		case http.MethodPost:
+			if r.URL.Query().Has("uploads") {
+				h.createMultipartUpload(w, r, bucket, key)
+				return
+			}
+			if r.URL.Query().Has("uploadId") {
+				h.completeMultipartUpload(w, r, bucket, key)
+				return
+			}
 		case http.MethodGet:
 			if r.URL.Query().Has("tagging") {
 				h.getObjectTagging(w, r, bucket, key)
@@ -110,6 +140,10 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 			h.getObject(w, r, bucket, key)
 			return
 		case http.MethodDelete:
+			if r.URL.Query().Has("uploadId") {
+				h.abortMultipartUpload(w, r, bucket, key)
+				return
+			}
 			if r.URL.Query().Has("tagging") {
 				h.deleteObjectTagging(w, bucket, key)
 				return
@@ -639,6 +673,140 @@ func extractFunctionName(arnOrName string) string {
 		}
 	}
 	return arnOrName
+}
+
+// --- Multipart upload ---
+
+func (h *Handler) createMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	if err := h.svc.HeadBucket(bucket); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+		return
+	}
+	contentType := r.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	h.mu.Lock()
+	h.uploadSeq++
+	uploadID := fmt.Sprintf("openstack-mpu-%d", h.uploadSeq)
+	h.uploads[uploadID] = &multipartUpload{
+		bucket:      bucket,
+		key:         key,
+		contentType: contentType,
+		parts:       make(map[int][]byte),
+	}
+	h.mu.Unlock()
+
+	type xmlResponse struct {
+		XMLName  xml.Name `xml:"InitiateMultipartUploadResult"`
+		Xmlns    string   `xml:"xmlns,attr"`
+		Bucket   string   `xml:"Bucket"`
+		Key      string   `xml:"Key"`
+		UploadID string   `xml:"UploadId"`
+	}
+	writeXML(w, http.StatusOK, xmlResponse{
+		Xmlns:    s3Namespace,
+		Bucket:   bucket,
+		Key:      key,
+		UploadID: uploadID,
+	})
+}
+
+func (h *Handler) uploadPart(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	uploadID := r.URL.Query().Get("uploadId")
+	partNumStr := r.URL.Query().Get("partNumber")
+
+	h.mu.Lock()
+	upload := h.uploads[uploadID]
+	h.mu.Unlock()
+
+	if upload == nil || upload.bucket != bucket || upload.key != key {
+		writeS3Error(w, http.StatusNotFound, "NoSuchUpload", "The specified upload does not exist")
+		return
+	}
+
+	partNum, _ := strconv.Atoi(partNumStr)
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeS3Error(w, http.StatusInternalServerError, "InternalError", "Failed to read part body")
+		return
+	}
+
+	h.mu.Lock()
+	upload.parts[partNum] = data
+	h.mu.Unlock()
+
+	etag := fmt.Sprintf("\"part-%d-%d\"", partNum, len(data))
+	w.Header().Set("ETag", etag)
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) completeMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	uploadID := r.URL.Query().Get("uploadId")
+
+	h.mu.Lock()
+	upload := h.uploads[uploadID]
+	h.mu.Unlock()
+
+	if upload == nil || upload.bucket != bucket || upload.key != key {
+		writeS3Error(w, http.StatusNotFound, "NoSuchUpload", "The specified upload does not exist")
+		return
+	}
+
+	// Parse the part list to determine order
+	type xmlPart struct {
+		PartNumber int    `xml:"PartNumber"`
+		ETag       string `xml:"ETag"`
+	}
+	type xmlComplete struct {
+		XMLName xml.Name  `xml:"CompleteMultipartUpload"`
+		Parts   []xmlPart `xml:"Part"`
+	}
+	body, _ := io.ReadAll(r.Body)
+	var req xmlComplete
+	xml.Unmarshal(body, &req)
+
+	// Assemble parts in order
+	h.mu.Lock()
+	var assembled bytes.Buffer
+	for _, p := range req.Parts {
+		if data, ok := upload.parts[p.PartNumber]; ok {
+			assembled.Write(data)
+		}
+	}
+	delete(h.uploads, uploadID)
+	h.mu.Unlock()
+
+	obj, err := h.svc.PutObject(bucket, key, upload.contentType, bytes.NewReader(assembled.Bytes()), nil)
+	if err != nil {
+		writeS3Error(w, http.StatusInternalServerError, "InternalError", err.Error())
+		return
+	}
+
+	type xmlResponse struct {
+		XMLName  xml.Name `xml:"CompleteMultipartUploadResult"`
+		Xmlns    string   `xml:"xmlns,attr"`
+		Location string   `xml:"Location"`
+		Bucket   string   `xml:"Bucket"`
+		Key      string   `xml:"Key"`
+		ETag     string   `xml:"ETag"`
+	}
+	writeXML(w, http.StatusOK, xmlResponse{
+		Xmlns:    s3Namespace,
+		Location: fmt.Sprintf("/%s/%s", bucket, key),
+		Bucket:   bucket,
+		Key:      key,
+		ETag:     obj.ETag,
+	})
+}
+
+func (h *Handler) abortMultipartUpload(w http.ResponseWriter, r *http.Request, bucket, key string) {
+	uploadID := r.URL.Query().Get("uploadId")
+	h.mu.Lock()
+	delete(h.uploads, uploadID)
+	h.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // --- Helpers ---

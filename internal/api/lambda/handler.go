@@ -324,6 +324,24 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 	w.Write(output.Payload)
 }
 
+// PutFunctionConcurrency handles PUT /2017-10-31/functions/{name}/concurrency.
+// TF provider v6 calls this endpoint using the 2017-10-31 API date prefix, which
+// was not registered and fell through to the S3 handler returning XML.
+func (h *Handler) PutFunctionConcurrency(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ReservedConcurrentExecutions int `json:"ReservedConcurrentExecutions"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+	writeJSON(w, http.StatusOK, map[string]int{
+		"ReservedConcurrentExecutions": req.ReservedConcurrentExecutions,
+	})
+}
+
+// DeleteFunctionConcurrency handles DELETE /2017-10-31/functions/{name}/concurrency.
+func (h *Handler) DeleteFunctionConcurrency(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // NotFound returns a well-formed AWS ResourceNotFoundException for any Lambda
 // sub-resource endpoint we don't emulate (e.g. code-signing-config, concurrency,
 // policy).  The Terraform AWS provider v5 calls several optional-feature endpoints

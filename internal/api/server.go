@@ -114,12 +114,25 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// HEAD is omitted — Go automatically routes HEAD to the GET handler,
 	// keeping r.Method="HEAD" so Dispatch still calls headBucket.
 	mux.HandleFunc("DELETE /{bucket}", s.s3.Dispatch)
+	// Lambda 2017-10-31 concurrency endpoints — must be registered before the
+	// generic S3 /{bucket}/{key...} patterns, which would otherwise capture
+	// paths like PUT /2017-10-31/functions/{name}/concurrency and return XML.
+	mux.HandleFunc("PUT /2017-10-31/functions/{name}/concurrency", s.lambda.PutFunctionConcurrency)
+	mux.HandleFunc("DELETE /2017-10-31/functions/{name}/concurrency", s.lambda.DeleteFunctionConcurrency)
+	for _, method := range [...]string{
+		http.MethodGet, http.MethodPut, http.MethodPost,
+		http.MethodDelete, http.MethodPatch,
+	} {
+		mux.HandleFunc(method+" /2017-10-31/functions/{name}/{subpath...}", s.lambda.NotFound)
+	}
+
 	// Object-level operations: /{bucket}/{key...}
 	// HEAD is omitted — Go automatically routes HEAD to the GET handler,
 	// keeping r.Method="HEAD" so Dispatch still calls headObject.
 	mux.HandleFunc("GET /{bucket}/{key...}", s.s3.Dispatch)
 	mux.HandleFunc("PUT /{bucket}/{key...}", s.s3.Dispatch)
 	mux.HandleFunc("DELETE /{bucket}/{key...}", s.s3.Dispatch)
+	mux.HandleFunc("POST /{bucket}/{key...}", s.s3.Dispatch)
 
 	// API Gateway v1 (REST API) — AWS-compatible management endpoints
 	mux.HandleFunc("POST /restapis", s.apigwv1.CreateRestAPI)

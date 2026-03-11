@@ -253,12 +253,21 @@ func (s *Store) GetQueueAttributes(name string, attrNames []string) (map[string]
 	if all || contains(attrNames, "FifoQueue") {
 		if q.config.FifoQueue {
 			result["FifoQueue"] = "true"
+		} else {
+			result["FifoQueue"] = "false"
 		}
 	}
 	if all || contains(attrNames, "ContentBasedDeduplication") {
 		if q.config.ContentBasedDeduplication {
 			result["ContentBasedDeduplication"] = "true"
+		} else {
+			result["ContentBasedDeduplication"] = "false"
 		}
+	}
+	// SqsManagedSseEnabled — always "true" (stub); TF v6 polls this via the
+	// attribute-create waiter and times out if the attribute is absent.
+	if all || contains(attrNames, "SqsManagedSseEnabled") {
+		result["SqsManagedSseEnabled"] = "true"
 	}
 	if (all || contains(attrNames, "RedrivePolicy")) && q.config.RedrivePolicy != "" {
 		result["RedrivePolicy"] = q.config.RedrivePolicy
