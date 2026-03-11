@@ -1,5 +1,5 @@
 <script lang="ts">
-	 import { SquaresFourIcon, GlobeHemisphereWestIcon, LightningIcon, ChatCircleIcon, KeyIcon, HardDriveIcon, ScrollIcon, DetectiveIcon, SidebarSimpleIcon, ArrowsClockwiseIcon, GearIcon, XIcon, PlusIcon, TrashIcon } from 'phosphor-svelte';
+	 import { SquaresFourIcon, GlobeHemisphereWestIcon, LightningIcon, ChatCircleIcon, KeyIcon, HardDriveIcon, ScrollIcon, DetectiveIcon, SidebarSimpleIcon, ArrowsClockwiseIcon, GearIcon, XIcon, PlusIcon, TrashIcon, ShieldWarningIcon } from 'phosphor-svelte';
 	import NavRailItem from './nav-rail-item.svelte';
 	import ThemeToggle from './theme-toggle.svelte';
 	import StatusIndicator from '$lib/components/common/status-indicator.svelte';
@@ -50,6 +50,7 @@
 	 const tabs = [
 	 	{ id: 'overview', label: 'Overview', icon: SquaresFourIcon },
 	 	{ id: 'gateways', label: 'Gateways', icon: GlobeHemisphereWestIcon },
+	 	{ id: 'chaos', label: 'Chaos', icon: ShieldWarningIcon },
 	 	{ id: 'functions', label: 'Functions', icon: LightningIcon },
 	 	{ id: 'queues', label: 'Queues', icon: ChatCircleIcon },
 	 	{ id: 'secrets', label: 'Secrets', icon: KeyIcon },

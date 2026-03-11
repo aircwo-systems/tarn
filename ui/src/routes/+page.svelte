@@ -10,10 +10,11 @@
 	import StorageSection from '$lib/components/sections/storage-section.svelte';
 	import LogsSection from '$lib/components/sections/logs-section.svelte';
 	import XraySection from '$lib/components/sections/xray-section.svelte';
+	import ChaosSection from '$lib/components/sections/chaos-section.svelte';
 	import { getDashboard } from '$lib/state.svelte';
 
 	const dashboard = getDashboard();
-	const validTabs = ['overview', 'gateways', 'functions', 'queues', 'secrets', 'triggers', 'storage', 'logs', 'xray'];
+	const validTabs = ['overview', 'gateways', 'functions', 'queues', 'secrets', 'triggers', 'storage', 'logs', 'xray', 'chaos'];
 
 	let activeTab = $state('overview');
 	let logsInitialGroup = $state('');
@@ -68,6 +69,8 @@
 			<LogsSection initialGroup={logsInitialGroup} />
 		{:else if activeTab === 'xray'}
 		<XraySection />
+		{:else if activeTab === 'chaos'}
+			<ChaosSection gateways={dashboard.data?.gateways ?? []} />
 		{/if}
 	</main>
 </div>

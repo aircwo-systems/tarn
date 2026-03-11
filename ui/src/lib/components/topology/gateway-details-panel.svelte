@@ -2,6 +2,7 @@
 	import { DownloadSimpleIcon, XIcon, CopyIcon, CheckIcon } from 'phosphor-svelte';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import type { GatewaySummary, RouteDetail } from '$lib/types';
+	import { slugify, normalizeTemplate, parseTarget, buildPostmanCollection, buildPostmanEnvironment, downloadJSON } from '$lib/postman';
 
 	let {
 		gateway,
@@ -49,143 +50,12 @@
 		}
 	}
 
-	function parseTarget(target: string): { kind: string; name: string } {
-		if (target.startsWith('sqs:')) return { kind: 'SQS', name: target.slice(4) };
-		if (target.startsWith('lambda:')) return { kind: 'λ', name: target.slice(7) };
-		return { kind: '', name: target };
-	}
-
-	function normalizeTemplate(t: string): string {
-		return t.split('\n').map((l) => l.trim()).filter((l) => l.length > 0).join('\n');
-	}
-
 	function hasTemplates(detail: RouteDetail): boolean {
 		return !!(detail.requestTemplates && Object.keys(detail.requestTemplates).length > 0);
 	}
 
 	function hasParams(detail: RouteDetail): boolean {
 		return !!(detail.requestParameters && Object.keys(detail.requestParameters).length > 0);
-	}
-
-	// ── Postman export (preserved from original) ───────────────────────────────
-
-	function normalizeBaseUrl(raw: string): string {
-		try {
-			const parsed = new URL(raw);
-			if (parsed.hostname === '0.0.0.0' || parsed.hostname === '::' || parsed.hostname === '[::]') {
-				parsed.hostname = '127.0.0.1';
-			}
-			return parsed.origin;
-		} catch {
-			return raw;
-		}
-	}
-
-	function slugify(value: string): string {
-		return value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'gateway';
-	}
-
-	function postmanPath(path: string): string {
-		if (!path || path === '/') return '';
-		return path.replace(/\{([a-zA-Z0-9_]+)\+?\}/g, '{{$1}}');
-	}
-
-	function routeVariableNames(path: string): string[] {
-		const matches = path.matchAll(/\{([a-zA-Z0-9_]+)\+?\}/g);
-		const names = new Set<string>();
-		for (const match of matches) {
-			if (match[1]) names.add(match[1]);
-		}
-		return Array.from(names);
-	}
-
-	function baseUrl(gw: GatewaySummary): string {
-		return normalizeBaseUrl(gw.invokeUrl);
-	}
-
-	function collectionVariables(gw: GatewaySummary): Array<{ key: string; value: string; type?: string }> {
-		const vars = new Map<string, { key: string; value: string; type?: string }>();
-		vars.set('baseUrl', { key: 'baseUrl', value: baseUrl(gw), type: 'string' });
-		vars.set('apiId', { key: 'apiId', value: gw.apiId, type: 'string' });
-		vars.set('stage', { key: 'stage', value: gw.defaultStage, type: 'string' });
-		vars.set('invokeBase', {
-			key: 'invokeBase',
-			value: '{{baseUrl}}/_apigateway/{{apiId}}/{{stage}}',
-			type: 'string'
-		});
-		for (const routeKey of gw.routeKeys ?? []) {
-			const route = routeParts(routeKey);
-			for (const v of routeVariableNames(route.path)) {
-				if (!vars.has(v)) vars.set(v, { key: v, value: '', type: 'string' });
-			}
-			if (route.method === '$default' && !vars.has('defaultPath')) {
-				vars.set('defaultPath', { key: 'defaultPath', value: '', type: 'string' });
-			}
-		}
-		return Array.from(vars.values());
-	}
-
-	function collectionItems(gw: GatewaySummary) {
-		return (gw.routeKeys ?? []).map((routeKey) => {
-			const route = routeParts(routeKey);
-			const exportedMethod = route.method === 'ANY' || route.method === '$default' ? 'GET' : route.method;
-			const rawPath =
-				route.method === '$default'
-					? '{{invokeBase}}/{{defaultPath}}'
-					: `{{invokeBase}}${postmanPath(route.path)}`;
-			return {
-				name: routeKey,
-				request: {
-					method: exportedMethod,
-					header:
-						exportedMethod === 'GET' || exportedMethod === 'HEAD'
-							? []
-							: [{ key: 'Content-Type', value: 'application/json', type: 'text' }],
-					url: rawPath,
-					description:
-						route.method === 'ANY'
-							? `Generated from ${routeKey}. Exported as GET placeholder.`
-							: route.method === '$default'
-								? 'Generated from $default route. Set {{defaultPath}} before sending.'
-								: `Generated from ${routeKey}.`
-				},
-				response: []
-			};
-		});
-	}
-
-	function buildPostmanCollection(gw: GatewaySummary) {
-		return {
-			info: {
-				name: `${gw.name} (OpenStack API Gateway)`,
-				description: `Generated from OpenStack API Gateway ${gw.apiId}.`,
-				schema: 'https://schema.getpostman.com/json/collection/v2.1.0/collection.json'
-			},
-			variable: collectionVariables(gw),
-			item: collectionItems(gw)
-		};
-	}
-
-	function buildPostmanEnvironment(gw: GatewaySummary) {
-		return {
-			name: `${gw.name} (OpenStack Local)`,
-			values: collectionVariables(gw).map((v) => ({ key: v.key, value: v.value, enabled: true, type: v.type ?? 'text' })),
-			_postman_variable_scope: 'environment',
-			_postman_exported_at: new Date().toISOString(),
-			_postman_exported_using: 'OpenStack dashboard'
-		};
-	}
-
-	function downloadJSON(filename: string, payload: unknown) {
-		const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-		const href = URL.createObjectURL(blob);
-		const link = document.createElement('a');
-		link.href = href;
-		link.download = filename;
-		document.body.appendChild(link);
-		link.click();
-		link.remove();
-		URL.revokeObjectURL(href);
 	}
 
 	function downloadCollection() {
@@ -371,7 +241,7 @@
 		<div class="flex items-center justify-between gap-2">
 			<div>
 				<p class="text-[10px] font-mono uppercase tracking-wide text-text-faint">Postman Export</p>
-				<p class="mt-0.5 text-[11px] text-text-faint">Use the Postman Desktop Agent for local requests.</p>
+				<p class="mt-0.5 text-[11px] text-text-faint">Use the Postman Desktop Agent for local requests. Run Chaos Probe to enrich with examples.</p>
 			</div>
 			<div class="flex gap-2 shrink-0">
 				<button

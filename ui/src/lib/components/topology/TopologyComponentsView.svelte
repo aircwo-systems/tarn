@@ -1,420 +1,160 @@
 <script lang="ts">
-	import { getDashboard } from '$lib/state.svelte';
-	import type {
-		GatewaySummary,
-		FunctionSummary,
-		QueueSummary,
-		SecretSummary,
-		BucketSummary,
-		InfraProbe
-	} from '$lib/types';
+  import { getDashboard } from '$lib/state.svelte';
+  import { fade } from 'svelte/transition';
 
-	let {
-		gateways = [],
-		functions = [],
-		queues = [],
-		secrets = [],
-		buckets = [],
-		infra = [],
-		canvasExpanded = false,
-		onGatewayClick = (_id: string) => {},
-		onNavigate = (_tab: string) => {}
-	}: {
-		gateways?: GatewaySummary[];
-		functions?: FunctionSummary[];
-		queues?: QueueSummary[];
-		secrets?: SecretSummary[];
-		buckets?: BucketSummary[];
-		infra?: InfraProbe[];
-		canvasExpanded?: boolean;
-		onGatewayClick?: (id: string) => void;
-		onNavigate?: (tab: string) => void;
-	} = $props();
+  let {
+    gateways = [], functions = [], queues = [], secrets = [], buckets = [], infra = [],
+    canvasExpanded = false, onGatewayClick = (_id: string) => {}, onNavigate = (_tab: string) => {}
+  } = $props();
 
-	const dashboard = getDashboard();
+  const dashboard = getDashboard();
 
-	// --- Canvas geometry ---
-	// Wider canvas gives room for large infra (multiple lambdas, queues, secrets, buckets)
-	const W = 1400;
-	const H = 560;
-	const CX = W / 2;
-	const endpoint = { x: CX, y: 58 };
-	const laneY = 200;
+  // --- 1. Tooltip State ---
+  let tooltip = $state({
+    visible: false,
+    x: 0,
+    y: 0,
+    title: '',
+    detail: '',
+    status: '',
+    color: 'var(--color-accent)'
+  });
 
-	// AWS service columns — 220px apart, giving each column 110px of node-fan space each side
-	const serviceX = { apigw: 90, lambda: 310, sqs: 530, secrets: 750, s3: 970 };
+  function showTooltip(e: MouseEvent, item: any, type: string, color: string) {
+    tooltip = {
+      visible: true,
+      x: e.clientX,
+      y: e.clientY,
+      title: item.name || item.apiId || 'Unknown Resource',
+      detail: type,
+      status: item.state || item.status || 'Active',
+      color
+    };
+  }
 
-	// Two-row resource layout
-	const ROW1_Y = laneY + 130;  // 330
-	const ROW2_Y = laneY + 245;  // 445
-	const ROW1_MAX = 5;          // up to 5 per row = 10 total per service
-	const NODE_SPACING = 46;
+  function hideTooltip() { tooltip.visible = false; }
 
-	// Local env zone — right panel (wider for more probe info)
-	const ZONE_X = 1090;
-	const ZONE_CX = ZONE_X + (W - ZONE_X) / 2;   // 1245
-	const ZONE_ROW_START_Y = 80;
-	const ZONE_ROW_H = 46;       // taller rows for readability
+  // --- 2. Adaptive Layout Logic ---
+  const W = 1400;
+  const H = $derived(canvasExpanded ? 900 : 640);
+  const CX = W / 2;
 
-	// --- Colors ---
-	const ledColorMap: Record<string, string> = {
-		green: 'var(--color-accent)',
-		amber: 'var(--color-amber)',
-		red: 'var(--color-red)',
-		gray: 'var(--color-text-faint)'
-	};
+  const zones = $derived([
+    { id: 'gateways', label: 'INGRESS', items: gateways, color: 'var(--color-red)', side: -1, order: 0 },
+    { id: 'functions', label: 'COMPUTE', items: functions, color: 'var(--color-accent)', side: -1, order: 1 },
+    { id: 'queues', label: 'MESSAGING', items: queues, color: 'var(--color-amber)', side: 1, order: 0 },
+    { id: 'secrets', label: 'SECRETS', items: secrets, color: 'var(--color-blue)', side: 1, order: 1 },
+    { id: 'storage', label: 'OBJECTS', items: buckets, color: 'var(--color-cyan)', side: 1, order: 2 },
+  ]);
 
-	function stateColor(state: string): string {
-		const s = state?.toLowerCase() ?? '';
-		if (s === 'active' || s === 'running') return 'green';
-		if (s === 'pending') return 'amber';
-		if (s === 'failed' || s === 'inactive') return 'red';
-		return 'gray';
-	}
-
-	function probeColor(probe: InfraProbe): string {
-		if (probe.status !== 'connected') return 'var(--color-red)';
-		if (probe.kind === 'http' || probe.kind === 'https') return 'var(--color-blue)';
-		return 'var(--color-accent)';
-	}
-
-	// Fan out positions — single row helper
-	function fanRow(cx: number, count: number, y: number): { x: number; y: number }[] {
-		if (count === 0) return [];
-		const total = (count - 1) * NODE_SPACING;
-		const startX = cx - total / 2;
-		return Array.from({ length: count }, (_, i) => ({ x: startX + i * NODE_SPACING, y }));
-	}
-
-	// Two-row fan: up to ROW1_MAX in row1, remaining in row2 (max ROW1_MAX each row = 10 total)
-	function fanPositions(cx: number, count: number): { x: number; y: number }[] {
-		const r1 = Math.min(count, ROW1_MAX);
-		const r2 = Math.min(count - r1, ROW1_MAX);
-		return [...fanRow(cx, r1, ROW1_Y), ...fanRow(cx, r2, ROW2_Y)];
-	}
-
-	const MAX_NODES = ROW1_MAX * 2;
-	const gwPositions = $derived(fanPositions(serviceX.apigw,   Math.min(gateways.length,  MAX_NODES)));
-	const fnPositions = $derived(fanPositions(serviceX.lambda,  Math.min(functions.length, MAX_NODES)));
-	const qPositions  = $derived(fanPositions(serviceX.sqs,     Math.min(queues.length,    MAX_NODES)));
-	const sPositions  = $derived(fanPositions(serviceX.secrets, Math.min(secrets.length,   MAX_NODES)));
-	const s3Positions = $derived(fanPositions(serviceX.s3,      Math.min(buckets.length,   MAX_NODES)));
-
-	// Overflow counts (resources beyond what's shown)
-	const gwOverflow  = $derived(Math.max(0, gateways.length  - MAX_NODES));
-	const fnOverflow  = $derived(Math.max(0, functions.length - MAX_NODES));
-	const qOverflow   = $derived(Math.max(0, queues.length    - MAX_NODES));
-	const sOverflow   = $derived(Math.max(0, secrets.length   - MAX_NODES));
-	const s3Overflow  = $derived(Math.max(0, buckets.length   - MAX_NODES));
-
-	const infraConnected = $derived(infra.filter((p) => p.status === 'connected').length);
-
-	const hasData = $derived(
-		gateways.length > 0 || functions.length > 0 || queues.length > 0 ||
-		secrets.length > 0 || buckets.length > 0 || infra.length > 0
-	);
-
-	function handleGatewayKeydown(event: KeyboardEvent, apiId: string) {
-		if (event.key === 'Enter' || event.key === ' ') {
-			event.preventDefault();
-			onGatewayClick(apiId);
-		}
-	}
-
-	function handleNavKeydown(event: KeyboardEvent, tab: string) {
-		if (event.key === 'Enter' || event.key === ' ') {
-			event.preventDefault();
-			onNavigate(tab);
-		}
-	}
+  const getScale = (count: number) => {
+    const dense = count > 6;
+    return {
+      w: dense ? 90 : 140,
+      h: dense ? 30 : 45,
+      gap: dense ? 6 : 12,
+      cols: dense ? 3 : 2,
+      font: dense ? '9px' : '11px'
+    };
+  };
 </script>
 
-<svg
-	viewBox="0 0 {W} {H}"
-	class="w-full h-full"
-	preserveAspectRatio="xMidYMin meet"
-	style={`min-width: ${canvasExpanded ? 1100 : 700}px;`}
->
-	<!-- Canvas background -->
-	<rect x={0} y={0} width={W} height={H} class="fill-bg" />
+<div class="relative w-full overflow-hidden transition-all duration-700 ease-in-out bg-bg border border-border" 
+     style="height: {H}px;">
+  
+  {#if tooltip.visible}
+    <div 
+      transition:fade={{ duration: 100 }}
+      class="fixed pointer-events-none z-50 flex flex-col gap-1 px-3 py-2 rounded border shadow-xl backdrop-blur-md bg-bg-surface/90 border-border-strong"
+      style="left: {tooltip.x + 15}px; top: {tooltip.y + 15}px; min-width: 160px;"
+    >
+      <div class="flex items-center justify-between gap-4">
+        <span class="text-[10px] font-mono opacity-50 tracking-tighter">{tooltip.detail}</span>
+        <div class="h-1.5 w-1.5 rounded-full" style="background: {tooltip.color}"></div>
+      </div>
+      <div class="text-xs font-bold font-mono truncate text-text">{tooltip.title}</div>
+      <div class="text-[10px] font-mono py-0.5 px-1.5 rounded w-fit uppercase" 
+           style="background: {tooltip.color}22; color: {tooltip.color}">
+        {tooltip.status}
+      </div>
+    </div>
+  {/if}
 
-	<!-- Dot grid -->
-	{#each Array(Math.floor(W / 44)) as _, ix (ix)}
-		{#each Array(Math.floor(H / 44)) as _, iy (iy)}
-			<circle cx={22 + ix * 44} cy={22 + iy * 44} r="0.65" class="fill-border" opacity="0.45" />
-		{/each}
-	{/each}
+  <svg viewBox="0 0 {W} {H}" class="w-full h-full">
+    <defs>
+      <pattern id="dotGrid" width="40" height="40" patternUnits="userSpaceOnUse">
+        <circle cx="2" cy="2" r="1" fill="var(--color-text)" opacity="0.05"/>
+      </pattern>
+    </defs>
 
-	{#if hasData}
-		<!-- ── AWS service zone ─────────────────────────────────────── -->
+    <rect width="100%" height="100%" fill="url(#dotGrid)" />
 
-		<!-- Fan lines: OpenStack endpoint → service headers (longer sweeping lines) -->
-		<line x1={endpoint.x} y1={endpoint.y + 17} x2={serviceX.apigw}   y2={laneY - 15} stroke="var(--color-border-strong)" stroke-width="1" stroke-dasharray="5 4" opacity="0.8" />
-		<line x1={endpoint.x} y1={endpoint.y + 17} x2={serviceX.lambda}  y2={laneY - 15} stroke="var(--color-border-strong)" stroke-width="1" stroke-dasharray="5 4" opacity="0.8" />
-		<line x1={endpoint.x} y1={endpoint.y + 17} x2={serviceX.sqs}     y2={laneY - 15} stroke="var(--color-border-strong)" stroke-width="1" stroke-dasharray="5 4" opacity="0.8" />
-		<line x1={endpoint.x} y1={endpoint.y + 17} x2={serviceX.secrets} y2={laneY - 15} stroke="var(--color-border-strong)" stroke-width="1" stroke-dasharray="5 4" opacity="0.8" />
-		<line x1={endpoint.x} y1={endpoint.y + 17} x2={serviceX.s3}      y2={laneY - 15} stroke="var(--color-border-strong)" stroke-width="1" stroke-dasharray="5 4" opacity="0.8" />
+    <g transform="translate({CX - 100}, 40)">
+      <rect width="200" height="54" rx="2" fill="var(--color-bg-surface)" stroke="var(--color-text)" stroke-width="0.5" />
+      <text x="100" y="34" text-anchor="middle" font-family="var(--font-mono)" font-size="14" font-weight="900" letter-spacing="4" fill="var(--color-text)">
+        OPEN STACK
+      </text>
+      <path d="M 0 54 L 200 54" stroke="var(--color-accent)" stroke-width="2" />
+    </g>
 
-		<!-- Fan lines: service header → individual resource nodes (row1 + row2) -->
-		{#each gwPositions as pos}
-			<line x1={serviceX.apigw}   y1={laneY + 15} x2={pos.x} y2={pos.y - 11} stroke="var(--color-red)"    stroke-width="0.7" opacity={pos.y > ROW1_Y ? 0.2 : 0.32} />
-		{/each}
-		{#each fnPositions as pos}
-			<line x1={serviceX.lambda}  y1={laneY + 15} x2={pos.x} y2={pos.y - 11} stroke="var(--color-accent)" stroke-width="0.7" opacity={pos.y > ROW1_Y ? 0.18 : 0.28} />
-		{/each}
-		{#each qPositions as pos}
-			<line x1={serviceX.sqs}     y1={laneY + 15} x2={pos.x} y2={pos.y - 11} stroke="var(--color-amber)"  stroke-width="0.7" opacity={pos.y > ROW1_Y ? 0.18 : 0.28} />
-		{/each}
-		{#each sPositions as pos}
-			<line x1={serviceX.secrets} y1={laneY + 15} x2={pos.x} y2={pos.y - 11} stroke="var(--color-blue)"   stroke-width="0.7" opacity={pos.y > ROW1_Y ? 0.18 : 0.28} />
-		{/each}
-		{#each s3Positions as pos}
-			<line x1={serviceX.s3}      y1={laneY + 15} x2={pos.x} y2={pos.y - 11} stroke="var(--color-accent)" stroke-width="0.7" opacity={pos.y > ROW1_Y ? 0.18 : 0.28} />
-		{/each}
+    {#if !dashboard.loading}
+      {#each zones as zone}
+        {#if zone.items.length > 0}
+          {@const s = getScale(zone.items.length)}
+          {@const xBase = zone.side === -1 ? CX - 460 : CX + 100}
+          {@const yBase = 160 + (zone.order * (canvasExpanded ? 240 : 180))}
+          
+          <g transform="translate({xBase}, {yBase})">
+            <path d="M {zone.side === -1 ? 320 : -60} 0 L {zone.side === -1 ? 360 : -100} 0" 
+                  stroke={zone.color} stroke-width="1" opacity="0.2" />
 
-		<!-- OpenStack endpoint node -->
-		<g>
-			<rect x={endpoint.x - 62} y={endpoint.y - 17} width="124" height="34" rx="6" class="fill-bg-surface stroke-border-strong" stroke-width="1" />
-			<circle cx={endpoint.x - 42} cy={endpoint.y} r="3.5" class="fill-accent" opacity="0.85">
-				<animate attributeName="opacity" values="0.85;0.4;0.85" dur="2s" repeatCount="indefinite" />
-			</circle>
-			<text x={endpoint.x - 28} y={endpoint.y + 4} class="fill-text" font-size="10" font-family="var(--font-mono)">OpenStack</text>
-		</g>
+            <text x="0" y="-15" fill={zone.color} font-family="var(--font-mono)" font-size="10" font-weight="bold" opacity="0.8">
+              // {zone.label}
+            </text>
 
-		<!-- Service header badges -->
-		<!-- APIGW -->
-		<g>
-			<rect x={serviceX.apigw - 56} y={laneY - 15} width="112" height="30" rx="5" class="fill-bg-surface" stroke="var(--color-red)" stroke-width="1" opacity="0.85" />
-			<text x={serviceX.apigw} y={laneY + 4.5} text-anchor="middle" class="fill-text" font-size="9.5" font-family="var(--font-mono)">APIGW</text>
-		</g>
-		{#if gwOverflow > 0}
-			<text x={serviceX.apigw + 60} y={laneY + 4.5} class="fill-text-faint" font-size="8" font-family="var(--font-mono)">+{gwOverflow}</text>
-		{/if}
-		<!-- Lambda -->
-		<g>
-			<rect x={serviceX.lambda - 52} y={laneY - 15} width="104" height="30" rx="5" class="fill-bg-surface" stroke="var(--color-accent)" stroke-width="1" opacity="0.85" />
-			<text x={serviceX.lambda} y={laneY + 4.5} text-anchor="middle" class="fill-text" font-size="9.5" font-family="var(--font-mono)">Lambda</text>
-		</g>
-		{#if fnOverflow > 0}
-			<text x={serviceX.lambda + 57} y={laneY + 4.5} class="fill-text-faint" font-size="8" font-family="var(--font-mono)">+{fnOverflow}</text>
-		{/if}
-		<!-- SQS -->
-		<g>
-			<rect x={serviceX.sqs - 42} y={laneY - 15} width="84" height="30" rx="5" class="fill-bg-surface" stroke="var(--color-amber)" stroke-width="1" opacity="0.85" />
-			<text x={serviceX.sqs} y={laneY + 4.5} text-anchor="middle" class="fill-text" font-size="9.5" font-family="var(--font-mono)">SQS</text>
-		</g>
-		{#if qOverflow > 0}
-			<text x={serviceX.sqs + 47} y={laneY + 4.5} class="fill-text-faint" font-size="8" font-family="var(--font-mono)">+{qOverflow}</text>
-		{/if}
-		<!-- Secrets -->
-		<g>
-			<rect x={serviceX.secrets - 52} y={laneY - 15} width="104" height="30" rx="5" class="fill-bg-surface" stroke="var(--color-blue)" stroke-width="1" opacity="0.85" />
-			<text x={serviceX.secrets} y={laneY + 4.5} text-anchor="middle" class="fill-text" font-size="9.5" font-family="var(--font-mono)">Secrets</text>
-		</g>
-		{#if sOverflow > 0}
-			<text x={serviceX.secrets + 57} y={laneY + 4.5} class="fill-text-faint" font-size="8" font-family="var(--font-mono)">+{sOverflow}</text>
-		{/if}
-		<!-- S3 -->
-		<g>
-			<rect x={serviceX.s3 - 42} y={laneY - 15} width="84" height="30" rx="5" class="fill-bg-surface" stroke="var(--color-accent)" stroke-width="1" opacity="0.85" />
-			<text x={serviceX.s3} y={laneY + 4.5} text-anchor="middle" class="fill-text" font-size="9.5" font-family="var(--font-mono)">S3</text>
-		</g>
-		{#if s3Overflow > 0}
-			<text x={serviceX.s3 + 47} y={laneY + 4.5} class="fill-text-faint" font-size="8" font-family="var(--font-mono)">+{s3Overflow}</text>
-		{/if}
+            {#each zone.items.slice(0, 18) as item, i}
+              {@const col = i % s.cols}
+              {@const row = Math.floor(i / s.cols)}
+              <g 
+                transform="translate({col * (s.w + s.gap)}, {row * (s.h + s.gap)})"
+                class="cursor-pointer group"
+                onmouseenter={(e) => showTooltip(e, item, zone.id, zone.color)}
+                onmouseleave={hideTooltip}
+                onclick={() => zone.id === 'gateways' ? onGatewayClick(item.apiId) : onNavigate(zone.id)}
+              >
+                <rect width={s.w} height={s.h} rx="1" fill="var(--color-bg-overlay)" stroke="var(--color-border)"
+                      class="group-hover:stroke-text group-hover:fill-bg-surface transition-all duration-200" />
+                <rect width="3" height={s.h} fill={zone.color} opacity="0.5" />
+                <text x="10" y={s.h / 2 + 4} fill="var(--color-text-muted)" font-family="var(--font-mono)" font-size={s.font}
+                      class="group-hover:fill-text truncate">
+                  {item.name?.slice(0, 12).toUpperCase() || 'UNTITLED'}
+                </text>
+              </g>
+            {/each}
+          </g>
+        {/if}
+      {/each}
 
-		<!-- API Gateway resource nodes -->
-		{#each gwPositions as pos, i (gateways[i]?.apiId ?? i)}
-			{@const gw = gateways[i]}
-			<g
-				role="button"
-				tabindex="0"
-				aria-label={`Open API Gateway details for ${gw.name}`}
-				class="cursor-pointer"
-				onclick={() => onGatewayClick(gw.apiId)}
-				onkeydown={(event: KeyboardEvent) => handleGatewayKeydown(event, gw.apiId)}
-			>
-				<rect x={pos.x - 20} y={pos.y - 11} width="40" height="22" rx="4" class="fill-bg-overlay" stroke="var(--color-red)" stroke-width="0.8" opacity="0.75" />
-				<circle cx={pos.x - 10} cy={pos.y} r="2.5" fill="var(--color-red)" opacity="0.8" />
-				<text x={pos.x - 3} y={pos.y + 3.5} class="fill-text-muted" font-size="7.5" font-family="var(--font-mono)">{gw.name.slice(0, 5)}</text>
-			</g>
-		{/each}
+      <g transform="translate({W - 260}, 40)">
+        <rect width="220" height={H - 80} rx="4" fill="var(--color-bg-surface)" fill-opacity="0.3" stroke="var(--color-border)" stroke-dasharray="4 4" />
+        <text x="15" y="25" fill="var(--color-text-faint)" font-family="var(--font-mono)" font-size="9" font-weight="bold">SYSTEM_PROBES</text>
+        
+        {#each infra.slice(0, 14) as probe, i}
+          <g transform="translate(15, {50 + i * 40})" 
+             class="cursor-pointer"
+             onmouseenter={(e) => showTooltip(e, probe, 'LOCAL_PROBE', 'var(--color-accent)')}
+             onmouseleave={hideTooltip}>
+            <circle cx="5" cy="12" r="3" fill={probe.status === 'connected' ? 'var(--color-accent)' : 'var(--color-red)'} />
+            <text x="18" y="16" fill="var(--color-text)" font-family="var(--font-mono)" font-size="11" opacity="0.8">{probe.name}</text>
+            <line x1="0" y1="30" x2="190" y2="30" stroke="var(--color-border)" opacity="0.2" />
+          </g>
+        {/each}
+      </g>
+    {/if}
+  </svg>
+</div>
 
-		<!-- Lambda Function resource nodes -->
-		{#each fnPositions as pos, i (functions[i]?.name ?? i)}
-			{@const fn = functions[i]}
-			<g
-				role="button"
-				tabindex="0"
-				aria-label={`View Lambda function ${fn.name}`}
-				class="cursor-pointer"
-				onclick={() => onNavigate('functions')}
-				onkeydown={(event: KeyboardEvent) => handleNavKeydown(event, 'functions')}
-			>
-				<rect x={pos.x - 20} y={pos.y - 11} width="40" height="22" rx="4" class="fill-bg-overlay" stroke={ledColorMap[stateColor(fn.state)]} stroke-width="0.8" />
-				<circle cx={pos.x - 10} cy={pos.y} r="2.5" fill={ledColorMap[stateColor(fn.state)]} />
-				<text x={pos.x - 3} y={pos.y + 3.5} class="fill-text-muted" font-size="7.5" font-family="var(--font-mono)">{fn.name.slice(0, 5)}</text>
-			</g>
-		{/each}
-
-		<!-- SQS Queue resource nodes -->
-		{#each qPositions as pos, i (queues[i]?.name ?? i)}
-			{@const q = queues[i]}
-			<g
-				role="button"
-				tabindex="0"
-				aria-label={`View SQS queue ${q.name}`}
-				class="cursor-pointer"
-				onclick={() => onNavigate('queues')}
-				onkeydown={(event: KeyboardEvent) => handleNavKeydown(event, 'queues')}
-			>
-				<rect x={pos.x - 20} y={pos.y - 11} width="40" height="22" rx="4" class="fill-bg-overlay" stroke="var(--color-amber)" stroke-width="0.8" opacity="0.65" />
-				<circle cx={pos.x - 10} cy={pos.y} r="2.5" fill="var(--color-amber)" opacity="0.75" />
-				<text x={pos.x - 3} y={pos.y + 3.5} class="fill-text-muted" font-size="7.5" font-family="var(--font-mono)">{q.name.slice(0, 5)}</text>
-			</g>
-		{/each}
-
-		<!-- Secrets Manager resource nodes -->
-		{#each sPositions as pos, i (secrets[i]?.name ?? i)}
-			{@const s = secrets[i]}
-			<g
-				role="button"
-				tabindex="0"
-				aria-label={`View secret ${s.name}`}
-				class="cursor-pointer"
-				onclick={() => onNavigate('secrets')}
-				onkeydown={(event: KeyboardEvent) => handleNavKeydown(event, 'secrets')}
-			>
-				<rect x={pos.x - 20} y={pos.y - 11} width="40" height="22" rx="4" class="fill-bg-overlay" stroke="var(--color-blue)" stroke-width="0.8" opacity="0.65" />
-				<circle cx={pos.x - 10} cy={pos.y} r="2.5" fill="var(--color-blue)" opacity="0.75" />
-				<text x={pos.x - 3} y={pos.y + 3.5} class="fill-text-muted" font-size="7.5" font-family="var(--font-mono)">{s.name.slice(0, 5)}</text>
-			</g>
-		{/each}
-
-		<!-- S3 Bucket resource nodes -->
-		{#each s3Positions as pos, i (buckets[i]?.name ?? i)}
-			{@const b = buckets[i]}
-			<g
-				role="button"
-				tabindex="0"
-				aria-label={`View S3 bucket ${b.name}`}
-				class="cursor-pointer"
-				onclick={() => onNavigate('storage')}
-				onkeydown={(event: KeyboardEvent) => handleNavKeydown(event, 'storage')}
-			>
-				<rect x={pos.x - 20} y={pos.y - 11} width="40" height="22" rx="4" class="fill-bg-overlay" stroke="var(--color-accent)" stroke-width="0.8" opacity="0.65" />
-				<circle cx={pos.x - 10} cy={pos.y} r="2.5" fill="var(--color-accent)" opacity="0.75" />
-				<text x={pos.x - 3} y={pos.y + 3.5} class="fill-text-muted" font-size="7.5" font-family="var(--font-mono)">{b.name.slice(0, 5)}</text>
-			</g>
-		{/each}
-
-		<!-- ── Local env zone ────────────────────────────────────────── -->
-
-		<!-- Zone background tint (darker, more distinct) -->
-		<rect x={ZONE_X} y={0} width={W - ZONE_X} height={H} class="fill-bg-surface" opacity="0.3" />
-
-		<!-- Vertical separator -->
-		<line
-			x1={ZONE_X} y1={16} x2={ZONE_X} y2={H - 16}
-			stroke="var(--color-border)" stroke-width="0.75" stroke-dasharray="3 6" opacity="0.6"
-		/>
-
-		<!-- Zone header -->
-		<text
-			x={ZONE_CX} y={30}
-			text-anchor="middle" font-size="7.5" font-family="var(--font-mono)"
-			class="fill-text-faint" letter-spacing="1.2"
-		>LOCAL ENV</text>
-
-		{#if infra.length > 0}
-			<!-- Connected indicator -->
-			<rect
-				x={ZONE_CX - 22} y={36} width={44} height={14} rx={7}
-				fill={infraConnected > 0 ? 'var(--color-accent)' : 'var(--color-red)'}
-				fill-opacity="0.12"
-				stroke={infraConnected > 0 ? 'var(--color-accent)' : 'var(--color-red)'}
-				stroke-width="0.5" opacity="0.6"
-			/>
-			<circle
-				cx={ZONE_CX - 9} cy={43} r="3"
-				fill={infraConnected > 0 ? 'var(--color-accent)' : 'var(--color-red)'}
-				opacity="0.85"
-			/>
-			<text
-				x={ZONE_CX - 1} y={47}
-				text-anchor="start" font-size="7.5" font-family="var(--font-mono)"
-				fill={infraConnected > 0 ? 'var(--color-accent)' : 'var(--color-red)'}
-				opacity="0.9"
-			>{infraConnected}/{infra.length}</text>
-
-			<!-- Probe rows (up to 9, with taller rows for readability) -->
-			{#each infra as probe, i (probe.kind + probe.host + probe.port)}
-				{@const rowY = ZONE_ROW_START_Y + i * ZONE_ROW_H}
-				{@const color = probeColor(probe)}
-				{@const isHTTP = probe.kind === 'http' || probe.kind === 'https'}
-				<g>
-					<rect
-						x={ZONE_X + 8} y={rowY - 14}
-						width={W - ZONE_X - 14} height={28}
-						rx={4}
-						fill={color} fill-opacity="0.05"
-						stroke={color} stroke-width="0.5"
-						stroke-dasharray={isHTTP ? '3 2' : 'none'}
-						opacity="0.55"
-					/>
-
-					{#if isHTTP && probe.status === 'connected'}
-						<circle cx={ZONE_X + 22} cy={rowY} r="6" fill={color} opacity="0.1">
-							<animate attributeName="r" values="6;10;6" dur="2.5s" repeatCount="indefinite" />
-							<animate attributeName="opacity" values="0.1;0;0.1" dur="2.5s" repeatCount="indefinite" />
-						</circle>
-					{/if}
-					<circle cx={ZONE_X + 22} cy={rowY} r="4" fill={color} opacity="0.88" />
-
-					{#if isHTTP}
-						<rect x={ZONE_X + 32} y={rowY - 7} width={22} height={13} rx={2}
-							fill={color} fill-opacity="0.1" stroke={color} stroke-width="0.4" opacity="0.6" />
-						<text x={ZONE_X + 43} y={rowY + 2.5} text-anchor="middle"
-							font-size="6.5" font-family="var(--font-mono)" fill={color} opacity="0.9">http</text>
-					{/if}
-
-					<text
-						x={isHTTP ? ZONE_X + 60 : ZONE_X + 34}
-						y={rowY + 4}
-						font-size="9" font-family="var(--font-mono)"
-						class="fill-text"
-					>{probe.name.slice(0, isHTTP ? 15 : 18)}</text>
-
-					{#if probe.status === 'connected'}
-						<text
-							x={W - 10} y={rowY + 4}
-							text-anchor="end" font-size="8" font-family="var(--font-mono)"
-							class="fill-text-faint"
-						>{Math.round(probe.latencyMs)}ms</text>
-					{:else}
-						<text
-							x={W - 10} y={rowY + 4}
-							text-anchor="end" font-size="8" font-family="var(--font-mono)"
-							fill="var(--color-red)" opacity="0.65"
-						>{probe.status}</text>
-					{/if}
-				</g>
-			{/each}
-		{:else}
-			<text
-				x={ZONE_CX} y={H / 2 - 10}
-				text-anchor="middle" font-size="9" font-family="var(--font-mono)"
-				class="fill-text-faint"
-			>no services</text>
-			<text
-				x={ZONE_CX} y={H / 2 + 10}
-				text-anchor="middle" font-size="7.5" font-family="var(--font-mono)"
-				class="fill-text-faint" opacity="0.5"
-			>configure in settings</text>
-		{/if}
-	{:else}
-		<text x={CX} y={H / 2} text-anchor="middle" class="fill-text-faint" font-size="12" font-family="var(--font-mono)">
-			{dashboard.loading ? 'Connecting...' : 'No data'}
-		</text>
-	{/if}
-</svg>
+<style>
+  svg { shape-rendering: geometricPrecision; }
+  g, rect, path { transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1), height 0.6s ease; }
+</style>

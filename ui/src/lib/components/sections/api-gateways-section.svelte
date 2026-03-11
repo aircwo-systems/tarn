@@ -1,11 +1,13 @@
 <script lang="ts">
-	import { GlobeHemisphereWestIcon } from 'phosphor-svelte';
+	import { GlobeHemisphereWestIcon, DownloadSimpleIcon, StackIcon } from 'phosphor-svelte';
+	import { fly } from 'svelte/transition';
 	import { TableRow, TableCell } from '$lib/components/ui/table';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import ResourceTable from '$lib/components/common/resource-table.svelte';
 	import ArnCell from '$lib/components/common/arn-cell.svelte';
 	import GatewayDetailsPanel from '$lib/components/topology/gateway-details-panel.svelte';
-	import { getDashboard, getDashboardFilters, matchesTagFilter } from '$lib/state.svelte';
+	import { getDashboard, getDashboardFilters, matchesTagFilter, refresh } from '$lib/state.svelte';
+	import { buildCombinedCollection, downloadJSON } from '$lib/postman';
 
 	const dashboard = getDashboard();
 	const filters = getDashboardFilters();
@@ -35,9 +37,13 @@
 			selectGateway(apiId);
 		}
 	}
+
+	function downloadAll() {
+		downloadJSON('openstack-all-gateways.postman_collection.json', buildCombinedCollection(gateways));
+	}
 </script>
 
-<div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]">
+<div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_38rem] 2xl:grid-cols-[minmax(0,1fr)_44rem]">
 	<ResourceTable
 		title="API Gateways"
 		count={gateways.length}
@@ -46,6 +52,7 @@
 		emptyMessage="No API Gateways created yet."
 		emptyIcon={GlobeHemisphereWestIcon}
 		columns={['Name', 'Type', 'Stage', 'Routes', 'Integrations']}
+		onRefresh={refresh}
 	>
 		{#each gateways as gateway}
 			<TableRow
@@ -87,3 +94,27 @@
 		</section>
 	{/if}
 </div>
+
+<!-- Combined export — slides in from right edge, rounded left only -->
+{#if gateways.length > 0}
+	<div
+		transition:fly={{ x: 160, duration: 300, opacity: 1 }}
+		class="fixed bottom-8 right-0 z-50 flex items-center gap-4 rounded-l-xl border border-r-0 border-border bg-bg-raised pl-4 pr-5 py-3"
+	>
+		<StackIcon size={13} class="text-text-faint shrink-0" />
+		<div class="leading-tight">
+			<p class="text-xs font-medium text-text">Combined Collection</p>
+			<p class="text-[11px] text-text-faint">
+				{gateways.length} {gateways.length === 1 ? 'gateway' : 'gateways'} · sub-folders per gateway
+			</p>
+		</div>
+		<button
+			type="button"
+			onclick={downloadAll}
+			class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-accent-strong bg-accent-muted px-3 py-1.5 text-xs text-accent hover:bg-accent/20 transition-colors"
+		>
+			<DownloadSimpleIcon size={12} />
+			Download all
+		</button>
+	</div>
+{/if}
