@@ -1,4 +1,11 @@
-export type NodeKind = 'gateway' | 'queue' | 'bucket' | 'function' | 'secret' | 'extension' | 'infra';
+export type NodeKind =
+  | "gateway"
+  | "queue"
+  | "bucket"
+  | "function"
+  | "secret"
+  | "extension"
+  | "infra";
 export type ConnectionNode = {
   id: string;
   x: number;

@@ -31,10 +31,10 @@ export interface OverviewResponse {
 }
 
 export interface TraceSpan {
-  kind: 'gateway' | 'lambda' | 'queue' | 'dlq' | string;
+  kind: "gateway" | "lambda" | "queue" | "dlq" | string;
   name: string;
   durationMs: number;
-  status: 'ok' | 'error' | 'client_error' | string;
+  status: "ok" | "error" | "client_error" | string;
   meta?: Record<string, string>;
 }
 
@@ -55,7 +55,7 @@ export interface InfraProbe {
   kind: string;
   host: string;
   port: number;
-  status: 'connected' | 'unreachable' | 'refused' | string;
+  status: "connected" | "unreachable" | "refused" | string;
   latencyMs: number;
   version?: string;
   error?: string;
@@ -90,6 +90,83 @@ export interface RouteDetail {
   integrationTarget?: string;
   requestTemplates?: Record<string, string>;
   requestParameters?: Record<string, string>;
+  /** v1 method-level params: "method.request.header.X-Foo" → required */
+  methodRequestParams?: Record<string, boolean>;
+  /** pre-populated body from the Lambda's events/ folder */
+  bodyExample?: unknown;
+}
+
+export interface ProbeBody {
+  label: string;
+  body?: string;       // JSON string, omitted for nil body
+  headers?: Record<string, string>;
+  malformed?: boolean;
+}
+
+export interface SchemaField {
+  name: string;
+  kind: 'string' | 'number' | 'bool' | 'enum' | 'literal' | 'array' | 'object' | 'unknown';
+  format?: 'datetime' | 'email' | 'url' | 'uuid' | '';
+  optional?: boolean;
+  enum?: string[];
+  literal?: string;
+}
+
+export interface SchemaExport {
+  name: string;
+  fields: SchemaField[];
+  isHeader: boolean;
+}
+
+export interface ScanMatch {
+  functionName: string;
+  dir: string;
+  schemasTs?: string;
+  eventFiles?: string[];
+  score: number;
+  schemas?: SchemaExport[];
+  probeBodies?: ProbeBody[];
+  /** Method-specific probe sets — preferred over probeBodies when available. */
+  probesByMethod?: Record<string, ProbeBody[]>;
+}
+
+export interface ScanSourceResponse {
+  matches: ScanMatch[];
+  unmatched: string[];
+  discovered: string[];
+}
+
+export interface ChaosRoundExample {
+  statusCode: number;
+  body?: string;
+  headers?: Record<string, string>;
+  durationMs: number;
+  /** Headers sent in this probe attempt */
+  requestHeaders?: Record<string, string>;
+  /** Body sent in this probe attempt */
+  requestBody?: string;
+  /** Probe label from schema-driven mode (e.g. "baseline", "enum:status=ACTIVE") */
+  label?: string;
+}
+
+export interface ChaosRound {
+  routeKey: string;
+  method: string;
+  path: string;
+  statusCode?: number;
+  headers?: Record<string, string>;
+  body?: string;
+  durationMs: number;
+  /** >1 when iterative header/body discovery was used */
+  attempts?: number;
+  error?: string;
+  /** All probe attempts — embedded as named Postman example responses */
+  examples?: ChaosRoundExample[];
+  /** Probe hit an enum validation error — user needs to supply the correct value */
+  needsInput?: boolean;
+  stuckFields?: string[];
+  /** Known valid options for each stuck enum field */
+  stuckOptions?: Record<string, string[]>;
 }
 
 export interface GatewaySummary {
@@ -149,7 +226,7 @@ export interface QueueSummary {
 export interface QueueMessageSummary {
   id: string;
   body: string;
-  state: 'visible' | 'inflight' | 'delayed' | string;
+  state: "visible" | "inflight" | "delayed" | string;
   sentAt: number;
   receiveCount: number;
 }
@@ -173,7 +250,7 @@ export interface SecretSummary {
 export interface SecretValueResult {
   name: string;
   value: string;
-  valueType: 'string' | 'binary' | 'empty' | string;
+  valueType: "string" | "binary" | "empty" | string;
 }
 
 export interface BucketSummary {
