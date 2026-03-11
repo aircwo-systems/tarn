@@ -232,6 +232,37 @@ func (s *Service) DeleteMethod(apiID, resourceID, httpMethod string) error {
 	return s.store.DeleteMethod(apiID, resourceID, strings.ToUpper(httpMethod))
 }
 
+// PatchMethod applies JSON Patch operations (RFC 6902) to an existing method.
+// Terraform calls this as UpdateMethod when request_parameters change.
+func (s *Service) PatchMethod(apiID, resourceID, httpMethod string, ops []PatchOp) (*types.RestMethod, error) {
+	httpMethod = strings.ToUpper(httpMethod)
+	method, err := s.store.GetMethod(apiID, resourceID, httpMethod)
+	if err != nil {
+		return nil, fmt.Errorf("method not found: %w", err)
+	}
+	for _, op := range ops {
+		path := op.Path
+		switch {
+		case strings.HasPrefix(path, "/requestParameters/"):
+			key := jsonPointerDecode(strings.TrimPrefix(path, "/requestParameters/"))
+			if op.Op == "remove" {
+				delete(method.RequestParameters, key)
+			} else {
+				if method.RequestParameters == nil {
+					method.RequestParameters = map[string]bool{}
+				}
+				method.RequestParameters[key] = op.Value != "false"
+			}
+		case path == "/authorizationType" && (op.Op == "replace" || op.Op == "add"):
+			method.AuthorizationType = op.Value
+		}
+	}
+	if err := s.store.PutMethod(apiID, method); err != nil {
+		return nil, err
+	}
+	return s.store.GetMethod(apiID, resourceID, httpMethod)
+}
+
 // PutIntegration creates or replaces an integration on a method.
 func (s *Service) PutIntegration(apiID, resourceID, httpMethod string, intType, intHTTPMethod, uri string, requestParameters map[string]string, requestTemplates map[string]string) (*types.RestIntegration, error) {
 	if intType == "" {
@@ -243,12 +274,12 @@ func (s *Service) PutIntegration(apiID, resourceID, httpMethod string, intType, 
 	}
 
 	integ := &types.RestIntegration{
-		Type:             intType,
-		HTTPMethod:       intHTTPMethod,
-		URI:              uri,
-		ResourceID:       resourceID,
-		RestAPIID:        apiID,
-		MethodHTTPMethod: httpMethod,
+		Type:              intType,
+		HTTPMethod:        intHTTPMethod,
+		URI:               uri,
+		ResourceID:        resourceID,
+		RestAPIID:         apiID,
+		MethodHTTPMethod:  httpMethod,
 		RequestParameters: requestParameters,
 		RequestTemplates:  requestTemplates,
 	}
@@ -299,11 +330,12 @@ func (s *Service) PatchIntegration(apiID, resourceID, httpMethod string, ops []P
 		case path == "/uri":
 			integ.URI = op.Value
 			// Re-resolve backend name from updated URI
-			if integ.Type == integrationTypeAWSProxy {
+			switch integ.Type {
+			case integrationTypeAWSProxy:
 				if _, fnName, err := parseLambdaIntegrationURI(op.Value); err == nil {
 					integ.LambdaFunctionName = fnName
 				}
-			} else if integ.Type == integrationTypeAWS {
+			case integrationTypeAWS:
 				if q, err := parseSQSIntegrationPath(op.Value); err == nil {
 					integ.SQSQueueName = q
 				}
@@ -1031,21 +1063,21 @@ func buildV1LambdaProxyEvent(input *InvokeInput, resource *types.RestResource, p
 		body = string(input.Body)
 	}
 	event := map[string]any{
-		"version":         "1.0",
-		"resource":        resource.Path,
-		"path":            normalizePath(input.Path),
-		"httpMethod":      strings.ToUpper(input.Method),
-		"headers":         headers,
+		"version":               "1.0",
+		"resource":              resource.Path,
+		"path":                  normalizePath(input.Path),
+		"httpMethod":            strings.ToUpper(input.Method),
+		"headers":               headers,
 		"queryStringParameters": qs,
-		"pathParameters":  pathParams,
-		"body":            body,
-		"isBase64Encoded": false,
+		"pathParameters":        pathParams,
+		"body":                  body,
+		"isBase64Encoded":       false,
 		"requestContext": map[string]any{
-			"resourceId":  resource.ID,
+			"resourceId":   resource.ID,
 			"resourcePath": resource.Path,
-			"httpMethod":  strings.ToUpper(input.Method),
-			"apiId":       apiID,
-			"stage":       stage,
+			"httpMethod":   strings.ToUpper(input.Method),
+			"apiId":        apiID,
+			"stage":        stage,
 		},
 	}
 	if len(pathParams) == 0 {

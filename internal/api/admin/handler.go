@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openstack-project/openstack/internal/collection"
 	apigatewaysvc "github.com/openstack-project/openstack/internal/apigateway"
 	apigatewayv1svc "github.com/openstack-project/openstack/internal/apigatewayv1"
 	"github.com/openstack-project/openstack/internal/config"
@@ -109,13 +110,15 @@ type s3BucketSummary struct {
 }
 
 type routeDetailSummary struct {
-	RouteKey          string            `json:"routeKey"`
-	Method            string            `json:"method,omitempty"`
-	Path              string            `json:"path,omitempty"`
-	IntegrationType   string            `json:"integrationType,omitempty"`
-	IntegrationTarget string            `json:"integrationTarget,omitempty"`
-	RequestTemplates  map[string]string `json:"requestTemplates,omitempty"`
-	RequestParameters map[string]string `json:"requestParameters,omitempty"`
+	RouteKey            string            `json:"routeKey"`
+	Method              string            `json:"method,omitempty"`
+	Path                string            `json:"path,omitempty"`
+	IntegrationType     string            `json:"integrationType,omitempty"`
+	IntegrationTarget   string            `json:"integrationTarget,omitempty"`
+	RequestTemplates    map[string]string `json:"requestTemplates,omitempty"`
+	RequestParameters   map[string]string `json:"requestParameters,omitempty"`
+	MethodRequestParams map[string]bool   `json:"methodRequestParams,omitempty"` // v1 method-level: "method.request.header.X-Foo": required
+	BodyExample         json.RawMessage   `json:"bodyExample,omitempty"`         // best-match event from events/ folder
 }
 
 type gatewaySummary struct {
@@ -200,6 +203,77 @@ type secretSummary struct {
 	TagCount        int               `json:"tagCount"`
 	CreatedDate     time.Time         `json:"createdDate"`
 	LastChangedDate time.Time         `json:"lastChangedDate"`
+}
+
+// pickBodyExample selects the most relevant event file for a given HTTP method
+// from the map returned by lambda.GetEventExamples (filename → raw JSON).
+//
+// Priority:
+//  1. Filename starts with the lowercase method (e.g. "post-batch" for POST).
+//  2. File is a full API Gateway proxy event whose httpMethod matches.
+//  3. Any plain JSON object (not a proxy event).
+//
+// For proxy events the body field is extracted (and decoded if it is a JSON string).
+func pickBodyExample(events map[string]json.RawMessage, method string) json.RawMessage {
+	if len(events) == 0 {
+		return nil
+	}
+	lm := strings.ToLower(method)
+
+	extractProxyBody := func(data json.RawMessage) json.RawMessage {
+		var proxy struct {
+			HTTPMethod string          `json:"httpMethod"`
+			Body       json.RawMessage `json:"body"`
+		}
+		if json.Unmarshal(data, &proxy) != nil || !strings.EqualFold(proxy.HTTPMethod, method) {
+			return nil
+		}
+		if len(proxy.Body) == 0 {
+			return nil
+		}
+		// body is sometimes a JSON-encoded string — decode it
+		var bodyStr string
+		if json.Unmarshal(proxy.Body, &bodyStr) == nil && json.Valid([]byte(bodyStr)) {
+			return json.RawMessage(bodyStr)
+		}
+		if json.Valid(proxy.Body) {
+			return proxy.Body
+		}
+		return nil
+	}
+
+	isProxyEvent := func(data json.RawMessage) bool {
+		var check struct{ HTTPMethod string `json:"httpMethod"` }
+		return json.Unmarshal(data, &check) == nil && check.HTTPMethod != ""
+	}
+
+	// Pass 1: filename prefix match (post-batch.json, patch-status.json …)
+	for name, data := range events {
+		if !strings.HasPrefix(strings.ToLower(name), lm) {
+			continue
+		}
+		if body := extractProxyBody(data); body != nil {
+			return body
+		}
+		if !isProxyEvent(data) {
+			return data
+		}
+	}
+
+	// Pass 2: proxy event with matching httpMethod
+	for _, data := range events {
+		if body := extractProxyBody(data); body != nil {
+			return body
+		}
+	}
+
+	// Pass 3: any plain JSON object
+	for _, data := range events {
+		if !isProxyEvent(data) {
+			return data
+		}
+	}
+	return nil
 }
 
 // Overview returns a dashboard-friendly snapshot of current resources.
@@ -451,6 +525,9 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		for _, res := range resources {
 			resourcePathByID[res.ID] = res.Path
 		}
+		// Cache event examples per Lambda function to avoid re-reading the zip
+		// for every route that targets the same function.
+		lambdaEvents := make(map[string]map[string]json.RawMessage)
 		v1RouteDetails := make([]routeDetailSummary, 0, len(integrations))
 		for _, integ := range integrations {
 			resPath := resourcePathByID[integ.ResourceID]
@@ -468,6 +545,19 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			}
 			if len(integ.RequestTemplates) > 0 {
 				detail.RequestTemplates = integ.RequestTemplates
+			}
+			// Fetch method-level request parameters (required headers, query params, body flag).
+			if method, err := h.apigwv1.GetMethod(v1api.ID, integ.ResourceID, integ.MethodHTTPMethod); err == nil && len(method.RequestParameters) > 0 {
+				detail.MethodRequestParams = method.RequestParameters
+			}
+			// Populate body example from the Lambda's events/ folder.
+			if integ.LambdaFunctionName != "" {
+				if _, cached := lambdaEvents[integ.LambdaFunctionName]; !cached {
+					lambdaEvents[integ.LambdaFunctionName] = h.lambda.GetEventExamples(integ.LambdaFunctionName)
+				}
+				if example := pickBodyExample(lambdaEvents[integ.LambdaFunctionName], integ.MethodHTTPMethod); example != nil {
+					detail.BodyExample = example
+				}
 			}
 			v1RouteDetails = append(v1RouteDetails, detail)
 		}
@@ -863,6 +953,136 @@ func (h *Handler) Infrastructure(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(results)
+}
+
+// RunChaos accepts a list of routes and fires one probe per route,
+// streaming each ProbeRound result as an NDJSON line.
+func (h *Handler) RunChaos(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		InvokeBase string `json:"invokeBase"`
+		Routes     []struct {
+			RouteKey        string                   `json:"routeKey"`
+			Method          string                   `json:"method"`
+			Path            string                   `json:"path"`
+			SeedBody        json.RawMessage          `json:"seedBody,omitempty"`
+			RequiredHeaders map[string]string        `json:"requiredHeaders,omitempty"`
+			FieldOverrides  map[string]interface{}   `json:"fieldOverrides,omitempty"`
+			ProbeBodies     []collection.ProbeBody   `json:"probeBodies,omitempty"`
+		} `json:"routes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	if req.InvokeBase == "" || len(req.Routes) == 0 {
+		writeError(w, http.StatusBadRequest, "invokeBase and routes are required")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	specs := make([]collection.RouteSpec, len(req.Routes))
+	for i, rt := range req.Routes {
+		specs[i] = collection.RouteSpec{
+			RouteKey:        rt.RouteKey,
+			Method:          rt.Method,
+			Path:            rt.Path,
+			InvokeBase:      req.InvokeBase,
+			SeedBody:        rt.SeedBody,
+			RequiredHeaders: rt.RequiredHeaders,
+			FieldOverrides:  rt.FieldOverrides,
+			ProbeBodies:     rt.ProbeBodies,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	ch := make(chan collection.ProbeRound, len(specs))
+	go func() {
+		collection.RunProbes(r.Context(), specs, ch)
+		close(ch)
+	}()
+
+	enc := json.NewEncoder(w)
+	for round := range ch {
+		if err := enc.Encode(round); err != nil {
+			return
+		}
+		flusher.Flush()
+	}
+}
+
+// ScanChaosSource scans a local directory for Lambda project directories,
+// parses any schemas.ts files found, and generates probe bodies for each
+// function matched to the provided function names.
+func (h *Handler) ScanChaosSource(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		BaseDir       string   `json:"baseDir"`
+		FunctionNames []string `json:"functionNames"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	if req.BaseDir == "" {
+		writeError(w, http.StatusBadRequest, "baseDir is required")
+		return
+	}
+
+	result, err := collection.ScanLocalSource(req.BaseDir, req.FunctionNames)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "scan failed: "+err.Error())
+		return
+	}
+
+	type matchResult struct {
+		collection.ScanMatch
+		Schemas        []collection.SchemaExport         `json:"schemas,omitempty"`
+		ProbeBodies    []collection.ProbeBody            `json:"probeBodies,omitempty"`
+		ProbesByMethod map[string][]collection.ProbeBody `json:"probesByMethod,omitempty"`
+	}
+
+	matches := make([]matchResult, 0, len(result.Matches))
+	for _, m := range result.Matches {
+		mr := matchResult{ScanMatch: m}
+
+		if m.SchemasTs != "" {
+			exports, err := collection.ParseSchemasFile(m.SchemasTs)
+			if err == nil {
+				mr.Schemas = exports
+				// Try method-specific probe generation first (eliminates duplicates).
+				byMethod := collection.GenerateProbesByMethod(exports, m.EventFiles)
+				if len(byMethod) > 0 {
+					mr.ProbesByMethod = byMethod
+				}
+				// Always generate the combined fallback for routes whose method
+				// doesn't match any schema naming convention.
+				mr.ProbeBodies = collection.GenerateProbesFromExports(exports, m.EventFiles)
+			}
+		}
+		// Always include event-file probes and structural probes (malformed/empty),
+		// even when no schema was found.
+		if len(mr.ProbeBodies) == 0 {
+			mr.ProbeBodies = collection.GenerateProbes(nil, m.EventFiles)
+		}
+
+		matches = append(matches, mr)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"matches":    matches,
+		"unmatched":  result.Unmatched,
+		"discovered": result.Discovered,
+	})
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {

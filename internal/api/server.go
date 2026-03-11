@@ -96,6 +96,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /_openstack/admin/logs/groups/{name...}", s.admin.LogGroupDetail)
 	mux.HandleFunc("GET /_openstack/admin/logs/events/{name...}", s.admin.LogEvents)
 	mux.HandleFunc("GET /_openstack/admin/infrastructure", s.admin.Infrastructure)
+	mux.HandleFunc("POST /_openstack/admin/chaos", s.admin.RunChaos)
+	mux.HandleFunc("POST /_openstack/admin/chaos/source", s.admin.ScanChaosSource)
 
 	// S3 API — path-style REST XML protocol
 	// POST is handled via s3PostDispatch to avoid conflict with SQS POST /{account}/{queue}
@@ -130,6 +132,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("PUT /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}", s.apigwv1.PutMethod)
 	mux.HandleFunc("GET /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}", s.apigwv1.GetMethod)
+	mux.HandleFunc("PATCH /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}", s.apigwv1.PatchMethod)
 	mux.HandleFunc("DELETE /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}", s.apigwv1.DeleteMethod)
 
 	mux.HandleFunc("PUT /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}/integration", s.apigwv1.PutIntegration)
@@ -342,4 +345,12 @@ type statusWriter struct {
 func (w *statusWriter) WriteHeader(status int) {
 	w.status = status
 	w.ResponseWriter.WriteHeader(status)
+}
+
+// Flush delegates to the underlying ResponseWriter if it implements http.Flusher,
+// so that streaming handlers (e.g. NDJSON chaos endpoint) work through this wrapper.
+func (w *statusWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }

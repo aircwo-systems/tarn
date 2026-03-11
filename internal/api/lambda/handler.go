@@ -512,18 +512,18 @@ func (h *Handler) DeleteLayerVersion(w http.ResponseWriter, r *http.Request) {
 // --- Request/Response types ---
 
 type createFunctionRequest struct {
-	FunctionName     string                   `json:"FunctionName"`
-	Runtime          string                   `json:"Runtime"`
-	Handler          string                   `json:"Handler"`
-	Role             string                   `json:"Role"`
-	Description      string                   `json:"Description,omitempty"`
-	Timeout          int                      `json:"Timeout,omitempty"`
-	MemorySize       int                      `json:"MemorySize,omitempty"`
-	Code             *codeInput               `json:"Code,omitempty"`
-	Environment      *envInput                `json:"Environment,omitempty"`
-	Layers           []string                 `json:"Layers,omitempty"`
-	Tags             map[string]string        `json:"Tags,omitempty"`
-	DeadLetterConfig *types.DeadLetterConfig  `json:"DeadLetterConfig,omitempty"`
+	FunctionName     string                  `json:"FunctionName"`
+	Runtime          string                  `json:"Runtime"`
+	Handler          string                  `json:"Handler"`
+	Role             string                  `json:"Role"`
+	Description      string                  `json:"Description,omitempty"`
+	Timeout          int                     `json:"Timeout,omitempty"`
+	MemorySize       int                     `json:"MemorySize,omitempty"`
+	Code             *codeInput              `json:"Code,omitempty"`
+	Environment      *envInput               `json:"Environment,omitempty"`
+	Layers           []string                `json:"Layers,omitempty"`
+	Tags             map[string]string       `json:"Tags,omitempty"`
+	DeadLetterConfig *types.DeadLetterConfig `json:"DeadLetterConfig,omitempty"`
 }
 
 type codeInput struct {

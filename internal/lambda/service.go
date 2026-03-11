@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -231,6 +233,36 @@ func (s *Service) DeleteFunction(ctx context.Context, name string) error {
 		s.logsSvc.LogSystemEvent(logssvc.LevelINFO, fmt.Sprintf("Function deleted: %s", name))
 	}
 	return nil
+}
+
+// GetEventExamples reads *.json files from the events/ directory inside a
+// function's deployed zip and returns them keyed by filename (without extension).
+// It handles both raw proxy events ({"httpMethod":...,"body":...}) and plain
+// JSON objects. Returns nil when no events directory exists or code is absent.
+func (s *Service) GetEventExamples(name string) map[string]json.RawMessage {
+	extractDir, err := s.store.ExtractCode(name)
+	if err != nil {
+		return nil
+	}
+	entries, err := os.ReadDir(filepath.Join(extractDir, "events"))
+	if err != nil {
+		return nil
+	}
+	result := make(map[string]json.RawMessage)
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(extractDir, "events", e.Name()))
+		if err != nil || !json.Valid(data) {
+			continue
+		}
+		result[strings.TrimSuffix(e.Name(), ".json")] = json.RawMessage(data)
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
 }
 
 // UpdateFunctionCode replaces function code.

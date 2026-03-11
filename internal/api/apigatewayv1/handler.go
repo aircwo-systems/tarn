@@ -174,6 +174,28 @@ func (h *Handler) DeleteMethod(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// PatchMethod handles PATCH /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}.
+// Terraform calls this as UpdateMethod when request_parameters change on an existing method.
+func (h *Handler) PatchMethod(w http.ResponseWriter, r *http.Request) {
+	apiID := r.PathValue("restApiId")
+	resourceID := r.PathValue("resourceId")
+	httpMethod := r.PathValue("httpMethod")
+	var req struct {
+		PatchOperations []svc.PatchOp `json:"patchOperations"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
+		return
+	}
+	method, err := h.svc.PatchMethod(apiID, resourceID, httpMethod, req.PatchOperations)
+	if err != nil {
+		status, code := errorStatus(err)
+		writeError(w, status, code, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, method)
+}
+
 // --- Integrations ---
 
 // PutIntegration handles PUT /restapis/{restApiId}/resources/{resourceId}/methods/{httpMethod}/integration.
