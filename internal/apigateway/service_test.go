@@ -2,6 +2,8 @@ package apigateway
 
 import (
 	"fmt"
+	"net/http"
+	"net/url"
 	"testing"
 
 	"github.com/openstack-project/openstack/internal/config"
@@ -248,4 +250,183 @@ func newTestService(t *testing.T) *Service {
 	}
 
 	return NewService(cfg, lambdaSvc, nil)
+}
+
+func TestInvokeSQSIntegration_MapsFIFORequestParameters(t *testing.T) {
+	tests := []struct {
+		name      string
+		groupExpr string
+		path      map[string]string
+		headers   http.Header
+		query     url.Values
+		body      string
+		wantBody  string
+		wantGroup string
+		wantDedup string
+	}{
+		{
+			name:      "group from path",
+			groupExpr: "$request.path.aggregateId",
+			path:      map[string]string{"aggregateId": "agg-path"},
+			headers:   http.Header{},
+			query:     url.Values{},
+			body:      `{"payload":"payload-path","dedup":"dedup-path"}`,
+			wantBody:  "payload-path",
+			wantGroup: "agg-path",
+			wantDedup: "dedup-path",
+		},
+		{
+			name:      "group from header",
+			groupExpr: "$request.header.x-group-id",
+			path:      nil,
+			headers:   http.Header{"X-Group-Id": []string{"agg-header"}},
+			query:     url.Values{},
+			body:      `{"payload":"payload-header","dedup":"dedup-header"}`,
+			wantBody:  "payload-header",
+			wantGroup: "agg-header",
+			wantDedup: "dedup-header",
+		},
+		{
+			name:      "group from query",
+			groupExpr: "$request.querystring.group",
+			path:      nil,
+			headers:   http.Header{},
+			query:     url.Values{"group": []string{"agg-query"}},
+			body:      `{"payload":"payload-query","dedup":"dedup-query"}`,
+			wantBody:  "payload-query",
+			wantGroup: "agg-query",
+			wantDedup: "dedup-query",
+		},
+		{
+			name:      "group from body field",
+			groupExpr: "$request.body.groupId",
+			path:      nil,
+			headers:   http.Header{},
+			query:     url.Values{},
+			body:      `{"payload":"payload-body","groupId":"agg-body","dedup":"dedup-body"}`,
+			wantBody:  "payload-body",
+			wantGroup: "agg-body",
+			wantDedup: "dedup-body",
+		},
+		{
+			name:      "group from literal",
+			groupExpr: "'agg-literal'",
+			path:      nil,
+			headers:   http.Header{},
+			query:     url.Values{},
+			body:      `{"payload":"payload-literal","dedup":"dedup-literal"}`,
+			wantBody:  "payload-literal",
+			wantGroup: "agg-literal",
+			wantDedup: "dedup-literal",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotQueue, gotBody, gotGroup, gotDedup string
+			svc := &Service{
+				sqsSend: func(queueName, body, groupID, dedupID string) (string, string, error) {
+					gotQueue, gotBody, gotGroup, gotDedup = queueName, body, groupID, dedupID
+					return "m-1", "md5-1", nil
+				},
+			}
+
+			integration := &types.APIGatewayIntegration{
+				SQSQueueName: "orders.fifo",
+				RequestParameters: map[string]string{
+					"MessageBody":            "$request.body.payload",
+					"MessageGroupId":         tc.groupExpr,
+					"MessageDeduplicationId": "$request.body.dedup",
+				},
+			}
+			input := &InvokeInput{
+				Headers: tc.headers,
+				Query:   tc.query,
+				Body:    []byte(tc.body),
+			}
+
+			out, err := svc.invokeSQSIntegration(integration, input, tc.path)
+			if err != nil {
+				t.Fatalf("invokeSQSIntegration: %v", err)
+			}
+			if out.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want %d", out.StatusCode, http.StatusOK)
+			}
+			if gotQueue != "orders.fifo" {
+				t.Fatalf("queue = %q, want %q", gotQueue, "orders.fifo")
+			}
+			if gotBody != tc.wantBody {
+				t.Fatalf("body = %q, want %q", gotBody, tc.wantBody)
+			}
+			if gotGroup != tc.wantGroup {
+				t.Fatalf("groupId = %q, want %q", gotGroup, tc.wantGroup)
+			}
+			if gotDedup != tc.wantDedup {
+				t.Fatalf("dedupId = %q, want %q", gotDedup, tc.wantDedup)
+			}
+		})
+	}
+}
+
+func TestInvokeSQSIntegration_DefaultsRemainBackwardCompatible(t *testing.T) {
+	t.Run("only MessageBody is configured", func(t *testing.T) {
+		var gotBody, gotGroup, gotDedup string
+		svc := &Service{
+			sqsSend: func(queueName, body, groupID, dedupID string) (string, string, error) {
+				gotBody, gotGroup, gotDedup = body, groupID, dedupID
+				return "m-2", "md5-2", nil
+			},
+		}
+
+		integration := &types.APIGatewayIntegration{
+			SQSQueueName: "orders-standard",
+			RequestParameters: map[string]string{
+				"MessageBody": "$request.body",
+			},
+		}
+		input := &InvokeInput{
+			Headers: http.Header{},
+			Query:   url.Values{},
+			Body:    []byte(`{"hello":"world"}`),
+		}
+
+		if _, err := svc.invokeSQSIntegration(integration, input, nil); err != nil {
+			t.Fatalf("invokeSQSIntegration: %v", err)
+		}
+		if gotBody != `{"hello":"world"}` {
+			t.Fatalf("body = %q, want %q", gotBody, `{"hello":"world"}`)
+		}
+		if gotGroup != "" {
+			t.Fatalf("groupId = %q, want empty", gotGroup)
+		}
+		if gotDedup != "" {
+			t.Fatalf("dedupId = %q, want empty", gotDedup)
+		}
+	})
+
+	t.Run("MessageBody defaults to raw body when unspecified", func(t *testing.T) {
+		var gotBody string
+		svc := &Service{
+			sqsSend: func(queueName, body, groupID, dedupID string) (string, string, error) {
+				gotBody = body
+				return "m-3", "md5-3", nil
+			},
+		}
+		integration := &types.APIGatewayIntegration{
+			SQSQueueName:      "orders-standard",
+			RequestParameters: map[string]string{"MessageGroupId": "'ignored'"},
+		}
+		input := &InvokeInput{
+			Headers: http.Header{},
+			Query:   url.Values{},
+			Body:    []byte(`{"raw":true}`),
+		}
+
+		if _, err := svc.invokeSQSIntegration(integration, input, nil); err != nil {
+			t.Fatalf("invokeSQSIntegration: %v", err)
+		}
+		if gotBody != `{"raw":true}` {
+			t.Fatalf("body = %q, want %q", gotBody, `{"raw":true}`)
+		}
+	})
 }

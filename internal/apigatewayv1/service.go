@@ -993,42 +993,72 @@ func extractVTLExpr(s string) (string, int) {
 	if len(s) == 0 || s[0] != '$' {
 		return "", 0
 	}
-	// Handle function call: $something(...)
+	// Handle chained calls/paths, e.g.:
+	//   $input.params().path.get('id')
+	// and nested wrappers, e.g.:
+	//   $util.urlEncode($util.toJson($payload))
 	depth := 0
+	inQuote := byte(0)
 	i := 1
 	for i < len(s) {
 		c := s[i]
-		if c == '(' {
-			depth++
-		} else if c == ')' {
-			depth--
-			if depth == 0 {
-				return s[:i+1], i + 1
+
+		if inQuote != 0 {
+			if c == inQuote && s[i-1] != '\\' {
+				inQuote = 0
 			}
-		} else if depth == 0 && !isVTLIdentChar(c) {
-			break
+			i++
+			continue
+		}
+
+		switch c {
+		case '\'', '"':
+			if depth == 0 {
+				return s[:i], i
+			}
+			inQuote = c
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			} else {
+				return s[:i], i
+			}
+		default:
+			if depth == 0 && isVTLExprTerminator(c) {
+				return s[:i], i
+			}
 		}
 		i++
 	}
-	if depth == 0 {
+
+	if depth == 0 && inQuote == 0 {
 		return s[:i], i
 	}
 	return "", 0
 }
 
-func isVTLIdentChar(c byte) bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '\'' || c == '"'
+func isVTLExprTerminator(c byte) bool {
+	switch c {
+	case ' ', '\t', '\r', '\n', '&', ',', ';', '{', '}', '[', ']', '+', '-', '*', '/', '%', '?', ':', '=', '!', '<', '>', '|', '\\', '\'', '"':
+		return true
+	default:
+		return false
+	}
 }
 
 func extractStringArg(expr string) string {
-	start := strings.Index(expr, "(")
+	start := strings.LastIndex(expr, "(")
 	end := strings.LastIndex(expr, ")")
 	if start < 0 || end <= start {
 		return ""
 	}
 	inner := strings.TrimSpace(expr[start+1 : end])
-	inner = strings.Trim(inner, `'"`)
-	return inner
+	if len(inner) >= 2 && ((inner[0] == '\'' && inner[len(inner)-1] == '\'') || (inner[0] == '"' && inner[len(inner)-1] == '"')) {
+		return inner[1 : len(inner)-1]
+	}
+	return strings.Trim(inner, `'"`)
 }
 
 func extractJSONPath(body []byte, path string) string {

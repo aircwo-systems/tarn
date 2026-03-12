@@ -1,18 +1,22 @@
 package apigatewayv1
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/url"
 	"testing"
+	"time"
+
+	"github.com/openstack-project/openstack/pkg/types"
 )
 
 func TestEvaluateVTL_MultilineSetPayloadToJson(t *testing.T) {
 	input := &InvokeInput{
 		Headers: http.Header{
-			"service-name":   []string{"orders-service"},
-			"correlation-id": []string{"corr-123"},
-			"channel":        []string{"web"},
+			"Service-Name":   []string{"orders-service"},
+			"Correlation-Id": []string{"corr-123"},
+			"Channel":        []string{"web"},
 		},
 		Query: url.Values{},
 		Body:  []byte(`{"ignored":true}`),
@@ -104,4 +108,109 @@ func TestNormalizeQueryParams_HandlesIndentedKeys(t *testing.T) {
 	if got := getQueryParam(params, "MessageBody"); got != `{"ok":true}` {
 		t.Fatalf("MessageBody = %q, want %q", got, `{"ok":true}`)
 	}
+}
+
+func TestEvaluateVTL_ChainedGetExpressionsResolveFinalArgument(t *testing.T) {
+	input := &InvokeInput{
+		Headers: http.Header{"X-Service": []string{"billing"}},
+		Query:   url.Values{"dedup": []string{"dedup-99"}},
+		Body:    []byte(`{}`),
+	}
+	pathParams := map[string]string{"aggregateId": "agg-99"}
+
+	tmpl := `Action=SendMessage&MessageGroupId=$util.urlEncode($input.params().path.get('aggregateId'))&MessageDeduplicationId=$util.urlEncode($input.params().querystring.get('dedup'))&MessageBody=$util.urlEncode($input.params().header.get('x-service'))`
+
+	result := evaluateVTL(tmpl, input, pathParams)
+	params, err := url.ParseQuery(result)
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+
+	if got := params.Get("MessageGroupId"); got != "agg-99" {
+		t.Fatalf("MessageGroupId = %q, want %q", got, "agg-99")
+	}
+	if got := params.Get("MessageDeduplicationId"); got != "dedup-99" {
+		t.Fatalf("MessageDeduplicationId = %q, want %q", got, "dedup-99")
+	}
+	if got := params.Get("MessageBody"); got != "billing" {
+		t.Fatalf("MessageBody = %q, want %q", got, "billing")
+	}
+}
+
+func TestInvokeAWSIntegration_UsesTemplateFallbackAndForwardsFIFOFields(t *testing.T) {
+	t.Run("template fallback forwards group and dedup", func(t *testing.T) {
+		var gotQueue, gotBody, gotGroup, gotDedup string
+		svc := &Service{
+			sqsSend: func(queueName, body, groupId, dedupId string) (string, string, error) {
+				gotQueue, gotBody, gotGroup, gotDedup = queueName, body, groupId, dedupId
+				return "m-1", "md5-1", nil
+			},
+		}
+
+		input := &InvokeInput{
+			Headers: http.Header{
+				"Content-Type": []string{"application/vnd.openstack+json; charset=utf-8"},
+				"X-Dedup-Id":   []string{"dedup-42"},
+			},
+			Query: url.Values{},
+			Body:  []byte(`{"event":"created"}`),
+		}
+		pathParams := map[string]string{"aggregateId": "agg-42"}
+		integ := &types.RestIntegration{
+			SQSQueueName: "orders.fifo",
+			RequestTemplates: map[string]string{
+				"application/json": `#set($aggregateId = $input.params().path.get('aggregateId'))
+#set($dedup = $input.params().header.get('x-dedup-id'))
+Action=SendMessage&MessageGroupId=$util.urlEncode($aggregateId)&MessageDeduplicationId=$util.urlEncode($dedup)&MessageBody=$util.urlEncode($input.body)`,
+			},
+		}
+
+		out, err := svc.invokeAWSIntegration(context.Background(), nil, input, integ, pathParams, time.Now())
+		if err != nil {
+			t.Fatalf("invokeAWSIntegration: %v", err)
+		}
+		if out.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", out.StatusCode, http.StatusOK)
+		}
+		if gotQueue != "orders.fifo" {
+			t.Fatalf("queueName = %q, want %q", gotQueue, "orders.fifo")
+		}
+		if gotBody != `{"event":"created"}` {
+			t.Fatalf("body = %q, want %q", gotBody, `{"event":"created"}`)
+		}
+		if gotGroup != "agg-42" {
+			t.Fatalf("groupId = %q, want %q", gotGroup, "agg-42")
+		}
+		if gotDedup != "dedup-42" {
+			t.Fatalf("dedupId = %q, want %q", gotDedup, "dedup-42")
+		}
+	})
+
+	t.Run("missing message body falls back to raw request body", func(t *testing.T) {
+		var gotBody string
+		svc := &Service{
+			sqsSend: func(queueName, body, groupId, dedupId string) (string, string, error) {
+				gotBody = body
+				return "m-2", "md5-2", nil
+			},
+		}
+		input := &InvokeInput{
+			Headers: http.Header{"Content-Type": []string{"application/json"}},
+			Query:   url.Values{},
+			Body:    []byte(`{"fallback":true}`),
+		}
+		integ := &types.RestIntegration{
+			SQSQueueName: "orders.fifo",
+			RequestTemplates: map[string]string{
+				"application/json": `Action=SendMessage&MessageGroupId=agg-42`,
+			},
+		}
+
+		if _, err := svc.invokeAWSIntegration(context.Background(), nil, input, integ, nil, time.Now()); err != nil {
+			t.Fatalf("invokeAWSIntegration: %v", err)
+		}
+		if gotBody != `{"fallback":true}` {
+			t.Fatalf("body = %q, want %q", gotBody, `{"fallback":true}`)
+		}
+	})
 }

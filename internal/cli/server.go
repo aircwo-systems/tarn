@@ -121,8 +121,8 @@ func startServer(cfg *config.Config) error {
 	}
 
 	// Initialize API Gateway services (with shared SQS send function)
-	sqsSendFn := func(queueName, body string) (string, string, error) {
-		msg, err := sqsSvc.SendMessage(queueName, body, 0, nil, "", "")
+	sqsSendFn := func(queueName, body, groupId, dedupId string) (string, string, error) {
+		msg, err := sqsSvc.SendMessage(queueName, body, 0, nil, groupId, dedupId)
 		if err != nil {
 			return "", "", err
 		}
