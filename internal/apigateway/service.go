@@ -29,7 +29,7 @@ const (
 )
 
 // SQSSendFunc is a function type for sending SQS messages.
-type SQSSendFunc func(queueName, body string) (messageID, md5 string, err error)
+type SQSSendFunc func(queueName, body, groupID, dedupID string) (messageID, md5 string, err error)
 
 // Service implements API Gateway HTTP API (v2) behavior.
 type Service struct {
@@ -1043,14 +1043,22 @@ func (s *Service) invokeSQSIntegration(integration *types.APIGatewayIntegration,
 		return nil, errors.New("SQS service not configured for AWS integration type")
 	}
 
-	// Resolve message body: use RequestParameters["MessageBody"] expression if present,
-	// otherwise fall back to the raw request body.
+	// Resolve message fields from RequestParameters expressions when provided.
+	// Defaults preserve backward compatibility for standard queues.
 	body := string(input.Body)
+	groupID := ""
+	dedupID := ""
 	if expr, ok := integration.RequestParameters["MessageBody"]; ok {
 		body = evaluateExpression(expr, input, pathParams)
 	}
+	if expr, ok := integration.RequestParameters["MessageGroupId"]; ok {
+		groupID = evaluateExpression(expr, input, pathParams)
+	}
+	if expr, ok := integration.RequestParameters["MessageDeduplicationId"]; ok {
+		dedupID = evaluateExpression(expr, input, pathParams)
+	}
 
-	messageID, md5, err := s.sqsSend(integration.SQSQueueName, body)
+	messageID, md5, err := s.sqsSend(integration.SQSQueueName, body, groupID, dedupID)
 	if err != nil {
 		return nil, fmt.Errorf("SQS send failed: %w", err)
 	}

@@ -624,6 +624,315 @@ func TestAPIGatewayLambdaE2E(t *testing.T) {
 	}
 }
 
+func TestAPIGatewayV1SQSFIFOE2E(t *testing.T) {
+	queueName := "e2e-apigwv1-fifo.fifo"
+	queueURL := endpoint + "/000000000000/" + queueName
+
+	sqsRequest(t, url.Values{
+		"Action":            {"CreateQueue"},
+		"QueueName":         {queueName},
+		"Attribute.1.Name":  {"FifoQueue"},
+		"Attribute.1.Value": {"true"},
+	})
+	defer func() {
+		sqsQueueRequest(t, queueName, url.Values{
+			"Action":   {"DeleteQueue"},
+			"QueueUrl": {queueURL},
+		})
+	}()
+
+	doJSON := func(method, rawURL string, payload any, headers map[string]string) (int, []byte) {
+		t.Helper()
+		var body io.Reader
+		if payload != nil {
+			b, _ := json.Marshal(payload)
+			body = bytes.NewReader(b)
+		}
+		req, err := http.NewRequest(method, rawURL, body)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		if payload != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, respBody
+	}
+
+	status, body := doJSON(http.MethodPost, endpoint+"/restapis", map[string]any{
+		"name": "e2e-v1-fifo-api",
+	}, nil)
+	if status != 201 {
+		t.Fatalf("create rest api failed (%d): %s", status, string(body))
+	}
+
+	var api struct {
+		ID             string `json:"id"`
+		RootResourceID string `json:"rootResourceId"`
+	}
+	if err := json.Unmarshal(body, &api); err != nil {
+		t.Fatalf("decode rest api create: %v", err)
+	}
+	defer func() {
+		req, _ := http.NewRequest(http.MethodDelete, endpoint+"/restapis/"+api.ID, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+
+	createResource := func(parentID, pathPart string) string {
+		t.Helper()
+		status, body := doJSON(http.MethodPost, endpoint+"/restapis/"+api.ID+"/resources/"+parentID, map[string]any{
+			"pathPart": pathPart,
+		}, nil)
+		if status != 201 {
+			t.Fatalf("create resource %q failed (%d): %s", pathPart, status, string(body))
+		}
+		var res struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(body, &res); err != nil {
+			t.Fatalf("decode resource create: %v", err)
+		}
+		return res.ID
+	}
+
+	v1ResourceID := createResource(api.RootResourceID, "v1")
+	eventsResourceID := createResource(v1ResourceID, "events")
+	aggregateResourceID := createResource(eventsResourceID, "{aggregateId}")
+
+	status, body = doJSON(http.MethodPut, endpoint+"/restapis/"+api.ID+"/resources/"+aggregateResourceID+"/methods/DELETE", map[string]any{
+		"authorizationType": "NONE",
+		"requestParameters": map[string]bool{
+			"method.request.path.aggregateId": true,
+		},
+	}, nil)
+	if status != 201 {
+		t.Fatalf("put method failed (%d): %s", status, string(body))
+	}
+
+	requestTemplate := `#set($aggregateId = $input.params().path.get('aggregateId'))
+#set($serviceName = $input.params().header.get('service-name'))
+#set($correlationId = $input.params().header.get('correlation-id'))
+#set($channel = $input.params().header.get('channel'))
+#set($payload = {
+  "event": {
+    "service-name": "$serviceName"
+  },
+  "aggregate": {
+    "aggregateId": "$aggregateId"
+  },
+  "source": {
+    "correlationId": "$correlationId",
+    "channel": "$channel"
+  }
+})
+Action=SendMessage&MessageGroupId=$util.urlEncode($aggregateId)&MessageBody=$util.urlEncode($util.toJson($payload))`
+
+	status, body = doJSON(http.MethodPut, endpoint+"/restapis/"+api.ID+"/resources/"+aggregateResourceID+"/methods/DELETE/integration", map[string]any{
+		"type":       "AWS",
+		"httpMethod": "POST",
+		"uri":        "arn:aws:apigateway:us-east-1:sqs:path/000000000000/" + queueName,
+		"requestParameters": map[string]string{
+			"integration.request.header.Content-Type": "'application/x-www-form-urlencoded'",
+		},
+		"requestTemplates": map[string]string{
+			"application/json": requestTemplate,
+		},
+	}, nil)
+	if status != 201 {
+		t.Fatalf("put integration failed (%d): %s", status, string(body))
+	}
+
+	status, body = doJSON(http.MethodPost, endpoint+"/restapis/"+api.ID+"/deployments", map[string]any{
+		"stageName": "local",
+	}, nil)
+	if status != 201 {
+		t.Fatalf("create deployment failed (%d): %s", status, string(body))
+	}
+
+	status, body = doJSON(http.MethodDelete, endpoint+"/_aws/execute-api/"+api.ID+"/local/v1/events/agg-42", map[string]any{
+		"ignored": true,
+	}, map[string]string{
+		"service-name":   "orders-service",
+		"correlation-id": "corr-123",
+		"channel":        "web",
+	})
+	if status != 200 {
+		t.Fatalf("invoke failed (%d): %s", status, string(body))
+	}
+
+	recvBody := sqsQueueRequest(t, queueName, url.Values{
+		"Action":              {"ReceiveMessage"},
+		"QueueUrl":            {queueURL},
+		"MaxNumberOfMessages": {"1"},
+	})
+	recv := string(recvBody)
+	if !strings.Contains(recv, `"aggregateId":"agg-42"`) {
+		t.Fatalf("expected mapped aggregateId in message body, got: %s", recv)
+	}
+	if !strings.Contains(recv, `"service-name":"orders-service"`) {
+		t.Fatalf("expected mapped service-name in message body, got: %s", recv)
+	}
+	if !strings.Contains(recv, `"correlationId":"corr-123"`) {
+		t.Fatalf("expected mapped correlationId in message body, got: %s", recv)
+	}
+}
+
+func TestAPIGatewayV2SQSFIFOE2E(t *testing.T) {
+	queueName := "e2e-apigwv2-fifo.fifo"
+	queueURL := endpoint + "/000000000000/" + queueName
+
+	sqsRequest(t, url.Values{
+		"Action":            {"CreateQueue"},
+		"QueueName":         {queueName},
+		"Attribute.1.Name":  {"FifoQueue"},
+		"Attribute.1.Value": {"true"},
+	})
+	defer func() {
+		sqsQueueRequest(t, queueName, url.Values{
+			"Action":   {"DeleteQueue"},
+			"QueueUrl": {queueURL},
+		})
+	}()
+
+	doJSON := func(method, rawURL string, payload any, headers map[string]string) (int, []byte) {
+		t.Helper()
+		var body io.Reader
+		if payload != nil {
+			b, _ := json.Marshal(payload)
+			body = bytes.NewReader(b)
+		}
+		req, err := http.NewRequest(method, rawURL, body)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		if payload != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		defer resp.Body.Close()
+		respBody, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, respBody
+	}
+
+	status, body := doJSON(http.MethodPost, endpoint+"/v2/apis", map[string]any{
+		"name":         "e2e-v2-fifo-api",
+		"protocolType": "HTTP",
+	}, nil)
+	if status != 201 {
+		t.Fatalf("create http api failed (%d): %s", status, string(body))
+	}
+	var api struct {
+		APIID string `json:"apiId"`
+	}
+	if err := json.Unmarshal(body, &api); err != nil {
+		t.Fatalf("decode api create: %v", err)
+	}
+	defer func() {
+		req, _ := http.NewRequest(http.MethodDelete, endpoint+"/v2/apis/"+api.APIID, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_ = resp.Body.Close()
+		}
+	}()
+
+	status, body = doJSON(http.MethodPost, endpoint+"/v2/apis/"+api.APIID+"/integrations", map[string]any{
+		"integrationType": "AWS",
+		"integrationUri":  "arn:aws:sqs:us-east-1:000000000000:" + queueName,
+		"requestParameters": map[string]string{
+			"MessageBody":            "$request.body.payload",
+			"MessageGroupId":         "$request.path.aggregateId",
+			"MessageDeduplicationId": "$request.header.x-dedup-id",
+		},
+	}, nil)
+	if status != 201 {
+		t.Fatalf("create fifo integration failed (%d): %s", status, string(body))
+	}
+	var fifoIntegration struct {
+		IntegrationID string `json:"integrationId"`
+	}
+	if err := json.Unmarshal(body, &fifoIntegration); err != nil {
+		t.Fatalf("decode fifo integration create: %v", err)
+	}
+
+	status, body = doJSON(http.MethodPost, endpoint+"/v2/apis/"+api.APIID+"/routes", map[string]any{
+		"routeKey": "POST /events/{aggregateId}",
+		"target":   "integrations/" + fifoIntegration.IntegrationID,
+	}, nil)
+	if status != 201 {
+		t.Fatalf("create fifo route failed (%d): %s", status, string(body))
+	}
+
+	status, body = doJSON(http.MethodPost, endpoint+"/_apigateway/"+api.APIID+"/$default/events/agg-v2", map[string]any{
+		"payload": "hello-from-v2",
+	}, map[string]string{
+		"x-dedup-id": "dedup-v2-1",
+	})
+	if status != 200 {
+		t.Fatalf("invoke fifo route failed (%d): %s", status, string(body))
+	}
+
+	recvBody := sqsQueueRequest(t, queueName, url.Values{
+		"Action":              {"ReceiveMessage"},
+		"QueueUrl":            {queueURL},
+		"MaxNumberOfMessages": {"1"},
+	})
+	if !strings.Contains(string(recvBody), "hello-from-v2") {
+		t.Fatalf("expected mapped v2 message body, got: %s", string(recvBody))
+	}
+
+	status, body = doJSON(http.MethodPost, endpoint+"/v2/apis/"+api.APIID+"/integrations", map[string]any{
+		"integrationType": "AWS",
+		"integrationUri":  "arn:aws:sqs:us-east-1:000000000000:" + queueName,
+		"requestParameters": map[string]string{
+			"MessageBody": "$request.body",
+		},
+	}, nil)
+	if status != 201 {
+		t.Fatalf("create no-group integration failed (%d): %s", status, string(body))
+	}
+	var noGroupIntegration struct {
+		IntegrationID string `json:"integrationId"`
+	}
+	if err := json.Unmarshal(body, &noGroupIntegration); err != nil {
+		t.Fatalf("decode no-group integration create: %v", err)
+	}
+
+	status, body = doJSON(http.MethodPost, endpoint+"/v2/apis/"+api.APIID+"/routes", map[string]any{
+		"routeKey": "POST /events-no-group",
+		"target":   "integrations/" + noGroupIntegration.IntegrationID,
+	}, nil)
+	if status != 201 {
+		t.Fatalf("create no-group route failed (%d): %s", status, string(body))
+	}
+
+	status, body = doJSON(http.MethodPost, endpoint+"/_apigateway/"+api.APIID+"/$default/events-no-group", map[string]any{
+		"payload": "should-fail",
+	}, nil)
+	if status != 500 {
+		t.Fatalf("expected fifo validation failure status 500, got %d: %s", status, string(body))
+	}
+	if !strings.Contains(string(body), "MessageGroupId is required for FIFO queues") {
+		t.Fatalf("expected fifo validation error in body, got: %s", string(body))
+	}
+}
+
 func TestCreateDuplicate(t *testing.T) {
 	handlerCode := `exports.handler = async () => ({});`
 	zipData := createZip(t, map[string]string{"index.js": handlerCode})
