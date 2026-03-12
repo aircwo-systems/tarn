@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strings"
 	"time"
 
@@ -614,13 +613,14 @@ func (s *Service) invokeAWSIntegration(ctx context.Context, api *types.RestAPI, 
 		params = url.Values{}
 		params.Set("MessageBody", body)
 	}
+	params = normalizeQueryParams(params)
 
-	messageBody := params.Get("MessageBody")
+	messageBody := getQueryParam(params, "MessageBody")
 	if messageBody == "" {
 		messageBody = string(input.Body)
 	}
-	messageGroupId := params.Get("MessageGroupId")
-	messageDedupId := params.Get("MessageDeduplicationId")
+	messageGroupId := getQueryParam(params, "MessageGroupId")
+	messageDedupId := getQueryParam(params, "MessageDeduplicationId")
 
 	sqsStart := time.Now()
 	messageID, md5, sendErr := s.sqsSend(queueName, messageBody, messageGroupId, messageDedupId)
@@ -1060,6 +1060,31 @@ func extractJSONPath(body []byte, path string) string {
 		return s
 	}
 	return strings.Trim(string(raw), `"`)
+}
+
+func normalizeQueryParams(params url.Values) url.Values {
+	if len(params) == 0 {
+		return params
+	}
+
+	normalized := url.Values{}
+	for k, vals := range params {
+		key := strings.TrimSpace(k)
+		normalized[key] = append(normalized[key], vals...)
+	}
+	return normalized
+}
+
+func getQueryParam(params url.Values, key string) string {
+	if val := params.Get(key); val != "" {
+		return val
+	}
+	for k, vals := range params {
+		if strings.EqualFold(strings.TrimSpace(k), key) && len(vals) > 0 {
+			return vals[0]
+		}
+	}
+	return ""
 }
 
 // buildV1LambdaProxyEvent builds the API Gateway v1 proxy event payload.
