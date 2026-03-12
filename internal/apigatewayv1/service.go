@@ -839,44 +839,53 @@ type vtlEvaluator struct {
 }
 
 func (v *vtlEvaluator) evaluate(tmpl string) string {
-	// Process line-by-line, handling #set directives
+	// Process line-by-line, handling #set directives (including multiline values).
 	lines := strings.Split(tmpl, "\n")
 	output := make([]string, 0, len(lines))
-	for _, line := range lines {
-		processed := v.processLine(strings.TrimRight(line, " \t"))
-		// Skip pure #set lines (they produce no output)
-		if isSetDirective(line) {
+	for i := 0; i < len(lines); i++ {
+		line := strings.TrimRight(lines[i], " \t")
+		trimmed := strings.TrimSpace(line)
+
+		if strings.HasPrefix(trimmed, "#set(") {
+			directive := line
+			balance := strings.Count(line, "(") - strings.Count(line, ")")
+			for balance > 0 && i+1 < len(lines) {
+				i++
+				next := strings.TrimRight(lines[i], " \t")
+				directive += "\n" + next
+				balance += strings.Count(next, "(") - strings.Count(next, ")")
+			}
+			v.processSetDirective(directive)
 			continue
 		}
-		output = append(output, processed)
+
+		output = append(output, v.expandExpressions(line))
 	}
 	// Join and expand remaining expressions
 	result := strings.Join(output, "\n")
 	return strings.TrimSpace(result)
 }
 
-func isSetDirective(line string) bool {
-	trimmed := strings.TrimSpace(line)
-	return strings.HasPrefix(trimmed, "#set(")
-}
+func (v *vtlEvaluator) processSetDirective(directive string) {
+	trimmed := strings.TrimSpace(directive)
+	if !strings.HasPrefix(trimmed, "#set(") || !strings.HasSuffix(trimmed, ")") {
+		return
+	}
 
-func (v *vtlEvaluator) processLine(line string) string {
-	// Handle #set($var = value)
-	setRe := regexp.MustCompile(`#set\(\s*(\$[\w.]+)\s*=\s*(.*?)\s*\)`)
-	line = setRe.ReplaceAllStringFunc(line, func(match string) string {
-		sub := setRe.FindStringSubmatch(match)
-		if len(sub) < 3 {
-			return ""
-		}
-		varName := strings.TrimPrefix(sub[1], "$")
-		val := v.expandExpr(strings.TrimSpace(sub[2]))
-		v.vars[varName] = val
-		return ""
-	})
+	inner := strings.TrimSpace(trimmed[len("#set(") : len(trimmed)-1])
+	eqIdx := strings.Index(inner, "=")
+	if eqIdx < 0 {
+		return
+	}
 
-	// Expand $variable references
-	line = v.expandExpressions(line)
-	return line
+	left := strings.TrimSpace(inner[:eqIdx])
+	right := strings.TrimSpace(inner[eqIdx+1:])
+	if !strings.HasPrefix(left, "$") {
+		return
+	}
+
+	varName := strings.TrimPrefix(left, "$")
+	v.vars[varName] = v.expandExpr(right)
 }
 
 func (v *vtlEvaluator) expandExpressions(s string) string {
@@ -910,9 +919,18 @@ func (v *vtlEvaluator) expandExpr(expr string) string {
 	// $util.toJson(inner)
 	if strings.HasPrefix(expr, "$util.toJson(") && strings.HasSuffix(expr, ")") {
 		inner := expr[len("$util.toJson(") : len(expr)-1]
-		val := v.expandExpr(inner)
+		val := strings.TrimSpace(v.expandExpr(inner))
+		if json.Valid([]byte(val)) {
+			return val
+		}
 		b, _ := json.Marshal(val)
 		return string(b)
+	}
+
+	// JSON object/array literal
+	if (strings.HasPrefix(expr, "{") && strings.HasSuffix(expr, "}")) ||
+		(strings.HasPrefix(expr, "[") && strings.HasSuffix(expr, "]")) {
+		return strings.TrimSpace(v.expandExpressions(expr))
 	}
 
 	// $input.json('$') — entire body as JSON string
