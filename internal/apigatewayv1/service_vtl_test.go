@@ -88,3 +88,20 @@ MessageBody=$payload.aggregate.aggregateId`
 		t.Fatalf("result = %q, want %q", result, "MessageBody=agg-99")
 	}
 }
+
+func TestNormalizeQueryParams_HandlesIndentedKeys(t *testing.T) {
+	raw := "Action=SendMessage&\n  MessageGroupId=agg-42&\n  MessageBody=%7B%22ok%22%3Atrue%7D"
+	params, err := url.ParseQuery(raw)
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+
+	params = normalizeQueryParams(params)
+
+	if got := getQueryParam(params, "MessageGroupId"); got != "agg-42" {
+		t.Fatalf("MessageGroupId = %q, want %q", got, "agg-42")
+	}
+	if got := getQueryParam(params, "MessageBody"); got != `{"ok":true}` {
+		t.Fatalf("MessageBody = %q, want %q", got, `{"ok":true}`)
+	}
+}
