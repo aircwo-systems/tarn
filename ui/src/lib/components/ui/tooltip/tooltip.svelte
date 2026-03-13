@@ -1,30 +1,7 @@
 <script lang="ts">
-	import { cn } from '$lib/utils';
+	import { Tooltip as TooltipPrimitive } from "bits-ui";
 
-	let {
-		text = '',
-		class: className,
-		children
-	}: { text?: string; class?: string; children?: import('svelte').Snippet } = $props();
-
-	let visible = $state(false);
+	let { open = $bindable(false), ...restProps }: TooltipPrimitive.RootProps = $props();
 </script>
 
-<!-- svelte-ignore a11y_no_static_element_interactions -->
-<span
-	class={cn('relative inline-flex', className)}
-	onmouseenter={() => (visible = true)}
-	onmouseleave={() => (visible = false)}
-	onfocus={() => (visible = true)}
-	onblur={() => (visible = false)}
->
-	{@render children?.()}
-	{#if visible && text}
-		<span
-			role="tooltip"
-			class="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 text-xs rounded-md bg-bg-overlay border border-border text-text whitespace-nowrap z-50"
-		>
-			{text}
-		</span>
-	{/if}
-</span>
+<TooltipPrimitive.Root bind:open {...restProps} />

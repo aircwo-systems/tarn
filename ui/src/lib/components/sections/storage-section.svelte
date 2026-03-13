@@ -107,61 +107,61 @@
 </script>
 
 <div class="space-y-4">
-  <div class="flex items-center justify-between gap-4 flex-wrap rounded-lg border border-border bg-bg-raised px-4 py-3">
+  <div class="flex items-center justify-between gap-4 flex-wrap rounded-lg border border-border bg-card px-4 py-3">
     <div class="flex items-center gap-3">
       <div class="flex items-center justify-center h-8 w-8 rounded-md bg-accent/10">
-        <HardDrive size={16} class="text-accent" />
+        <HardDrive size={16} class="text-primary" />
       </div>
       <div>
-        <h2 class="text-sm font-semibold text-text">S3 Storage</h2>
-        <p class="text-[10px] text-text-faint font-mono">
+        <h2 class="text-sm font-semibold text-foreground">S3 Storage</h2>
+        <p class="text-[10px] text-muted-foreground/70 font-mono">
           {buckets.length} bucket{buckets.length !== 1 ? 's' : ''}
         </p>
       </div>
     </div>
-    <span class="inline-flex items-center rounded-full border border-border px-2.5 py-1 text-xs text-text-faint">
+    <span class="inline-flex items-center rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground/70">
       Path-style: /_s3/&lbrace;bucket&rbrace;/&lbrace;key&rbrace;
     </span>
   </div>
 
   {#if buckets.length === 0 && !dashboard.loading}
-    <div class="rounded-lg border border-border bg-bg-raised px-4 py-8 text-center">
-      <Package size={28} class="mx-auto text-text-faint mb-2" />
-      <p class="text-sm text-text-muted">No S3 buckets</p>
-      <p class="text-xs text-text-faint mt-1">
-        Create one with <code class="bg-bg-surface px-1 py-0.5 rounded text-accent">openstack s3 mb --name my-bucket</code>
+    <div class="rounded-lg border border-border bg-card px-4 py-8 text-center">
+      <Package size={28} class="mx-auto text-muted-foreground/70 mb-2" />
+      <p class="text-sm text-muted-foreground">No S3 buckets</p>
+      <p class="text-xs text-muted-foreground/70 mt-1">
+        Create one with <code class="bg-muted px-1 py-0.5 rounded text-primary">openstack s3 mb --name my-bucket</code>
       </p>
     </div>
   {:else}
-    <div class="rounded-lg border border-border bg-bg-raised overflow-hidden">
+    <div class="rounded-lg border border-border bg-card overflow-hidden">
       <table class="w-full text-xs">
         <thead>
-          <tr class="border-b border-border bg-bg-surface/50">
-            <th class="text-left px-3 py-2 font-mono text-text-faint uppercase tracking-wider">Bucket</th>
-            <th class="text-right px-3 py-2 font-mono text-text-faint uppercase tracking-wider">Objects</th>
-            <th class="text-right px-3 py-2 font-mono text-text-faint uppercase tracking-wider">Total Size</th>
-            <th class="text-right px-3 py-2 font-mono text-text-faint uppercase tracking-wider">Created</th>
-            <th class="text-right px-3 py-2 font-mono text-text-faint uppercase tracking-wider"></th>
+          <tr class="border-b border-border bg-muted/50">
+            <th class="text-left px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Bucket</th>
+            <th class="text-right px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Objects</th>
+            <th class="text-right px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Total Size</th>
+            <th class="text-right px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Created</th>
+            <th class="text-right px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider"></th>
           </tr>
         </thead>
         <tbody>
           {#each buckets as bucket}
-            <tr class="border-b border-border last:border-b-0 hover:bg-bg-surface/40 transition-colors">
+            <tr class="border-b border-border last:border-b-0 hover:bg-muted/40 transition-colors">
               <td class="px-3 py-2">
                 <div class="flex items-center gap-2">
                   <LedDot color="green" />
-                  <span class="text-text font-mono">{bucket.name}</span>
+                  <span class="text-foreground font-mono">{bucket.name}</span>
                 </div>
               </td>
-              <td class="text-right px-3 py-2 text-text-muted font-mono">{bucket.objects}</td>
-              <td class="text-right px-3 py-2 text-text-muted font-mono">{formatBytes(bucket.totalSize)}</td>
-              <td class="text-right px-3 py-2 text-text-faint font-mono">
+              <td class="text-right px-3 py-2 text-muted-foreground font-mono">{bucket.objects}</td>
+              <td class="text-right px-3 py-2 text-muted-foreground font-mono">{formatBytes(bucket.totalSize)}</td>
+              <td class="text-right px-3 py-2 text-muted-foreground/70 font-mono">
                 {new Date(bucket.createdDate).toLocaleDateString()}
               </td>
               <td class="text-right px-3 py-2">
                 <button
                   type="button"
-                  class="text-accent hover:underline text-[11px]"
+                  class="text-primary hover:underline text-[11px]"
                   onclick={() => browseBucket(bucket.name)}
                 >
                   Browse
@@ -175,18 +175,18 @@
   {/if}
 
   {#if selectedBucket}
-    <div class="rounded-lg border border-accent-strong bg-bg-raised overflow-hidden">
-      <div class="flex items-center justify-between px-3 py-2 border-b border-border bg-bg-surface/30">
+    <div class="rounded-lg border border-primary/50 bg-card overflow-hidden">
+      <div class="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/30">
         <div class="flex items-center gap-2">
-          <HardDrive size={13} class="text-accent" />
-          <span class="text-xs font-mono text-text">s3://{selectedBucket}</span>
-          <span class="text-[10px] text-text-faint font-mono">({objects.length} objects)</span>
+          <HardDrive size={13} class="text-primary" />
+          <span class="text-xs font-mono text-foreground">s3://{selectedBucket}</span>
+          <span class="text-[10px] text-muted-foreground/70 font-mono">({objects.length} objects)</span>
         </div>
         <div class="flex items-center gap-2">
           <button
             type="button"
             onclick={() => browseBucket(selectedBucket)}
-            class="text-text-muted hover:text-text transition-colors"
+            class="text-muted-foreground hover:text-foreground transition-colors"
             aria-label="Refresh objects"
           >
             <ArrowClockwise size={12} class={loadingObjects ? 'animate-spin' : ''} />
@@ -194,7 +194,7 @@
           <button
             type="button"
             onclick={closeBrowser}
-            class="text-xs text-text-muted hover:text-text transition-colors"
+            class="text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
             Close
           </button>
@@ -202,32 +202,32 @@
       </div>
 
       {#if loadingObjects}
-        <div class="px-3 py-6 text-center text-xs text-text-faint font-mono">Loading objects...</div>
+        <div class="px-3 py-6 text-center text-xs text-muted-foreground/70 font-mono">Loading objects...</div>
       {:else if objects.length === 0}
-        <div class="px-3 py-6 text-center text-xs text-text-faint font-mono">Bucket is empty</div>
+        <div class="px-3 py-6 text-center text-xs text-muted-foreground/70 font-mono">Bucket is empty</div>
       {:else}
         <div class="max-h-80 overflow-y-auto">
           <table class="w-full text-xs">
-            <thead class="sticky top-0 bg-bg-raised">
+            <thead class="sticky top-0 bg-card">
               <tr class="border-b border-border">
-                <th class="text-left px-3 py-1.5 font-mono text-text-faint uppercase tracking-wider">Key</th>
-                <th class="text-right px-3 py-1.5 font-mono text-text-faint uppercase tracking-wider">Size</th>
-                <th class="text-right px-3 py-1.5 font-mono text-text-faint uppercase tracking-wider">Last Modified</th>
-                <th class="text-right px-3 py-1.5 font-mono text-text-faint uppercase tracking-wider"></th>
+                <th class="text-left px-3 py-1.5 font-mono text-muted-foreground/70 uppercase tracking-wider">Key</th>
+                <th class="text-right px-3 py-1.5 font-mono text-muted-foreground/70 uppercase tracking-wider">Size</th>
+                <th class="text-right px-3 py-1.5 font-mono text-muted-foreground/70 uppercase tracking-wider">Last Modified</th>
+                <th class="text-right px-3 py-1.5 font-mono text-muted-foreground/70 uppercase tracking-wider"></th>
               </tr>
             </thead>
             <tbody>
               {#each objects as obj}
                 <tr class="border-b border-border last:border-b-0">
-                  <td class="px-3 py-1.5 text-text font-mono truncate max-w-[300px]" title={obj.key}>{obj.key}</td>
-                  <td class="text-right px-3 py-1.5 text-text-muted font-mono whitespace-nowrap">{formatBytes(obj.size)}</td>
-                  <td class="text-right px-3 py-1.5 text-text-faint font-mono whitespace-nowrap">
+                  <td class="px-3 py-1.5 text-foreground font-mono truncate max-w-[300px]" title={obj.key}>{obj.key}</td>
+                  <td class="text-right px-3 py-1.5 text-muted-foreground font-mono whitespace-nowrap">{formatBytes(obj.size)}</td>
+                  <td class="text-right px-3 py-1.5 text-muted-foreground/70 font-mono whitespace-nowrap">
                     {new Date(obj.lastModified).toLocaleString()}
                   </td>
                   <td class="text-right px-3 py-1.5">
                     <button
                       type="button"
-                      class="text-accent hover:underline text-[11px]"
+                      class="text-primary hover:underline text-[11px]"
                       onclick={() => void viewObject(selectedBucket, obj.key)}
                     >
                       View
@@ -240,20 +240,20 @@
         </div>
 
         {#if selectedObjectKey}
-          <div class="border-t border-border bg-bg-surface/30">
+          <div class="border-t border-border bg-muted/30">
             <div class="flex items-center justify-between px-3 py-2 border-b border-border">
               <div class="space-y-0.5 min-w-0">
-                <p class="text-xs text-text font-mono truncate max-w-[20rem] sm:max-w-[32rem]" title={selectedObjectKey}>
+                <p class="text-xs text-foreground font-mono truncate max-w-[20rem] sm:max-w-[32rem]" title={selectedObjectKey}>
                   {selectedObjectKey}
                 </p>
-                <p class="text-[10px] text-text-faint font-mono">{objectContentType || '--'}</p>
+                <p class="text-[10px] text-muted-foreground/70 font-mono">{objectContentType || '--'}</p>
               </div>
               
               <div class="flex items-center gap-3">
                 {#if isImage}
                   <button
                     type="button"
-                    class="flex items-center gap-1.5 text-[11px] {showRaw ? 'text-accent' : 'text-text-muted hover:text-text'}"
+                    class="flex items-center gap-1.5 text-[11px] {showRaw ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
                     onclick={() => showRaw = !showRaw}
                   >
                     {#if showRaw}
@@ -269,7 +269,7 @@
                 {#if !isImage || showRaw}
                   <button
                     type="button"
-                    class="flex items-center gap-1.5 text-[11px] transition-colors {copied ? 'text-green-400' : 'text-text-muted hover:text-text'}"
+                    class="flex items-center gap-1.5 text-[11px] transition-colors {copied ? 'text-green-400' : 'text-muted-foreground hover:text-foreground'}"
                     onclick={copyToClipboard}
                   >
                     {#if copied}
@@ -284,7 +284,7 @@
 
                 <button
                   type="button"
-                  class="text-[11px] text-text-muted hover:text-text"
+                  class="text-[11px] text-muted-foreground hover:text-foreground"
                   onclick={clearPreview}
                 >
                   Close
@@ -293,9 +293,9 @@
             </div>
 
             {#if loadingPreview}
-              <div class="px-3 py-6 text-center text-xs text-text-faint font-mono">Loading object...</div>
+              <div class="px-3 py-6 text-center text-xs text-muted-foreground/70 font-mono">Loading object...</div>
             {:else if previewError}
-              <div class="px-3 py-6 text-center text-xs text-red-300 font-mono">{previewError}</div>
+              <div class="px-3 py-6 text-center text-xs text-destructive-300 font-mono">{previewError}</div>
             {:else}
               <div class="max-h-screen overflow-auto px-3 py-3">
                 {#if isImage && !showRaw}
@@ -307,7 +307,7 @@
                     />
                   </div>
                 {:else}
-                  <pre class="text-xs font-mono text-text whitespace-pre-wrap break-words leading-relaxed">{objectPreview}</pre>
+                  <pre class="text-xs font-mono text-foreground whitespace-pre-wrap break-words leading-relaxed">{objectPreview}</pre>
                 {/if}
               </div>
             {/if}

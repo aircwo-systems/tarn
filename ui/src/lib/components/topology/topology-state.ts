@@ -32,11 +32,11 @@ export const laneY = 140;
 
 // --- 3. Visual Helpers (Colors & States) ---
 export const ledColorMap: Record<string, string> = {
-  green: "var(--color-accent)",
-  red: "var(--color-red)",
-  amber: "var(--color-amber)",
-  blue: "var(--color-blue)",
-  gray: "var(--color-text-faint)",
+  green: "var(--color-primary)",
+  red: "var(--color-destructive)",
+  amber: "var(--color-chart-4)",
+  blue: "var(--color-chart-2)",
+  gray: "var(--color-muted-foreground)",
 };
 
 export const stateColor = (state: string): string => {

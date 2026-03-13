@@ -1,249 +1,339 @@
 <script lang="ts">
-	import {
-		WarningIcon,
-		GlobeHemisphereWestIcon,
-		LightningIcon,
-		ChatCircleIcon,
-		KeyIcon,
-		HardDriveIcon,
-		ArrowsClockwiseIcon,
-		MagnifyingGlassIcon,
-		XIcon
-	} from 'phosphor-svelte';
-	import LedDot from '$lib/components/common/led-dot.svelte';
-	import TopologyCanvas from '$lib/components/topology/topology-canvas.svelte';
-	import ActiveComponents from './active-components.svelte';
-	import {
-		getDashboard,
-		getDashboardFilters,
-		setDashboardTagFilter,
-		getUISettings,
-		getVisibleInfra,
-		matchesTagFilter
-	} from '$lib/state.svelte';
+  import {
+    WarningIcon,
+    GlobeHemisphereWestIcon,
+    LightningIcon,
+    ChatCircleIcon,
+    KeyIcon,
+    HardDriveIcon,
+    ArrowsClockwiseIcon,
+    MagnifyingGlassIcon,
+    XIcon,
+  } from "phosphor-svelte";
+  import LedDot from "$lib/components/common/led-dot.svelte";
+  import {
+    getDashboard,
+    getDashboardFilters,
+    getUISettings,
+    getVisibleInfra,
+    matchesTagFilter,
+    setDashboardTagFilter,
+  } from "$lib/state.svelte";
+  import Badge from "$lib/components/ui/badge/badge.svelte";
+  import Button from "$lib/components/ui/button/button.svelte";
+  import { Card, CardContent, CardHeader } from "$lib/components/ui/card";
+  import Separator from "$lib/components/ui/separator/separator.svelte";
+  import ActiveComponents from "./active-components.svelte";
+  import TopologyTraceTicker from "$lib/components/topology/canvas/TopologyTraceTicker.svelte";
+  import TopologyCanvas from "$lib/components/topology/topology-canvas.svelte";
 
-	let { onNavigate = (_tab: string) => {} }: { onNavigate?: (tab: string) => void } = $props();
+  let {
+    onNavigate = (_tab: string) => {},
+  }: { onNavigate?: (tab: string) => void } = $props();
 
-	const dashboard = getDashboard();
-	const filters = getDashboardFilters();
-	const uiSettings = getUISettings();
+  const dashboard = getDashboard();
+  const filters = getDashboardFilters();
+  const uiSettings = getUISettings();
 
-	let tagDraft = $state(filters.tagFilter);
+  let tagDraft = $state(filters.tagFilter);
 
-	$effect(() => {
-		tagDraft = filters.tagFilter;
-	});
+  $effect(() => {
+    tagDraft = filters.tagFilter;
+  });
 
-	function applyFilter() {
-		setDashboardTagFilter(tagDraft);
-	}
+  function applyFilter() {
+    setDashboardTagFilter(tagDraft);
+  }
 
-	function clearFilter() {
-		tagDraft = '';
-		setDashboardTagFilter('');
-	}
+  function clearFilter() {
+    tagDraft = "";
+    setDashboardTagFilter("");
+  }
 
-	const filteredGateways = $derived(
-		(dashboard.data?.gateways ?? []).filter((g) => matchesTagFilter(g.tags, filters.tagFilter))
-	);
-	const filteredFunctions = $derived(
-		(dashboard.data?.functions ?? []).filter((f) => matchesTagFilter(f.tags, filters.tagFilter))
-	);
-	const filteredQueues = $derived(
-		(dashboard.data?.queues ?? []).filter((q) => matchesTagFilter(q.tags, filters.tagFilter))
-	);
-	const filteredSecrets = $derived(
-		(dashboard.data?.secrets ?? []).filter((s) => matchesTagFilter(s.tags, filters.tagFilter))
-	);
+  const filteredGateways = $derived(
+    (dashboard.data?.gateways ?? []).filter((g) =>
+      matchesTagFilter(g.tags, filters.tagFilter),
+    ),
+  );
+  const filteredFunctions = $derived(
+    (dashboard.data?.functions ?? []).filter((f) =>
+      matchesTagFilter(f.tags, filters.tagFilter),
+    ),
+  );
+  const filteredQueues = $derived(
+    (dashboard.data?.queues ?? []).filter((q) =>
+      matchesTagFilter(q.tags, filters.tagFilter),
+    ),
+  );
+  const filteredSecrets = $derived(
+    (dashboard.data?.secrets ?? []).filter((s) =>
+      matchesTagFilter(s.tags, filters.tagFilter),
+    ),
+  );
 
-	const buckets = $derived(dashboard.data?.buckets ?? []);
-	const eventMappings = $derived(dashboard.data?.eventSourceMappings ?? []);
-	const visibleInfra = $derived(getVisibleInfra(dashboard.data?.infrastructure ?? []));
-	const infraConnected = $derived(visibleInfra.filter((p) => p.status === 'connected').length);
+  const buckets = $derived(dashboard.data?.buckets ?? []);
+  const eventMappings = $derived(dashboard.data?.eventSourceMappings ?? []);
+  const visibleInfra = $derived(
+    getVisibleInfra(dashboard.data?.infrastructure ?? []),
+  );
+  const infraConnected = $derived(
+    visibleInfra.filter((p) => p.status === "connected").length,
+  );
+  const recentTraces = $derived(dashboard.data?.recentTraces ?? []);
+  let selectedRecentTraceId = $state<string | null>(null);
+  let isCanvasExpanded = $state(false);
 
-	const connectionStatus = $derived(
-		dashboard.error ? 'error' : dashboard.loading ? 'loading' : dashboard.data ? 'ok' : 'idle'
-	);
+  const connectionStatus = $derived(
+    dashboard.error
+      ? "error"
+      : dashboard.loading
+        ? "loading"
+        : dashboard.data
+          ? "ok"
+          : "idle",
+  );
 </script>
 
-<!-- Full-bleed header: same bg as sidebar, visually anchored to it -->
-<div class="-mx-4 md:-mx-6 -mt-4 md:-mt-5 mb-4 border-b border-border bg-bg-raised">
-	<!-- Row 1: connection status + tag filter + polling -->
-	<div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 md:px-6 py-2.5">
-		<!-- Connection -->
-		<div class="flex items-center gap-2 shrink-0 min-w-0">
-			<LedDot
-				color={connectionStatus === 'ok' ? 'green' : connectionStatus === 'loading' ? 'amber' : 'red'}
-				size="md"
-			/>
-			<span
-				class="text-xs font-mono text-text-faint truncate max-w-[14rem]"
-				title={dashboard.data?.config.endpoint}
-			>
-				{dashboard.data?.config.endpoint ?? 'connecting...'}
-			</span>
-			{#if dashboard.data?.config.region}
-				<span class="text-text-faint/40 hidden sm:inline">·</span>
-				<span class="text-[10px] font-mono text-text-faint hidden sm:inline">
-					{dashboard.data.config.region}
-				</span>
-			{/if}
-		</div>
+<div class="flex w-full min-w-0 flex-col gap-4">
+  <Card class="w-full min-w-0">
+    <CardContent class="space-y-3 px-4 py-3 md:px-5">
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="inline-flex min-w-0 shrink-0 items-center gap-2">
+          <LedDot
+            color={connectionStatus === "ok"
+              ? "green"
+              : connectionStatus === "loading"
+                ? "amber"
+                : "red"}
+            size="md"
+          />
+          <span
+            class="max-w-[16rem] truncate font-mono text-xs text-muted-foreground"
+            title={dashboard.data?.config.endpoint}
+          >
+            {dashboard.data?.config.endpoint ?? "connecting..."}
+          </span>
+          {#if dashboard.data?.config.region}
+            <span class="hidden text-muted-foreground/40 sm:inline">·</span>
+            <span
+              class="hidden font-mono text-[10px] text-muted-foreground sm:inline"
+              >{dashboard.data.config.region}</span
+            >
+          {/if}
+        </div>
 
-		<div class="h-3.5 w-px bg-border shrink-0 hidden sm:block"></div>
+        <Separator orientation="vertical" class="hidden h-4 sm:block" />
 
-		<!-- Tag filter (inline, no card) -->
-		<div class="flex items-center gap-1.5 flex-1 min-w-[10rem] max-w-[20rem]">
-			<MagnifyingGlassIcon size={12} class="text-text-faint shrink-0" />
-			<input
-				type="text"
-				placeholder="Filter by tag..."
-				bind:value={tagDraft}
-				onkeydown={(e) => {
-					if (e.key === 'Enter') applyFilter();
-				}}
-				class="flex-1 min-w-0 bg-transparent text-xs text-text outline-none placeholder:text-text-faint"
-			/>
-			{#if tagDraft}
-				<button
-					type="button"
-					onclick={clearFilter}
-					class="text-text-faint hover:text-text shrink-0 transition-colors"
-					aria-label="Clear filter"
-				>
-					<XIcon size={11} />
-				</button>
-			{/if}
-			{#if tagDraft !== filters.tagFilter}
-				<button
-					type="button"
-					onclick={applyFilter}
-					class="shrink-0 text-[10px] font-medium text-accent hover:text-accent/70 px-1 transition-colors"
-				>
-					Apply
-				</button>
-			{/if}
-		</div>
+        <div
+          class="flex min-w-56 flex-1 items-center gap-1 rounded-md border border-border bg-muted/30 px-2"
+        >
+          <MagnifyingGlassIcon
+            size={12}
+            class="shrink-0 text-muted-foreground"
+          />
+          <input
+            type="text"
+            placeholder="Filter infrastructure by tag..."
+            bind:value={tagDraft}
+            onkeydown={(e) => {
+              if (e.key === "Enter") applyFilter();
+            }}
+            class="h-7 w-full bg-transparent text-xs text-foreground outline-none placeholder:text-muted-foreground"
+          />
+          {#if tagDraft}
+            <Button
+              variant="ghost"
+              size="icon"
+              class="h-6 w-6"
+              type="button"
+              onclick={clearFilter}
+              aria-label="Clear tag filter"
+            >
+              <XIcon size={11} />
+            </Button>
+          {/if}
+          {#if tagDraft !== filters.tagFilter}
+            <Button
+              variant="secondary"
+              size="sm"
+              type="button"
+              onclick={applyFilter}
+            >
+              Apply
+            </Button>
+          {/if}
+        </div>
 
-		{#if filters.tagFilter}
-			<span
-				class="shrink-0 inline-flex items-center rounded-full border border-accent-strong bg-accent/10 px-2 py-0.5 text-[10px] font-mono text-accent"
-			>
-				{filters.tagFilter}
-			</span>
-		{/if}
+        {#if filters.tagFilter}
+          <Badge variant="default" class="font-mono text-[10px]">
+            {filters.tagFilter}
+          </Badge>
+        {/if}
 
-		<!-- Polling indicator -->
-		<div class="ml-auto shrink-0 flex items-center gap-1.5">
-			<LedDot color="green" />
-			<span class="text-[10px] font-mono text-text-faint">
-				{uiSettings.pollingIntervalSeconds}s
-			</span>
-		</div>
-	</div>
+        <div class="ml-auto inline-flex shrink-0 items-center gap-1.5">
+          <LedDot color="green" />
+          <span class="font-mono text-[10px] text-muted-foreground">
+            Poll {uiSettings.pollingIntervalSeconds}s
+          </span>
+        </div>
+      </div>
 
-	<!-- Row 2: resource count pills (clickable navigation) -->
-	<div class="flex flex-wrap items-center gap-1.5 px-4 md:px-6 pb-2.5">
-		<button
-			type="button"
-			onclick={() => onNavigate('gateways')}
-			class="inline-flex items-center gap-1.5 rounded-md border border-border bg-bg-surface/50 px-2.5 py-1 text-[11px] hover:border-border-strong hover:bg-bg-surface transition-colors"
-		>
-			<GlobeHemisphereWestIcon size={11} class="text-blue shrink-0" />
-			<span class="font-mono text-text">{filteredGateways.length}</span>
-			<span class="text-text-faint">Gateways</span>
-		</button>
+      <div class="flex flex-wrap items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          onclick={() => onNavigate("gateways")}
+          class="gap-1.5"
+        >
+          <GlobeHemisphereWestIcon size={12} />
+          <span class="font-mono">{filteredGateways.length}</span>
+          <span>Gateways</span>
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onclick={() => onNavigate("functions")}
+          class="gap-1.5"
+        >
+          <LightningIcon size={12} />
+          <span class="font-mono">{filteredFunctions.length}</span>
+          <span>Functions</span>
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onclick={() => onNavigate("queues")}
+          class="gap-1.5"
+        >
+          <ChatCircleIcon size={12} />
+          <span class="font-mono">{filteredQueues.length}</span>
+          <span>Queues</span>
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onclick={() => onNavigate("secrets")}
+          class="gap-1.5"
+        >
+          <KeyIcon size={12} />
+          <span class="font-mono">{filteredSecrets.length}</span>
+          <span>Secrets</span>
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onclick={() => onNavigate("storage")}
+          class="gap-1.5"
+        >
+          <HardDriveIcon size={12} />
+          <span class="font-mono">{buckets.length}</span>
+          <span>Buckets</span>
+        </Button>
+        {#if eventMappings.length > 0}
+          <Button
+            variant="outline"
+            size="sm"
+            onclick={() => onNavigate("triggers")}
+            class="gap-1.5"
+          >
+            <ArrowsClockwiseIcon size={12} />
+            <span class="font-mono">{eventMappings.length}</span>
+            <span>Triggers</span>
+          </Button>
+        {/if}
+        {#if visibleInfra.length > 0}
+          <Badge variant={infraConnected > 0 ? "secondary" : "destructive"}>
+            {infraConnected}/{visibleInfra.length} infra connected
+          </Badge>
+        {/if}
+      </div>
+    </CardContent>
+  </Card>
 
-		<button
-			type="button"
-			onclick={() => onNavigate('functions')}
-			class="inline-flex items-center gap-1.5 rounded-md border border-border bg-bg-surface/50 px-2.5 py-1 text-[11px] hover:border-border-strong hover:bg-bg-surface transition-colors"
-		>
-			<LightningIcon size={11} class="text-accent shrink-0" />
-			<span class="font-mono text-text">{filteredFunctions.length}</span>
-			<span class="text-text-faint">Functions</span>
-		</button>
+  {#if dashboard.data?.warnings?.length}
+    <Card class="border-destructive/30 bg-destructive/5">
+      <CardContent class="px-4 py-3">
+        <div class="mb-2 flex items-center gap-2">
+          <WarningIcon size={14} class="text-destructive" />
+          <h3 class="text-sm font-semibold text-destructive">Warnings</h3>
+        </div>
+        <ul class="list-disc space-y-1 pl-5 text-xs text-destructive/90">
+          {#each dashboard.data.warnings as warning (warning)}
+            <li>{warning}</li>
+          {/each}
+        </ul>
+      </CardContent>
+    </Card>
+  {/if}
 
-		<button
-			type="button"
-			onclick={() => onNavigate('queues')}
-			class="inline-flex items-center gap-1.5 rounded-md border border-border bg-bg-surface/50 px-2.5 py-1 text-[11px] hover:border-border-strong hover:bg-bg-surface transition-colors"
-		>
-			<ChatCircleIcon size={11} class="text-amber shrink-0" />
-			<span class="font-mono text-text">{filteredQueues.length}</span>
-			<span class="text-text-faint">Queues</span>
-		</button>
+  <div
+    class={`grid min-w-0 gap-4 ${isCanvasExpanded ? "lg:grid-cols-1" : "lg:grid-cols-[minmax(0,1fr)_20rem]"}`}
+  >
+    <Card class="min-w-0 overflow-hidden">
+      <CardHeader class="border-b border-border">
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <h3 class="truncate text-sm font-semibold text-foreground">
+              Topology Stage
+            </h3>
+            <p class="text-xs text-muted-foreground">
+              Primary responsive container for canvas composition.
+            </p>
+          </div>
+          <Badge variant="secondary" class="shrink-0">w-full · responsive</Badge
+          >
+        </div>
+      </CardHeader>
+      <CardContent class="p-3 md:p-4">
+        <div
+          class={`w-full overflow-hidden rounded-md border border-border bg-background ${
+            isCanvasExpanded
+              ? "h-[calc(100svh-12rem)] min-h-144"
+              : "h-[58svh] min-h-112 lg:h-[calc(100svh-22rem)]"
+          }`}
+        >
+          <TopologyCanvas
+            {onNavigate}
+            onExpandedChange={(expanded) => (isCanvasExpanded = expanded)}
+          />
+        </div>
+      </CardContent>
+    </Card>
 
-		<button
-			type="button"
-			onclick={() => onNavigate('secrets')}
-			class="inline-flex items-center gap-1.5 rounded-md border border-border bg-bg-surface/50 px-2.5 py-1 text-[11px] hover:border-border-strong hover:bg-bg-surface transition-colors"
-		>
-			<KeyIcon size={11} class="text-blue/80 shrink-0" />
-			<span class="font-mono text-text">{filteredSecrets.length}</span>
-			<span class="text-text-faint">Secrets</span>
-		</button>
+    {#if !isCanvasExpanded}
+      <div class="flex min-w-0 flex-col gap-4">
+        <TopologyTraceTicker
+          traces={recentTraces}
+          selectedTraceId={selectedRecentTraceId}
+          onSelect={(id) => (selectedRecentTraceId = id)}
+        />
 
-		<button
-			type="button"
-			onclick={() => onNavigate('storage')}
-			class="inline-flex items-center gap-1.5 rounded-md border border-border bg-bg-surface/50 px-2.5 py-1 text-[11px] hover:border-border-strong hover:bg-bg-surface transition-colors"
-		>
-			<HardDriveIcon size={11} class="text-accent/80 shrink-0" />
-			<span class="font-mono text-text">{buckets.length}</span>
-			<span class="text-text-faint">Buckets</span>
-		</button>
+        <Card>
+          <CardHeader class="border-b border-border">
+            <h4 class="text-sm font-semibold text-foreground">
+              Filters / Detail Rail
+            </h4>
+          </CardHeader>
+          <CardContent class="p-3">
+            <div
+              class="flex h-40 items-center justify-center rounded-md border border-dashed border-border bg-muted/20 text-xs text-muted-foreground"
+            >
+              Placeholder
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    {/if}
+  </div>
 
-		{#if eventMappings.length > 0}
-			<button
-				type="button"
-				onclick={() => onNavigate('triggers')}
-				class="inline-flex items-center gap-1.5 rounded-md border border-border bg-bg-surface/50 px-2.5 py-1 text-[11px] hover:border-border-strong hover:bg-bg-surface transition-colors"
-			>
-				<ArrowsClockwiseIcon size={11} class="text-amber/80 shrink-0" />
-				<span class="font-mono text-text">{eventMappings.length}</span>
-				<span class="text-text-faint">Triggers</span>
-			</button>
-		{/if}
-
-		{#if visibleInfra.length > 0}
-			<span
-				class="inline-flex items-center gap-1.5 rounded-md border border-border bg-bg-surface/50 px-2.5 py-1 text-[11px]"
-			>
-				<LedDot color={infraConnected > 0 ? 'green' : 'red'} />
-				<span class="font-mono text-text">{infraConnected}/{visibleInfra.length}</span>
-				<span class="text-text-faint">Infra</span>
-			</span>
-		{/if}
-
-		{#if dashboard.data?.services?.length}
-			<span class="ml-auto text-[10px] font-mono text-text-faint hidden lg:block">
-				{dashboard.data.services.join(' · ')}
-			</span>
-		{/if}
-	</div>
-</div>
-
-<!-- Warnings (if any) -->
-{#if dashboard.data?.warnings?.length}
-	<div class="rounded-lg border border-red/20 bg-red-muted px-4 py-3">
-		<div class="flex items-center gap-2 mb-2">
-			<WarningIcon size={14} class="text-red" />
-			<h3 class="text-sm font-semibold text-red">Warnings</h3>
-		</div>
-		<ul class="space-y-1 text-xs text-red/80 pl-5 list-disc">
-			{#each dashboard.data.warnings as warning (warning)}
-				<li>{warning}</li>
-			{/each}
-		</ul>
-	</div>
-{/if}
-
-<div class="flex flex-col gap-4 overflow-hidden" style="height: calc(100vh - 6.5rem)">
-	<div class="flex-1 min-h-0">
-		<TopologyCanvas {onNavigate} />
-	</div>
-	<div class="shrink-0">
-		<ActiveComponents />
-	</div>
+  {#if !isCanvasExpanded}
+    <Card>
+      <CardHeader class="border-b border-border">
+        <h4 class="text-sm font-semibold text-foreground">Further Content</h4>
+      </CardHeader>
+      <CardContent class="p-0">
+        <ActiveComponents embedded={true} showHeader={false} />
+      </CardContent>
+    </Card>
+  {/if}
 </div>

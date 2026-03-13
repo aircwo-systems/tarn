@@ -25,7 +25,7 @@
 </script>
 
 <Card class={cn('border-t-2 px-3 py-3', borderColors[accentColor], className)}>
-	<p class="text-[10px] font-mono uppercase tracking-wider text-text-muted">{label}</p>
-	<p class="text-2xl font-semibold tracking-tight text-text mt-1">{value}</p>
-	<p class="text-xs text-text-faint mt-0.5">{subtitle}</p>
+	<p class="text-[10px] font-mono uppercase tracking-wider text-muted-foreground">{label}</p>
+	<p class="text-2xl font-semibold tracking-tight text-foreground mt-1">{value}</p>
+	<p class="text-xs text-muted-foreground/70 mt-0.5">{subtitle}</p>
 </Card>

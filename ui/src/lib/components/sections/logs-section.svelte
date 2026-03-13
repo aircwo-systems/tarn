@@ -3,6 +3,7 @@
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from '$lib/components/common/empty-state.svelte';
+	import FormattedMessageViewer from '$lib/components/common/formatted-message-viewer.svelte';
 	import { fetchLogGroups, fetchLogEvents, type FetchLogEventsParams } from '$lib/api';
 	import type { LogGroupSummary, LogEvent } from '$lib/types';
 
@@ -363,18 +364,6 @@
 		return looksLikeJSON(text) ? highlightJSON(text) : highlightJavaToString(text);
 	}
 
-	// Panel detail expand state — reset whenever a new event is selected
-	let panelRawExpanded = $state(false);
-	let panelFormattedExpanded = $state(true);
-
-	$effect(() => {
-		const ev = selectedEvent; // track changes
-		if (ev !== null) {
-			panelRawExpanded = false;
-			panelFormattedExpanded = true;
-		}
-	});
-
 	const parsedSpringBootLog = $derived(
 		selectedEvent ? parseSpringBootLog(selectedEvent.message) : null
 	);
@@ -509,26 +498,26 @@
 	<!-- ── Event viewer ─────────────────────────────────────────────── -->
 	<div class="space-y-3">
 		<!-- Header -->
-		<div class="flex items-center justify-between gap-3 flex-wrap rounded-lg border border-border bg-bg-raised px-4 py-3">
+		<div class="flex items-center justify-between gap-3 flex-wrap rounded-lg border border-border bg-card px-4 py-3">
 			<div class="flex items-center gap-3 min-w-0">
 				<button
 					type="button"
 					onclick={backToGroups}
-					class="flex items-center justify-center h-7 w-7 rounded-md text-text-muted hover:text-text hover:bg-bg-surface transition-colors shrink-0"
+					class="flex items-center justify-center h-7 w-7 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
 					aria-label="Back to log groups"
 				>
 					<ArrowLeftIcon size={16} />
 				</button>
 				<div class="min-w-0">
-					<h2 class="text-sm font-semibold text-text truncate">{selectedGroup}</h2>
-					<p class="text-[10px] text-text-faint font-mono">{pageInfo}</p>
+					<h2 class="text-sm font-semibold text-foreground truncate">{selectedGroup}</h2>
+					<p class="text-[10px] text-muted-foreground/70 font-mono">{pageInfo}</p>
 				</div>
 			</div>
 			<div class="flex items-center gap-2 shrink-0">
 				<button
 					type="button"
 					onclick={() => autoRefresh = !autoRefresh}
-					class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors {autoRefresh ? 'border-accent-strong bg-accent-muted text-accent' : 'border-border text-text-muted hover:text-text'}"
+					class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors {autoRefresh ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground'}"
 				>
 					<ArrowsClockwiseIcon size={12} class={autoRefresh ? 'animate-spin' : ''} />
 					{autoRefresh ? 'Live' : 'Auto'}
@@ -536,7 +525,7 @@
 				<button
 					type="button"
 					onclick={() => showFilters = !showFilters}
-					class="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-text-muted hover:text-text transition-colors"
+					class="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
 				>
 					<FunnelIcon size={12} />
 					Filters
@@ -546,7 +535,7 @@
 					type="button"
 					onclick={loadEvents}
 					disabled={eventsLoading}
-					class="inline-flex items-center gap-1.5 rounded-md border border-accent-strong bg-accent-muted px-2.5 py-1 text-xs text-accent hover:bg-accent/20 transition-colors disabled:opacity-50"
+					class="inline-flex items-center gap-1.5 rounded-md border border-primary/50 bg-primary/10 px-2.5 py-1 text-xs text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
 				>
 					<ArrowsClockwiseIcon size={12} class={eventsLoading ? 'animate-spin' : ''} />
 					Refresh
@@ -556,14 +545,14 @@
 
 		<!-- Filters panel -->
 		{#if showFilters}
-			<div class="rounded-lg border border-border bg-bg-raised px-4 py-3">
+			<div class="rounded-lg border border-border bg-card px-4 py-3">
 				<div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
 					<div class="space-y-1">
-						<label class="text-[10px] font-medium uppercase tracking-wider text-text-faint" for="log-level">Level</label>
+						<label class="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70" for="log-level">Level</label>
 						<select
 							id="log-level"
 							bind:value={filterLevel}
-							class="w-full rounded-md border border-border bg-bg-surface px-2 py-1.5 text-xs text-text outline-none focus:ring-1 focus:ring-accent"
+							class="w-full rounded-md border border-border bg-muted px-2 py-1.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
 						>
 							<option value="">All levels</option>
 							<option value="DEBUG">DEBUG</option>
@@ -573,42 +562,42 @@
 						</select>
 					</div>
 					<div class="space-y-1">
-						<label class="text-[10px] font-medium uppercase tracking-wider text-text-faint" for="log-pattern">Search pattern</label>
+						<label class="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70" for="log-pattern">Search pattern</label>
 						<div class="relative">
-							<MagnifyingGlassIcon size={12} class="absolute left-2 top-1/2 -translate-y-1/2 text-text-faint" />
+							<MagnifyingGlassIcon size={12} class="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground/70" />
 							<input
 								id="log-pattern"
 								type="text"
 								placeholder="Filter messages..."
 								bind:value={filterPattern}
 								onkeydown={(e) => { if (e.key === 'Enter') applyFilters(); }}
-								class="w-full rounded-md border border-border bg-bg-surface pl-7 pr-2 py-1.5 text-xs text-text outline-none focus:ring-1 focus:ring-accent placeholder:text-text-faint"
+								class="w-full rounded-md border border-border bg-muted pl-7 pr-2 py-1.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/70"
 							/>
 						</div>
 					</div>
 					<div class="space-y-1">
-						<label class="text-[10px] font-medium uppercase tracking-wider text-text-faint" for="log-stream">Stream</label>
+						<label class="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/70" for="log-stream">Stream</label>
 						<input
 							id="log-stream"
 							type="text"
 							placeholder="Stream name..."
 							bind:value={filterStream}
 							onkeydown={(e) => { if (e.key === 'Enter') applyFilters(); }}
-							class="w-full rounded-md border border-border bg-bg-surface px-2 py-1.5 text-xs text-text outline-none focus:ring-1 focus:ring-accent placeholder:text-text-faint"
+							class="w-full rounded-md border border-border bg-muted px-2 py-1.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/70"
 						/>
 					</div>
 					<div class="flex items-end gap-2">
 						<button
 							type="button"
 							onclick={applyFilters}
-							class="rounded-md border border-accent-strong bg-accent-muted px-3 py-1.5 text-xs text-accent hover:bg-accent/20 transition-colors"
+							class="rounded-md border border-primary/50 bg-primary/10 px-3 py-1.5 text-xs text-primary hover:bg-primary/20 transition-colors"
 						>
 							Apply
 						</button>
 						<button
 							type="button"
 							onclick={clearFilters}
-							class="rounded-md border border-border px-3 py-1.5 text-xs text-text-muted hover:bg-bg-surface transition-colors"
+							class="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted transition-colors"
 						>
 							Clear
 						</button>
@@ -619,7 +608,7 @@
 
 		<!-- Events list -->
 		{#if eventsError}
-			<div class="rounded-lg border border-red/20 bg-red-muted px-4 py-3 text-xs text-red">
+			<div class="rounded-lg border border-red/20 bg-red-muted px-4 py-3 text-xs text-destructive">
 				{eventsError}
 			</div>
 		{:else if eventsLoading && events.length === 0}
@@ -647,8 +636,8 @@
 							onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectEvent(event); } }}
 							class="group relative flex items-start gap-0 cursor-pointer transition-colors duration-100 {
 								isSelected
-									? 'bg-bg-surface'
-									: 'hover:bg-bg-surface/70'
+									? 'bg-muted'
+									: 'hover:bg-muted/70'
 							}"
 						>
 							<!-- Level strip -->
@@ -656,8 +645,8 @@
 
 							<div class="flex items-start gap-2.5 px-3 py-2 flex-1 min-w-0">
 								<!-- Timestamp -->
-								<span class="text-[11px] text-text-faint whitespace-nowrap shrink-0 w-[130px] tabular-nums pt-px">
-									{new Date(event.timestamp).toLocaleTimeString()}<span class="text-text-faint/50">.{String(new Date(event.timestamp).getMilliseconds()).padStart(3, '0')}</span>
+								<span class="text-[11px] text-muted-foreground/70 whitespace-nowrap shrink-0 w-[130px] tabular-nums pt-px">
+									{new Date(event.timestamp).toLocaleTimeString()}<span class="text-muted-foreground/70/50">.{String(new Date(event.timestamp).getMilliseconds()).padStart(3, '0')}</span>
 								</span>
 
 								<!-- Level badge -->
@@ -669,8 +658,8 @@
 								{#if selectedGroupIsLambda}
 									<span class="hidden xl:inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] uppercase tracking-wide mt-px {
 										isOutput
-											? 'border-accent-strong bg-accent-muted text-accent'
-											: 'border-border bg-bg-surface text-text-faint'
+											? 'border-primary/50 bg-primary/10 text-primary'
+											: 'border-border bg-muted text-muted-foreground/70'
 									}">
 										{isOutput ? 'Output' : 'Runtime'}
 									</span>
@@ -678,14 +667,14 @@
 
 								<!-- Message -->
 								<span class="break-all whitespace-pre-wrap flex-1 min-w-0 text-[13px] leading-snug {
-									isSelected ? 'text-text' : isOutput ? 'text-text' : 'text-text-muted'
+									isSelected ? 'text-foreground' : isOutput ? 'text-foreground' : 'text-muted-foreground'
 								}">
 									{event.message}
 								</span>
 
 								<!-- Stream name (hidden when panel open) -->
 								{#if event.streamName && !selectedEvent}
-									<span class="text-[11px] text-text-faint whitespace-nowrap shrink-0 hidden lg:inline pt-px" title={event.streamName}>
+									<span class="text-[11px] text-muted-foreground/70 whitespace-nowrap shrink-0 hidden lg:inline pt-px" title={event.streamName}>
 										{event.streamName.length > 24 ? event.streamName.slice(-24) : event.streamName}
 									</span>
 								{/if}
@@ -696,24 +685,24 @@
 
 				<!-- Detail panel — CSS width transition, no Svelte dependency -->
 				<div
-					class="shrink-0 border-l border-border bg-bg-raised overflow-hidden transition-[width,opacity] duration-200 ease-out {selectedEvent ? 'opacity-100' : 'opacity-0'}"
+					class="shrink-0 border-l border-border bg-card overflow-hidden transition-[width,opacity] duration-200 ease-out {selectedEvent ? 'opacity-100' : 'opacity-0'}"
 					style="width: {selectedEvent ? '400px' : '0px'}"
 				>
 					{#if selectedEvent}
 						{@const ev = selectedEvent}
 						<div class="flex flex-col h-full min-w-[400px]">
 							<!-- Panel header -->
-							<div class="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5 shrink-0 bg-bg-raised">
+							<div class="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5 shrink-0 bg-card">
 								<div class="flex items-center gap-2 min-w-0">
 									<Badge variant={levelColor(ev.level)} class="shrink-0">{ev.level}</Badge>
-									<span class="text-[11px] text-text-faint font-mono tabular-nums truncate">
+									<span class="text-[11px] text-muted-foreground/70 font-mono tabular-nums truncate">
 										{new Date(ev.timestamp).toLocaleTimeString()}.{String(new Date(ev.timestamp).getMilliseconds()).padStart(3, '0')}
 									</span>
 								</div>
 								<button
 									type="button"
 									onclick={() => selectedEvent = null}
-									class="h-6 w-6 flex items-center justify-center rounded text-text-faint hover:text-text hover:bg-bg-surface transition-colors shrink-0"
+									class="h-6 w-6 flex items-center justify-center rounded text-muted-foreground/70 hover:text-foreground hover:bg-muted transition-colors shrink-0"
 									aria-label="Close detail panel"
 								>
 									<XIcon size={14} />
@@ -725,11 +714,11 @@
 								<!-- Message section -->
 								<div>
 									<div class="flex items-center justify-between mb-2">
-										<p class="text-[10px] font-medium uppercase tracking-widest text-text-faint">Message</p>
+										<p class="text-[10px] font-medium uppercase tracking-widest text-muted-foreground/70">Message</p>
 										<button
 											type="button"
 											onclick={copyMessage}
-											class="flex items-center gap-1 text-[10px] text-text-faint hover:text-text transition-colors"
+											class="flex items-center gap-1 text-[10px] text-muted-foreground/70 hover:text-foreground transition-colors"
 										>
 											<CopySimpleIcon size={11} />
 											{copiedMessage ? 'Copied!' : 'Copy'}
@@ -737,87 +726,57 @@
 									</div>
 
 									{#if panelIsComplex}
-										<!-- Formatted view — expanded by default -->
-										<div class="mb-2 rounded-md border border-border overflow-hidden">
-											<button
-												type="button"
-												onclick={() => panelFormattedExpanded = !panelFormattedExpanded}
-												class="flex items-center justify-between w-full bg-bg-surface px-3 py-2 text-[11px] text-text-muted hover:text-text hover:bg-bg-surface/80 transition-colors"
-											>
-												<span class="flex items-center gap-2 font-medium">
-													<span class="h-1.5 w-1.5 rounded-full bg-accent/80 shrink-0"></span>
-													Formatted
-												</span>
-												<CaretDownIcon size={11} class="transition-transform duration-150 {panelFormattedExpanded ? 'rotate-180' : ''}" />
-											</button>
-											{#if panelFormattedExpanded}
-												{#if panelHighlightedHtml !== null}
-													<div class="log-highlight border-t border-border bg-bg-base px-3 py-3 text-[12px] font-mono text-text leading-relaxed whitespace-pre-wrap break-all max-h-[55vh] overflow-y-auto">{@html panelHighlightedHtml}</div>
-												{:else}
-													<pre class="border-t border-border bg-bg-base px-3 py-3 text-[12px] font-mono text-text leading-relaxed whitespace-pre-wrap break-all max-h-[55vh] overflow-y-auto">{panelDisplayMessage}</pre>
-												{/if}
-											{/if}
-										</div>
-
-										<!-- Raw view — collapsed by default -->
-										<div class="rounded-md border border-border overflow-hidden">
-											<button
-												type="button"
-												onclick={() => panelRawExpanded = !panelRawExpanded}
-												class="flex items-center justify-between w-full bg-bg-surface px-3 py-2 text-[11px] text-text-muted hover:text-text hover:bg-bg-surface/80 transition-colors"
-											>
-												<span class="flex items-center gap-2 font-medium">
-													<span class="h-1.5 w-1.5 rounded-full bg-text-faint/50 shrink-0"></span>
-													Raw
-												</span>
-												<CaretDownIcon size={11} class="transition-transform duration-150 {panelRawExpanded ? 'rotate-180' : ''}" />
-											</button>
-											{#if panelRawExpanded}
-												<pre class="border-t border-border bg-bg-base px-3 py-3 text-[11px] font-mono text-text-muted leading-relaxed whitespace-pre-wrap break-all max-h-[40vh] overflow-y-auto">{ev.message}</pre>
-											{/if}
-										</div>
+										<FormattedMessageViewer
+											raw={ev.message}
+											formatted={panelHighlightedHtml === null ? panelDisplayMessage : panelFormattedMessage}
+											formattedHtml={panelHighlightedHtml}
+											formattedContentClass="log-highlight text-[12px] text-foreground"
+											rawContentClass="text-[11px] text-muted-foreground"
+											formattedMaxHeightClass="max-h-[55vh]"
+											rawMaxHeightClass="max-h-[40vh]"
+										/>
 									{:else}
 										<!-- Simple message — no collapsing needed -->
-										<pre class="rounded-md border border-border bg-bg-base px-3 py-3 text-[13px] font-mono text-text leading-relaxed whitespace-pre-wrap break-all">{ev.message}</pre>
+										<pre class="rounded-md border border-border bg-background-base px-3 py-3 text-[13px] font-mono text-foreground leading-relaxed whitespace-pre-wrap break-all">{ev.message}</pre>
 									{/if}
 								</div>
 
 								<!-- Metadata table -->
 								<div>
-									<p class="text-[10px] font-medium uppercase tracking-widest text-text-faint mb-2">Details</p>
+									<p class="text-[10px] font-medium uppercase tracking-widest text-muted-foreground/70 mb-2">Details</p>
 									<div class="rounded-md border border-border overflow-hidden divide-y divide-border/60">
 										<div class="flex items-start gap-4 px-3 py-2">
-											<span class="text-[10px] uppercase tracking-wider text-text-faint w-20 shrink-0 pt-px">Time</span>
-											<span class="text-[12px] font-mono text-text-muted break-all leading-snug">{formatDetailTimestamp(ev.timestamp)}</span>
+											<span class="text-[10px] uppercase tracking-wider text-muted-foreground/70 w-20 shrink-0 pt-px">Time</span>
+											<span class="text-[12px] font-mono text-muted-foreground break-all leading-snug">{formatDetailTimestamp(ev.timestamp)}</span>
 										</div>
 										<div class="flex items-center gap-4 px-3 py-2">
-											<span class="text-[10px] uppercase tracking-wider text-text-faint w-20 shrink-0">Level</span>
+											<span class="text-[10px] uppercase tracking-wider text-muted-foreground/70 w-20 shrink-0">Level</span>
 											<Badge variant={levelColor(ev.level)} class="text-[10px]">{ev.level}</Badge>
 										</div>
 										{#if parsedSpringBootLog}
 											<div class="flex items-start gap-4 px-3 py-2">
-												<span class="text-[10px] uppercase tracking-wider text-text-faint w-20 shrink-0 pt-px">Thread</span>
-												<span class="text-[12px] font-mono text-text-muted break-all leading-snug">{parsedSpringBootLog.thread}</span>
+												<span class="text-[10px] uppercase tracking-wider text-muted-foreground/70 w-20 shrink-0 pt-px">Thread</span>
+												<span class="text-[12px] font-mono text-muted-foreground break-all leading-snug">{parsedSpringBootLog.thread}</span>
 											</div>
 											<div class="flex items-start gap-4 px-3 py-2">
-												<span class="text-[10px] uppercase tracking-wider text-text-faint w-20 shrink-0 pt-px">Logger</span>
-												<span class="text-[12px] font-mono text-text-muted break-all leading-snug">{parsedSpringBootLog.logger}</span>
+												<span class="text-[10px] uppercase tracking-wider text-muted-foreground/70 w-20 shrink-0 pt-px">Logger</span>
+												<span class="text-[12px] font-mono text-muted-foreground break-all leading-snug">{parsedSpringBootLog.logger}</span>
 											</div>
 											<div class="flex items-center gap-4 px-3 py-2">
-												<span class="text-[10px] uppercase tracking-wider text-text-faint w-20 shrink-0">PID</span>
-												<span class="text-[12px] font-mono text-text-muted">{parsedSpringBootLog.pid}</span>
+												<span class="text-[10px] uppercase tracking-wider text-muted-foreground/70 w-20 shrink-0">PID</span>
+												<span class="text-[12px] font-mono text-muted-foreground">{parsedSpringBootLog.pid}</span>
 											</div>
 										{/if}
 										{#if ev.streamName}
 											<div class="flex items-start gap-4 px-3 py-2">
-												<span class="text-[10px] uppercase tracking-wider text-text-faint w-20 shrink-0 pt-px">Stream</span>
-												<span class="text-[12px] font-mono text-text-muted break-all leading-snug">{ev.streamName}</span>
+												<span class="text-[10px] uppercase tracking-wider text-muted-foreground/70 w-20 shrink-0 pt-px">Stream</span>
+												<span class="text-[12px] font-mono text-muted-foreground break-all leading-snug">{ev.streamName}</span>
 											</div>
 										{/if}
 										{#if ev.source}
 											<div class="flex items-center gap-4 px-3 py-2">
-												<span class="text-[10px] uppercase tracking-wider text-text-faint w-20 shrink-0">Source</span>
-												<span class="text-[12px] font-mono text-text-muted">{ev.source}</span>
+												<span class="text-[10px] uppercase tracking-wider text-muted-foreground/70 w-20 shrink-0">Source</span>
+												<span class="text-[12px] font-mono text-muted-foreground">{ev.source}</span>
 											</div>
 										{/if}
 									</div>
@@ -831,13 +790,13 @@
 			<!-- Pagination -->
 			{#if eventsTotal > eventsLimit}
 				<div class="flex items-center justify-between px-1">
-					<p class="text-xs text-text-faint">{pageInfo}</p>
+					<p class="text-xs text-muted-foreground/70">{pageInfo}</p>
 					<div class="flex items-center gap-2">
 						<button
 							type="button"
 							onclick={prevPage}
 							disabled={!hasPrevPage}
-							class="rounded-md border border-border px-2.5 py-1 text-xs text-text-muted hover:bg-bg-surface transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+							class="rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
 						>
 							Previous
 						</button>
@@ -845,7 +804,7 @@
 							type="button"
 							onclick={nextPage}
 							disabled={!hasNextPage}
-							class="rounded-md border border-border px-2.5 py-1 text-xs text-text-muted hover:bg-bg-surface transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+							class="rounded-md border border-border px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
 						>
 							Next
 						</button>
@@ -858,35 +817,35 @@
 	<!-- ── Groups list ──────────────────────────────────────────────── -->
 	<div class="space-y-3">
 		<!-- Header -->
-		<div class="flex items-center justify-between gap-3 rounded-lg border border-border bg-bg-raised px-4 py-3">
+		<div class="flex items-center justify-between gap-3 rounded-lg border border-border bg-card px-4 py-3">
 			<div class="flex items-center gap-3">
 				<div class="flex items-center justify-center h-8 w-8 rounded-md bg-accent/10">
-					<ScrollIcon size={16} class="text-accent" />
+					<ScrollIcon size={16} class="text-primary" />
 				</div>
 				<div>
-					<h2 class="text-sm font-semibold text-text">Log Groups</h2>
-					<p class="text-[10px] text-text-faint font-mono">{groupsCountLabel}</p>
+					<h2 class="text-sm font-semibold text-foreground">Log Groups</h2>
+					<p class="text-[10px] text-muted-foreground/70 font-mono">{groupsCountLabel}</p>
 				</div>
 			</div>
 			<button
 				type="button"
 				onclick={loadGroups}
 				disabled={groupsLoading}
-				class="inline-flex items-center gap-1.5 rounded-md border border-accent-strong bg-accent-muted px-2.5 py-1 text-xs text-accent hover:bg-accent/20 transition-colors disabled:opacity-50"
+				class="inline-flex items-center gap-1.5 rounded-md border border-primary/50 bg-primary/10 px-2.5 py-1 text-xs text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
 			>
 				<ArrowsClockwiseIcon size={12} class={groupsLoading ? 'animate-spin' : ''} />
 				Refresh
 			</button>
 		</div>
 
-		<div class="rounded-lg border border-border bg-bg-raised px-4 py-3 space-y-3">
+		<div class="rounded-lg border border-border bg-card px-4 py-3 space-y-3">
 			<div class="relative">
-				<MagnifyingGlassIcon size={12} class="absolute left-2 top-1/2 -translate-y-1/2 text-text-faint" />
+				<MagnifyingGlassIcon size={12} class="absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground/70" />
 				<input
 					type="text"
 					placeholder="Search services or log groups..."
 					bind:value={groupSearch}
-					class="w-full rounded-md border border-border bg-bg-surface pl-7 pr-2 py-2 text-xs text-text outline-none focus:ring-1 focus:ring-accent placeholder:text-text-faint"
+					class="w-full rounded-md border border-border bg-muted pl-7 pr-2 py-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/70"
 				/>
 			</div>
 			<div class="flex flex-wrap gap-2">
@@ -894,7 +853,7 @@
 					<button
 						type="button"
 						onclick={() => serviceFilter = option.key}
-						class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors {serviceFilter === option.key ? 'border-accent-strong bg-accent-muted text-accent' : 'border-border text-text-muted hover:text-text hover:bg-bg-surface'}"
+						class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors {serviceFilter === option.key ? 'border-primary/50 bg-primary/10 text-primary' : 'border-border text-muted-foreground hover:text-foreground hover:bg-muted'}"
 					>
 						<span>{option.label}</span>
 						<span class="rounded-full bg-black/5 px-1.5 py-0.5 text-[10px] tabular-nums dark:bg-white/10">{option.count}</span>
@@ -905,7 +864,7 @@
 
 		<!-- Error state -->
 		{#if groupsError}
-			<div class="rounded-lg border border-red/20 bg-red-muted px-4 py-3 text-xs text-red">
+			<div class="rounded-lg border border-red/20 bg-red-muted px-4 py-3 text-xs text-destructive">
 				{groupsError}
 			</div>
 		{/if}
@@ -927,28 +886,28 @@
 					<button
 						type="button"
 						onclick={() => selectGroup(group.name)}
-						class="flex items-center justify-between gap-4 rounded-lg border border-border bg-bg-raised px-4 py-3 text-left hover:border-accent/40 hover:bg-bg-surface/50 transition-colors group"
+						class="flex items-center justify-between gap-4 rounded-lg border border-border bg-card px-4 py-3 text-left hover:border-primary/40 hover:bg-muted/50 transition-colors group"
 					>
 						<div class="min-w-0 flex-1">
 							<div class="flex items-center gap-2 mb-1">
 								<Badge variant="secondary" class="text-[10px]">{groupCategory(group.name)}</Badge>
-								<span class="text-sm font-medium text-text truncate">{groupDisplayName(group.name)}</span>
+								<span class="text-sm font-medium text-foreground truncate">{groupDisplayName(group.name)}</span>
 							</div>
-							<p class="text-[10px] font-mono text-text-faint truncate">{group.name}</p>
+							<p class="text-[10px] font-mono text-muted-foreground/70 truncate">{group.name}</p>
 						</div>
 						<div class="flex items-center gap-4 shrink-0 text-right">
 							<div>
-								<p class="text-sm font-semibold text-text tabular-nums">{group.eventCount}</p>
-								<p class="text-[10px] text-text-faint">events</p>
+								<p class="text-sm font-semibold text-foreground tabular-nums">{group.eventCount}</p>
+								<p class="text-[10px] text-muted-foreground/70">events</p>
 							</div>
 							<div>
-								<p class="text-sm font-semibold text-text tabular-nums">{group.streamCount}</p>
-								<p class="text-[10px] text-text-faint">streams</p>
+								<p class="text-sm font-semibold text-foreground tabular-nums">{group.streamCount}</p>
+								<p class="text-[10px] text-muted-foreground/70">streams</p>
 							</div>
 							{#if group.lastEvent}
 								<div class="hidden sm:block">
-									<p class="text-xs text-text-muted tabular-nums">{new Date(group.lastEvent).toLocaleTimeString()}</p>
-									<p class="text-[10px] text-text-faint">last event</p>
+									<p class="text-xs text-muted-foreground tabular-nums">{new Date(group.lastEvent).toLocaleTimeString()}</p>
+									<p class="text-[10px] text-muted-foreground/70">last event</p>
 								</div>
 							{/if}
 						</div>
