@@ -1,10 +1,14 @@
 package admin
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -361,6 +365,73 @@ func TestOverviewInfersRedisInfraConnectionsFromEnvironment(t *testing.T) {
 	}
 	if payload.Connections[0].Evidence != "env" || payload.Connections[0].Source != "REDIS_URL" {
 		t.Fatalf("unexpected connection evidence: %+v", payload.Connections[0])
+	}
+}
+
+func TestScanChaosSourceRejectsInvalidBaseDir(t *testing.T) {
+	h := newTestHandler(t)
+
+	body := bytes.NewBufferString("{\"baseDir\":\"bad\\u0000path\",\"functionNames\":[\"orders\"]}")
+	req := httptest.NewRequest(http.MethodPost, "/_openstack/admin/chaos/source", body)
+	rec := httptest.NewRecorder()
+
+	h.ScanChaosSource(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(rec.Body.String(), "invalid control characters") {
+		t.Fatalf("body = %q, want invalid control characters error", rec.Body.String())
+	}
+}
+
+func TestScanChaosSourceSanitizesQuotedBaseDir(t *testing.T) {
+	h := newTestHandler(t)
+
+	baseDir := t.TempDir()
+	lambdaDir := filepath.Join(baseDir, "orders-handler")
+	if err := os.MkdirAll(lambdaDir, 0o755); err != nil {
+		t.Fatalf("mkdir lambda dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lambdaDir, "package.json"), []byte(`{"name":"orders-handler"}`), 0o644); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+
+	payload := map[string]any{
+		"baseDir":       `  "` + baseDir + `"  `,
+		"functionNames": []string{"orders-handler"},
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/_openstack/admin/chaos/source", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	h.ScanChaosSource(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp struct {
+		Matches []struct {
+			FunctionName string `json:"functionName"`
+			Dir          string `json:"dir"`
+		} `json:"matches"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.Matches) != 1 {
+		t.Fatalf("matches len = %d, want 1", len(resp.Matches))
+	}
+	if resp.Matches[0].FunctionName != "orders-handler" {
+		t.Fatalf("functionName = %q, want %q", resp.Matches[0].FunctionName, "orders-handler")
+	}
+	if resp.Matches[0].Dir != lambdaDir {
+		t.Fatalf("dir = %q, want %q", resp.Matches[0].Dir, lambdaDir)
 	}
 }
 

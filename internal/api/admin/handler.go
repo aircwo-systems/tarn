@@ -3,16 +3,19 @@ package admin
 import (
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/openstack-project/openstack/internal/collection"
 	apigatewaysvc "github.com/openstack-project/openstack/internal/apigateway"
 	apigatewayv1svc "github.com/openstack-project/openstack/internal/apigatewayv1"
+	"github.com/openstack-project/openstack/internal/collection"
 	"github.com/openstack-project/openstack/internal/config"
 	eventsourcesvc "github.com/openstack-project/openstack/internal/eventsource"
 	infrasvc "github.com/openstack-project/openstack/internal/infrastructure"
@@ -243,7 +246,9 @@ func pickBodyExample(events map[string]json.RawMessage, method string) json.RawM
 	}
 
 	isProxyEvent := func(data json.RawMessage) bool {
-		var check struct{ HTTPMethod string `json:"httpMethod"` }
+		var check struct {
+			HTTPMethod string `json:"httpMethod"`
+		}
 		return json.Unmarshal(data, &check) == nil && check.HTTPMethod != ""
 	}
 
@@ -961,13 +966,13 @@ func (h *Handler) RunChaos(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		InvokeBase string `json:"invokeBase"`
 		Routes     []struct {
-			RouteKey        string                   `json:"routeKey"`
-			Method          string                   `json:"method"`
-			Path            string                   `json:"path"`
-			SeedBody        json.RawMessage          `json:"seedBody,omitempty"`
-			RequiredHeaders map[string]string        `json:"requiredHeaders,omitempty"`
-			FieldOverrides  map[string]interface{}   `json:"fieldOverrides,omitempty"`
-			ProbeBodies     []collection.ProbeBody   `json:"probeBodies,omitempty"`
+			RouteKey        string                 `json:"routeKey"`
+			Method          string                 `json:"method"`
+			Path            string                 `json:"path"`
+			SeedBody        json.RawMessage        `json:"seedBody,omitempty"`
+			RequiredHeaders map[string]string      `json:"requiredHeaders,omitempty"`
+			FieldOverrides  map[string]interface{} `json:"fieldOverrides,omitempty"`
+			ProbeBodies     []collection.ProbeBody `json:"probeBodies,omitempty"`
 		} `json:"routes"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -1031,12 +1036,13 @@ func (h *Handler) ScanChaosSource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
-	if req.BaseDir == "" {
-		writeError(w, http.StatusBadRequest, "baseDir is required")
+	baseDir, err := sanitizeLocalSourceDir(req.BaseDir)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	result, err := collection.ScanLocalSource(req.BaseDir, req.FunctionNames)
+	result, err := collection.ScanLocalSource(baseDir, req.FunctionNames)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "scan failed: "+err.Error())
 		return
@@ -1083,6 +1089,45 @@ func (h *Handler) ScanChaosSource(w http.ResponseWriter, r *http.Request) {
 		"unmatched":  result.Unmatched,
 		"discovered": result.Discovered,
 	})
+}
+
+func sanitizeLocalSourceDir(baseDir string) (string, error) {
+	trimmed := strings.TrimSpace(baseDir)
+	if trimmed == "" {
+		return "", fmt.Errorf("baseDir is required")
+	}
+	if len(trimmed) > 1024 {
+		return "", fmt.Errorf("baseDir is too long")
+	}
+	if strings.IndexFunc(trimmed, func(r rune) bool {
+		return r == 0 || r < 32 || r == 127
+	}) != -1 {
+		return "", fmt.Errorf("baseDir contains invalid control characters")
+	}
+	if len(trimmed) >= 2 {
+		if (trimmed[0] == '"' && trimmed[len(trimmed)-1] == '"') || (trimmed[0] == '\'' && trimmed[len(trimmed)-1] == '\'') {
+			trimmed = strings.TrimSpace(trimmed[1 : len(trimmed)-1])
+		}
+	}
+
+	cleaned := filepath.Clean(trimmed)
+	abs, err := filepath.Abs(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("baseDir is invalid")
+	}
+
+	info, err := os.Stat(abs)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("baseDir does not exist")
+		}
+		return "", fmt.Errorf("baseDir is unavailable")
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("baseDir must be a directory")
+	}
+
+	return abs, nil
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
