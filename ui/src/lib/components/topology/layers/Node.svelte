@@ -8,7 +8,7 @@
 
 <g class="node">
   <rect {x} {y} {width} height="20" rx="4" 
-        stroke={color} class="fill-bg-overlay" stroke-width="0.75" />
+        stroke={color} class="fill-popover" stroke-width="0.75" />
   <circle cx={x + 9} cy={y + 10} r="2" fill={color} />
   <text x={x + 15} y={y + 13} font-size="7">{label}</text>
 </g>

@@ -82,18 +82,18 @@
 	{#each secrets as secret}
 		<TableRow>
 			<TableCell><ArnCell name={secret.name} arn={secret.arn} /></TableCell>
-			<TableCell class="text-text-muted text-xs">{secret.description || '--'}</TableCell>
+			<TableCell class="text-muted-foreground text-xs">{secret.description || '--'}</TableCell>
 			<TableCell class="min-w-[18rem]">
 				<div class="flex items-center gap-2">
 					<span
-						class={`max-w-[20rem] break-all font-mono text-xs ${secretErrors[secret.name] ? 'text-red-300' : 'text-text-faint'}`}
+						class={`max-w-[20rem] break-all font-mono text-xs ${secretErrors[secret.name] ? 'text-destructive-300' : 'text-muted-foreground/70'}`}
 						title={secretVisible[secret.name] ? renderSecretValue(secret.name) : 'Hidden'}
 					>
 						{renderSecretValue(secret.name)}
 					</span>
 					<button
 						type="button"
-						class="shrink-0 rounded-md border border-border p-1 text-text-muted hover:bg-bg-subtle hover:text-text disabled:cursor-not-allowed disabled:opacity-50"
+						class="shrink-0 rounded-md border border-border p-1 text-muted-foreground hover:bg-background-subtle hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
 						onclick={() => void toggleSecretValue(secret.name)}
 						disabled={secretLoading[secret.name]}
 						title={secretVisible[secret.name] ? 'Hide secret value' : 'View secret value'}
@@ -109,10 +109,10 @@
 					</button>
 				</div>
 			</TableCell>
-			<TableCell class="font-mono text-text-faint text-xs">{secret.versionId}</TableCell>
-			<TableCell class="text-text-muted">{secret.tagCount}</TableCell>
-			<TableCell class="text-text-faint text-xs">{formatDate(secret.createdDate)}</TableCell>
-			<TableCell class="text-text-faint text-xs">{formatDate(secret.lastChangedDate)}</TableCell>
+			<TableCell class="font-mono text-muted-foreground/70 text-xs">{secret.versionId}</TableCell>
+			<TableCell class="text-muted-foreground">{secret.tagCount}</TableCell>
+			<TableCell class="text-muted-foreground/70 text-xs">{formatDate(secret.createdDate)}</TableCell>
+			<TableCell class="text-muted-foreground/70 text-xs">{formatDate(secret.lastChangedDate)}</TableCell>
 		</TableRow>
 	{/each}
 </ResourceTable>

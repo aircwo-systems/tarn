@@ -20,10 +20,12 @@ let inFlight = false;
 
 const SETTINGS_COOKIE = "openstack-ui-settings";
 const INFRA_SETTINGS_KEY = "openstack-infra-settings";
+const PROJECT_SETTINGS_KEY = "openstack-project-settings";
 const DEFAULT_POLLING_INTERVAL_SECONDS = 5;
 const MIN_POLLING_INTERVAL_SECONDS = 1;
 const MAX_POLLING_INTERVAL_SECONDS = 120;
 const DEFAULT_PERSISTENCE_ENABLED = false;
+const MAX_SCHEMA_SOURCE_LENGTH = 1024;
 
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -33,6 +35,7 @@ let resolvedTheme = $state<"light" | "dark">("dark");
 let persistenceEnabled = $state(DEFAULT_PERSISTENCE_ENABLED);
 let dashboardTagFilter = $state("");
 let settingsInitialized = false;
+let schemaSourceDir = $state("");
 
 let infraEnabledKinds = $state<InfraProbeKind[]>(["docker"]);
 let infraFrontendTargets = $state<FrontendTarget[]>([]);
@@ -71,6 +74,9 @@ export function getUISettings() {
     },
     get persistenceEnabled() {
       return persistenceEnabled;
+    },
+    get schemaSourceDir() {
+      return schemaSourceDir;
     },
   };
 }
@@ -124,6 +130,7 @@ export function initUISettings() {
   persistenceEnabled = normalizePersistenceEnabled(settings.persistenceEnabled);
   applyTheme(themeMode);
   initInfraSettings();
+  initProjectSettings();
 }
 
 export function getInfraSettings() {
@@ -180,6 +187,14 @@ export function setPersistenceEnabled(next: boolean) {
 
   persistenceEnabled = normalized;
   persistSettingsToCookie();
+}
+
+export function setSchemaSourceDir(next: string) {
+  const normalized = sanitizeSchemaSourceDir(next);
+  if (normalized === schemaSourceDir) return;
+
+  schemaSourceDir = normalized;
+  persistProjectSettings();
 }
 
 export function setDashboardTagFilter(next: string) {
@@ -338,6 +353,23 @@ function normalizePersistenceEnabled(value: unknown): boolean {
   return value === true;
 }
 
+export function sanitizeSchemaSourceDir(value: unknown): string {
+  if (typeof value !== "string") return "";
+
+  let normalized = value.replace(/[\u0000-\u001F\u007F]/g, "").trim();
+  if (
+    normalized.length >= 2 &&
+    ((normalized.startsWith('"') && normalized.endsWith('"')) ||
+      (normalized.startsWith("'") && normalized.endsWith("'")))
+  ) {
+    normalized = normalized.slice(1, -1).trim();
+  }
+  if (normalized.length > MAX_SCHEMA_SOURCE_LENGTH) {
+    normalized = normalized.slice(0, MAX_SCHEMA_SOURCE_LENGTH);
+  }
+  return normalized;
+}
+
 function initInfraSettings() {
   if (typeof localStorage === "undefined") return;
   try {
@@ -360,6 +392,26 @@ function persistInfraSettings() {
   localStorage.setItem(
     INFRA_SETTINGS_KEY,
     JSON.stringify({ enabledKinds: infraEnabledKinds, frontendTargets: infraFrontendTargets }),
+  );
+}
+
+function initProjectSettings() {
+  if (typeof localStorage === "undefined") return;
+  try {
+    const raw = localStorage.getItem(PROJECT_SETTINGS_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as { schemaSourceDir?: unknown };
+    schemaSourceDir = sanitizeSchemaSourceDir(parsed.schemaSourceDir);
+  } catch {
+    // ignore corrupt data
+  }
+}
+
+function persistProjectSettings() {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(
+    PROJECT_SETTINGS_KEY,
+    JSON.stringify({ schemaSourceDir }),
   );
 }
 

@@ -17,7 +17,7 @@
 	);
 </script>
 
-<div class="flex items-center gap-2 text-xs text-text-muted">
+<div class="flex items-center gap-2 text-xs text-muted-foreground">
 	<LedDot color={ledColor} size="md" />
 	<span>{text}</span>
 </div>

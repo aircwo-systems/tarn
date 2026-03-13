@@ -42,24 +42,24 @@
 >
 	{#each Array(Math.floor(CW / 48)) as _, ix}
 		{#each Array(Math.floor(CH / 48)) as _, iy}
-			<circle cx={24 + ix * 48} cy={24 + iy * 48} r="0.55" class="fill-border" opacity="0.45" />
+			<circle cx={24 + ix * 48} cy={24 + iy * 48} r="0.55" class="fill-[var(--color-border)]" opacity="0.45" />
 		{/each}
 	{/each}
 
 	{#if hasData}
-		<text x={connGatewayX} y={92} text-anchor="middle" class="fill-text-faint" font-size="8" font-family="var(--font-mono)">
+		<text x={connGatewayX} y={92} text-anchor="middle" class="fill-foreground-faint" font-size="8" font-family="var(--font-mono)">
 			Gateways
 		</text>
-		<text x={connQueueX} y={92} text-anchor="middle" class="fill-text-faint" font-size="8" font-family="var(--font-mono)">
+		<text x={connQueueX} y={92} text-anchor="middle" class="fill-foreground-faint" font-size="8" font-family="var(--font-mono)">
 			Queues
 		</text>
-		<text x={connBucketX} y={92} text-anchor="middle" class="fill-text-faint" font-size="8" font-family="var(--font-mono)">
+		<text x={connBucketX} y={92} text-anchor="middle" class="fill-foreground-faint" font-size="8" font-family="var(--font-mono)">
 			Buckets
 		</text>
-		<text x={connFunctionX} y={92} text-anchor="middle" class="fill-text-faint" font-size="8" font-family="var(--font-mono)">
+		<text x={connFunctionX} y={92} text-anchor="middle" class="fill-foreground-faint" font-size="8" font-family="var(--font-mono)">
 			Functions
 		</text>
-		<text x={connSecretX} y={92} text-anchor="middle" class="fill-text-faint" font-size="8" font-family="var(--font-mono)">
+		<text x={connSecretX} y={92} text-anchor="middle" class="fill-foreground-faint" font-size="8" font-family="var(--font-mono)">
 			Secrets
 		</text>
 
@@ -67,7 +67,7 @@
 		<!-- ...existing code from topology-canvas.svelte for connections view... -->
 
 	{:else}
-		<text x={CW / 2} y={CH / 2} text-anchor="middle" class="fill-text-faint" font-size="11" font-family="var(--font-mono)">
+		<text x={CW / 2} y={CH / 2} text-anchor="middle" class="fill-foreground-faint" font-size="11" font-family="var(--font-mono)">
 			Connecting...
 		</text>
 	{/if}

@@ -116,20 +116,20 @@
 </script>
 
 <div class="space-y-4">
-	<div class="rounded-lg border border-border bg-bg-raised px-4 py-3">
+	<div class="rounded-lg border border-border bg-card px-4 py-3">
 		<div class="flex flex-wrap items-center justify-between gap-3">
 			<div>
-				<h2 class="text-sm font-semibold text-text">Triggers</h2>
-				<p class="text-[10px] text-text-faint font-mono">
+				<h2 class="text-sm font-semibold text-foreground">Triggers</h2>
+				<p class="text-[10px] text-muted-foreground/70 font-mono">
 					Visualizing event sources wired to functions and APIs
 				</p>
 			</div>
 			<div class="flex items-center gap-2 text-xs">
-				<span class="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-text-muted">
+				<span class="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-muted-foreground">
 					<ChatCircle size={12} class="text-amber" />
 					SQS {sqsCount}
 				</span>
-				<span class="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-text-muted">
+				<span class="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-muted-foreground">
 					<GlobeHemisphereWest size={12} class="text-blue" />
 					API {apiCount}
 				</span>
@@ -159,13 +159,13 @@
 				<TableCell>
 					{#if trigger.type === 'SQS'}
 						<div class="flex items-start gap-2">
-							<Lightning size={13} class="mt-[2px] text-accent" />
+							<Lightning size={13} class="mt-[2px] text-primary" />
 							<ArnCell name={trigger.targetName} arn={trigger.targetArn} />
 						</div>
 					{:else}
 						<div class="space-y-0.5 max-w-[22rem]">
-							<p class="text-xs font-medium text-text">{trigger.targetName}</p>
-							<p class="font-mono text-[11px] text-text-faint">{trigger.targetArn}</p>
+							<p class="text-xs font-medium text-foreground">{trigger.targetName}</p>
+							<p class="font-mono text-[11px] text-muted-foreground/70">{trigger.targetArn}</p>
 						</div>
 					{/if}
 				</TableCell>
@@ -174,9 +174,9 @@
 				</TableCell>
 				<TableCell>
 					<div class="space-y-0.5">
-						<p class="text-xs text-text-muted">{trigger.detail}</p>
+						<p class="text-xs text-muted-foreground">{trigger.detail}</p>
 						{#if trigger.lastResult}
-							<p class="font-mono text-[11px] text-text-faint">{trigger.lastResult}</p>
+							<p class="font-mono text-[11px] text-muted-foreground/70">{trigger.lastResult}</p>
 						{/if}
 					</div>
 				</TableCell>
