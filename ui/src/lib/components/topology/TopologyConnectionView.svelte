@@ -8,13 +8,13 @@
     InfraProbe,
     EventSourceMappingSummary,
     InfraConnection,
-    RequestTrace,
+    RequestTrace
   } from "$lib/types";
   import type { ConnectionNode } from "./types";
   import {
     buildTopologyGraph,
     infraKindTone,
-    type InfraNodePosition,
+    type InfraNodePosition
   } from "./topology-connection-model";
   import TopologyConnectionCanvas from "./canvas/TopologyConnectionCanvas.svelte";
   import TopologyNodeTooltip from "./canvas/TopologyNodeTooltip.svelte";
