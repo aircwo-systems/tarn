@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 
@@ -134,6 +135,34 @@ func TestEvaluateVTL_ChainedGetExpressionsResolveFinalArgument(t *testing.T) {
 	}
 	if got := params.Get("MessageBody"); got != "billing" {
 		t.Fatalf("MessageBody = %q, want %q", got, "billing")
+	}
+}
+
+func TestEvaluateVTL_ToJsonCompactsJSONOutput(t *testing.T) {
+	input := &InvokeInput{
+		Headers: http.Header{},
+		Query:   url.Values{},
+		Body:    []byte(`{}`),
+	}
+
+	tmpl := `#set($payload = {
+  "b": "two",
+  "a": "one"
+})
+MessageBody=$util.toJson($payload)`
+
+	result := evaluateVTL(tmpl, input, nil)
+	params, err := url.ParseQuery(result)
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+
+	body := params.Get("MessageBody")
+	if strings.Contains(body, "\n") || strings.Contains(body, ": ") {
+		t.Fatalf("MessageBody should be compact JSON, got %q", body)
+	}
+	if body != `{"a":"one","b":"two"}` {
+		t.Fatalf("MessageBody = %q, want %q", body, `{"a":"one","b":"two"}`)
 	}
 }
 
