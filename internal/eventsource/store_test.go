@@ -1,6 +1,8 @@
 package eventsource
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/openstack-project/openstack/internal/config"
@@ -131,5 +133,53 @@ func TestStorePersistenceRoundTrip(t *testing.T) {
 	}
 	if got.BatchSize != 7 {
 		t.Fatalf("batchSize = %d, want 7", got.BatchSize)
+	}
+}
+
+func TestStoreConcurrentSavesPersistAllMappings(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.PersistenceEnabled = true
+
+	s := NewStore(cfg)
+	if err := s.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+
+	const n = 64
+	errCh := make(chan error, n)
+	var wg sync.WaitGroup
+
+	for i := 0; i < n; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			m := &types.EventSourceMapping{
+				UUID:         fmt.Sprintf("concurrent-%d", i),
+				FunctionName: "fn",
+				QueueName:    "q",
+				State:        "Enabled",
+			}
+			if err := s.Save(m); err != nil {
+				errCh <- err
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("save failed: %v", err)
+	}
+
+	// Reload from disk and ensure all mappings were persisted.
+	s2 := NewStore(cfg)
+	if err := s2.Init(); err != nil {
+		t.Fatalf("init reloaded store: %v", err)
+	}
+
+	if got := len(s2.List()); got != n {
+		t.Fatalf("reloaded mapping count = %d, want %d", got, n)
 	}
 }

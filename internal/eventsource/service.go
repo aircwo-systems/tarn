@@ -46,7 +46,67 @@ func (s *Service) SetCollector(c *tracesvc.Collector) { s.collector = c }
 
 // Init loads persisted state.
 func (s *Service) Init() error {
-	return s.store.Init()
+	if err := s.store.Init(); err != nil {
+		return err
+	}
+	return s.dedupeMappings()
+}
+
+func (s *Service) dedupeMappings() error {
+	all := s.store.List()
+	if len(all) <= 1 {
+		return nil
+	}
+
+	type winner struct {
+		mapping *types.EventSourceMapping
+	}
+	byKey := map[string]winner{}
+	duplicates := make([]*types.EventSourceMapping, 0)
+
+	for _, m := range all {
+		normalizedFunctionName := normalizeLambdaFunctionName(m.FunctionName)
+		key := m.EventSourceArn + "|" + normalizedFunctionName
+
+		if cur, ok := byKey[key]; !ok {
+			byKey[key] = winner{mapping: m}
+			continue
+		} else {
+			// Keep the most recently modified mapping for this unique key.
+			if m.LastModified.After(cur.mapping.LastModified) {
+				duplicates = append(duplicates, cur.mapping)
+				byKey[key] = winner{mapping: m}
+			} else {
+				duplicates = append(duplicates, m)
+			}
+		}
+	}
+
+	for _, dup := range duplicates {
+		if err := s.store.Delete(dup.UUID); err != nil {
+			return fmt.Errorf("delete duplicate mapping %s: %w", dup.UUID, err)
+		}
+	}
+
+	// Normalize function names of surviving mappings so future lookups are stable.
+	for _, item := range byKey {
+		m := item.mapping
+		normalized := normalizeLambdaFunctionName(m.FunctionName)
+		if m.FunctionName == normalized {
+			continue
+		}
+		m.FunctionName = normalized
+		m.LastModified = time.Now().UTC()
+		if err := s.store.Save(m); err != nil {
+			return fmt.Errorf("normalize mapping %s function name: %w", m.UUID, err)
+		}
+	}
+
+	if len(duplicates) > 0 {
+		log.Printf("[eventsource] removed %d duplicate event source mapping(s)", len(duplicates))
+	}
+
+	return nil
 }
 
 // Start begins pollers for all mappings.
@@ -91,6 +151,15 @@ func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string
 		return nil, err
 	}
 
+	normalizedFunctionName := normalizeLambdaFunctionName(functionName)
+	var existing *types.EventSourceMapping
+	for _, m := range s.store.List() {
+		if m.EventSourceArn == eventSourceArn && normalizeLambdaFunctionName(m.FunctionName) == normalizedFunctionName {
+			existing = m
+			break
+		}
+	}
+
 	if batchSize <= 0 {
 		batchSize = 10
 	}
@@ -101,13 +170,50 @@ func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string
 		maxBatchingWindow = 0
 	}
 
+	// Idempotent create/upsert for the same (eventSourceArn, functionName) pair.
+	// This keeps mappings unique per lambda+event-source while making repeated
+	// applies resilient when persisted mappings already exist.
+	if existing != nil {
+		existing.FunctionArn = functionArn
+		existing.FunctionName = normalizedFunctionName
+		existing.QueueName = queueName
+		existing.BatchSize = batchSize
+		existing.MaximumBatchingWindowInSeconds = maxBatchingWindow
+		existing.Enabled = enabled
+		existing.FilterCriteria = filterCriteria
+		existing.LastModified = time.Now().UTC()
+		if enabled {
+			existing.State = "Enabled"
+		} else {
+			existing.State = "Disabled"
+		}
+
+		if err := s.store.Save(existing); err != nil {
+			return nil, err
+		}
+
+		// Reconcile poller state with updated mapping config.
+		s.mu.Lock()
+		if p, exists := s.pollers[existing.UUID]; exists {
+			p.stop()
+			delete(s.pollers, existing.UUID)
+		}
+		if existing.Enabled {
+			p := newPoller(existing, s.sqs, s.lambda, s.store, s.traceStore, s.collector)
+			p.start()
+			s.pollers[existing.UUID] = p
+		}
+		s.mu.Unlock()
+
+		return existing, nil
+	}
+
 	state := "Enabled"
 	if !enabled {
 		state = "Disabled"
 	}
 
 	now := time.Now().UTC()
-	normalizedFunctionName := normalizeLambdaFunctionName(functionName)
 	mapping := &types.EventSourceMapping{
 		UUID:                           uuid.NewString(),
 		EventSourceArn:                 eventSourceArn,

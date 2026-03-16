@@ -17,6 +17,7 @@ type mockSQS struct {
 	mu           sync.Mutex
 	messages     []*types.SQSMessage
 	deleted      []string
+	released     []string
 	receiveErr   error
 	receiveCalls int
 }
@@ -46,6 +47,13 @@ func (m *mockSQS) DeleteMessage(queueName, receiptHandle string) error {
 }
 
 func (m *mockSQS) ChangeMessageVisibility(queueName, receiptHandle string, timeout int) error {
+	return nil
+}
+
+func (m *mockSQS) ReleaseMessage(queueName, receiptHandle string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.released = append(m.released, receiptHandle)
 	return nil
 }
 
@@ -101,6 +109,17 @@ func TestBuildSQSEventPayload(t *testing.T) {
 	}
 	if records[0].Body != `{"order":"123"}` {
 		t.Fatalf("body = %q, want %q", records[0].Body, `{"order":"123"}`)
+	}
+}
+
+func TestMatchesFilterPatternWithEscapedBodyJSON(t *testing.T) {
+	msg := &types.SQSMessage{
+		Body: `{\"id\":\"req-1\",\"type\":\"type2\"}`,
+	}
+
+	pattern := `{"body":{"type":["type2"]}}`
+	if !matchesFilterPattern(msg, pattern) {
+		t.Fatalf("expected escaped JSON body to match pattern %s", pattern)
 	}
 }
 
@@ -242,6 +261,63 @@ func TestPollerPausesOnMissingQueue(t *testing.T) {
 	// poller must still be stoppable after a not-found error.
 	p.stop()
 	p.stop()
+}
+
+func TestPollerReleasesFilteredOutMessages(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.PersistenceEnabled = false
+
+	store := NewStore(cfg)
+	store.Init()
+
+	mapping := &types.EventSourceMapping{
+		UUID:                           "poll-filter-release",
+		EventSourceArn:                 "arn:aws:sqs:us-east-1:000000000000:events",
+		QueueName:                      "events",
+		FunctionName:                   "type2-processor",
+		BatchSize:                      10,
+		MaximumBatchingWindowInSeconds: 1,
+		Enabled:                        true,
+		State:                          "Enabled",
+		FilterCriteria: &types.FilterCriteria{
+			Filters: []types.FilterCriteriaFilter{
+				{Pattern: `{"body":{"type":["type2"]}}`},
+			},
+		},
+	}
+	if err := store.Save(mapping); err != nil {
+		t.Fatalf("save mapping: %v", err)
+	}
+
+	sqsMock := &mockSQS{
+		messages: []*types.SQSMessage{
+			{
+				MessageId:     "m1",
+				ReceiptHandle: "rh1",
+				Body:          `{"id":"req-1","type":"type1"}`,
+				MD5OfBody:     "md5",
+			},
+		},
+	}
+	lambdaMock := &mockLambda{}
+
+	p := newPoller(mapping, sqsMock, lambdaMock, store, nil, nil)
+	p.poll()
+
+	lambdaMock.mu.Lock()
+	invocations := len(lambdaMock.invocations)
+	lambdaMock.mu.Unlock()
+	if invocations != 0 {
+		t.Fatalf("expected 0 lambda invocations for filtered-out message, got %d", invocations)
+	}
+
+	sqsMock.mu.Lock()
+	released := len(sqsMock.released)
+	sqsMock.mu.Unlock()
+	if released != 1 {
+		t.Fatalf("expected 1 released message, got %d", released)
+	}
 }
 
 func TestPollerPausesOnMissingFunction(t *testing.T) {
