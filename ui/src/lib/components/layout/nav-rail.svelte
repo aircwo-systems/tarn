@@ -15,8 +15,8 @@
     PlusIcon,
     TrashIcon,
     ShieldWarningIcon,
-    QrCodeIcon,
   } from "phosphor-svelte";
+  import OpenStackLogo from "$lib/components/common/openstack-logo.svelte";
   import NavRailItem from "./nav-rail-item.svelte";
   import ThemeToggle from "./theme-toggle.svelte";
   import StatusIndicator from "$lib/components/common/status-indicator.svelte";
@@ -189,7 +189,7 @@
 >
   <!-- Brand -->
   <div class="flex items-center gap-2.5 px-3 py-3 shrink-0">
-    <QrCodeIcon class="h-8 w-8 rotate-90 fill-primary" />
+    <OpenStackLogo class="h-8 w-8 shrink-0" color="#007a5a" />
     {#if !collapsed}
       <div class="min-w-0">
         <p
