@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sort"
 	"sync"
 	"time"
 )
@@ -28,6 +29,8 @@ type Handler struct {
 	accountID string
 	mu        sync.Mutex
 	roles     map[string]*role
+	// inlinePolicies stores IAM inline role policies by role name and policy name.
+	inlinePolicies map[string]map[string]string
 	seq       int
 }
 
@@ -36,6 +39,7 @@ func NewHandler(accountID string) *Handler {
 	return &Handler{
 		accountID: accountID,
 		roles:     make(map[string]*role),
+		inlinePolicies: make(map[string]map[string]string),
 	}
 }
 
@@ -74,13 +78,14 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		h.emptyOK(w, action)
 	case "ListAttachedRolePolicies":
 		h.listAttachedRolePolicies(w)
-	case "PutRolePolicy", "DeleteRolePolicy":
-		h.emptyOK(w, action)
+	case "PutRolePolicy":
+		h.putRolePolicy(w, r)
+	case "DeleteRolePolicy":
+		h.deleteRolePolicy(w, r)
 	case "GetRolePolicy":
-		// No inline policies — return NoSuchEntity so TF can distinguish from an error.
-		h.noSuchEntity(w, "The policy was not found.")
+		h.getRolePolicy(w, r)
 	case "ListRolePolicies":
-		h.listRolePolicies(w)
+		h.listRolePolicies(w, r)
 	case "ListInstanceProfilesForRole":
 		h.listInstanceProfilesForRole(w)
 	case "CreateInstanceProfile":
@@ -121,6 +126,9 @@ func (h *Handler) createRole(w http.ResponseWriter, r *http.Request) {
 		MaxSessionDuration:       3600,
 	}
 	h.roles[name] = ro
+	if _, ok := h.inlinePolicies[name]; !ok {
+		h.inlinePolicies[name] = make(map[string]string)
+	}
 	h.mu.Unlock()
 
 	w.WriteHeader(http.StatusOK)
@@ -144,8 +152,11 @@ func (h *Handler) getRole(w http.ResponseWriter, r *http.Request) {
 			CreateDate:               time.Now().UTC().Format(time.RFC3339),
 			MaxSessionDuration:       3600,
 		}
-		h.roles[name] = ro
-	}
+			h.roles[name] = ro
+			if _, ok := h.inlinePolicies[name]; !ok {
+				h.inlinePolicies[name] = make(map[string]string)
+			}
+		}
 	h.mu.Unlock()
 
 	w.WriteHeader(http.StatusOK)
@@ -156,6 +167,7 @@ func (h *Handler) deleteRole(w http.ResponseWriter, r *http.Request) {
 	name := r.FormValue("RoleName")
 	h.mu.Lock()
 	delete(h.roles, name)
+	delete(h.inlinePolicies, name)
 	h.mu.Unlock()
 	h.emptyOK(w, "DeleteRole")
 }
@@ -200,12 +212,107 @@ func (h *Handler) listAttachedRolePolicies(w http.ResponseWriter) {
 		`</ListAttachedRolePoliciesResponse>`)
 }
 
-func (h *Handler) listRolePolicies(w http.ResponseWriter) {
+func (h *Handler) putRolePolicy(w http.ResponseWriter, r *http.Request) {
+	roleName := r.FormValue("RoleName")
+	policyName := r.FormValue("PolicyName")
+	policyDoc := r.FormValue("PolicyDocument")
+
+	if roleName == "" || policyName == "" {
+		h.noSuchEntity(w, "Role or policy not found.")
+		return
+	}
+
+	h.mu.Lock()
+	// Match getRole behavior: auto-stub missing roles to keep Terraform flows resilient.
+	if _, ok := h.roles[roleName]; !ok {
+		h.seq++
+		h.roles[roleName] = &role{
+			Name:                     roleName,
+			RoleID:                   fmt.Sprintf("AROAOPENSTACKSTUB%04d", h.seq),
+			ARN:                      fmt.Sprintf("arn:aws:iam::%s:role/%s", h.accountID, roleName),
+			Path:                     "/",
+			AssumeRolePolicyDocument: "{}",
+			CreateDate:               time.Now().UTC().Format(time.RFC3339),
+			MaxSessionDuration:       3600,
+		}
+	}
+	if _, ok := h.inlinePolicies[roleName]; !ok {
+		h.inlinePolicies[roleName] = make(map[string]string)
+	}
+	h.inlinePolicies[roleName][policyName] = policyDoc
+	h.mu.Unlock()
+
+	h.emptyOK(w, "PutRolePolicy")
+}
+
+func (h *Handler) getRolePolicy(w http.ResponseWriter, r *http.Request) {
+	roleName := r.FormValue("RoleName")
+	policyName := r.FormValue("PolicyName")
+
+	h.mu.Lock()
+	policies := h.inlinePolicies[roleName]
+	policyDoc, ok := policies[policyName]
+	h.mu.Unlock()
+	if !ok {
+		h.noSuchEntity(w, "The policy was not found.")
+		return
+	}
+
+	encoded := url.QueryEscape(policyDoc)
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>`+
+		`<GetRolePolicyResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">`+
+		`<GetRolePolicyResult>`+
+		`<RoleName>%s</RoleName>`+
+		`<PolicyName>%s</PolicyName>`+
+		`<PolicyDocument>%s</PolicyDocument>`+
+		`</GetRolePolicyResult>`+
+		`<ResponseMetadata><RequestId>openstack-iam-stub</RequestId></ResponseMetadata>`+
+		`</GetRolePolicyResponse>`,
+		roleName, policyName, encoded)
+}
+
+func (h *Handler) deleteRolePolicy(w http.ResponseWriter, r *http.Request) {
+	roleName := r.FormValue("RoleName")
+	policyName := r.FormValue("PolicyName")
+
+	h.mu.Lock()
+	if policies, ok := h.inlinePolicies[roleName]; ok {
+		delete(policies, policyName)
+	}
+	h.mu.Unlock()
+
+	h.emptyOK(w, "DeleteRolePolicy")
+}
+
+func (h *Handler) listRolePolicies(w http.ResponseWriter, r *http.Request) {
+	roleName := r.FormValue("RoleName")
+
+	h.mu.Lock()
+	policies := h.inlinePolicies[roleName]
+	names := make([]string, 0, len(policies))
+	for name := range policies {
+		names = append(names, name)
+	}
+	h.mu.Unlock()
+	sort.Strings(names)
+
+	var policyNamesXML string
+	if len(names) == 0 {
+		policyNamesXML = "<PolicyNames/>"
+	} else {
+		policyNamesXML = "<PolicyNames>"
+		for _, name := range names {
+			policyNamesXML += fmt.Sprintf("<member>%s</member>", name)
+		}
+		policyNamesXML += "</PolicyNames>"
+	}
+
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>`+
 		`<ListRolePoliciesResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">`+
 		`<ListRolePoliciesResult>`+
-		`<PolicyNames/>`+
+		policyNamesXML+
 		`<IsTruncated>false</IsTruncated>`+
 		`</ListRolePoliciesResult>`+
 		`<ResponseMetadata><RequestId>openstack-iam-stub</RequestId></ResponseMetadata>`+
