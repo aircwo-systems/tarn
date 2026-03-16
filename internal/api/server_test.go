@@ -48,32 +48,32 @@ func TestNewServerRegistersRoutes(t *testing.T) {
 	// start a test HTTP server using the same mux as NewServer
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
-	ts := httptest.NewServer(s.withLogging(mux))
-	defer ts.Close()
+	handler := s.withLogging(mux)
 
 	// create a lambda function via API so we can exercise both GET endpoints
 	createBody := []byte(`{"FunctionName":"foo","Runtime":"nodejs20.x","Handler":"index.handler","Role":"arn:aws:iam::000000000000:role/test","Code":{"ZipFile":""}}`)
-	resp, err := http.Post(ts.URL+"/2015-03-31/functions", "application/json", bytes.NewReader(createBody))
-	if err != nil {
-		t.Fatalf("create function request failed: %v", err)
-	}
-	if resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("create function status=%d body=%s", resp.StatusCode, string(body))
+	createReq := httptest.NewRequest(http.MethodPost, "/2015-03-31/functions", bytes.NewReader(createBody))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	handler.ServeHTTP(createRec, createReq)
+	createResp := createRec.Result()
+	if createResp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(createResp.Body)
+		t.Fatalf("create function status=%d body=%s", createResp.StatusCode, string(body))
 	}
 
 	// GET wrapper should include Configuration wrapper
-	resp, err = http.Get(ts.URL + "/2015-03-31/functions/foo")
-	if err != nil {
-		t.Fatalf("wrapper GET failed: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("wrapper GET status=%d", resp.StatusCode)
+	wrapperReq := httptest.NewRequest(http.MethodGet, "/2015-03-31/functions/foo", nil)
+	wrapperRec := httptest.NewRecorder()
+	handler.ServeHTTP(wrapperRec, wrapperReq)
+	wrapperResp := wrapperRec.Result()
+	if wrapperResp.StatusCode != http.StatusOK {
+		t.Fatalf("wrapper GET status=%d", wrapperResp.StatusCode)
 	}
 	var wrapper struct {
 		Configuration types.FunctionConfig `json:"Configuration"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&wrapper); err != nil {
+	if err := json.NewDecoder(wrapperResp.Body).Decode(&wrapper); err != nil {
 		t.Fatalf("decode wrapper response: %v", err)
 	}
 	if wrapper.Configuration.FunctionName != "foo" {
@@ -81,15 +81,15 @@ func TestNewServerRegistersRoutes(t *testing.T) {
 	}
 
 	// GET configuration path should return the object directly (no wrapper)
-	resp, err = http.Get(ts.URL + "/2015-03-31/functions/foo/configuration")
-	if err != nil {
-		t.Fatalf("configuration GET failed: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("configuration GET status=%d", resp.StatusCode)
+	cfgReq := httptest.NewRequest(http.MethodGet, "/2015-03-31/functions/foo/configuration", nil)
+	cfgRec := httptest.NewRecorder()
+	handler.ServeHTTP(cfgRec, cfgReq)
+	cfgResp := cfgRec.Result()
+	if cfgResp.StatusCode != http.StatusOK {
+		t.Fatalf("configuration GET status=%d", cfgResp.StatusCode)
 	}
 	var cfg1 types.FunctionConfig
-	if err := json.NewDecoder(resp.Body).Decode(&cfg1); err != nil {
+	if err := json.NewDecoder(cfgResp.Body).Decode(&cfg1); err != nil {
 		t.Fatalf("decode configuration response: %v", err)
 	}
 	if cfg1.FunctionName != "foo" {
@@ -98,15 +98,15 @@ func TestNewServerRegistersRoutes(t *testing.T) {
 
 	// verify state progression via the API: first fetch should be pending,
 	// second fetch should be active
-	resp, err = http.Get(ts.URL + "/2015-03-31/functions/foo/configuration")
-	if err != nil {
-		t.Fatalf("second configuration GET failed: %v", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("second configuration GET status=%d", resp.StatusCode)
+	cfgReq2 := httptest.NewRequest(http.MethodGet, "/2015-03-31/functions/foo/configuration", nil)
+	cfgRec2 := httptest.NewRecorder()
+	handler.ServeHTTP(cfgRec2, cfgReq2)
+	cfgResp2 := cfgRec2.Result()
+	if cfgResp2.StatusCode != http.StatusOK {
+		t.Fatalf("second configuration GET status=%d", cfgResp2.StatusCode)
 	}
 	var cfg2 types.FunctionConfig
-	if err := json.NewDecoder(resp.Body).Decode(&cfg2); err != nil {
+	if err := json.NewDecoder(cfgResp2.Body).Decode(&cfg2); err != nil {
 		t.Fatalf("decode second configuration response: %v", err)
 	}
 	if cfg2.State != types.FunctionStateActive {

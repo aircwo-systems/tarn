@@ -174,38 +174,45 @@ func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string
 	// This keeps mappings unique per lambda+event-source while making repeated
 	// applies resilient when persisted mappings already exist.
 	if existing != nil {
-		existing.FunctionArn = functionArn
-		existing.FunctionName = normalizedFunctionName
-		existing.QueueName = queueName
-		existing.BatchSize = batchSize
-		existing.MaximumBatchingWindowInSeconds = maxBatchingWindow
-		existing.Enabled = enabled
-		existing.FilterCriteria = filterCriteria
-		existing.LastModified = time.Now().UTC()
-		if enabled {
-			existing.State = "Enabled"
-		} else {
-			existing.State = "Disabled"
-		}
-
-		if err := s.store.Save(existing); err != nil {
-			return nil, err
-		}
-
-		// Reconcile poller state with updated mapping config.
+		// Stop any currently running poller before swapping mapping config.
+		// This avoids mutating a mapping object while a poller goroutine is
+		// concurrently reading from it.
 		s.mu.Lock()
 		if p, exists := s.pollers[existing.UUID]; exists {
 			p.stop()
 			delete(s.pollers, existing.UUID)
 		}
-		if existing.Enabled {
-			p := newPoller(existing, s.sqs, s.lambda, s.store, s.traceStore, s.collector)
+		s.mu.Unlock()
+
+		updated := *existing
+		updated.FunctionArn = functionArn
+		updated.FunctionName = normalizedFunctionName
+		updated.QueueName = queueName
+		updated.BatchSize = batchSize
+		updated.MaximumBatchingWindowInSeconds = maxBatchingWindow
+		updated.Enabled = enabled
+		updated.FilterCriteria = filterCriteria
+		updated.LastModified = time.Now().UTC()
+		if enabled {
+			updated.State = "Enabled"
+		} else {
+			updated.State = "Disabled"
+		}
+
+		if err := s.store.Save(&updated); err != nil {
+			return nil, err
+		}
+
+		// Reconcile poller state with updated mapping config.
+		s.mu.Lock()
+		if updated.Enabled && s.sqs != nil && s.lambda != nil {
+			p := newPoller(&updated, s.sqs, s.lambda, s.store, s.traceStore, s.collector)
 			p.start()
-			s.pollers[existing.UUID] = p
+			s.pollers[updated.UUID] = p
 		}
 		s.mu.Unlock()
 
-		return existing, nil
+		return &updated, nil
 	}
 
 	state := "Enabled"
@@ -319,7 +326,7 @@ func (s *Service) UpdateMapping(uuid string, batchSize *int, maxBatchingWindow *
 		p.stop()
 		delete(s.pollers, uuid)
 	}
-	if mapping.Enabled {
+	if mapping.Enabled && s.sqs != nil && s.lambda != nil {
 		p := newPoller(mapping, s.sqs, s.lambda, s.store, s.traceStore, s.collector)
 		p.start()
 		s.pollers[uuid] = p
@@ -342,6 +349,10 @@ func (s *Service) DeleteMapping(uuid string) error {
 }
 
 func (s *Service) startPoller(mapping *types.EventSourceMapping) {
+	if s.sqs == nil || s.lambda == nil {
+		return
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
