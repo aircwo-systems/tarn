@@ -569,13 +569,13 @@
           oninput={(e) =>
             updateSourceDir((e.currentTarget as HTMLInputElement).value)}
           onkeydown={(e) => e.key === "Enter" && scanSource()}
-          class="flex-1 min-w-0 rounded border border-border bg-background px-2.5 py-1.5 font-mono text-[11px] text-foreground placeholder:text-muted-foreground/70/40 focus:border-primary/60 focus:outline-none"
+          class="flex-1 min-w-0 rounded-lg border border-border bg-background px-2.5 py-1.5 font-mono text-[11px] text-foreground placeholder:text-muted-foreground/70/40 focus:border-primary/60 focus:outline-none"
         />
         <button
           type="button"
           onclick={scanSource}
           disabled={!sourceDir.trim() || scanning}
-          class="inline-flex items-center gap-1.5 rounded border border-border bg-card px-3 py-1.5 text-[11px] text-foreground hover:bg-popover transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+          class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-[11px] text-foreground hover:bg-popover transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
         >
           {#if scanning}
             <SpinnerGapIcon size={11} class="animate-spin" />
@@ -619,7 +619,7 @@
           <div class="space-y-1 max-h-40 overflow-y-auto">
             {#each scanResult.matches as m (m.functionName)}
               <div
-                class="flex items-start gap-2 rounded border border-border/50 bg-background px-2.5 py-1.5 text-[10px]"
+                class="flex items-start gap-2 rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-[10px]"
               >
                 <div class="flex-1 min-w-0">
                   <div class="flex items-center gap-2">
@@ -642,14 +642,14 @@
                 <div class="shrink-0 flex gap-1.5">
                   {#if m.schemasTs}
                     <span
-                      class="rounded border border-primary/50 bg-primary/10 px-1 py-0.5 font-mono text-[9px] text-primary"
+                      class="rounded-lg border border-primary/50 bg-primary/10 px-1 py-0.5 font-mono text-[9px] text-primary"
                     >
                       schema
                     </span>
                   {/if}
                   {#if m.eventFiles?.length}
                     <span
-                      class="rounded border border-border bg-card px-1 py-0.5 font-mono text-[9px] text-muted-foreground/70"
+                      class="rounded-lg border border-border bg-card px-1 py-0.5 font-mono text-[9px] text-muted-foreground/70"
                     >
                       {m.eventFiles.length} event{m.eventFiles.length !== 1
                         ? "s"
@@ -659,7 +659,7 @@
                   {#if m.probesByMethod}
                     {#each Object.entries(m.probesByMethod) as [meth, bodies] (meth)}
                       <span
-                        class="rounded border border-border bg-card px-1 py-0.5 font-mono text-[9px] text-muted-foreground/70"
+                        class="rounded-lg border border-border bg-card px-1 py-0.5 font-mono text-[9px] text-muted-foreground/70"
                       >
                         {meth}
                         {bodies.length}p
@@ -667,7 +667,7 @@
                     {/each}
                   {:else if m.probeBodies?.length}
                     <span
-                      class="rounded border border-border bg-card px-1 py-0.5 font-mono text-[9px] text-muted-foreground/70"
+                      class="rounded-lg border border-border bg-card px-1 py-0.5 font-mono text-[9px] text-muted-foreground/70"
                     >
                       {m.probeBodies.length} probe{m.probeBodies.length !== 1
                         ? "s"
@@ -748,7 +748,7 @@
               <button
                 type="button"
                 onclick={() => downloadGateway(gw)}
-                class="inline-flex shrink-0 items-center gap-1 rounded border border-primary/50 bg-primary/10 px-2 py-1 text-[11px] text-primary hover:bg-primary/20 transition-colors"
+                class="inline-flex shrink-0 items-center gap-1 rounded-lg border border-primary/50 bg-primary/10 px-2 py-1 text-[11px] text-primary hover:bg-primary/20 transition-colors"
               >
                 <DownloadSimpleIcon size={11} />
                 Collection
@@ -891,7 +891,7 @@
                           <button
                             type="button"
                             onclick={() => toggleExReq(id, i)}
-                            class="rounded px-1.5 py-0.5 text-[9px] transition-colors shrink-0
+                            class="rounded-lg px-1.5 py-0.5 text-[9px] transition-colors shrink-0
 															{showReq
                               ? 'bg-popover text-foreground border border-border'
                               : 'text-muted-foreground/70/60 hover:text-foreground'}"
@@ -901,7 +901,7 @@
                             <button
                               type="button"
                               onclick={() => toggleExFormat(id, i)}
-                              class="rounded px-1.5 py-0.5 text-[9px] font-sans transition-colors shrink-0
+                              class="rounded-lg px-1.5 py-0.5 text-[9px] font-sans transition-colors shrink-0
 																{formatted
                                 ? 'bg-popover text-foreground border border-border'
                                 : 'text-muted-foreground/70/60 hover:text-foreground'}"
@@ -914,7 +914,7 @@
                         <!-- Request detail panel -->
                         {#if showReq}
                           <div
-                            class="mx-3 mb-2 rounded border border-border/50 bg-popover/40 overflow-hidden"
+                            class="mx-3 mb-2 rounded-lg border border-border/50 bg-popover/40 overflow-hidden"
                           >
                             <div class="px-2.5 py-1.5 space-y-2">
                               <div>
@@ -1012,7 +1012,7 @@
                                   field,
                                   (e.target as HTMLInputElement).value,
                                 )}
-                              class="w-full rounded border border-border bg-background px-2 py-1 font-mono text-[10px] text-foreground placeholder:text-muted-foreground/70/40 focus:border-amber-500/60 focus:outline-none"
+                              class="w-full rounded-lg border border-border bg-background px-2 py-1 font-mono text-[10px] text-foreground placeholder:text-muted-foreground/70/40 focus:border-amber-500/60 focus:outline-none"
                             />
                             {#if round.stuckOptions?.[field]?.length}
                               <p
@@ -1028,7 +1028,7 @@
                     <button
                       type="button"
                       onclick={() => reprobeRoute(gw, detail, id)}
-                      class="inline-flex items-center gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[10px] text-amber-400 hover:bg-amber-500/20 transition-colors"
+                      class="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[10px] text-amber-400 hover:bg-amber-500/20 transition-colors"
                     >
                       <PlayIcon size={10} />
                       Re-probe with overrides
@@ -1052,7 +1052,7 @@
     <!-- Progress bar while probing -->
     {#if probing}
       <div
-        class="relative h-7 rounded border border-border overflow-hidden bg-background"
+        class="relative h-7 rounded-lg border border-border overflow-hidden bg-background"
       >
         <div
           class="absolute inset-y-0 left-0 bg-primary/15 transition-all duration-300"
@@ -1073,7 +1073,7 @@
 
     <!-- Done: full-width download bar  |  [=== stats ===| ↓ Download All ] -->
     {#if !probing && results.size > 0}
-      <div class="flex rounded border border-border overflow-hidden text-xs">
+      <div class="flex rounded-lg border border-border overflow-hidden text-xs">
         <!-- left: stats fill -->
         <div class="flex flex-1 items-center gap-4 bg-card px-4 py-2.5 min-w-0">
           <span class="font-mono text-muted-foreground/70 shrink-0">
