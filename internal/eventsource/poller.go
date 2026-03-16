@@ -79,6 +79,9 @@ type SQSInterface interface {
 	// ChangeMessageVisibility updates the visibility timeout of an in-flight message.
 	// Setting timeout=0 makes the message immediately visible to other consumers.
 	ChangeMessageVisibility(queueName, receiptHandle string, timeout int) error
+	// ReleaseMessage resets visibility and undoes this receive attempt so
+	// filter misses do not count toward redrive/DLQ thresholds.
+	ReleaseMessage(queueName, receiptHandle string) error
 	// MoveToDLQIfExceeded checks whether msg has exceeded the queue's maxReceiveCount
 	// and, if so, delivers it to the configured DLQ and deletes it from srcQueue.
 	// Returns (true, dlqName, nil) when moved, (false, "", nil) when below the threshold.
@@ -160,8 +163,9 @@ func (p *poller) poll() {
 	}
 
 	// Apply filter criteria: partition messages into matching and non-matching.
-	// Non-matching messages have their visibility reset to 0 so other pollers
-	// (with different filter policies on the same queue) can process them.
+	// Non-matching messages are released so other pollers (with different
+	// filter policies on the same queue) can process them, without incrementing
+	// receive count toward DLQ redrive thresholds.
 	matching := msgs
 	if p.mapping.FilterCriteria != nil && len(p.mapping.FilterCriteria.Filters) > 0 {
 		matching = make([]*types.SQSMessage, 0, len(msgs))
@@ -169,9 +173,10 @@ func (p *poller) poll() {
 			if matchesAnyFilter(msg, p.mapping.FilterCriteria) {
 				matching = append(matching, msg)
 			} else {
-				// Release the message immediately for other consumers.
-				if err := p.sqs.ChangeMessageVisibility(p.mapping.QueueName, msg.ReceiptHandle, 0); err != nil {
-					log.Printf("[eventsource] %s: reset visibility for filtered-out message %s: %v", p.mapping.UUID, msg.MessageId, err)
+				// Release the message immediately for other consumers, without
+				// counting this filter miss as a processing attempt.
+				if err := p.sqs.ReleaseMessage(p.mapping.QueueName, msg.ReceiptHandle); err != nil {
+					log.Printf("[eventsource] %s: release filtered-out message %s: %v", p.mapping.UUID, msg.MessageId, err)
 				}
 			}
 		}
@@ -383,9 +388,9 @@ func matchesFilterPattern(msg *types.SQSMessage, pattern string) bool {
 		}
 		switch key {
 		case "body":
-			var body map[string]interface{}
-			if err := json.Unmarshal([]byte(msg.Body), &body); err != nil {
-				return false // body is not JSON
+			body, ok := decodeMessageBodyForFiltering(msg.Body)
+			if !ok {
+				return false
 			}
 			if !matchFieldConditions(body, conditions) {
 				return false
@@ -397,6 +402,36 @@ func matchesFilterPattern(msg *types.SQSMessage, pattern string) bool {
 		}
 	}
 	return true
+}
+
+// decodeMessageBodyForFiltering parses message bodies for filter evaluation.
+// It supports:
+// 1) regular JSON objects
+// 2) JSON strings containing an object payload
+// 3) shell-escaped JSON objects like {\"type\":\"type2\"}
+func decodeMessageBodyForFiltering(raw string) (map[string]interface{}, bool) {
+	var body map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &body); err == nil {
+		return body, true
+	}
+
+	// Some clients may double-encode message bodies as JSON strings.
+	var wrapped string
+	if err := json.Unmarshal([]byte(raw), &wrapped); err == nil {
+		if err := json.Unmarshal([]byte(wrapped), &body); err == nil {
+			return body, true
+		}
+	}
+
+	// Be tolerant of common shell-escaped JSON input, e.g. {\"type\":\"type2\"}.
+	if strings.Contains(raw, `\"`) {
+		normalized := strings.ReplaceAll(raw, `\"`, `"`)
+		if err := json.Unmarshal([]byte(normalized), &body); err == nil {
+			return body, true
+		}
+	}
+
+	return nil, false
 }
 
 // matchFieldConditions checks that every key in conditions matches the corresponding
@@ -447,13 +482,13 @@ type sqsMessageAttribute struct {
 }
 
 type sqsEventRecord struct {
-	MessageId         string                         `json:"messageId"`
-	ReceiptHandle     string                         `json:"receiptHandle"`
-	Body              string                         `json:"body"`
-	Md5OfBody         string                         `json:"md5OfBody"`
-	EventSource       string                         `json:"eventSource"`
-	EventSourceARN    string                         `json:"eventSourceARN"`
-	AwsRegion         string                         `json:"awsRegion"`
+	MessageId      string `json:"messageId"`
+	ReceiptHandle  string `json:"receiptHandle"`
+	Body           string `json:"body"`
+	Md5OfBody      string `json:"md5OfBody"`
+	EventSource    string `json:"eventSource"`
+	EventSourceARN string `json:"eventSourceARN"`
+	AwsRegion      string `json:"awsRegion"`
 	// Attributes holds SQS system attributes. The AWS Java SDK calls
 	// getAttributes() and NPEs if this field is null/missing in the JSON,
 	// so we always emit it as a non-null object even when it has no entries.

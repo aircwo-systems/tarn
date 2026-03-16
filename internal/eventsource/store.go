@@ -14,9 +14,10 @@ import (
 
 // Store is an in-memory store for event source mappings with optional JSON persistence.
 type Store struct {
-	mu       sync.RWMutex
-	cfg      *config.Config
-	mappings map[string]*types.EventSourceMapping
+	mu        sync.RWMutex
+	persistMu sync.Mutex
+	cfg       *config.Config
+	mappings  map[string]*types.EventSourceMapping
 }
 
 // NewStore creates a new event source mapping store.
@@ -121,6 +122,9 @@ func (store *Store) persist() error {
 		return nil
 	}
 
+	store.persistMu.Lock()
+	defer store.persistMu.Unlock()
+
 	store.mu.RLock()
 	mappings := make([]*types.EventSourceMapping, 0, len(store.mappings))
 	for _, m := range store.mappings {
@@ -132,10 +136,33 @@ func (store *Store) persist() error {
 	if err != nil {
 		return fmt.Errorf("marshal eventsource state: %w", err)
 	}
-	statePath := filepath.Join(store.cfg.EventSourceDir(), "state.json")
-	tmpPath := statePath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("write eventsource state: %w", err)
+
+	dir := store.cfg.EventSourceDir()
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create eventsource dir: %w", err)
 	}
-	return os.Rename(tmpPath, statePath)
+
+	tmpFile, err := os.CreateTemp(dir, "state-*.json.tmp")
+	if err != nil {
+		return fmt.Errorf("create eventsource temp state: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("write eventsource temp state: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close eventsource temp state: %w", err)
+	}
+
+	statePath := filepath.Join(dir, "state.json")
+	if err := os.Rename(tmpPath, statePath); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename eventsource temp state: %w", err)
+	}
+
+	return nil
 }
