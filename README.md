@@ -1,5 +1,9 @@
 # OpenStack
 
+<p align="center">
+  <img src="ui/static/favicon.svg" alt="OpenStack logo" width="140" />
+</p>
+
 An open-source AWS cloud emulator for local development and testing. Built as a fast, developer-friendly alternative to LocalStack — permanently free under Apache 2.0.
 
 **Current status**
