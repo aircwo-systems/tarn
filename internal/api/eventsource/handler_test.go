@@ -79,6 +79,50 @@ func TestCreateAndGetMapping(t *testing.T) {
 	}
 }
 
+func TestCreateDuplicateMappingIsIdempotent(t *testing.T) {
+	h := newTestHandler(t)
+
+	body1 := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:orders","FunctionName":"process-order","BatchSize":5,"Enabled":true}`
+	req1 := httptest.NewRequest(http.MethodPost, eventSourceMappingsPath, bytes.NewBufferString(body1))
+	rec1 := httptest.NewRecorder()
+	h.Create(rec1, req1)
+	if rec1.Code != http.StatusCreated {
+		t.Fatalf("first create status = %d, want %d, body: %s", rec1.Code, http.StatusCreated, rec1.Body.String())
+	}
+
+	body2 := `{"EventSourceArn":"arn:aws:sqs:us-east-1:000000000000:orders","FunctionName":"process-order","BatchSize":3,"Enabled":true}`
+	req2 := httptest.NewRequest(http.MethodPost, eventSourceMappingsPath, bytes.NewBufferString(body2))
+	rec2 := httptest.NewRecorder()
+	h.Create(rec2, req2)
+	if rec2.Code != http.StatusCreated {
+		t.Fatalf("second create status = %d, want %d, body: %s", rec2.Code, http.StatusCreated, rec2.Body.String())
+	}
+
+	var second mappingResponse
+	if err := json.NewDecoder(rec2.Body).Decode(&second); err != nil {
+		t.Fatalf("decode second create: %v", err)
+	}
+	if second.BatchSize != 3 {
+		t.Fatalf("second create batchSize = %d, want 3", second.BatchSize)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, eventSourceMappingsPath, nil)
+	listRec := httptest.NewRecorder()
+	h.List(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list status = %d, want %d", listRec.Code, http.StatusOK)
+	}
+	var listBody struct {
+		EventSourceMappings []mappingResponse `json:"EventSourceMappings"`
+	}
+	if err := json.NewDecoder(listRec.Body).Decode(&listBody); err != nil {
+		t.Fatalf("decode list body: %v", err)
+	}
+	if len(listBody.EventSourceMappings) != 1 {
+		t.Fatalf("mapping count = %d, want 1", len(listBody.EventSourceMappings))
+	}
+}
+
 func TestCreateMissingEventSourceArn(t *testing.T) {
 	h := newTestHandler(t)
 
