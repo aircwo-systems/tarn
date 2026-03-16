@@ -1,6 +1,7 @@
 package sqs
 
 import (
+	"bytes"
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
@@ -25,9 +26,10 @@ const defaultStaleReceiveCount = 5
 
 // Store is an in-memory store for SQS queues and messages.
 type Store struct {
-	mu     sync.RWMutex
-	queues map[string]*queue
-	cfg    *config.Config
+	mu        sync.RWMutex
+	persistMu sync.Mutex
+	queues    map[string]*queue
+	cfg       *config.Config
 }
 
 type queue struct {
@@ -66,7 +68,8 @@ func (s *Store) Init() error {
 	var snapshot struct {
 		Queues []queueSnapshot `json:"queues"`
 	}
-	if err := json.Unmarshal(data, &snapshot); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	if err := decoder.Decode(&snapshot); err != nil {
 		return fmt.Errorf("decode queues state: %w", err)
 	}
 
@@ -516,6 +519,36 @@ func (s *Store) ChangeMessageVisibility(name string, receiptHandle string, timeo
 	return fmt.Errorf("receipt handle not found")
 }
 
+// ReleaseMessage makes an in-flight message visible immediately and undoes one
+// receive attempt. This is used by event source filter misses so they can be
+// retried by other consumers without being penalized toward DLQ thresholds.
+func (s *Store) ReleaseMessage(name string, receiptHandle string) error {
+	s.mu.RLock()
+	q, exists := s.queues[name]
+	s.mu.RUnlock()
+	if !exists {
+		return fmt.Errorf("queue %s not found", name)
+	}
+
+	q.mu.Lock()
+	for _, m := range q.messages {
+		if m.ReceiptHandle == receiptHandle && !m.Deleted {
+			m.VisibleAt = nowMs()
+			if m.ApproximateReceiveCount > 0 {
+				m.ApproximateReceiveCount--
+				if m.ApproximateReceiveCount == 0 {
+					m.ApproximateFirstReceiveTimestamp = 0
+				}
+			}
+			q.mu.Unlock()
+			s.persist()
+			return nil
+		}
+	}
+	q.mu.Unlock()
+	return fmt.Errorf("receipt handle not found")
+}
+
 // PurgeQueue removes all messages from a queue.
 func (s *Store) PurgeQueue(name string) error {
 	s.mu.RLock()
@@ -876,6 +909,8 @@ func (s *Store) persistLocked() {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return
 	}
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
 
 	names := make([]string, 0, len(s.queues))
 	for name := range s.queues {
@@ -918,9 +953,22 @@ func (s *Store) persistLocked() {
 		return
 	}
 
-	tmpPath := s.cfg.QueuesStatePath() + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	tmpFile, err := os.CreateTemp(filepath.Dir(s.cfg.QueuesStatePath()), "state-*.json.tmp")
+	if err != nil {
 		return
 	}
-	_ = os.Rename(tmpPath, s.cfg.QueuesStatePath())
+	tmpPath := tmpFile.Name()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return
+	}
+	if err := os.Rename(tmpPath, s.cfg.QueuesStatePath()); err != nil {
+		_ = os.Remove(tmpPath)
+	}
 }

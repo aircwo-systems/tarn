@@ -1,6 +1,7 @@
 package sqs
 
 import (
+	"os"
 	"testing"
 	"time"
 
@@ -287,6 +288,41 @@ func TestChangeMessageVisibility(t *testing.T) {
 	}
 }
 
+func TestReleaseMessageDoesNotAccumulateReceiveCount(t *testing.T) {
+	s := newTestStore()
+	s.CreateQueue("q-release", nil, nil)
+
+	if _, err := s.SendMessage("q-release", `{"type":"type2"}`, 0, nil, "", ""); err != nil {
+		t.Fatalf("send message: %v", err)
+	}
+
+	msgs1, err := s.ReceiveMessage("q-release", 1, 30)
+	if err != nil {
+		t.Fatalf("receive #1: %v", err)
+	}
+	if len(msgs1) != 1 {
+		t.Fatalf("receive #1 count = %d, want 1", len(msgs1))
+	}
+	if msgs1[0].ApproximateReceiveCount != 1 {
+		t.Fatalf("receive #1 count = %d, want 1", msgs1[0].ApproximateReceiveCount)
+	}
+
+	if err := s.ReleaseMessage("q-release", msgs1[0].ReceiptHandle); err != nil {
+		t.Fatalf("release message: %v", err)
+	}
+
+	msgs2, err := s.ReceiveMessage("q-release", 1, 30)
+	if err != nil {
+		t.Fatalf("receive #2: %v", err)
+	}
+	if len(msgs2) != 1 {
+		t.Fatalf("receive #2 count = %d, want 1", len(msgs2))
+	}
+	if msgs2[0].ApproximateReceiveCount != 1 {
+		t.Fatalf("receive #2 count = %d, want 1", msgs2[0].ApproximateReceiveCount)
+	}
+}
+
 func TestQueueTags(t *testing.T) {
 	s := newTestStore()
 	s.CreateQueue("tagged", nil, map[string]string{"env": "dev"})
@@ -489,5 +525,42 @@ func TestDeletedQueueIsRemovedFromPersistedState(t *testing.T) {
 
 	if _, err := reloaded.GetQueue("ephemeral-queue"); err == nil {
 		t.Fatal("expected deleted queue to stay deleted after reload")
+	}
+}
+
+func TestInitToleratesTrailingGarbageInStateFile(t *testing.T) {
+	cfg := &config.Config{
+		Host:               "localhost",
+		Port:               4566,
+		Region:             "us-east-1",
+		AccountID:          "000000000000",
+		DataDir:            t.TempDir(),
+		PersistenceEnabled: true,
+	}
+
+	store := NewStore(cfg)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	if _, err := store.CreateQueue("q-corrupt", nil, nil); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+
+	original, err := os.ReadFile(cfg.QueuesStatePath())
+	if err != nil {
+		t.Fatalf("read state file: %v", err)
+	}
+	corrupted := append(original, []byte("\n    }\n  ]\n}")...)
+	if err := os.WriteFile(cfg.QueuesStatePath(), corrupted, 0644); err != nil {
+		t.Fatalf("write corrupted state file: %v", err)
+	}
+
+	reloaded := NewStore(cfg)
+	if err := reloaded.Init(); err != nil {
+		t.Fatalf("reload store with trailing garbage: %v", err)
+	}
+
+	if _, err := reloaded.GetQueue("q-corrupt"); err != nil {
+		t.Fatalf("expected queue to load from tolerant decoder: %v", err)
 	}
 }

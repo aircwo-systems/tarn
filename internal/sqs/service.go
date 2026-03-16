@@ -154,6 +154,12 @@ func (s *Service) ChangeMessageVisibility(queueName, receiptHandle string, timeo
 	return s.store.ChangeMessageVisibility(queueName, receiptHandle, timeout)
 }
 
+// ReleaseMessage immediately re-exposes an in-flight message and reverses the
+// receive-attempt counter bump caused by ReceiveMessage.
+func (s *Service) ReleaseMessage(queueName, receiptHandle string) error {
+	return s.store.ReleaseMessage(queueName, receiptHandle)
+}
+
 // MoveToDLQIfExceeded checks whether msg has exceeded the queue's maxReceiveCount.
 // If so, it delivers the message to the configured DLQ and deletes it from srcQueue.
 // Returns (true, dlqName, nil) when moved, (false, "", nil) when below threshold or no DLQ configured.
