@@ -5,6 +5,10 @@
 /openstack
 /.cache/
 
+# enable later
+/docs/
+/examples/
+
 # Go
 *.exe
 *.exe~
