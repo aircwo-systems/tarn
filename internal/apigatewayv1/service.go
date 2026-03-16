@@ -921,6 +921,13 @@ func (v *vtlEvaluator) expandExpr(expr string) string {
 		inner := expr[len("$util.toJson(") : len(expr)-1]
 		val := strings.TrimSpace(v.expandExpr(inner))
 		if json.Valid([]byte(val)) {
+			// API Gateway's $util.toJson emits compact JSON.
+			var decoded any
+			if err := json.Unmarshal([]byte(val), &decoded); err == nil {
+				if b, err := json.Marshal(decoded); err == nil {
+					return string(b)
+				}
+			}
 			return val
 		}
 		b, _ := json.Marshal(val)
