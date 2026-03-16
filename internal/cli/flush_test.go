@@ -140,6 +140,79 @@ func TestRunFlushDeletesOnlyMatchingTaggedResources(t *testing.T) {
 	}
 }
 
+func TestRunFlushContinuesAfterQueueDeleteError(t *testing.T) {
+	const endpoint = "http://openstack.test"
+	var deleted []string
+
+	prevClient := cliHTTPClient
+	cliHTTPClient = &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_openstack/admin/overview":
+				return jsonResponse(http.StatusOK, `{
+					"config":{"accountId":"000000000000"},
+					"gateways":[],
+					"functions":[{"name":"fn-a","tags":{"feature":"r10"}}],
+					"queues":[{"name":"q-a","url":"`+endpoint+`/000000000000/q-a","tags":{"feature":"r10"}}],
+					"secrets":[{"name":"secret-a","tags":{"feature":"r10"}}],
+					"eventSourceMappings":[{"uuid":"esm-a","queueName":"q-a","functionName":"fn-a"}]
+				}`)
+			case r.Method == http.MethodDelete && r.URL.String() == endpoint+"/2015-03-31/event-source-mappings/esm-a":
+				deleted = append(deleted, "mapping:esm-a")
+				return jsonResponse(http.StatusNoContent, "")
+			case r.Method == http.MethodPost && r.URL.String() == endpoint+"/000000000000/q-a":
+				return jsonResponse(http.StatusBadRequest, `<ErrorResponse><Error><Code>InvalidAddress</Code></Error></ErrorResponse>`)
+			case r.Method == http.MethodPost && r.URL.String() == endpoint+"/":
+				if r.Header.Get("X-Amz-Target") == "secretsmanager.DeleteSecret" {
+					deleted = append(deleted, "secret:secret-a")
+					return jsonResponse(http.StatusOK, `{"Name":"secret-a"}`)
+				}
+			case r.Method == http.MethodDelete && r.URL.String() == endpoint+"/2015-03-31/functions/fn-a":
+				deleted = append(deleted, "function:fn-a")
+				return jsonResponse(http.StatusNoContent, "")
+			}
+			return jsonResponse(http.StatusNotFound, `{"Message":"not found"}`)
+		}),
+	}
+	defer func() { cliHTTPClient = prevClient }()
+
+	cmd := &cobra.Command{Use: "openstack"}
+	t.Setenv("OPENSTACK_ENDPOINT", endpoint)
+
+	var out bytes.Buffer
+	err := runFlush(cmd, &out, flushOptions{TagFilter: "feature=r10"})
+	if err == nil {
+		t.Fatal("expected runFlush to report warnings when queue delete fails")
+	}
+
+	gotDeleted := strings.Join(deleted, ",")
+	for _, want := range []string{
+		"mapping:esm-a",
+		"secret:secret-a",
+		"function:fn-a",
+	} {
+		if !strings.Contains(gotDeleted, want) {
+			t.Fatalf("expected deletion %q in %q", want, gotDeleted)
+		}
+	}
+}
+
+func TestDeleteQueueTreatsNonExistentQueueAsSuccess(t *testing.T) {
+	const queueURL = "http://openstack.test/000000000000/missing-queue.fifo"
+
+	prevClient := cliHTTPClient
+	cliHTTPClient = &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			return jsonResponse(http.StatusBadRequest, `<ErrorResponse><Error><Code>AWS.SimpleQueueService.NonExistentQueue</Code></Error></ErrorResponse>`)
+		}),
+	}
+	defer func() { cliHTTPClient = prevClient }()
+
+	if err := deleteQueue(queueURL); err != nil {
+		t.Fatalf("deleteQueue should ignore missing queue errors, got: %v", err)
+	}
+}
+
 func jsonResponse(status int, body string) (*http.Response, error) {
 	return &http.Response{
 		StatusCode: status,
