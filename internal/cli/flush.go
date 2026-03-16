@@ -129,45 +129,63 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		return nil
 	}
 
+	failures := make([]string, 0)
+	recordFailure := func(kind, name string, err error) {
+		msg := fmt.Sprintf("%s %s: %v", kind, name, err)
+		failures = append(failures, msg)
+		_, _ = fmt.Fprintf(out, "Warning: failed to delete %s %s: %v\n", kind, name, err)
+	}
+
 	for _, mapping := range filteredMappings {
 		if err := deleteEventSourceMapping(endpoint, mapping.UUID); err != nil {
-			return fmt.Errorf("delete event source mapping %s: %w", mapping.UUID, err)
+			recordFailure("trigger", mapping.UUID, err)
+			continue
 		}
 		_, _ = fmt.Fprintf(out, "Deleted Trigger: %s (%s -> %s)\n", mapping.UUID, mapping.QueueName, mapping.FunctionName)
 	}
 	for _, api := range filteredGateways {
 		if err := deleteAPIGateway(endpoint, api.APIID, api.Version); err != nil {
-			return fmt.Errorf("delete api gateway %s: %w", api.Name, err)
+			recordFailure("api gateway", api.Name, err)
+			continue
 		}
 		_, _ = fmt.Fprintf(out, "Deleted API Gateway: %s\n", api.Name)
 	}
 	for _, queue := range filteredQueues {
 		if err := deleteQueue(queue.URL); err != nil {
-			return fmt.Errorf("delete queue %s: %w", queue.Name, err)
+			recordFailure("queue", queue.Name, err)
+			continue
 		}
 		_, _ = fmt.Fprintf(out, "Deleted Queue: %s\n", queue.Name)
 	}
 	for _, secret := range filteredSecrets {
 		if err := deleteSecret(endpoint, secret.Name); err != nil {
-			return fmt.Errorf("delete secret %s: %w", secret.Name, err)
+			recordFailure("secret", secret.Name, err)
+			continue
 		}
 		_, _ = fmt.Fprintf(out, "Deleted Secret: %s\n", secret.Name)
 	}
 	for _, fn := range filteredFunctions {
 		if err := deleteFunction(endpoint, fn.Name); err != nil {
-			return fmt.Errorf("delete function %s: %w", fn.Name, err)
+			recordFailure("lambda", fn.Name, err)
+			continue
 		}
 		_, _ = fmt.Fprintf(out, "Deleted Lambda: %s\n", fn.Name)
 	}
 	for _, bucket := range filteredBuckets {
 		if err := flushS3Bucket(endpoint, bucket.Name); err != nil {
-			return fmt.Errorf("flush s3 bucket %s: %w", bucket.Name, err)
+			recordFailure("s3 bucket", bucket.Name, err)
+			continue
 		}
 		_, _ = fmt.Fprintf(out, "Deleted S3 Bucket: %s\n", bucket.Name)
 	}
 
-	_, _ = fmt.Fprintln(out, "Flush complete.")
-	return nil
+	if len(failures) == 0 {
+		_, _ = fmt.Fprintln(out, "Flush complete.")
+		return nil
+	}
+
+	_, _ = fmt.Fprintf(out, "Flush completed with %d warning(s).\n", len(failures))
+	return fmt.Errorf("flush completed with %d warning(s)", len(failures))
 }
 
 func fetchFlushOverview(endpoint string) (*flushOverview, error) {
@@ -628,6 +646,20 @@ func deleteQueue(queueURL string) error {
 	defer resp.Body.Close()
 
 	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+
+	// Deleting a queue should be idempotent for flush purposes.
+	// If the queue already disappeared, continue as success.
+	if resp.StatusCode == http.StatusBadRequest {
+		bodyText := string(body)
+		if strings.Contains(bodyText, "AWS.SimpleQueueService.NonExistentQueue") ||
+			strings.Contains(bodyText, "QueueDoesNotExist") {
+			return nil
+		}
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("error (%d): %s", resp.StatusCode, string(body))
 	}
