@@ -1,46 +1,122 @@
 <script lang="ts">
-  import { Package, HardDrive, ArrowClockwise, Eye, Code, CopySimple, Check } from 'phosphor-svelte';
-  import LedDot from '$lib/components/common/led-dot.svelte';
-  import { getDashboard } from '$lib/state.svelte';
-  import { formatBytes } from '$lib/utils';
+  import {
+    Package,
+    HardDrive,
+    ArrowClockwise,
+    Eye,
+    Code,
+    CopySimple,
+    Check,
+  } from "phosphor-svelte";
+  import LedDot from "$lib/components/common/led-dot.svelte";
+  import { getDashboard } from "$lib/state.svelte";
+  import { formatBytes } from "$lib/utils";
+  import {
+    Accordion,
+    AccordionItem,
+    AccordionTrigger,
+    AccordionContent,
+  } from "$lib/components/ui/accordion";
+
+  type BucketObject = {
+    key: string;
+    size: number;
+    lastModified: string;
+    etag: string;
+  };
+
+  type ObjectPreviewState = {
+    loading: boolean;
+    error: string;
+    content: string;
+    contentType: string;
+    showRaw: boolean;
+    copied: boolean;
+  };
 
   const dashboard = getDashboard();
-
   const buckets = $derived(dashboard.data?.buckets ?? []);
 
-  let selectedBucket = $state('');
-  let objects = $state<any[]>([]);
+  let selectedBucket = $state("");
+  let objects = $state<BucketObject[]>([]);
   let loadingObjects = $state(false);
-  let selectedObjectKey = $state('');
-  let objectPreview = $state('');
-  let objectContentType = $state('');
-  let loadingPreview = $state(false);
-  let previewError = $state('');
-  
-  // New Preview States
-  let showRaw = $state(false);
-  let copied = $state(false);
+  let openObjectKeys = $state<string[]>([]);
+  let previewByKey = $state<Record<string, ObjectPreviewState>>({});
 
-  const isImage = $derived(
-    objectContentType.startsWith('image/') || 
-    objectContentType === 'image/svg+xml'
-  );
+  function defaultPreviewState(): ObjectPreviewState {
+    return {
+      loading: false,
+      error: "",
+      content: "",
+      contentType: "",
+      showRaw: false,
+      copied: false,
+    };
+  }
+
+  function ensurePreviewState(key: string): ObjectPreviewState {
+    const existing = previewByKey[key];
+    if (existing) return existing;
+
+    const created = defaultPreviewState();
+    previewByKey = { ...previewByKey, [key]: created };
+    return created;
+  }
+
+  function patchPreviewState(key: string, patch: Partial<ObjectPreviewState>) {
+    const current = ensurePreviewState(key);
+    previewByKey = {
+      ...previewByKey,
+      [key]: {
+        ...current,
+        ...patch,
+      },
+    };
+  }
+
+  function clearAllPreviews() {
+    openObjectKeys = [];
+    previewByKey = {};
+  }
+
+  function closeBrowser() {
+    selectedBucket = "";
+    objects = [];
+    clearAllPreviews();
+  }
+
+  function isObjectOpen(key: string): boolean {
+    return openObjectKeys.includes(key);
+  }
+
+  function isImageContent(contentType: string): boolean {
+    return contentType.startsWith("image/") || contentType === "image/svg+xml";
+  }
+
+  function encodeS3KeyPath(key: string): string {
+    return key
+      .split("/")
+      .map((part) => encodeURIComponent(part))
+      .join("/");
+  }
 
   async function browseBucket(name: string) {
     selectedBucket = name;
     loadingObjects = true;
-    clearPreview();
+    clearAllPreviews();
+
     try {
       const resp = await fetch(`/_s3/${name}?list-type=2`);
       const text = await resp.text();
       const parser = new DOMParser();
-      const xml = parser.parseFromString(text, 'text/xml');
-      const contents = xml.querySelectorAll('Contents');
+      const xml = parser.parseFromString(text, "text/xml");
+      const contents = xml.querySelectorAll("Contents");
+
       objects = Array.from(contents).map((c) => ({
-        key: c.querySelector('Key')?.textContent ?? '',
-        size: parseInt(c.querySelector('Size')?.textContent ?? '0', 10),
-        lastModified: c.querySelector('LastModified')?.textContent ?? '',
-        etag: c.querySelector('ETag')?.textContent ?? ''
+        key: c.querySelector("Key")?.textContent ?? "",
+        size: parseInt(c.querySelector("Size")?.textContent ?? "0", 10),
+        lastModified: c.querySelector("LastModified")?.textContent ?? "",
+        etag: c.querySelector("ETag")?.textContent ?? "",
       }));
     } catch {
       objects = [];
@@ -49,60 +125,80 @@
     }
   }
 
-  function closeBrowser() {
-    selectedBucket = '';
-    objects = [];
-    clearPreview();
-  }
-
-  function clearPreview() {
-    selectedObjectKey = '';
-    objectPreview = '';
-    objectContentType = '';
-    loadingPreview = false;
-    previewError = '';
-    showRaw = false;
-    copied = false;
-  }
-
-  function encodeS3KeyPath(key: string): string {
-    return key
-      .split('/')
-      .map((part) => encodeURIComponent(part))
-      .join('/');
-  }
-
-  async function copyToClipboard() {
-    try {
-      await navigator.clipboard.writeText(objectPreview);
-      copied = true;
-      setTimeout(() => (copied = false), 2000);
-    } catch (err) {
-      console.error('Failed to copy!', err);
+  async function loadObjectPreview(bucket: string, key: string, force = false) {
+    const state = ensurePreviewState(key);
+    if (!force && (state.loading || state.content || state.error)) {
+      return;
     }
-  }
 
-  async function viewObject(bucket: string, key: string) {
-    selectedObjectKey = key;
-    loadingPreview = true;
-    objectPreview = '';
-    objectContentType = '';
-    previewError = '';
-    showRaw = false;
+    patchPreviewState(key, {
+      loading: true,
+      error: "",
+      copied: false,
+      showRaw: false,
+    });
+
     try {
       const path = encodeS3KeyPath(key);
       const resp = await fetch(`/_s3/${bucket}/${path}`);
       if (!resp.ok) {
         throw new Error(`HTTP ${resp.status}`);
       }
-      objectContentType = resp.headers.get('content-type') ?? 'application/octet-stream';
+
+      const contentType = resp.headers.get("content-type") ?? "application/octet-stream";
       const text = await resp.text();
-      objectPreview = text;
+
+      patchPreviewState(key, {
+        loading: false,
+        error: "",
+        content: text,
+        contentType,
+      });
     } catch (error) {
-      previewError = error instanceof Error ? error.message : 'Failed to load object';
-    } finally {
-      loadingPreview = false;
+      patchPreviewState(key, {
+        loading: false,
+        contentType: "",
+        content: "",
+        error: error instanceof Error ? error.message : "Failed to load object",
+      });
     }
+  }
+
+  function handleObjectOpenChange(next: string[] | string) {
+    const nextValues = Array.isArray(next)
+      ? next
+      : next
+          ? [next]
+          : [];
+
+    const newlyOpened = nextValues.filter((key) => !openObjectKeys.includes(key));
+    openObjectKeys = nextValues;
+
+    for (const key of newlyOpened) {
+      void loadObjectPreview(selectedBucket, key);
+    }
+  }
+
+  async function copyToClipboard(key: string) {
+    const preview = ensurePreviewState(key);
+    if (!preview.content) return;
+
+    try {
+      await navigator.clipboard.writeText(preview.content);
+      patchPreviewState(key, { copied: true });
+      setTimeout(() => {
+        const latest = previewByKey[key];
+        if (!latest) return;
+        patchPreviewState(key, { copied: false });
+      }, 2000);
+    } catch (err) {
+      console.error("Failed to copy object preview", err);
+    }
+  }
+
+  function toggleRawPreview(key: string) {
+    const preview = ensurePreviewState(key);
+    patchPreviewState(key, { showRaw: !preview.showRaw });
   }
 </script>
 
@@ -115,7 +211,7 @@
       <div>
         <h2 class="text-sm font-semibold text-foreground">S3 Storage</h2>
         <p class="text-[10px] text-muted-foreground/70 font-mono">
-          {buckets.length} bucket{buckets.length !== 1 ? 's' : ''}
+          {buckets.length} bucket{buckets.length !== 1 ? "s" : ""}
         </p>
       </div>
     </div>
@@ -162,7 +258,7 @@
                 <button
                   type="button"
                   class="text-primary hover:underline text-[11px]"
-                  onclick={() => browseBucket(bucket.name)}
+                  onclick={() => void browseBucket(bucket.name)}
                 >
                   Browse
                 </button>
@@ -185,11 +281,11 @@
         <div class="flex items-center gap-2">
           <button
             type="button"
-            onclick={() => browseBucket(selectedBucket)}
+            onclick={() => void browseBucket(selectedBucket)}
             class="text-muted-foreground hover:text-foreground transition-colors"
             aria-label="Refresh objects"
           >
-            <ArrowClockwise size={12} class={loadingObjects ? 'animate-spin' : ''} />
+            <ArrowClockwise size={12} class={loadingObjects ? "animate-spin" : ""} />
           </button>
           <button
             type="button"
@@ -206,113 +302,93 @@
       {:else if objects.length === 0}
         <div class="px-3 py-6 text-center text-xs text-muted-foreground/70 font-mono">Bucket is empty</div>
       {:else}
-        <div class="max-h-80 overflow-y-auto">
-          <table class="w-full text-xs">
-            <thead class="sticky top-0 bg-card">
-              <tr class="border-b border-border">
-                <th class="text-left px-3 py-1.5 font-mono text-muted-foreground/70 uppercase tracking-wider">Key</th>
-                <th class="text-right px-3 py-1.5 font-mono text-muted-foreground/70 uppercase tracking-wider">Size</th>
-                <th class="text-right px-3 py-1.5 font-mono text-muted-foreground/70 uppercase tracking-wider">Last Modified</th>
-                <th class="text-right px-3 py-1.5 font-mono text-muted-foreground/70 uppercase tracking-wider"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each objects as obj}
-                <tr class="border-b border-border last:border-b-0">
-                  <td class="px-3 py-1.5 text-foreground font-mono truncate max-w-[300px]" title={obj.key}>{obj.key}</td>
-                  <td class="text-right px-3 py-1.5 text-muted-foreground font-mono whitespace-nowrap">{formatBytes(obj.size)}</td>
-                  <td class="text-right px-3 py-1.5 text-muted-foreground/70 font-mono whitespace-nowrap">
-                    {new Date(obj.lastModified).toLocaleString()}
-                  </td>
-                  <td class="text-right px-3 py-1.5">
-                    <button
-                      type="button"
-                      class="text-primary hover:underline text-[11px]"
-                      onclick={() => void viewObject(selectedBucket, obj.key)}
-                    >
-                      View
-                    </button>
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
-
-        {#if selectedObjectKey}
-          <div class="border-t border-border bg-muted/30">
-            <div class="flex items-center justify-between px-3 py-2 border-b border-border">
-              <div class="space-y-0.5 min-w-0">
-                <p class="text-xs text-foreground font-mono truncate max-w-[20rem] sm:max-w-[32rem]" title={selectedObjectKey}>
-                  {selectedObjectKey}
-                </p>
-                <p class="text-[10px] text-muted-foreground/70 font-mono">{objectContentType || '--'}</p>
-              </div>
-              
-              <div class="flex items-center gap-3">
-                {#if isImage}
-                  <button
-                    type="button"
-                    class="flex items-center gap-1.5 text-[11px] {showRaw ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
-                    onclick={() => showRaw = !showRaw}
-                  >
-                    {#if showRaw}
-                      <Eye size={14} />
-                      <span>Preview</span>
-                    {:else}
-                      <Code size={14} />
-                      <span>Raw</span>
-                    {/if}
-                  </button>
-                {/if}
-
-                {#if !isImage || showRaw}
-                  <button
-                    type="button"
-                    class="flex items-center gap-1.5 text-[11px] transition-colors {copied ? 'text-green-400' : 'text-muted-foreground hover:text-foreground'}"
-                    onclick={copyToClipboard}
-                  >
-                    {#if copied}
-                      <Check size={14} />
-                      <span>Copied</span>
-                    {:else}
-                      <CopySimple size={14} />
-                      <span>Copy</span>
-                    {/if}
-                  </button>
-                {/if}
-
-                <button
-                  type="button"
-                  class="text-[11px] text-muted-foreground hover:text-foreground"
-                  onclick={clearPreview}
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-
-            {#if loadingPreview}
-              <div class="px-3 py-6 text-center text-xs text-muted-foreground/70 font-mono">Loading object...</div>
-            {:else if previewError}
-              <div class="px-3 py-6 text-center text-xs text-destructive-300 font-mono">{previewError}</div>
-            {:else}
-              <div class="max-h-screen overflow-auto px-3 py-3">
-                {#if isImage && !showRaw}
-                  <div class="flex justify-center bg-black/5 rounded-md p-4 border border-border/50">
-                    <img 
-                      src={`/_s3/${selectedBucket}/${encodeS3KeyPath(selectedObjectKey)}`} 
-                      alt={selectedObjectKey}
-                      class="max-w-full h-auto shadow-sm" 
-                    />
-                  </div>
-                {:else}
-                  <pre class="text-xs font-mono text-foreground whitespace-pre-wrap break-words leading-relaxed">{objectPreview}</pre>
-                {/if}
-              </div>
-            {/if}
+        <div class="max-h-96 overflow-y-auto px-3">
+          <div class="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-3 border-b border-border py-1.5 text-[10px] text-muted-foreground/70 font-mono uppercase tracking-wider">
+            <span>Key</span>
+            <span class="text-right">Size</span>
+            <span class="text-right">Last Modified</span>
+            <span class="text-right">Action</span>
           </div>
-        {/if}
+
+          <Accordion
+            type="multiple"
+            value={openObjectKeys}
+            onValueChange={handleObjectOpenChange}
+            class="w-full"
+          >
+            {#each objects as obj}
+              {@const preview = previewByKey[obj.key]}
+              <AccordionItem value={obj.key}>
+                <AccordionTrigger class="w-full py-1.5 text-foreground hover:bg-muted/20">
+                  <div class="grid w-full grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-3 pr-2">
+                    <span class="truncate font-mono" title={obj.key}>{obj.key}</span>
+                    <span class="text-right text-muted-foreground font-mono whitespace-nowrap">{formatBytes(obj.size)}</span>
+                    <span class="text-right text-muted-foreground/70 font-mono whitespace-nowrap">{new Date(obj.lastModified).toLocaleString()}</span>
+                    <span class="text-right text-primary text-[11px]">{isObjectOpen(obj.key) ? "Close" : "View"}</span>
+                  </div>
+                </AccordionTrigger>
+
+                <AccordionContent class="pt-0">
+                  <div class="rounded-md border border-border bg-muted/20 px-3 py-2 mb-2">
+                    <div class="flex items-center justify-between border-b border-border pb-2 mb-2">
+                      <p class="text-[10px] text-muted-foreground/70 font-mono">{preview?.contentType || "--"}</p>
+
+                      <div class="flex items-center gap-3">
+                        {#if preview && isImageContent(preview.contentType)}
+                          <button
+                            type="button"
+                            class="flex items-center gap-1.5 text-[11px] {preview.showRaw ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
+                            onclick={() => toggleRawPreview(obj.key)}
+                          >
+                            {#if preview.showRaw}
+                              <Eye size={14} />
+                              <span>Preview</span>
+                            {:else}
+                              <Code size={14} />
+                              <span>Raw</span>
+                            {/if}
+                          </button>
+                        {/if}
+
+                        {#if preview && (!isImageContent(preview.contentType) || preview.showRaw)}
+                          <button
+                            type="button"
+                            class="flex items-center gap-1.5 text-[11px] transition-colors {preview.copied ? 'text-green-400' : 'text-muted-foreground hover:text-foreground'}"
+                            onclick={() => void copyToClipboard(obj.key)}
+                          >
+                            {#if preview.copied}
+                              <Check size={14} />
+                              <span>Copied</span>
+                            {:else}
+                              <CopySimple size={14} />
+                              <span>Copy</span>
+                            {/if}
+                          </button>
+                        {/if}
+                      </div>
+                    </div>
+
+                    {#if !preview || preview.loading}
+                      <div class="py-4 text-center text-xs text-muted-foreground/70 font-mono">Loading object...</div>
+                    {:else if preview.error}
+                      <div class="py-4 text-center text-xs text-destructive-300 font-mono">{preview.error}</div>
+                    {:else if isImageContent(preview.contentType) && !preview.showRaw}
+                      <div class="flex justify-center bg-black/5 rounded-md p-4 border border-border/50">
+                        <img
+                          src={`/_s3/${selectedBucket}/${encodeS3KeyPath(obj.key)}`}
+                          alt={obj.key}
+                          class="max-w-full h-auto shadow-sm"
+                        />
+                      </div>
+                    {:else}
+                      <pre class="text-xs font-mono text-foreground whitespace-pre-wrap break-words leading-relaxed">{preview.content}</pre>
+                    {/if}
+                  </div>
+                </AccordionContent>
+              </AccordionItem>
+            {/each}
+          </Accordion>
+        </div>
       {/if}
     </div>
   {/if}
