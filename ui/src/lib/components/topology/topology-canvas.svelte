@@ -40,6 +40,11 @@
       matchesTagFilter(q.tags, filters.tagFilter),
     ),
   );
+  const topics = $derived(
+    (dashboard.data?.topics ?? []).filter((t) =>
+      matchesTagFilter(t.tags, filters.tagFilter),
+    ),
+  );
   const secrets = $derived(
     (dashboard.data?.secrets ?? []).filter((s) =>
       matchesTagFilter(s.tags, filters.tagFilter),
@@ -102,6 +107,7 @@
     gateways.length +
       functions.length +
       queues.length +
+      topics.length +
       buckets.length +
       secrets.length +
       infra.length,
@@ -416,6 +422,7 @@
           {gateways}
           {functions}
           {queues}
+          {topics}
           {secrets}
           {buckets}
           {infra}
@@ -428,6 +435,7 @@
           {gateways}
           {functions}
           {queues}
+          {topics}
           {secrets}
           {buckets}
           {infra}

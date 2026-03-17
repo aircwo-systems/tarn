@@ -278,6 +278,9 @@ func (s *Store) GetQueueAttributes(name string, attrNames []string) (map[string]
 	if (all || contains(attrNames, "KmsDataKeyReusePeriodSeconds")) && q.config.KmsDataKeyReusePeriodSeconds != 0 {
 		result["KmsDataKeyReusePeriodSeconds"] = fmt.Sprintf("%d", q.config.KmsDataKeyReusePeriodSeconds)
 	}
+	if (all || contains(attrNames, "Policy")) && q.config.Policy != "" {
+		result["Policy"] = q.config.Policy
+	}
 	if (all || contains(attrNames, "RedrivePolicy")) && q.config.RedrivePolicy != "" {
 		result["RedrivePolicy"] = q.config.RedrivePolicy
 	}
@@ -753,6 +756,9 @@ func applyQueueAttributes(cfg *types.QueueConfig, attrs map[string]string) {
 	}
 	if v, ok := attrs["KmsDataKeyReusePeriodSeconds"]; ok {
 		_, _ = fmt.Sscanf(v, "%d", &cfg.KmsDataKeyReusePeriodSeconds)
+	}
+	if v, ok := attrs["Policy"]; ok {
+		cfg.Policy = v
 	}
 	if v, ok := attrs["RedrivePolicy"]; ok && v != "" {
 		var policy struct {

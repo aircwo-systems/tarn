@@ -144,6 +144,38 @@
       }
     }
 
+    for (const edge of model.edges.snsToQueue) {
+      const isFocused = isEdgeFocused(edge.id);
+      drawPath(context, edge.path, {
+        stroke: edge.activity?.hasError
+          ? palette.destructive
+          : edge.activity
+            ? palette.primary
+            : palette.chart1,
+        width: activityWidth(edge.activity, 1.3),
+        opacity: focusOpacity(activityOpacity(edge.activity, 0.7), isFocused, palette),
+        dash: edge.activity ? [6, 3] : [5, 4],
+        animateDash: !!edge.activity,
+        time,
+      });
+    }
+
+    for (const edge of model.edges.snsToFunction) {
+      const isFocused = isEdgeFocused(edge.id);
+      drawPath(context, edge.path, {
+        stroke: edge.activity?.hasError
+          ? palette.destructive
+          : edge.activity
+            ? palette.primary
+            : palette.chart1,
+        width: activityWidth(edge.activity, 1.3),
+        opacity: focusOpacity(activityOpacity(edge.activity, 0.76), isFocused, palette),
+        dash: edge.activity ? [6, 3] : [5, 4],
+        animateDash: !!edge.activity,
+        time,
+      });
+    }
+
     for (const edge of model.edges.queueToFunction) {
       const isFocused = isEdgeFocused(edge.id);
       drawPath(context, edge.path, {

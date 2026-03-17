@@ -3,6 +3,7 @@
     GatewaySummary,
     FunctionSummary,
     QueueSummary,
+    TopicSummary,
     BucketSummary,
     SecretSummary,
     InfraProbe,
@@ -23,6 +24,7 @@
     gateways = [],
     functions = [],
     queues = [],
+    topics = [],
     buckets = [],
     secrets = [],
     infra = [],
@@ -44,6 +46,7 @@
     gateways?: GatewaySummary[];
     functions?: FunctionSummary[];
     queues?: QueueSummary[];
+    topics?: TopicSummary[];
     buckets?: BucketSummary[];
     secrets?: SecretSummary[];
     infra?: InfraProbe[];
@@ -68,6 +71,7 @@
       gateways,
       functions,
       queues,
+      topics,
       buckets,
       secrets,
       infra,
@@ -131,6 +135,8 @@
         return "var(--color-chart-1)";
       case "queue":
         return "var(--color-chart-4)";
+      case "topic":
+        return "var(--color-chart-1)";
       case "function":
         return "var(--color-primary)";
       case "secret":

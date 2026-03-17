@@ -23,6 +23,7 @@ import (
 	logssvc "github.com/openstack-project/openstack/internal/logs"
 	s3svc "github.com/openstack-project/openstack/internal/s3"
 	secretssvc "github.com/openstack-project/openstack/internal/secrets"
+	snssvc "github.com/openstack-project/openstack/internal/sns"
 	sqssvc "github.com/openstack-project/openstack/internal/sqs"
 	tracesvc "github.com/openstack-project/openstack/internal/trace"
 	"github.com/openstack-project/openstack/pkg/types"
@@ -37,13 +38,14 @@ type Handler struct {
 	logs       *logssvc.Service
 	s3         *s3svc.Service
 	sqs        *sqssvc.Service
+	sns        *snssvc.Service
 	secrets    *secretssvc.Service
 	infra      *infrasvc.Service
 	esm        *eventsourcesvc.Service
 	traceStore *tracesvc.Store
 }
 
-func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apigatewayv1svc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, traceStore *tracesvc.Store) *Handler {
+func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apigatewayv1svc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, sns *snssvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, traceStore *tracesvc.Store) *Handler {
 	return &Handler{
 		cfg:        cfg,
 		apigw:      apigw,
@@ -52,6 +54,7 @@ func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apiga
 		logs:       logs,
 		s3:         s3,
 		sqs:        sqs,
+		sns:        sns,
 		secrets:    secrets,
 		infra:      infra,
 		esm:        esm,
@@ -68,6 +71,8 @@ type overviewResponse struct {
 	Gateways            []gatewaySummary       `json:"gateways"`
 	Functions           []functionSummary      `json:"functions"`
 	Queues              []queueSummary         `json:"queues"`
+	Topics              []topicSummary         `json:"topics"`
+	Subscriptions       []subscriptionSummary  `json:"subscriptions"`
 	Secrets             []secretSummary        `json:"secrets"`
 	Buckets             []s3BucketSummary      `json:"buckets"`
 	EventSourceMappings []esmSummary           `json:"eventSourceMappings"`
@@ -89,6 +94,8 @@ type overviewCounts struct {
 	Gateways            int `json:"gateways"`
 	Functions           int `json:"functions"`
 	Queues              int `json:"queues"`
+	Topics              int `json:"topics"`
+	Subscriptions       int `json:"subscriptions"`
 	Secrets             int `json:"secrets"`
 	Buckets             int `json:"buckets"`
 	LogGroups           int `json:"logGroups"`
@@ -187,6 +194,27 @@ type queueSummary struct {
 	Tags             map[string]string `json:"tags,omitempty"`
 	TagCount         int               `json:"tagCount"`
 	RecentMessages   []queueMessage    `json:"recentMessages,omitempty"`
+}
+
+type topicSummary struct {
+	Name             string            `json:"name"`
+	Arn              string            `json:"arn"`
+	FIFO             bool              `json:"fifo"`
+	Subscriptions    int               `json:"subscriptions"`
+	CreatedTimestamp int64             `json:"createdTimestamp"`
+	Tags             map[string]string `json:"tags,omitempty"`
+	TagCount         int               `json:"tagCount"`
+}
+
+type subscriptionSummary struct {
+	SubscriptionArn    string `json:"subscriptionArn"`
+	TopicArn           string `json:"topicArn"`
+	TopicName          string `json:"topicName"`
+	Protocol           string `json:"protocol"`
+	Endpoint           string `json:"endpoint"`
+	RawMessageDelivery bool   `json:"rawMessageDelivery"`
+	FilterPolicy       string `json:"filterPolicy,omitempty"`
+	FilterPolicyScope  string `json:"filterPolicyScope,omitempty"`
 }
 
 type queueMessage struct {
@@ -296,6 +324,12 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	}
 
 	queues := h.sqs.ListQueues("")
+	topics := make([]*types.SNSTopic, 0)
+	subscriptions := make([]*types.SNSSubscription, 0)
+	if h.sns != nil {
+		topics = h.sns.ListTopics()
+		subscriptions = h.sns.ListSubscriptions()
+	}
 	secrets := h.secrets.ListSecrets()
 	buckets := h.s3.ListBuckets()
 	logGroups := h.logs.ListGroups()
@@ -312,7 +346,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	resp := overviewResponse{
 		Status:    "running",
 		Timestamp: time.Now().UTC(),
-		Services:  []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "secretsmanager", "eventsource"},
+		Services:  []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "sns", "secretsmanager", "eventsource"},
 		Config: overviewConfig{
 			Region:    h.cfg.Region,
 			AccountID: h.cfg.AccountID,
@@ -324,6 +358,8 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			Gateways:            len(gateways) + len(v1APIs),
 			Functions:           len(functions),
 			Queues:              len(queues),
+			Topics:              len(topics),
+			Subscriptions:       len(subscriptions),
 			Secrets:             len(secrets),
 			Buckets:             len(buckets),
 			LogGroups:           len(logGroups),
@@ -332,6 +368,8 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		Gateways:            make([]gatewaySummary, 0, len(gateways)),
 		Functions:           make([]functionSummary, 0, len(functions)),
 		Queues:              make([]queueSummary, 0, len(queues)),
+		Topics:              make([]topicSummary, 0, len(topics)),
+		Subscriptions:       make([]subscriptionSummary, 0, len(subscriptions)),
 		Secrets:             make([]secretSummary, 0, len(secrets)),
 		Buckets:             make([]s3BucketSummary, 0, len(buckets)),
 		EventSourceMappings: make([]esmSummary, 0, len(esmMappings)),
@@ -716,6 +754,69 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		resp.Queues = append(resp.Queues, summary)
 	}
 	sort.Slice(resp.Queues, func(i, j int) bool { return resp.Queues[i].Name < resp.Queues[j].Name })
+
+	subscriptionsByTopicArn := make(map[string]int, len(topics))
+	for _, sub := range subscriptions {
+		subscriptionsByTopicArn[sub.TopicArn]++
+	}
+	for _, topic := range topics {
+		resp.Topics = append(resp.Topics, topicSummary{
+			Name:             topic.Name,
+			Arn:              topic.TopicArn,
+			FIFO:             topic.FifoTopic,
+			Subscriptions:    subscriptionsByTopicArn[topic.TopicArn],
+			CreatedTimestamp: topic.CreatedTimestamp,
+			Tags:             cloneStringMap(topic.Tags),
+			TagCount:         len(topic.Tags),
+		})
+	}
+	sort.Slice(resp.Topics, func(i, j int) bool { return resp.Topics[i].Name < resp.Topics[j].Name })
+
+	for _, sub := range subscriptions {
+		topicName := topicNameFromARN(sub.TopicArn)
+		resp.Subscriptions = append(resp.Subscriptions, subscriptionSummary{
+			SubscriptionArn:    sub.SubscriptionArn,
+			TopicArn:           sub.TopicArn,
+			TopicName:          topicName,
+			Protocol:           sub.Protocol,
+			Endpoint:           sub.Endpoint,
+			RawMessageDelivery: sub.RawMessageDelivery,
+			FilterPolicy:       sub.FilterPolicy,
+			FilterPolicyScope:  sub.FilterPolicyScope,
+		})
+
+		kind := ""
+		targetID := sub.Endpoint
+		targetName := sub.Endpoint
+		switch strings.ToLower(sub.Protocol) {
+		case "sqs":
+			kind = "sns-sqs"
+			targetName = queueNameFromEndpoint(sub.Endpoint)
+			targetID = targetName
+		case "lambda":
+			kind = "sns-lambda"
+			targetName = lambdaNameFromARNOrName(sub.Endpoint)
+			targetID = targetName
+		default:
+			// unsupported target types are omitted from topology connections.
+		}
+		if kind != "" {
+			resp.Connections = append(resp.Connections, infraConnection{
+				SourceFunction: topicName,
+				TargetID:       targetID,
+				TargetName:     targetName,
+				TargetKind:     kind,
+				Evidence:       "subscription",
+				Source:         sub.SubscriptionArn,
+			})
+		}
+	}
+	sort.Slice(resp.Subscriptions, func(i, j int) bool {
+		if resp.Subscriptions[i].TopicName == resp.Subscriptions[j].TopicName {
+			return resp.Subscriptions[i].SubscriptionArn < resp.Subscriptions[j].SubscriptionArn
+		}
+		return resp.Subscriptions[i].TopicName < resp.Subscriptions[j].TopicName
+	})
 
 	for _, secret := range secrets {
 		resp.Secrets = append(resp.Secrets, secretSummary{
@@ -1136,6 +1237,48 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"error": message,
 	})
+}
+
+func topicNameFromARN(topicArn string) string {
+	parts := strings.Split(topicArn, ":")
+	if len(parts) == 0 {
+		return topicArn
+	}
+	return parts[len(parts)-1]
+}
+
+func queueNameFromEndpoint(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return endpoint
+	}
+	if strings.HasPrefix(endpoint, "arn:aws:sqs:") {
+		parts := strings.Split(endpoint, ":")
+		if len(parts) > 0 {
+			return parts[len(parts)-1]
+		}
+	}
+	if idx := strings.LastIndex(endpoint, "/"); idx >= 0 && idx+1 < len(endpoint) {
+		return endpoint[idx+1:]
+	}
+	return endpoint
+}
+
+func lambdaNameFromARNOrName(value string) string {
+	value = strings.TrimSpace(value)
+	const marker = ":function:"
+	if !strings.Contains(value, marker) {
+		return value
+	}
+	i := strings.Index(value, marker)
+	name := value[i+len(marker):]
+	if j := strings.IndexByte(name, ':'); j != -1 {
+		name = name[:j]
+	}
+	if name == "" {
+		return value
+	}
+	return name
 }
 
 func parseInt(v string) int {

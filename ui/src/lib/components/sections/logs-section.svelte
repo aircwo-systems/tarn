@@ -419,6 +419,7 @@
 		if (name === '/openstack/api') return 'api';
 		if (name === '/openstack/system') return 'system';
 		if (name.startsWith('/openstack/apigateway')) return 'apigatewayv2';
+		if (name.startsWith('/openstack/sns')) return 'sns';
 		if (name.startsWith('/openstack/sqs')) return 'sqs';
 		if (name.startsWith('/openstack/secrets')) return 'secretsmanager';
 		if (name.startsWith('/openstack/')) return 'system';
@@ -432,6 +433,7 @@
 			case 'api': return 'API';
 			case 'system': return 'System';
 			case 'apigatewayv2': return 'API Gateway';
+			case 'sns': return 'SNS';
 			case 'sqs': return 'SQS';
 			case 'secretsmanager': return 'Secrets';
 			default: return 'Other';
@@ -461,7 +463,7 @@
 			counts.set(key, (counts.get(key) ?? 0) + 1);
 		}
 
-		const orderedKeys = ['lambda', 'api', 'system', 'apigatewayv2', 'sqs', 'secretsmanager', 'other'];
+		const orderedKeys = ['lambda', 'api', 'system', 'apigatewayv2', 'sns', 'sqs', 'secretsmanager', 'other'];
 		const options = [{ key: 'all', label: serviceLabel('all'), count: groups.length }];
 		for (const key of orderedKeys) {
 			const count = counts.get(key) ?? 0;

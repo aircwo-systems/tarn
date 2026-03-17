@@ -190,7 +190,7 @@ func (h *Handler) getQueueAttributes(w http.ResponseWriter, r *http.Request) {
 
 	var attrXML string
 	for k, v := range attrs {
-		attrXML += fmt.Sprintf("    <Attribute>\n      <Name>%s</Name>\n      <Value>%s</Value>\n    </Attribute>\n", k, v)
+		attrXML += fmt.Sprintf("    <Attribute>\n      <Name>%s</Name>\n      <Value>%s</Value>\n    </Attribute>\n", xmlEscape(k), xmlEscape(v))
 	}
 
 	body := fmt.Sprintf(`<GetQueueAttributesResponse xmlns="%s">

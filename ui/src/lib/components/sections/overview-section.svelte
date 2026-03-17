@@ -4,6 +4,7 @@
     GlobeHemisphereWestIcon,
     LightningIcon,
     ChatCircleIcon,
+    BellIcon,
     KeyIcon,
     HardDriveIcon,
     ArrowsClockwiseIcon,
@@ -68,6 +69,11 @@
   const filteredSecrets = $derived(
     (dashboard.data?.secrets ?? []).filter((s) =>
       matchesTagFilter(s.tags, filters.tagFilter),
+    ),
+  );
+  const filteredTopics = $derived(
+    (dashboard.data?.topics ?? []).filter((t) =>
+      matchesTagFilter(t.tags, filters.tagFilter),
     ),
   );
 
@@ -208,6 +214,16 @@
           <ChatCircleIcon size={12} />
           <span class="font-mono">{filteredQueues.length}</span>
           <span>Queues</span>
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          onclick={() => onNavigate("sns")}
+          class="gap-1.5"
+        >
+          <BellIcon size={12} />
+          <span class="font-mono">{filteredTopics.length}</span>
+          <span>SNS</span>
         </Button>
         <Button
           variant="outline"

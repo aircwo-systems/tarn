@@ -57,6 +57,9 @@
 
     if (model.hasData) {
       context.fillText("API Gateway", CONNECTION_CANVAS.colGateway, 96);
+      if (model.nodes.topics.length > 0) {
+        context.fillText("SNS", CONNECTION_CANVAS.colTopic, 96);
+      }
       context.fillText("SQS", CONNECTION_CANVAS.colQueue, 96);
       context.fillText("Lambda", CONNECTION_CANVAS.colFunction, 96);
 

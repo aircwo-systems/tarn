@@ -17,6 +17,7 @@ import (
 	lambdahandler "github.com/openstack-project/openstack/internal/api/lambda"
 	s3handler "github.com/openstack-project/openstack/internal/api/s3"
 	secretshandler "github.com/openstack-project/openstack/internal/api/secrets"
+	snshandler "github.com/openstack-project/openstack/internal/api/sns"
 	sqshandler "github.com/openstack-project/openstack/internal/api/sqs"
 	apigatewaysvc "github.com/openstack-project/openstack/internal/apigateway"
 	apigatewayv1svc "github.com/openstack-project/openstack/internal/apigatewayv1"
@@ -27,6 +28,7 @@ import (
 	logssvc "github.com/openstack-project/openstack/internal/logs"
 	s3svc "github.com/openstack-project/openstack/internal/s3"
 	secretssvc "github.com/openstack-project/openstack/internal/secrets"
+	snssvc "github.com/openstack-project/openstack/internal/sns"
 	sqssvc "github.com/openstack-project/openstack/internal/sqs"
 	tracesvc "github.com/openstack-project/openstack/internal/trace"
 )
@@ -40,6 +42,7 @@ type Server struct {
 	lambda      *lambdahandler.Handler
 	s3          *s3handler.Handler
 	sqs         *sqshandler.Handler
+	sns         *snshandler.Handler
 	secrets     *secretshandler.Handler
 	eventsource *eventsourcehandler.Handler
 	admin       *adminhandler.Handler
@@ -49,7 +52,7 @@ type Server struct {
 }
 
 // NewServer creates a new API server.
-func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, gatewayV1Svc *apigatewayv1svc.Service, lambdaSvc *lambdasvc.Service, logsSvc *logssvc.Service, sqsSvc *sqssvc.Service, secretsSvc *secretssvc.Service, infraSvc *infrasvc.Service, s3Svc *s3svc.Service, esmSvc *eventsourcesvc.Service, traceStore *tracesvc.Store, collector *tracesvc.Collector) *Server {
+func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, gatewayV1Svc *apigatewayv1svc.Service, lambdaSvc *lambdasvc.Service, logsSvc *logssvc.Service, sqsSvc *sqssvc.Service, snsSvc *snssvc.Service, secretsSvc *secretssvc.Service, infraSvc *infrasvc.Service, s3Svc *s3svc.Service, esmSvc *eventsourcesvc.Service, traceStore *tracesvc.Store, collector *tracesvc.Collector) *Server {
 	lambdaHandler := lambdahandler.NewHandler(lambdaSvc, s3Svc)
 	lambdaHandler.SetTraceStore(traceStore)
 	lambdaHandler.SetCollector(collector)
@@ -64,9 +67,10 @@ func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, gatewayV1S
 		lambda:      lambdaHandler,
 		s3:          s3handler.NewHandler(s3Svc),
 		sqs:         sqshandler.NewHandler(sqsSvc),
+		sns:         snshandler.NewHandler(snsSvc),
 		secrets:     secretsHandler,
 		eventsource: eventsourcehandler.NewHandler(esmSvc),
-		admin:       adminhandler.NewHandler(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, traceStore),
+		admin:       adminhandler.NewHandler(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, traceStore),
 		iam:         iamhandler.NewHandler(cfg.AccountID),
 		logsSvc:     logsSvc,
 		collector:   collector,
@@ -270,7 +274,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Queue URL paths: /{accountId}/{queueName}
 	// Also handles POST /_s3/{bucket}?delete via prefix check
 	mux.HandleFunc("POST /{account}/{queue}", s.postAccountDispatch)
-	// Catch-all for POST / — dispatches between Secrets Manager (X-Amz-Target) and SQS (Action)
+	// Catch-all for POST / — dispatches between Secrets Manager, IAM, SNS, and SQS
 	mux.HandleFunc("POST /", s.postRootDispatch)
 
 	// Optional dashboard UI (SPA fallback for GET requests only)
@@ -303,16 +307,27 @@ func (s *Server) postAccountDispatch(w http.ResponseWriter, r *http.Request) {
 	s.sqs.Dispatch(w, r)
 }
 
-// postRootDispatch routes POST / between Secrets Manager, IAM, and SQS.
-// Secrets Manager uses X-Amz-Target; IAM uses Version=2010-05-08; SQS uses Action.
+// postRootDispatch routes POST / between Secrets Manager, IAM, SNS, and SQS.
+// Secrets Manager uses X-Amz-Target; IAM uses Version=2010-05-08; SNS/SQS use Action.
 func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
 	if secretshandler.IsSecretsManagerRequest(r) {
 		s.secrets.Dispatch(w, r)
 		return
 	}
+	// SQS JSON wire protocol uses X-Amz-Target: AmazonSQS.*
+	if strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AmazonSQS.") {
+		s.sqs.Dispatch(w, r)
+		return
+	}
 	if iamhandler.IsIAMRequest(r) {
 		s.iam.Dispatch(w, r)
 		return
+	}
+	if err := r.ParseForm(); err == nil {
+		if snshandler.IsSNSAction(r.FormValue("Action")) {
+			s.sns.Dispatch(w, r)
+			return
+		}
 	}
 	s.sqs.Dispatch(w, r)
 }
@@ -341,7 +356,7 @@ func (s *Server) telemetryDBHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","secretsmanager","eventsource"]}`)
+	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","sns","secretsmanager","eventsource"]}`)
 }
 
 func (s *Server) withLogging(next http.Handler) http.Handler {

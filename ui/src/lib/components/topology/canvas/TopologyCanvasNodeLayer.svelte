@@ -65,6 +65,19 @@
       });
     }
 
+    for (const node of model.nodes.topics) {
+      drawNode(context, node, {
+        palette,
+        stroke: palette.chart1,
+        fill: palette.popover,
+        titleColor: palette.foreground,
+        subColor: palette.mutedForeground,
+        hovered: hoveredNodeId === node.id,
+        focused: isFocused(node.id),
+        time,
+      });
+    }
+
     for (const node of model.nodes.functions) {
       drawNode(context, node, {
         palette,
