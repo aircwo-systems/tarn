@@ -184,6 +184,8 @@
     "postgresql",
     "mysql",
     "redis",
+    "cache_extension",
+    "cache-extension",
     "secret",
     "secrets",
   ]);

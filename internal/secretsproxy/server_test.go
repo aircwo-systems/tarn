@@ -78,3 +78,77 @@ func TestHandlerForwardsGetSecret(t *testing.T) {
 		t.Fatalf("response did not contain forwarded secret value, got: %s", rec.Body.String())
 	}
 }
+
+func TestHandlerEmitsRequestEvent(t *testing.T) {
+	var emitted RequestEvent
+	httpClient := &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"application/json"},
+				},
+				Body: io.NopCloser(strings.NewReader(`{"Name":"my-secret","SecretString":"top-secret"}`)),
+			}, nil
+		}),
+	}
+
+	h := NewHandler(Options{
+		UpstreamURL:  "http://openstack.local",
+		SessionToken: "expected-token",
+		RequireToken: true,
+		HTTPClient:   httpClient,
+		OnRequest: func(event RequestEvent) {
+			emitted = event
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/secretsmanager/get?secretId=my-secret", nil)
+	req.Header.Set(tokenHeader, "expected-token")
+	req.Header.Set("X-OpenStack-Function-Name", "local-fn")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	if emitted.SecretID != "my-secret" {
+		t.Fatalf("event secretId = %q, want %q", emitted.SecretID, "my-secret")
+	}
+	if emitted.FunctionName != "local-fn" {
+		t.Fatalf("event functionName = %q, want %q", emitted.FunctionName, "local-fn")
+	}
+	if emitted.StatusCode != http.StatusOK {
+		t.Fatalf("event status = %d, want %d", emitted.StatusCode, http.StatusOK)
+	}
+	if !emitted.TokenValid {
+		t.Fatalf("event tokenValid = false, want true")
+	}
+}
+
+func TestHandlerEmitsEventForInvalidToken(t *testing.T) {
+	var emitted RequestEvent
+	h := NewHandler(Options{
+		UpstreamURL:  "http://openstack.local",
+		SessionToken: "expected-token",
+		RequireToken: true,
+		OnRequest: func(event RequestEvent) {
+			emitted = event
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/secretsmanager/get?secretId=my-secret", nil)
+	req.Header.Set(tokenHeader, "wrong-token")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	if emitted.StatusCode != http.StatusForbidden {
+		t.Fatalf("event status = %d, want %d", emitted.StatusCode, http.StatusForbidden)
+	}
+	if emitted.TokenValid {
+		t.Fatalf("event tokenValid = true, want false")
+	}
+}
