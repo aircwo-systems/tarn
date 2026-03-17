@@ -17,6 +17,7 @@ func NewSecretsCmd() *cobra.Command {
 	cmd.AddCommand(newListCmd())
 	cmd.AddCommand(newDeleteCmd())
 	cmd.AddCommand(newUpdateCmd())
+	cmd.AddCommand(newProxyCmd())
 
 	return cmd
 }
