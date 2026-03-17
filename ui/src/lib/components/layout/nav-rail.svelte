@@ -15,6 +15,7 @@
     PlusIcon,
     TrashIcon,
     ShieldWarningIcon,
+    BellIcon,
   } from "phosphor-svelte";
   import OpenStackLogo from "$lib/components/common/openstack-logo.svelte";
   import NavRailItem from "./nav-rail-item.svelte";
@@ -90,6 +91,7 @@
     { id: "chaos", label: "Chaos", icon: ShieldWarningIcon },
     { id: "functions", label: "Functions", icon: LightningIcon },
     { id: "queues", label: "Queues", icon: ChatCircleIcon },
+    { id: "sns", label: "SNS", icon: BellIcon },
     { id: "secrets", label: "Secrets", icon: KeyIcon },
     { id: "triggers", label: "Triggers", icon: ArrowsClockwiseIcon },
     { id: "storage", label: "Storage", icon: HardDriveIcon },

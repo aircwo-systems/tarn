@@ -3,6 +3,7 @@
     GlobeHemisphereWestIcon,
     LightningIcon,
     ChatCircleIcon,
+    BellIcon,
     KeyIcon,
     HardDriveIcon,
     HardDrivesIcon,
@@ -48,6 +49,18 @@
       matchesTagFilter(secret.tags, filters.tagFilter),
     ),
   );
+  const topics = $derived(
+    (dashboard.data?.topics ?? []).filter((topic) =>
+      matchesTagFilter(topic.tags, filters.tagFilter),
+    ),
+  );
+  const topicNames = $derived(new Set(topics.map((topic) => topic.name)));
+  const subscriptions = $derived(
+    (dashboard.data?.subscriptions ?? []).filter((subscription) => {
+      if (!filters.tagFilter.trim()) return true;
+      return topicNames.has(subscription.topicName);
+    }),
+  );
   const buckets = $derived(dashboard.data?.buckets ?? []);
   const eventMappings = $derived(dashboard.data?.eventSourceMappings ?? []);
   const infra = $derived(getVisibleInfra(dashboard.data?.infrastructure ?? []));
@@ -55,6 +68,8 @@
     gateways.length +
       functions.length +
       queues.length +
+      topics.length +
+      subscriptions.length +
       secrets.length +
       buckets.length +
       eventMappings.length +
@@ -94,7 +109,7 @@
     </div>
   {:else}
     <div
-      class="grid grid-cols-1 lg:grid-cols-7 divide-y lg:divide-y-0 lg:divide-x divide-border"
+      class="grid grid-cols-1 lg:grid-cols-8 divide-y lg:divide-y-0 lg:divide-x divide-border"
     >
       <!-- API Gateway -->
       <div class="p-3">
@@ -201,6 +216,48 @@
               </li>
             {/each}
           </ul>
+        {/if}
+      </div>
+
+      <!-- SNS -->
+      <div class="p-3">
+        <div class="flex items-center gap-2 mb-2">
+          <BellIcon size={13} weight="fill" class="text-primary" />
+          <span
+            class="text-[10px] font-mono uppercase tracking-wider text-muted-foreground"
+            >SNS</span
+          >
+          <span class="ml-auto text-[10px] font-mono text-muted-foreground/70"
+            >{topics.length}</span
+          >
+        </div>
+        {#if topics.length === 0}
+          <p class="text-[11px] text-muted-foreground/70 py-2">No topics</p>
+        {:else}
+          <ul class="space-y-1.5">
+            {#each topics as topic}
+              <li class="flex items-center gap-2 group">
+                <LedDot color="green" />
+                <span
+                  class="text-xs text-foreground truncate flex-1"
+                  title={topic.arn}>{topic.name}</span
+                >
+                <Badge
+                  variant={topic.fifo ? "amber" : "secondary"}
+                  class="text-[10px] px-1.5 py-0"
+                >
+                  {topic.fifo ? "FIFO" : "Std"}
+                </Badge>
+                <span
+                  class="text-[10px] font-mono text-muted-foreground/70 shrink-0"
+                  >{topic.subscriptions} sub</span
+                >
+              </li>
+            {/each}
+          </ul>
+          <p class="mt-2 text-[10px] text-muted-foreground/70 font-mono">
+            {subscriptions.length} subscriptions total
+          </p>
         {/if}
       </div>
 

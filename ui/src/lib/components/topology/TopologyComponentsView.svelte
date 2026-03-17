@@ -6,6 +6,7 @@
     gateways = [],
     functions = [],
     queues = [],
+    topics = [],
     secrets = [],
     buckets = [],
     infra = [],
@@ -74,12 +75,20 @@
       order: 0,
     },
     {
+      id: "sns",
+      label: "SNS",
+      items: topics,
+      color: "var(--color-primary)",
+      side: 1,
+      order: 1,
+    },
+    {
       id: "secrets",
       label: "SECRETS",
       items: secrets,
       color: "var(--color-chart-2)",
       side: 1,
-      order: 1,
+      order: 2,
     },
     {
       id: "storage",
@@ -87,7 +96,7 @@
       items: buckets,
       color: "var(--color-cyan)",
       side: 1,
-      order: 2,
+      order: 3,
     },
   ]);
 

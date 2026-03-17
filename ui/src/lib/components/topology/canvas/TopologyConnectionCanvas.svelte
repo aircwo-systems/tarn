@@ -380,6 +380,7 @@
 
     const nodes: ConnectionNode[] = [
       ...graph.nodes.gateways,
+      ...graph.nodes.topics,
       ...graph.nodes.queues,
       ...graph.nodes.functions,
       ...(graph.nodes.cacheExtension ? [graph.nodes.cacheExtension] : []),

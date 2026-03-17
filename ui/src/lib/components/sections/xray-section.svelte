@@ -65,6 +65,8 @@
         return "var(--chart-6)";
       case "queue":
         return "var(--color-amber)";
+      case "topic":
+        return "var(--color-primary)";
       case "dlq":
         return "var(--color-red)";
       case "s3":
@@ -91,6 +93,8 @@
         return "Lambda";
       case "queue":
         return "SQS";
+      case "topic":
+        return "SNS";
       case "dlq":
         return "DLQ";
       case "s3":
@@ -127,6 +131,8 @@
     if (t.method && t.path) return `${t.method} ${t.path}`;
     const s3 = t.spans.find((s) => s.kind === "s3");
     if (s3) return `S3 → ${s3.name}`;
+    const topic = t.spans.find((s) => s.kind === "topic");
+    if (topic) return `SNS → ${topic.name}`;
     const q = t.spans.find((s) => s.kind === "queue" || s.kind === "dlq");
     if (q) return `ESM → ${q.name}`;
     const fn = t.spans.find((s) => s.kind === "lambda");

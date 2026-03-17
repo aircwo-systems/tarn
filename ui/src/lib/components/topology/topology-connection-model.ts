@@ -7,6 +7,7 @@ import type {
   InfraConnection,
   InfraProbe,
   QueueSummary,
+  TopicSummary,
   RequestTrace,
   SecretSummary,
 } from "$lib/types";
@@ -21,7 +22,8 @@ export const CONNECTION_CANVAS = {
   cacheHalfHeight: 34,
   infraHalfWidth: 108,
   colGateway: 170,
-  colQueue: 430,
+  colTopic: 390,
+  colQueue: 560,
   colFunction: 760,
   colSecret: 1120,
   colBucket: 1290,
@@ -55,6 +57,10 @@ export interface QueueFnEdge extends LaneEdge {
   filterLabel: string | null;
 }
 
+export interface SnsEdge extends LaneEdge {
+  activity?: EdgeActivity;
+}
+
 export interface DlqEdge {
   id: string;
   from: ConnectionNode;
@@ -74,6 +80,7 @@ export interface TopologyGraphModel {
   infraById: Map<string, InfraProbe>;
   nodes: {
     gateways: ConnectionNode[];
+    topics: ConnectionNode[];
     queues: ConnectionNode[];
     functions: ConnectionNode[];
     buckets: ConnectionNode[];
@@ -84,6 +91,8 @@ export interface TopologyGraphModel {
   edges: {
     apigwToQueue: GwEdge[];
     apigwToFunction: GwEdge[];
+    snsToQueue: SnsEdge[];
+    snsToFunction: SnsEdge[];
     queueToFunction: QueueFnEdge[];
     queueToDlq: DlqEdge[];
     bucketToFunction: LaneEdge[];
@@ -129,6 +138,7 @@ export interface BuildTopologyGraphInput {
   gateways: GatewaySummary[];
   functions: FunctionSummary[];
   queues: QueueSummary[];
+  topics: TopicSummary[];
   buckets: BucketSummary[];
   secrets: SecretSummary[];
   infra: InfraProbe[];
@@ -145,6 +155,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     gateways,
     functions,
     queues,
+    topics,
     buckets,
     secrets,
     infra,
@@ -167,11 +178,22 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     }),
   );
 
+  const connTopics = topics.slice(0, 3).map(
+    (t, i): ConnectionNode => ({
+      id: t.name,
+      x: CONNECTION_CANVAS.colTopic,
+      y: 220 + i * 112,
+      label: trimLabel(t.name, 13),
+      sub: `${t.subscriptions} sub`,
+      kind: "topic",
+    }),
+  );
+
   const connQueues = queues.slice(0, 4).map(
     (q, i): ConnectionNode => ({
       id: q.name,
       x: CONNECTION_CANVAS.colQueue,
-      y: 260 + i * 146,
+      y: 240 + connTopics.length * 112 + i * 112,
       label: trimLabel(q.name, 13),
       sub: `${q.approxVisible + q.approxInFlight + q.approxDelayed} msg`,
       kind: "queue",
@@ -279,6 +301,38 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     path: laneAwarePath(edge.from, edge.to, edge.lane, edge.laneCount),
   }));
 
+  const snsToQueue = withLanes(
+    infraConnections.flatMap((c) => {
+      if (c.targetKind !== "sns-sqs") return [];
+      const from = connTopics.find((n) => n.id === c.sourceFunction);
+      const queueName = c.targetId || c.targetName;
+      const to = connQueues.find((n) => n.id === queueName);
+      if (!from || !to) return [];
+      const activity = traceEdgeActivity.get(`sns::${from.id}→${to.id}`);
+      return [{ from, to, activity }];
+    }),
+    (edge) => `${edge.from.id}→${edge.to.id}`,
+  ).map((edge) => ({
+    ...edge,
+    path: laneAwarePath(edge.from, edge.to, edge.lane, edge.laneCount),
+  }));
+
+  const snsToFunction = withLanes(
+    infraConnections.flatMap((c) => {
+      if (c.targetKind !== "sns-lambda") return [];
+      const from = connTopics.find((n) => n.id === c.sourceFunction);
+      const fnName = c.targetId || c.targetName;
+      const to = connFunctions.find((n) => n.id === fnName);
+      if (!from || !to) return [];
+      const activity = traceEdgeActivity.get(`sns::${from.id}→${to.id}`);
+      return [{ from, to, activity }];
+    }),
+    (edge) => `${edge.from.id}→${edge.to.id}`,
+  ).map((edge) => ({
+    ...edge,
+    path: laneAwarePath(edge.from, edge.to, edge.lane, edge.laneCount),
+  }));
+
   const queueToFunctionPairs: {
     queueId: string;
     fnId: string;
@@ -364,6 +418,8 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
   const awsServiceKinds = [
     "apigw-sqs",
     "apigw-lambda",
+    "sns-sqs",
+    "sns-lambda",
     "s3-lambda",
     "sqs-lambda",
     "queue-dlq",
@@ -444,6 +500,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
   return {
     hasData:
       gateways.length > 0 ||
+      topics.length > 0 ||
       functions.length > 0 ||
       queues.length > 0 ||
       buckets.length > 0 ||
@@ -454,6 +511,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     ),
     nodes: {
       gateways: connGateways,
+      topics: connTopics,
       queues: connQueues,
       functions: connFunctions,
       buckets: connBuckets,
@@ -464,6 +522,8 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     edges: {
       apigwToQueue,
       apigwToFunction,
+      snsToQueue,
+      snsToFunction,
       queueToFunction,
       queueToDlq,
       bucketToFunction,
@@ -530,6 +590,7 @@ export function selectedTraceNodes(
   if (!trace) return [];
 
   const lambdaSpan = trace.spans.find((span) => span.kind === "lambda");
+  const topicSpan = trace.spans.find((span) => span.kind === "topic");
   const queueSpan = trace.spans.find((span) => span.kind === "queue");
   const dlqSpan = trace.spans.find((span) => span.kind === "dlq");
   const cacheSpan = trace.spans.find(
@@ -545,6 +606,9 @@ export function selectedTraceNodes(
   const matchedFunction = lambdaSpan
     ? model.nodes.functions.find((node) => node.id === lambdaSpan.name)
     : undefined;
+  const matchedTopic = topicSpan
+    ? model.nodes.topics.find((node) => node.id === topicSpan.name)
+    : undefined;
   const matchedQueue = queueSpan
     ? model.nodes.queues.find((node) => node.id === queueSpan.name)
     : undefined;
@@ -556,7 +620,7 @@ export function selectedTraceNodes(
     ? model.nodes.secrets.find((node) => node.id === secretsSpan.name)
     : undefined;
 
-  return [matchedGateway, matchedFunction, matchedQueue, matchedDlq, matchedCache, matchedSecret].filter(
+  return [matchedGateway, matchedFunction, matchedTopic, matchedQueue, matchedDlq, matchedCache, matchedSecret].filter(
     (node): node is ConnectionNode => !!node,
   );
 }
@@ -593,6 +657,7 @@ export function findNodeAt(model: TopologyGraphModel, x: number, y: number): Con
     ...model.nodes.secrets,
     ...(model.nodes.cacheExtension ? [model.nodes.cacheExtension] : []),
     ...model.nodes.functions,
+    ...model.nodes.topics,
     ...model.nodes.queues,
     ...model.nodes.buckets,
     ...model.nodes.gateways,
@@ -714,6 +779,8 @@ export function hoverFocusState(
   const allEdges: Array<{ id: string; from: ConnectionNode; to: ConnectionNode }> = [
     ...model.edges.apigwToQueue,
     ...model.edges.apigwToFunction,
+    ...model.edges.snsToQueue,
+    ...model.edges.snsToFunction,
     ...model.edges.queueToFunction,
     ...model.edges.queueToDlq,
     ...model.edges.bucketToFunction,
@@ -1014,6 +1081,7 @@ function buildTraceEdgeActivity(recentTraces: RequestTrace[], now: number): Map<
     if (age > TRACE_WINDOW_MS) continue;
 
     const lambdaSpan = trace.spans.find((span) => span.kind === "lambda");
+    const topicSpan = trace.spans.find((span) => span.kind === "topic");
     const queueSpan = trace.spans.find((span) => span.kind === "queue");
     const dlqSpan = trace.spans.find((span) => span.kind === "dlq");
     const hasCacheFlow = trace.spans.some(
@@ -1028,6 +1096,10 @@ function buildTraceEdgeActivity(recentTraces: RequestTrace[], now: number): Map<
     if (trace.gatewayId) {
       const target = lambdaSpan ? lambdaSpan.name : queueSpan ? queueSpan.name : null;
       if (target) key = `gw::${trace.gatewayId}→${target}`;
+    } else if (topicSpan && queueSpan) {
+      key = `sns::${topicSpan.name}→${queueSpan.name}`;
+    } else if (topicSpan && lambdaSpan) {
+      key = `sns::${topicSpan.name}→${lambdaSpan.name}`;
     } else if (queueSpan && dlqSpan) {
       key = `dlq::${queueSpan.name}→${dlqSpan.name}`;
     } else if (queueSpan && lambdaSpan) {

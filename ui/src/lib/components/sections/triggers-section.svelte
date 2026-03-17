@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ArrowsClockwise, ChatCircle, GlobeHemisphereWest, Lightning } from 'phosphor-svelte';
+	import { ArrowsClockwise, Bell, ChatCircle, GlobeHemisphereWest, Lightning } from 'phosphor-svelte';
 	import { TableCell, TableRow } from '$lib/components/ui/table';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import ArnCell from '$lib/components/common/arn-cell.svelte';
@@ -8,7 +8,7 @@
 
 	type TriggerRow = {
 		id: string;
-		type: 'SQS' | 'API';
+		type: 'SQS' | 'SNS' | 'API';
 		sourceName: string;
 		sourceArn: string;
 		targetName: string;
@@ -30,11 +30,16 @@
 	const queues = $derived(
 		(dashboard.data?.queues ?? []).filter((queue) => matchesTagFilter(queue.tags, filters.tagFilter))
 	);
+	const topics = $derived(
+		(dashboard.data?.topics ?? []).filter((topic) => matchesTagFilter(topic.tags, filters.tagFilter))
+	);
+	const subscriptions = $derived(dashboard.data?.subscriptions ?? []);
 	const mappings = $derived(dashboard.data?.eventSourceMappings ?? []);
 	const connections = $derived(dashboard.data?.connections ?? []);
 
 	const functionsByName = $derived(new Map(functions.map((fn) => [fn.name, fn])));
 	const queuesByName = $derived(new Map(queues.map((queue) => [queue.name, queue])));
+	const topicsByName = $derived(new Map(topics.map((topic) => [topic.name, topic])));
 	const gatewaysByID = $derived(new Map(gateways.map((gateway) => [gateway.apiId, gateway])));
 
 	const filteredMappings = $derived(
@@ -60,6 +65,48 @@
 				state: mapping.state,
 				detail: `Batch ×${mapping.batchSize}`,
 				lastResult: mapping.lastResult
+			};
+		})
+	);
+
+	const filteredSubscriptions = $derived(
+		subscriptions.filter((subscription) => {
+			if (!filters.tagFilter.trim()) {
+				return true;
+			}
+			return topicsByName.has(subscription.topicName);
+		})
+	);
+
+	const snsTriggers = $derived<TriggerRow[]>(
+		filteredSubscriptions.map((subscription) => {
+			const topic = topicsByName.get(subscription.topicName);
+			const protocol = subscription.protocol.toLowerCase();
+			const targetName =
+				protocol === 'lambda'
+					? lambdaNameFromEndpoint(subscription.endpoint)
+					: protocol === 'sqs'
+						? queueNameFromEndpoint(subscription.endpoint)
+						: subscription.endpoint;
+			const targetArn =
+				protocol === 'lambda'
+					? functionsByName.get(targetName)?.arn ?? subscription.endpoint
+					: protocol === 'sqs'
+						? queuesByName.get(targetName)?.arn ?? queuesByName.get(targetName)?.url ?? subscription.endpoint
+						: subscription.endpoint;
+
+			return {
+				id: `sns-${subscription.subscriptionArn}`,
+				type: 'SNS',
+				sourceName: subscription.topicName,
+				sourceArn: topic?.arn ?? subscription.topicArn,
+				targetName,
+				targetArn,
+				state: 'Configured',
+				detail: `${subscription.protocol.toUpperCase()} subscription${
+					subscription.filterPolicy ? ` · filter` : ''
+				}`,
+				lastResult: subscription.filterPolicy
 			};
 		})
 	);
@@ -101,8 +148,9 @@
 			})
 	);
 
-	const triggerRows = $derived<TriggerRow[]>([...sqsTriggers, ...apiTriggers]);
+	const triggerRows = $derived<TriggerRow[]>([...sqsTriggers, ...snsTriggers, ...apiTriggers]);
 	const sqsCount = $derived(sqsTriggers.length);
+	const snsCount = $derived(snsTriggers.length);
 	const apiCount = $derived(apiTriggers.length);
 
 	function stateBadgeVariant(state: string): 'default' | 'amber' | 'destructive' | 'secondary' | 'outline' {
@@ -112,6 +160,26 @@
 		if (normalized.includes('fail') || normalized === 'disabled') return 'destructive';
 		if (normalized === 'unknown') return 'secondary';
 		return 'outline';
+	}
+
+	function lambdaNameFromEndpoint(endpoint: string): string {
+		const marker = ':function:';
+		const index = endpoint.indexOf(marker);
+		if (index < 0) return endpoint;
+		const tail = endpoint.slice(index + marker.length);
+		return tail.split(':')[0] || endpoint;
+	}
+
+	function queueNameFromEndpoint(endpoint: string): string {
+		if (endpoint.startsWith('arn:aws:sqs:')) {
+			const parts = endpoint.split(':');
+			return parts[parts.length - 1] || endpoint;
+		}
+		const slash = endpoint.lastIndexOf('/');
+		if (slash >= 0 && slash + 1 < endpoint.length) {
+			return endpoint.slice(slash + 1);
+		}
+		return endpoint;
 	}
 </script>
 
@@ -128,6 +196,10 @@
 				<span class="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-muted-foreground">
 					<ChatCircle size={12} class="text-amber" />
 					SQS {sqsCount}
+				</span>
+				<span class="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-muted-foreground">
+					<Bell size={12} class="text-primary" />
+					SNS {snsCount}
 				</span>
 				<span class="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-muted-foreground">
 					<GlobeHemisphereWest size={12} class="text-blue" />
@@ -149,7 +221,7 @@
 		{#each triggerRows as trigger}
 			<TableRow>
 				<TableCell>
-					<Badge variant={trigger.type === 'SQS' ? 'amber' : 'secondary'}>
+					<Badge variant={trigger.type === 'SQS' ? 'amber' : trigger.type === 'SNS' ? 'default' : 'secondary'}>
 						{trigger.type}
 					</Badge>
 				</TableCell>
@@ -157,7 +229,7 @@
 					<ArnCell name={trigger.sourceName} arn={trigger.sourceArn} />
 				</TableCell>
 				<TableCell>
-					{#if trigger.type === 'SQS'}
+					{#if trigger.type === 'SQS' || trigger.type === 'SNS'}
 						<div class="flex items-start gap-2">
 							<Lightning size={13} class="mt-[2px] text-primary" />
 							<ArnCell name={trigger.targetName} arn={trigger.targetArn} />

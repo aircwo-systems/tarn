@@ -188,6 +188,16 @@ func (c *Config) QueuesStatePath() string {
 	return filepath.Join(c.QueuesDir(), "state.json")
 }
 
+// SNSDir returns the path where SNS state is stored.
+func (c *Config) SNSDir() string {
+	return filepath.Join(c.DataDir, "sns")
+}
+
+// SNSStatePath returns the state snapshot path for SNS resources.
+func (c *Config) SNSStatePath() string {
+	return filepath.Join(c.SNSDir(), "state.json")
+}
+
 // SecretsDir returns the path where secrets state is stored.
 func (c *Config) SecretsDir() string {
 	return filepath.Join(c.DataDir, "secrets")

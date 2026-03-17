@@ -13,6 +13,8 @@ export interface OverviewResponse {
     gateways: number;
     functions: number;
     queues: number;
+    topics: number;
+    subscriptions: number;
     secrets: number;
     buckets: number;
     logGroups: number;
@@ -21,6 +23,8 @@ export interface OverviewResponse {
   gateways: GatewaySummary[];
   functions: FunctionSummary[];
   queues: QueueSummary[];
+  topics: TopicSummary[];
+  subscriptions: SubscriptionSummary[];
   secrets: SecretSummary[];
   buckets: BucketSummary[];
   eventSourceMappings: EventSourceMappingSummary[];
@@ -31,7 +35,7 @@ export interface OverviewResponse {
 }
 
 export interface TraceSpan {
-  kind: "gateway" | "lambda" | "queue" | "dlq" | string;
+  kind: "gateway" | "lambda" | "topic" | "queue" | "dlq" | string;
   name: string;
   durationMs: number;
   status: "ok" | "error" | "client_error" | string;
@@ -221,6 +225,27 @@ export interface QueueSummary {
   tags?: Record<string, string>;
   tagCount: number;
   recentMessages?: QueueMessageSummary[];
+}
+
+export interface TopicSummary {
+  name: string;
+  arn: string;
+  fifo: boolean;
+  subscriptions: number;
+  createdTimestamp: number;
+  tags?: Record<string, string>;
+  tagCount: number;
+}
+
+export interface SubscriptionSummary {
+  subscriptionArn: string;
+  topicArn: string;
+  topicName: string;
+  protocol: string;
+  endpoint: string;
+  rawMessageDelivery: boolean;
+  filterPolicy?: string;
+  filterPolicyScope?: string;
 }
 
 export interface QueueMessageSummary {

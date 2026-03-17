@@ -7,6 +7,7 @@ import (
 	"github.com/openstack-project/openstack/internal/cli/lambda"
 	s3cli "github.com/openstack-project/openstack/internal/cli/s3"
 	"github.com/openstack-project/openstack/internal/cli/secrets"
+	"github.com/openstack-project/openstack/internal/cli/sns"
 	"github.com/openstack-project/openstack/internal/cli/sqs"
 	"github.com/spf13/cobra"
 )
@@ -36,6 +37,13 @@ Manage SQS queues:
   openstack sqs list
   openstack sqs delete-queue --name my-queue
 
+Manage SNS topics:
+  openstack sns create-topic --name my-topic
+  openstack sns subscribe --topic-arn arn:aws:sns:us-east-1:000000000000:my-topic --protocol sqs --endpoint arn:aws:sqs:us-east-1:000000000000:my-queue
+  openstack sns publish --topic-arn arn:aws:sns:us-east-1:000000000000:my-topic --message "hello"
+  openstack sns list-topics
+  openstack sns delete-topic --topic-arn arn:aws:sns:us-east-1:000000000000:my-topic
+
 Manage S3 buckets:
   openstack s3 mb --name my-bucket
   openstack s3 ls
@@ -64,6 +72,7 @@ Flush provisioned resources:
 	root.AddCommand(lambda.NewLambdaCmd())
 	root.AddCommand(s3cli.NewS3Cmd())
 	root.AddCommand(sqs.NewSQSCmd())
+	root.AddCommand(sns.NewSNSCmd())
 	root.AddCommand(secrets.NewSecretsCmd())
 
 	root.PersistentFlags().String("host", "0.0.0.0", "API server bind address")
@@ -122,7 +131,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Region:   %s\n", cfg.Region)
 	fmt.Fprintf(os.Stderr, "Endpoint: %s\n", cfg.Endpoint())
 	fmt.Fprintf(os.Stderr, "Data Dir: %s\n", cfg.DataDir)
-	fmt.Fprintln(os.Stderr, "Services: apigateway, apigatewayv2, lambda, s3, sqs, secretsmanager")
+	fmt.Fprintln(os.Stderr, "Services: apigateway, apigatewayv2, lambda, s3, sqs, sns, secretsmanager")
 	if cfg.UIEnabled {
 		fmt.Fprintf(os.Stderr, "Dashboard: http://%s:%d/\n", displayHost(cfg.Host), cfg.Port)
 		fmt.Fprintf(os.Stderr, "UI Dir:    %s\n", cfg.UIDir)

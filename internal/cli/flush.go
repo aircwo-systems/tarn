@@ -41,6 +41,18 @@ type flushOverview struct {
 		URL  string            `json:"url"`
 		Tags map[string]string `json:"tags"`
 	} `json:"queues"`
+	Topics []struct {
+		Name string            `json:"name"`
+		Arn  string            `json:"arn"`
+		Tags map[string]string `json:"tags"`
+	} `json:"topics"`
+	Subscriptions []struct {
+		SubscriptionArn string `json:"subscriptionArn"`
+		TopicArn        string `json:"topicArn"`
+		TopicName       string `json:"topicName"`
+		Protocol        string `json:"protocol"`
+		Endpoint        string `json:"endpoint"`
+	} `json:"subscriptions"`
 	Secrets []struct {
 		Name string            `json:"name"`
 		Tags map[string]string `json:"tags"`
@@ -94,6 +106,8 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	filteredGateways := filterGateways(overview.Gateways, opts.TagFilter)
 	filteredFunctions := filterFunctions(overview.Functions, opts.TagFilter)
 	filteredQueues := filterQueues(overview.Queues, opts.TagFilter)
+	filteredTopics := filterTopics(overview.Topics, opts.TagFilter)
+	filteredSubscriptions := filterSubscriptions(overview.Subscriptions, opts.TagFilter, filteredTopics, filteredQueues, filteredFunctions)
 	filteredSecrets := filterSecrets(overview.Secrets, opts.TagFilter)
 	filteredMappings := filterEventSourceMappings(overview.EventSourceMappings, opts.TagFilter, filteredQueues, filteredFunctions)
 	filteredBuckets := []struct {
@@ -105,7 +119,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		filteredBuckets = filterBuckets(overview.Buckets, opts.TagFilter)
 	}
 
-	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredSecrets) + len(filteredMappings) + len(filteredBuckets)
+	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredBuckets)
 	if total == 0 {
 		if opts.TagFilter != "" {
 			_, _ = fmt.Fprintf(out, "No resources matched tag filter %q\n", opts.TagFilter)
@@ -121,7 +135,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	}
 	_, _ = fmt.Fprintln(out)
 
-	if err := printFlushPlan(out, filteredGateways, filteredFunctions, filteredQueues, filteredSecrets, filteredMappings, filteredBuckets); err != nil {
+	if err := printFlushPlan(out, filteredGateways, filteredFunctions, filteredQueues, filteredTopics, filteredSubscriptions, filteredSecrets, filteredMappings, filteredBuckets); err != nil {
 		return err
 	}
 	if opts.DryRun {
@@ -149,6 +163,20 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 			continue
 		}
 		_, _ = fmt.Fprintf(out, "Deleted API Gateway: %s\n", api.Name)
+	}
+	for _, sub := range filteredSubscriptions {
+		if err := deleteSNSSubscription(endpoint, sub.SubscriptionArn); err != nil {
+			recordFailure("subscription", sub.SubscriptionArn, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Deleted Subscription: %s\n", sub.SubscriptionArn)
+	}
+	for _, topic := range filteredTopics {
+		if err := deleteSNSTopic(endpoint, topic.Arn); err != nil {
+			recordFailure("topic", topic.Name, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Deleted Topic: %s\n", topic.Name)
 	}
 	for _, queue := range filteredQueues {
 		if err := deleteQueue(queue.URL); err != nil {
@@ -223,6 +251,16 @@ func printFlushPlan(out io.Writer, gateways []struct {
 	Name string
 	URL  string
 	Tags map[string]string
+}, topics []struct {
+	Name string
+	Arn  string
+	Tags map[string]string
+}, subscriptions []struct {
+	SubscriptionArn string
+	TopicArn        string
+	TopicName       string
+	Protocol        string
+	Endpoint        string
 }, secrets []struct {
 	Name string
 	Tags map[string]string
@@ -261,6 +299,26 @@ func printFlushPlan(out io.Writer, gateways []struct {
 		}
 		for _, queue := range queues {
 			if _, err := fmt.Fprintf(out, "  - %s\n", queue.Name); err != nil {
+				return err
+			}
+		}
+	}
+	if len(topics) > 0 {
+		if _, err := fmt.Fprintln(out, "SNS Topics:"); err != nil {
+			return err
+		}
+		for _, topic := range topics {
+			if _, err := fmt.Fprintf(out, "  - %s\n", topic.Name); err != nil {
+				return err
+			}
+		}
+	}
+	if len(subscriptions) > 0 {
+		if _, err := fmt.Fprintln(out, "SNS Subscriptions:"); err != nil {
+			return err
+		}
+		for _, sub := range subscriptions {
+			if _, err := fmt.Fprintf(out, "  - %s (%s -> %s)\n", sub.SubscriptionArn, sub.Protocol, sub.Endpoint); err != nil {
 				return err
 			}
 		}
@@ -371,6 +429,121 @@ func filterQueues(items []struct {
 				URL  string
 				Tags map[string]string
 			}{Name: item.Name, URL: item.URL, Tags: item.Tags})
+		}
+	}
+	return out
+}
+
+func filterTopics(items []struct {
+	Name string            `json:"name"`
+	Arn  string            `json:"arn"`
+	Tags map[string]string `json:"tags"`
+}, query string) []struct {
+	Name string
+	Arn  string
+	Tags map[string]string
+} {
+	var out []struct {
+		Name string
+		Arn  string
+		Tags map[string]string
+	}
+	for _, item := range items {
+		if matchesTagSelector(item.Tags, query) {
+			out = append(out, struct {
+				Name string
+				Arn  string
+				Tags map[string]string
+			}{Name: item.Name, Arn: item.Arn, Tags: item.Tags})
+		}
+	}
+	return out
+}
+
+func filterSubscriptions(items []struct {
+	SubscriptionArn string `json:"subscriptionArn"`
+	TopicArn        string `json:"topicArn"`
+	TopicName       string `json:"topicName"`
+	Protocol        string `json:"protocol"`
+	Endpoint        string `json:"endpoint"`
+}, query string, topics []struct {
+	Name string
+	Arn  string
+	Tags map[string]string
+}, queues []struct {
+	Name string
+	URL  string
+	Tags map[string]string
+}, functions []struct {
+	Name string
+	Tags map[string]string
+}) []struct {
+	SubscriptionArn string
+	TopicArn        string
+	TopicName       string
+	Protocol        string
+	Endpoint        string
+} {
+	var out []struct {
+		SubscriptionArn string
+		TopicArn        string
+		TopicName       string
+		Protocol        string
+		Endpoint        string
+	}
+
+	if strings.TrimSpace(query) == "" {
+		for _, item := range items {
+			out = append(out, struct {
+				SubscriptionArn string
+				TopicArn        string
+				TopicName       string
+				Protocol        string
+				Endpoint        string
+			}{
+				SubscriptionArn: item.SubscriptionArn,
+				TopicArn:        item.TopicArn,
+				TopicName:       item.TopicName,
+				Protocol:        item.Protocol,
+				Endpoint:        item.Endpoint,
+			})
+		}
+		return out
+	}
+
+	selectedTopics := make(map[string]struct{}, len(topics)*2)
+	for _, topic := range topics {
+		selectedTopics[topic.Arn] = struct{}{}
+		selectedTopics[topic.Name] = struct{}{}
+	}
+	selectedQueues := make(map[string]struct{}, len(queues))
+	for _, queue := range queues {
+		selectedQueues[queue.Name] = struct{}{}
+	}
+	selectedFunctions := make(map[string]struct{}, len(functions))
+	for _, fn := range functions {
+		selectedFunctions[fn.Name] = struct{}{}
+	}
+
+	for _, item := range items {
+		_, topicMatchArn := selectedTopics[item.TopicArn]
+		_, topicMatchName := selectedTopics[item.TopicName]
+		_, queueMatch := selectedQueues[queueNameFromEndpoint(item.Endpoint)]
+		_, fnMatch := selectedFunctions[normalizeLambdaRef(item.Endpoint)]
+		if topicMatchArn || topicMatchName || queueMatch || fnMatch {
+			out = append(out, struct {
+				SubscriptionArn string
+				TopicArn        string
+				TopicName       string
+				Protocol        string
+				Endpoint        string
+			}{
+				SubscriptionArn: item.SubscriptionArn,
+				TopicArn:        item.TopicArn,
+				TopicName:       item.TopicName,
+				Protocol:        item.Protocol,
+				Endpoint:        item.Endpoint,
+			})
 		}
 	}
 	return out
@@ -666,6 +839,78 @@ func deleteQueue(queueURL string) error {
 	return nil
 }
 
+func deleteSNSSubscription(endpoint, subscriptionArn string) error {
+	form := url.Values{
+		"Action":          {"Unsubscribe"},
+		"SubscriptionArn": {subscriptionArn},
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := cliHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+
+	// Treat missing subscriptions as success so flush can proceed idempotently.
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest {
+		bodyText := string(body)
+		if strings.Contains(bodyText, "NotFound") ||
+			strings.Contains(bodyText, "InvalidParameter") ||
+			strings.Contains(bodyText, "InvalidParameterValue") ||
+			strings.Contains(bodyText, "does not exist") {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("error (%d): %s", resp.StatusCode, string(body))
+}
+
+func deleteSNSTopic(endpoint, topicArn string) error {
+	form := url.Values{
+		"Action":   {"DeleteTopic"},
+		"TopicArn": {topicArn},
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := cliHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+
+	// Treat missing topics as success so flush remains resilient after partial applies.
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest {
+		bodyText := string(body)
+		if strings.Contains(bodyText, "NotFound") ||
+			strings.Contains(bodyText, "InvalidParameter") ||
+			strings.Contains(bodyText, "InvalidParameterValue") ||
+			strings.Contains(bodyText, "does not exist") {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("error (%d): %s", resp.StatusCode, string(body))
+}
+
 func deleteSecret(endpoint, name string) error {
 	body, _ := json.Marshal(map[string]any{
 		"SecretId":                   name,
@@ -732,6 +977,23 @@ func normalizeLambdaRef(ref string) string {
 		return ref
 	}
 	return name
+}
+
+func queueNameFromEndpoint(endpoint string) string {
+	endpoint = strings.TrimSpace(endpoint)
+	if endpoint == "" {
+		return endpoint
+	}
+	if strings.HasPrefix(endpoint, "arn:aws:sqs:") {
+		parts := strings.Split(endpoint, ":")
+		if len(parts) > 0 {
+			return parts[len(parts)-1]
+		}
+	}
+	if idx := strings.LastIndex(endpoint, "/"); idx >= 0 && idx+1 < len(endpoint) {
+		return endpoint[idx+1:]
+	}
+	return endpoint
 }
 
 type listBucketResult struct {

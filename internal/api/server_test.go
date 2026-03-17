@@ -17,6 +17,7 @@ import (
 	"github.com/openstack-project/openstack/internal/logs"
 	s3store "github.com/openstack-project/openstack/internal/s3"
 	"github.com/openstack-project/openstack/internal/secrets"
+	"github.com/openstack-project/openstack/internal/sns"
 	"github.com/openstack-project/openstack/internal/sqs"
 	"github.com/openstack-project/openstack/pkg/types"
 )
@@ -34,13 +35,14 @@ func TestNewServerRegistersRoutes(t *testing.T) {
 	gatewayV1Svc := apigatewayv1.NewService(cfg, lambdaSvc, nil)
 	logsSvc := logs.NewService(cfg)
 	sqsSvc := sqs.NewService(cfg)
+	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
 	secretsSvc := secrets.NewService(cfg)
 
 	s3Svc := s3store.NewService(cfg)
 	infraSvc := infrastructure.NewService("", false)
 	esmStore := eventsource.NewStore(cfg)
 	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil)
-	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, nil, nil)
+	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, nil, nil)
 	if s == nil {
 		t.Fatal("NewServer returned nil")
 	}

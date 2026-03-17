@@ -5,6 +5,7 @@
   import APIGatewaysSection from "$lib/components/sections/api-gateways-section.svelte";
   import FunctionsSection from "$lib/components/sections/functions-section.svelte";
   import QueuesSection from "$lib/components/sections/queues-section.svelte";
+  import SNSSection from "$lib/components/sections/sns-section.svelte";
   import SecretsSection from "$lib/components/sections/secrets-section.svelte";
   import TriggersSection from "$lib/components/sections/triggers-section.svelte";
   import StorageSection from "$lib/components/sections/storage-section.svelte";
@@ -20,6 +21,7 @@
     "gateways",
     "functions",
     "queues",
+    "sns",
     "secrets",
     "triggers",
     "storage",
@@ -74,6 +76,8 @@
         <FunctionsSection />
       {:else if activeTab === "queues"}
         <QueuesSection />
+      {:else if activeTab === "sns"}
+        <SNSSection />
       {:else if activeTab === "secrets"}
         <SecretsSection />
       {:else if activeTab === "triggers"}

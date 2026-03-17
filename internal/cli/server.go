@@ -28,6 +28,7 @@ import (
 	s3store "github.com/openstack-project/openstack/internal/s3"
 	"github.com/openstack-project/openstack/internal/secrets"
 	"github.com/openstack-project/openstack/internal/secretsproxy"
+	"github.com/openstack-project/openstack/internal/sns"
 	"github.com/openstack-project/openstack/internal/sqs"
 	"github.com/openstack-project/openstack/internal/trace"
 	"github.com/openstack-project/openstack/pkg/types"
@@ -143,6 +144,12 @@ func startServer(cfg *config.Config) error {
 		return fmt.Errorf("failed to initialize secrets store: %w", err)
 	}
 
+	// Initialize SNS service
+	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
+	if err := snsSvc.Init(); err != nil {
+		return fmt.Errorf("failed to initialize sns store: %w", err)
+	}
+
 	// Initialize S3 service
 	s3Svc := s3store.NewService(cfg)
 	if err := s3Svc.Init(); err != nil {
@@ -191,6 +198,7 @@ func startServer(cfg *config.Config) error {
 	gatewaySvc.SetCollector(collector)
 	gatewayV1Svc.SetTraceStore(traceStore)
 	gatewayV1Svc.SetCollector(collector)
+	snsSvc.SetTraceStore(traceStore)
 	esmSvc.SetTraceStore(traceStore)
 	esmSvc.SetCollector(collector)
 
@@ -304,7 +312,7 @@ func startServer(cfg *config.Config) error {
 	}
 
 	// Create and start API server
-	server := api.NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, traceStore, collector)
+	server := api.NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, traceStore, collector)
 
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)

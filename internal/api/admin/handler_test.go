@@ -21,6 +21,7 @@ import (
 	logssvc "github.com/openstack-project/openstack/internal/logs"
 	s3svc "github.com/openstack-project/openstack/internal/s3"
 	secretssvc "github.com/openstack-project/openstack/internal/secrets"
+	snssvc "github.com/openstack-project/openstack/internal/sns"
 	sqssvc "github.com/openstack-project/openstack/internal/sqs"
 	"github.com/openstack-project/openstack/pkg/types"
 )
@@ -453,9 +454,10 @@ func newTestHandler(t *testing.T) *Handler {
 	apigwv1 := apigatewayv1svc.NewService(cfg, lambda, nil)
 	s3 := s3svc.NewService(cfg)
 	sqs := sqssvc.NewService(cfg)
+	sns := snssvc.NewService(cfg, sqs, lambda)
 	secrets := secretssvc.NewService(cfg)
 	infra := infrasvc.NewService("", false)
 	esmStore := eventsourcesvc.NewStore(cfg)
 	esm := eventsourcesvc.NewService(cfg, esmStore, nil, nil)
-	return NewHandler(cfg, apigw, apigwv1, lambda, logs, sqs, secrets, infra, s3, esm, nil)
+	return NewHandler(cfg, apigw, apigwv1, lambda, logs, sqs, sns, secrets, infra, s3, esm, nil)
 }

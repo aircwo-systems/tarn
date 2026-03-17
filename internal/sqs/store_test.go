@@ -391,8 +391,10 @@ func TestDeleteQueue(t *testing.T) {
 
 func TestGetQueueAttributes(t *testing.T) {
 	s := newTestStore()
+	policy := `{"Version":"2012-10-17","Statement":[{"Sid":"AllowSNSPublish","Effect":"Allow"}]}`
 	s.CreateQueue("attr-queue", map[string]string{
 		"VisibilityTimeout": "60",
+		"Policy":            policy,
 	}, nil)
 
 	s.SendMessage("attr-queue", "msg1", 0, nil, "", "")
@@ -411,6 +413,9 @@ func TestGetQueueAttributes(t *testing.T) {
 	}
 	if attrs["ApproximateNumberOfMessages"] != "2" {
 		t.Fatalf("expected 2 messages, got %q", attrs["ApproximateNumberOfMessages"])
+	}
+	if attrs["Policy"] != policy {
+		t.Fatalf("expected Policy=%q, got %q", policy, attrs["Policy"])
 	}
 }
 
