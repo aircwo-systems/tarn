@@ -41,28 +41,44 @@ type Config struct {
 	InfraProbeEnabled bool
 	// InfraProbeTargets is a comma-separated list of "kind:host:port" targets.
 	InfraProbeTargets string
+	// ExposeSecretsProxy enables the local secrets extension-compatible proxy
+	// alongside `openstack start`.
+	ExposeSecretsProxy bool
+	// SecretsProxyHost is the interface bind address for the local secrets proxy.
+	SecretsProxyHost string
+	// SecretsProxyPort is the listen port for the local secrets proxy.
+	SecretsProxyPort int
+	// SecretsProxySessionToken is the expected extension token header value.
+	SecretsProxySessionToken string
+	// SecretsProxyRequireToken enforces extension token validation.
+	SecretsProxyRequireToken bool
 }
 
 // Default returns a Config with sensible defaults.
 func Default() *Config {
 	home, _ := os.UserHomeDir()
 	return &Config{
-		Host:                  "0.0.0.0",
-		Port:                  4566,
-		DataDir:               filepath.Join(home, ".openstack", "data"),
-		DockerHost:            "unix:///var/run/docker.sock",
-		LambdaKeepAliveMS:     600000, // 10 minutes
-		LambdaDefaultTimeout:  3,
-		LambdaDefaultMemory:   128,
-		Region:                "us-east-1",
-		AccountID:             "000000000000",
-		UIEnabled:             false,
-		UIDir:                 "./ui/build",
-		PersistenceEnabled:    false,
-		LogsMaxEventsPerGroup: 10000,
-		LogsPersistToDisk:     false,
-		InfraProbeEnabled:     true,
-		InfraProbeTargets:     "postgresql:localhost:5432,redis:localhost:6379,mysql:localhost:3306,mongodb:localhost:27017",
+		Host:                     "0.0.0.0",
+		Port:                     4566,
+		DataDir:                  filepath.Join(home, ".openstack", "data"),
+		DockerHost:               "unix:///var/run/docker.sock",
+		LambdaKeepAliveMS:        600000, // 10 minutes
+		LambdaDefaultTimeout:     3,
+		LambdaDefaultMemory:      128,
+		Region:                   "us-east-1",
+		AccountID:                "000000000000",
+		UIEnabled:                false,
+		UIDir:                    "./ui/build",
+		PersistenceEnabled:       false,
+		LogsMaxEventsPerGroup:    10000,
+		LogsPersistToDisk:        false,
+		InfraProbeEnabled:        true,
+		InfraProbeTargets:        "postgresql:localhost:5432,redis:localhost:6379,mysql:localhost:3306,mongodb:localhost:27017",
+		ExposeSecretsProxy:       false,
+		SecretsProxyHost:         "127.0.0.1",
+		SecretsProxyPort:         2773,
+		SecretsProxySessionToken: "local-dev-token",
+		SecretsProxyRequireToken: true,
 	}
 }
 
@@ -123,6 +139,27 @@ func (c *Config) LoadFromEnv() {
 	}
 	if v := os.Getenv("OPENSTACK_INFRA_TARGETS"); v != "" {
 		c.InfraProbeTargets = v
+	}
+	if v := os.Getenv("OPENSTACK_EXPOSE_SECRETS_PROXY"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.ExposeSecretsProxy = b
+		}
+	}
+	if v := os.Getenv("OPENSTACK_SECRETS_PROXY_HOST"); v != "" {
+		c.SecretsProxyHost = v
+	}
+	if v := os.Getenv("OPENSTACK_SECRETS_PROXY_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			c.SecretsProxyPort = port
+		}
+	}
+	if v := os.Getenv("OPENSTACK_SECRETS_PROXY_TOKEN"); v != "" {
+		c.SecretsProxySessionToken = v
+	}
+	if v := os.Getenv("OPENSTACK_SECRETS_PROXY_REQUIRE_TOKEN"); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			c.SecretsProxyRequireToken = b
+		}
 	}
 }
 

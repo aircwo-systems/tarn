@@ -3,9 +3,12 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -24,6 +27,7 @@ import (
 	"github.com/openstack-project/openstack/internal/logs"
 	s3store "github.com/openstack-project/openstack/internal/s3"
 	"github.com/openstack-project/openstack/internal/secrets"
+	"github.com/openstack-project/openstack/internal/secretsproxy"
 	"github.com/openstack-project/openstack/internal/sqs"
 	"github.com/openstack-project/openstack/internal/trace"
 	"github.com/openstack-project/openstack/pkg/types"
@@ -57,6 +61,31 @@ func buildConfig(cmd *cobra.Command) (*config.Config, error) {
 	if cmd.Flags().Changed("persist") || os.Getenv("OPENSTACK_PERSIST") == "" {
 		if v, err := cmd.Flags().GetBool("persist"); err == nil {
 			cfg.PersistenceEnabled = v
+		}
+	}
+	if cmd.Flags().Changed("expose-secrets-proxy") || os.Getenv("OPENSTACK_EXPOSE_SECRETS_PROXY") == "" {
+		if v, err := cmd.Flags().GetBool("expose-secrets-proxy"); err == nil {
+			cfg.ExposeSecretsProxy = v
+		}
+	}
+	if cmd.Flags().Changed("secrets-proxy-host") || os.Getenv("OPENSTACK_SECRETS_PROXY_HOST") == "" {
+		if v, err := cmd.Flags().GetString("secrets-proxy-host"); err == nil && v != "" {
+			cfg.SecretsProxyHost = v
+		}
+	}
+	if cmd.Flags().Changed("secrets-proxy-port") || os.Getenv("OPENSTACK_SECRETS_PROXY_PORT") == "" {
+		if v, err := cmd.Flags().GetInt("secrets-proxy-port"); err == nil && v > 0 {
+			cfg.SecretsProxyPort = v
+		}
+	}
+	if cmd.Flags().Changed("secrets-proxy-token") || os.Getenv("OPENSTACK_SECRETS_PROXY_TOKEN") == "" {
+		if v, err := cmd.Flags().GetString("secrets-proxy-token"); err == nil && v != "" {
+			cfg.SecretsProxySessionToken = v
+		}
+	}
+	if cmd.Flags().Changed("secrets-proxy-require-token") || os.Getenv("OPENSTACK_SECRETS_PROXY_REQUIRE_TOKEN") == "" {
+		if v, err := cmd.Flags().GetBool("secrets-proxy-require-token"); err == nil {
+			cfg.SecretsProxyRequireToken = v
 		}
 	}
 
@@ -232,6 +261,48 @@ func startServer(cfg *config.Config) error {
 		Error:  dockerErr,
 	})
 
+	var secretsProxyServer *http.Server
+	if cfg.ExposeSecretsProxy {
+		logsSvc.CreateLogGroup("/openstack/secrets-proxy")
+		addr := fmt.Sprintf("%s:%d", cfg.SecretsProxyHost, cfg.SecretsProxyPort)
+		upstream := cfg.Endpoint()
+		token := cfg.SecretsProxySessionToken
+		if token == "" {
+			token = "local-dev-token"
+		}
+
+		secretsProxyServer = &http.Server{
+			Addr: addr,
+			Handler: secretsproxy.NewHandler(secretsproxy.Options{
+				UpstreamURL:  upstream,
+				SessionToken: token,
+				RequireToken: cfg.SecretsProxyRequireToken,
+				OnRequest: func(event secretsproxy.RequestEvent) {
+					recordSecretsProxyTelemetry(logsSvc, traceStore, event)
+				},
+			}),
+			ReadTimeout:  15 * time.Second,
+			WriteTimeout: 30 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}
+
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("failed to start secrets proxy listener on %s: %w", addr, err)
+		}
+		go func() {
+			log.Printf("[secrets-proxy] listening on %s, upstream: %s", addr, upstream)
+			if err := secretsProxyServer.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("[secrets-proxy] server error: %v", err)
+			}
+		}()
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = secretsProxyServer.Shutdown(ctx)
+		}()
+	}
+
 	// Create and start API server
 	server := api.NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, traceStore, collector)
 
@@ -243,6 +314,11 @@ func startServer(cfg *config.Config) error {
 		<-sigCh
 		log.Println("\nShutting down OpenStack...")
 		eng.Cleanup(ctx)
+		if secretsProxyServer != nil {
+			if err := secretsProxyServer.Shutdown(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				log.Printf("[secrets-proxy] shutdown error: %v", err)
+			}
+		}
 		server.Shutdown(ctx)
 		cancel()
 	}()
@@ -253,6 +329,109 @@ func startServer(cfg *config.Config) error {
 		return nil
 	}
 	return err
+}
+
+func recordSecretsProxyTelemetry(logsSvc *logs.Service, traceStore *trace.Store, event secretsproxy.RequestEvent) {
+	startedAt := event.StartedAt
+	if startedAt.IsZero() {
+		startedAt = time.Now().UTC()
+	}
+
+	statusCode := event.StatusCode
+	if statusCode == 0 {
+		statusCode = http.StatusOK
+	}
+	spanStatus := "ok"
+	switch {
+	case statusCode >= 500:
+		spanStatus = "error"
+	case statusCode >= 400:
+		spanStatus = "client_error"
+	}
+
+	secretID := event.SecretID
+	if secretID == "" {
+		secretID = "(missing secretId)"
+	}
+	path := "/secretsmanager/get?secretId=" + url.QueryEscape(secretID)
+
+	if logsSvc != nil {
+		level := logs.LevelINFO
+		if statusCode >= 500 {
+			level = logs.LevelERROR
+		} else if statusCode >= 400 {
+			level = logs.LevelWARN
+		}
+		fnName := event.FunctionName
+		if fnName == "" {
+			fnName = "unknown-local"
+		}
+		msg := fmt.Sprintf(
+			"GET /secretsmanager/get status=%d duration=%dms secretId=%s function=%s tokenValid=%t",
+			statusCode,
+			event.DurationMs,
+			secretID,
+			fnName,
+			event.TokenValid,
+		)
+		if event.Error != "" {
+			msg += " error=" + event.Error
+		}
+		logsSvc.PutLogEvents("/openstack/secrets-proxy", "requests", []logs.LogEvent{
+			{
+				Timestamp: startedAt,
+				Message:   msg,
+				Level:     level,
+				Source:    logs.SourceAPI,
+			},
+		})
+	}
+
+	if traceStore != nil {
+		spanMeta := map[string]string{
+			"source": event.Source,
+		}
+		if event.FunctionName != "" {
+			spanMeta["functionName"] = event.FunctionName
+		}
+		spans := []trace.Span{
+			{
+				Kind:       "cache_extension",
+				Name:       "secrets-proxy",
+				DurationMs: event.DurationMs,
+				Status:     spanStatus,
+				Meta:       spanMeta,
+			},
+			{
+				Kind:       "secrets",
+				Name:       secretID,
+				DurationMs: event.DurationMs,
+				Status:     spanStatus,
+			},
+		}
+		if event.FunctionName != "" {
+			spans = append([]trace.Span{
+				{
+					Kind:       "lambda",
+					Name:       event.FunctionName,
+					DurationMs: event.DurationMs,
+					Status:     spanStatus,
+					Meta: map[string]string{
+						"source": "secrets-proxy",
+					},
+				},
+			}, spans...)
+		}
+		traceStore.Add(&trace.Trace{
+			ID:         uuid.NewString()[:8],
+			StartedAt:  startedAt,
+			DurationMs: event.DurationMs,
+			Status:     statusCode,
+			Method:     http.MethodGet,
+			Path:       path,
+			Spans:      spans,
+		})
+	}
 }
 
 func matchesNotification(lc types.S3LambdaNotification, eventName, key string) bool {

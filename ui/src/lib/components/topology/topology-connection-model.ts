@@ -411,7 +411,12 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     : [];
 
   const cacheActivity = aggregateActivity(
-    functionToCache.flatMap((edge) => (edge.activity ? [edge.activity] : [])),
+    [
+      ...functionToCache.flatMap((edge) => (edge.activity ? [edge.activity] : [])),
+      ...(traceEdgeActivity.get("cache::global")
+        ? [traceEdgeActivity.get("cache::global")!]
+        : []),
+    ],
   );
 
   const cacheToSecret = connCacheExtension
@@ -527,6 +532,12 @@ export function selectedTraceNodes(
   const lambdaSpan = trace.spans.find((span) => span.kind === "lambda");
   const queueSpan = trace.spans.find((span) => span.kind === "queue");
   const dlqSpan = trace.spans.find((span) => span.kind === "dlq");
+  const cacheSpan = trace.spans.find(
+    (span) => span.kind === "cache_extension" || span.kind === "cache-extension",
+  );
+  const secretsSpan = trace.spans.find(
+    (span) => span.kind === "secrets" || span.kind === "secret",
+  );
 
   const matchedGateway = trace.gatewayId
     ? model.nodes.gateways.find((node) => node.id === trace.gatewayId)
@@ -540,8 +551,12 @@ export function selectedTraceNodes(
   const matchedDlq = dlqSpan
     ? model.nodes.queues.find((node) => node.id === dlqSpan.name)
     : undefined;
+  const matchedCache = cacheSpan || secretsSpan ? model.nodes.cacheExtension ?? undefined : undefined;
+  const matchedSecret = secretsSpan
+    ? model.nodes.secrets.find((node) => node.id === secretsSpan.name)
+    : undefined;
 
-  return [matchedGateway, matchedFunction, matchedQueue, matchedDlq].filter(
+  return [matchedGateway, matchedFunction, matchedQueue, matchedDlq, matchedCache, matchedSecret].filter(
     (node): node is ConnectionNode => !!node,
   );
 }
@@ -981,6 +996,18 @@ function filterLabel(filterCriteria: FilterCriteria | undefined): string | null 
 
 function buildTraceEdgeActivity(recentTraces: RequestTrace[], now: number): Map<string, EdgeActivity> {
   const map = new Map<string, EdgeActivity>();
+  const bump = (key: string, trace: RequestTrace) => {
+    const activity = map.get(key) ?? {
+      count: 0,
+      hasError: false,
+      latestMs: 0,
+    };
+
+    activity.count += 1;
+    if (trace.status >= 500) activity.hasError = true;
+    if (trace.durationMs > activity.latestMs) activity.latestMs = trace.durationMs;
+    map.set(key, activity);
+  };
 
   for (const trace of recentTraces) {
     const age = now - new Date(trace.startedAt).getTime();
@@ -989,6 +1016,13 @@ function buildTraceEdgeActivity(recentTraces: RequestTrace[], now: number): Map<
     const lambdaSpan = trace.spans.find((span) => span.kind === "lambda");
     const queueSpan = trace.spans.find((span) => span.kind === "queue");
     const dlqSpan = trace.spans.find((span) => span.kind === "dlq");
+    const hasCacheFlow = trace.spans.some(
+      (span) =>
+        span.kind === "cache_extension" ||
+        span.kind === "cache-extension" ||
+        span.kind === "secrets" ||
+        span.kind === "secret",
+    );
 
     let key: string | null = null;
     if (trace.gatewayId) {
@@ -1000,18 +1034,15 @@ function buildTraceEdgeActivity(recentTraces: RequestTrace[], now: number): Map<
       key = `queue::${queueSpan.name}→${lambdaSpan.name}`;
     }
 
-    if (!key) continue;
-
-    const activity = map.get(key) ?? {
-      count: 0,
-      hasError: false,
-      latestMs: 0,
-    };
-
-    activity.count += 1;
-    if (trace.status >= 500) activity.hasError = true;
-    if (trace.durationMs > activity.latestMs) activity.latestMs = trace.durationMs;
-    map.set(key, activity);
+    if (key) {
+      bump(key, trace);
+    }
+    if (hasCacheFlow) {
+      bump("cache::global", trace);
+      if (lambdaSpan) {
+        bump(`fn::${lambdaSpan.name}`, trace);
+      }
+    }
   }
 
   return map;
@@ -1021,6 +1052,10 @@ function fnActivity(
   traceEdgeActivity: Map<string, EdgeActivity>,
   functionName: string,
 ): EdgeActivity | undefined {
+  const direct = traceEdgeActivity.get(`fn::${functionName}`);
+  if (direct) {
+    return direct;
+  }
   for (const [key, activity] of traceEdgeActivity) {
     if (key.endsWith(`→${functionName}`)) {
       return activity;

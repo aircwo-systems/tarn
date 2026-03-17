@@ -88,11 +88,19 @@ func newVersionCmd() *cobra.Command {
 }
 
 func newStartCmd() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "start",
 		Short: "Start the OpenStack API server",
 		RunE:  runStart,
 	}
+
+	cmd.Flags().Bool("expose-secrets-proxy", false, "Run a local secrets extension-compatible proxy alongside the API server")
+	cmd.Flags().String("secrets-proxy-host", "127.0.0.1", "Host interface for the local secrets proxy")
+	cmd.Flags().Int("secrets-proxy-port", 2773, "Port for the local secrets proxy")
+	cmd.Flags().String("secrets-proxy-token", "", "Expected X-Aws-Parameters-Secrets-Token value (defaults to OPENSTACK_SECRETS_PROXY_TOKEN or local-dev-token)")
+	cmd.Flags().Bool("secrets-proxy-require-token", true, "Require X-Aws-Parameters-Secrets-Token validation in the local secrets proxy")
+
+	return cmd
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
@@ -118,6 +126,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if cfg.UIEnabled {
 		fmt.Fprintf(os.Stderr, "Dashboard: http://%s:%d/\n", displayHost(cfg.Host), cfg.Port)
 		fmt.Fprintf(os.Stderr, "UI Dir:    %s\n", cfg.UIDir)
+	}
+	if cfg.ExposeSecretsProxy {
+		fmt.Fprintf(os.Stderr, "Secrets Proxy: http://%s:%d\n", displayHost(cfg.SecretsProxyHost), cfg.SecretsProxyPort)
 	}
 	fmt.Fprintln(os.Stderr, "")
 
