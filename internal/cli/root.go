@@ -87,13 +87,22 @@ Flush provisioned resources:
 }
 
 func newVersionCmd() *cobra.Command {
-	return &cobra.Command{
+	var check bool
+
+	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print the OpenStack version",
-		Run: func(cmd *cobra.Command, args []string) {
+		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Printf("openstack %s\n", version)
+			if !check {
+				return nil
+			}
+			return runVersionUpdateCheck(cmd, os.Stdout, version)
 		},
 	}
+
+	cmd.Flags().BoolVar(&check, "check", false, "Check whether a newer OpenStack version is available")
+	return cmd
 }
 
 func newStartCmd() *cobra.Command {
@@ -118,6 +127,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	maybePrintUpdateNotice(os.Stderr, cfg.DataDir, version)
 
 	fmt.Fprintf(os.Stderr, `
    ____                   _____ __             __
