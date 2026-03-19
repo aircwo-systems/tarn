@@ -213,6 +213,71 @@ func TestDeleteQueueTreatsNonExistentQueueAsSuccess(t *testing.T) {
 	}
 }
 
+func TestRunFlushClearsS3TriggersWithoutStorage(t *testing.T) {
+	const endpoint = "http://openstack.test"
+	var cleared []string
+
+	prevClient := cliHTTPClient
+	cliHTTPClient = &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_openstack/admin/overview":
+				return jsonResponse(http.StatusOK, `{
+					"config":{"accountId":"000000000000"},
+					"gateways":[],
+					"functions":[],
+					"queues":[],
+					"topics":[],
+					"subscriptions":[],
+					"secrets":[],
+					"eventSourceMappings":[],
+					"buckets":[
+						{"name":"r10-artifacts","objects":0,"totalSize":0},
+						{"name":"r9-artifacts","objects":0,"totalSize":0}
+					]
+				}`)
+			case r.Method == http.MethodPut && r.URL.String() == endpoint+"/_s3/r10-artifacts?notification":
+				cleared = append(cleared, "r10-artifacts")
+				return jsonResponse(http.StatusOK, "")
+			}
+			return jsonResponse(http.StatusNotFound, `{"Message":"not found"}`)
+		}),
+	}
+	defer func() { cliHTTPClient = prevClient }()
+
+	cmd := &cobra.Command{Use: "openstack"}
+	t.Setenv("OPENSTACK_ENDPOINT", endpoint)
+
+	var out bytes.Buffer
+	err := runFlush(cmd, &out, flushOptions{TagFilter: "r10"})
+	if err != nil {
+		t.Fatalf("runFlush returned error: %v", err)
+	}
+
+	if len(cleared) != 1 || cleared[0] != "r10-artifacts" {
+		t.Fatalf("expected only r10 bucket notification to be cleared, got %v", cleared)
+	}
+	if !strings.Contains(out.String(), "Cleared S3 Trigger Config: r10-artifacts") {
+		t.Fatalf("expected output to mention cleared s3 trigger config, got: %s", out.String())
+	}
+}
+
+func TestClearS3BucketNotificationsTreatsMissingBucketAsSuccess(t *testing.T) {
+	const endpoint = "http://openstack.test"
+
+	prevClient := cliHTTPClient
+	cliHTTPClient = &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			return jsonResponse(http.StatusNotFound, `<Error><Code>NoSuchBucket</Code><Message>The specified bucket does not exist</Message></Error>`)
+		}),
+	}
+	defer func() { cliHTTPClient = prevClient }()
+
+	if err := clearS3BucketNotifications(endpoint, "missing-bucket"); err != nil {
+		t.Fatalf("clearS3BucketNotifications should ignore missing bucket errors, got: %v", err)
+	}
+}
+
 func jsonResponse(status int, body string) (*http.Response, error) {
 	return &http.Response{
 		StatusCode: status,

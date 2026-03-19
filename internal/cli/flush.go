@@ -110,16 +110,24 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	filteredSubscriptions := filterSubscriptions(overview.Subscriptions, opts.TagFilter, filteredTopics, filteredQueues, filteredFunctions)
 	filteredSecrets := filterSecrets(overview.Secrets, opts.TagFilter)
 	filteredMappings := filterEventSourceMappings(overview.EventSourceMappings, opts.TagFilter, filteredQueues, filteredFunctions)
+	filteredNotificationBuckets := []struct {
+		Name      string
+		Objects   int
+		TotalSize int64
+	}{}
 	filteredBuckets := []struct {
 		Name      string
 		Objects   int
 		TotalSize int64
 	}{}
+	if !opts.Storage {
+		filteredNotificationBuckets = filterBuckets(overview.Buckets, opts.TagFilter)
+	}
 	if opts.Storage {
 		filteredBuckets = filterBuckets(overview.Buckets, opts.TagFilter)
 	}
 
-	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredBuckets)
+	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredNotificationBuckets) + len(filteredBuckets)
 	if total == 0 {
 		if opts.TagFilter != "" {
 			_, _ = fmt.Fprintf(out, "No resources matched tag filter %q\n", opts.TagFilter)
@@ -135,7 +143,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	}
 	_, _ = fmt.Fprintln(out)
 
-	if err := printFlushPlan(out, filteredGateways, filteredFunctions, filteredQueues, filteredTopics, filteredSubscriptions, filteredSecrets, filteredMappings, filteredBuckets); err != nil {
+	if err := printFlushPlan(out, filteredGateways, filteredFunctions, filteredQueues, filteredTopics, filteredSubscriptions, filteredSecrets, filteredMappings, filteredNotificationBuckets, filteredBuckets); err != nil {
 		return err
 	}
 	if opts.DryRun {
@@ -156,6 +164,13 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 			continue
 		}
 		_, _ = fmt.Fprintf(out, "Deleted Trigger: %s (%s -> %s)\n", mapping.UUID, mapping.QueueName, mapping.FunctionName)
+	}
+	for _, bucket := range filteredNotificationBuckets {
+		if err := clearS3BucketNotifications(endpoint, bucket.Name); err != nil {
+			recordFailure("s3 trigger", bucket.Name, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Cleared S3 Trigger Config: %s\n", bucket.Name)
 	}
 	for _, api := range filteredGateways {
 		if err := deleteAPIGateway(endpoint, api.APIID, api.Version); err != nil {
@@ -268,6 +283,10 @@ func printFlushPlan(out io.Writer, gateways []struct {
 	UUID         string
 	QueueName    string
 	FunctionName string
+}, notificationBuckets []struct {
+	Name      string
+	Objects   int
+	TotalSize int64
 }, buckets []struct {
 	Name      string
 	Objects   int
@@ -339,6 +358,16 @@ func printFlushPlan(out io.Writer, gateways []struct {
 		}
 		for _, mapping := range mappings {
 			if _, err := fmt.Fprintf(out, "  - %s (%s -> %s)\n", mapping.UUID, mapping.QueueName, mapping.FunctionName); err != nil {
+				return err
+			}
+		}
+	}
+	if len(notificationBuckets) > 0 {
+		if _, err := fmt.Fprintln(out, "S3 Trigger Configs:"); err != nil {
+			return err
+		}
+		for _, bucket := range notificationBuckets {
+			if _, err := fmt.Fprintf(out, "  - %s\n", bucket.Name); err != nil {
 				return err
 			}
 		}
@@ -1013,6 +1042,10 @@ type deleteObjectsRequest struct {
 }
 
 func flushS3Bucket(endpoint, bucket string) error {
+	if err := clearS3BucketNotifications(endpoint, bucket); err != nil {
+		return err
+	}
+
 	keys, err := listAllBucketObjectKeys(endpoint, bucket)
 	if err != nil {
 		return err
@@ -1029,6 +1062,37 @@ func flushS3Bucket(endpoint, bucket string) error {
 	}
 
 	return deleteS3Bucket(endpoint, bucket)
+}
+
+func clearS3BucketNotifications(endpoint, bucket string) error {
+	requestURL := endpoint + "/_s3/" + url.PathEscape(bucket) + "?notification"
+	req, err := http.NewRequest(http.MethodPut, requestURL, strings.NewReader(`<NotificationConfiguration/>`))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/xml")
+
+	resp, err := cliHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest {
+		bodyText := string(body)
+		if strings.Contains(bodyText, "NoSuchBucket") ||
+			strings.Contains(bodyText, "NotFound") ||
+			strings.Contains(bodyText, "does not exist") {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("clear bucket notification error (%d): %s", resp.StatusCode, string(body))
 }
 
 func listAllBucketObjectKeys(endpoint, bucket string) ([]string, error) {
