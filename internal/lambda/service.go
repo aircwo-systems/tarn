@@ -43,6 +43,11 @@ type FunctionMetrics struct {
 
 const pendingToActiveDelay = 750 * time.Millisecond
 
+const (
+	coldStartInvokeRetryAttempts = 4
+	coldStartInvokeRetryBackoff  = 150 * time.Millisecond
+)
+
 // NewService creates a new Lambda service.
 func NewService(cfg *config.Config, store *Store, eng *engine.Engine, pool *engine.WarmPool, logsSvc *logssvc.Service) *Service {
 	return &Service{
@@ -508,6 +513,7 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	fnMu := s.getFunctionMutex(fn.FunctionName)
 	fnMu.Lock()
 	info, warm := s.engine.GetContainer(fn.FunctionName)
+	coldStart := !warm
 	if !warm {
 		log.Printf("[lambda] cold start for %s", fn.FunctionName)
 		if s.logsSvc != nil {
@@ -550,8 +556,7 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	invokeCtx, cancel := context.WithTimeout(ctx, time.Duration(fn.Timeout)*time.Second)
 	defer cancel()
 
-	output, err := s.invoker.InvokeWithLogs(invokeCtx, s.engine, info, input)
-	s.ingestContainerLogs(fn.FunctionName, info)
+	output, err := s.invokeWithRetry(invokeCtx, info, input, coldStart)
 	if err != nil {
 		return nil, fmt.Errorf("invocation failed: %w", err)
 	}
@@ -568,6 +573,66 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	}
 
 	return output, nil
+}
+
+func (s *Service) invokeWithRetry(ctx context.Context, info *engine.ContainerInfo, input *types.InvokeInput, coldStart bool) (*types.InvokeOutput, error) {
+	attempts := 1
+	if coldStart {
+		attempts += coldStartInvokeRetryAttempts
+	}
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		output, err := s.invoker.InvokeWithLogs(ctx, s.engine, info, input)
+		s.ingestContainerLogs(input.FunctionName, info)
+		if err == nil {
+			return output, nil
+		}
+
+		if !coldStart || !isTransientRIEInvokeError(err) || attempt == attempts {
+			return nil, err
+		}
+
+		backoff := time.Duration(attempt) * coldStartInvokeRetryBackoff
+		log.Printf("[lambda] transient invoke error for %s (attempt %d/%d): %v; retrying in %s", input.FunctionName, attempt, attempts, err, backoff)
+
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+
+	return nil, fmt.Errorf("invoke retry loop exhausted for %s", input.FunctionName)
+}
+
+func isTransientRIEInvokeError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	msg := strings.ToLower(err.Error())
+	if !strings.Contains(msg, "rie invocation failed") {
+		return false
+	}
+
+	transientTokens := []string{
+		"connection refused",
+		"connection reset by peer",
+		"use of closed network connection",
+		"server closed idle connection",
+		"broken pipe",
+		"unexpected eof",
+		" eof",
+	}
+	for _, token := range transientTokens {
+		if strings.Contains(msg, token) {
+			return true
+		}
+	}
+
+	return false
 }
 
 // GetFunctionMetrics returns invocation metrics for the given function.
