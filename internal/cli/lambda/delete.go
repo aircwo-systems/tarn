@@ -12,8 +12,8 @@ func newDeleteCmd() *cobra.Command {
 	var name string
 
 	cmd := &cobra.Command{
-		Use:   "delete",
-		Short: "Delete a Lambda function",
+		Use:     "delete",
+		Short:   "Delete a Lambda function",
 		Example: `  openstack lambda delete --name my-func`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)

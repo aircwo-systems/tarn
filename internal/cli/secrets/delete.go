@@ -10,8 +10,8 @@ func newDeleteCmd() *cobra.Command {
 	var name string
 
 	cmd := &cobra.Command{
-		Use:   "delete",
-		Short: "Delete a secret",
+		Use:     "delete",
+		Short:   "Delete a secret",
 		Example: `  openstack secrets delete --name my-secret`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)

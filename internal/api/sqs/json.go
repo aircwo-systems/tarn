@@ -204,11 +204,11 @@ func (h *Handler) jsonSetQueueAttributes(w http.ResponseWriter, body []byte) {
 
 func (h *Handler) jsonSendMessage(w http.ResponseWriter, body []byte) {
 	var req struct {
-		QueueUrl               string                         `json:"QueueUrl"`
-		MessageBody            string                         `json:"MessageBody"`
-		DelaySeconds           int                            `json:"DelaySeconds"`
-		MessageGroupId         string                         `json:"MessageGroupId"`
-		MessageDeduplicationId string                         `json:"MessageDeduplicationId"`
+		QueueUrl               string                             `json:"QueueUrl"`
+		MessageBody            string                             `json:"MessageBody"`
+		DelaySeconds           int                                `json:"DelaySeconds"`
+		MessageGroupId         string                             `json:"MessageGroupId"`
+		MessageDeduplicationId string                             `json:"MessageDeduplicationId"`
 		MessageAttributes      map[string]*types.MessageAttribute `json:"MessageAttributes"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
@@ -335,9 +335,9 @@ func (h *Handler) jsonReceiveMessage(w http.ResponseWriter, body []byte) {
 			MD5OfBody:     m.MD5OfBody,
 			Body:          m.Body,
 			Attributes: map[string]string{
-				"SenderId":                        "000000000000",
-				"SentTimestamp":                   strconv.FormatInt(m.SentTimestamp, 10),
-				"ApproximateReceiveCount":         strconv.Itoa(m.ApproximateReceiveCount),
+				"SenderId":                         "000000000000",
+				"SentTimestamp":                    strconv.FormatInt(m.SentTimestamp, 10),
+				"ApproximateReceiveCount":          strconv.Itoa(m.ApproximateReceiveCount),
 				"ApproximateFirstReceiveTimestamp": strconv.FormatInt(m.ApproximateFirstReceiveTimestamp, 10),
 			},
 		})
@@ -377,7 +377,7 @@ type jsonDeleteBatchEntry struct {
 
 func (h *Handler) jsonDeleteMessageBatch(w http.ResponseWriter, body []byte) {
 	var req struct {
-		QueueUrl string                `json:"QueueUrl"`
+		QueueUrl string                 `json:"QueueUrl"`
 		Entries  []jsonDeleteBatchEntry `json:"Entries"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {

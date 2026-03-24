@@ -53,33 +53,33 @@ type RestAPI struct {
 
 // RestResource represents a resource (path segment) in the REST API resource tree.
 type RestResource struct {
-	ID           string `json:"id"`
-	RestAPIID    string `json:"restApiId,omitempty"`
-	ParentID     string `json:"parentId,omitempty"`
-	PathPart     string `json:"pathPart,omitempty"`
-	Path         string `json:"path"`
-	ResourceArn  string `json:"resourceArn,omitempty"`
+	ID          string `json:"id"`
+	RestAPIID   string `json:"restApiId,omitempty"`
+	ParentID    string `json:"parentId,omitempty"`
+	PathPart    string `json:"pathPart,omitempty"`
+	Path        string `json:"path"`
+	ResourceArn string `json:"resourceArn,omitempty"`
 }
 
 // RestMethod represents an HTTP method on a resource.
 type RestMethod struct {
-	HTTPMethod        string            `json:"httpMethod"`
-	ResourceID        string            `json:"resourceId,omitempty"`
-	RestAPIID         string            `json:"restApiId,omitempty"`
-	AuthorizationType string            `json:"authorizationType"`
-	RequestParameters map[string]bool   `json:"requestParameters,omitempty"`
+	HTTPMethod        string          `json:"httpMethod"`
+	ResourceID        string          `json:"resourceId,omitempty"`
+	RestAPIID         string          `json:"restApiId,omitempty"`
+	AuthorizationType string          `json:"authorizationType"`
+	RequestParameters map[string]bool `json:"requestParameters,omitempty"`
 }
 
 // RestIntegration represents a backend integration for a REST API method.
 type RestIntegration struct {
-	Type                  string            `json:"type"`
-	HTTPMethod            string            `json:"httpMethod,omitempty"`
-	URI                   string            `json:"uri,omitempty"`
-	ResourceID            string            `json:"resourceId,omitempty"`
-	RestAPIID             string            `json:"restApiId,omitempty"`
-	MethodHTTPMethod      string            `json:"methodHttpMethod,omitempty"`
-	RequestParameters     map[string]string `json:"requestParameters,omitempty"`
-	RequestTemplates      map[string]string `json:"requestTemplates,omitempty"`
+	Type              string            `json:"type"`
+	HTTPMethod        string            `json:"httpMethod,omitempty"`
+	URI               string            `json:"uri,omitempty"`
+	ResourceID        string            `json:"resourceId,omitempty"`
+	RestAPIID         string            `json:"restApiId,omitempty"`
+	MethodHTTPMethod  string            `json:"methodHttpMethod,omitempty"`
+	RequestParameters map[string]string `json:"requestParameters,omitempty"`
+	RequestTemplates  map[string]string `json:"requestTemplates,omitempty"`
 	// Resolved backend fields (not serialized to API response)
 	LambdaFunctionName string `json:"lambdaFunctionName,omitempty"`
 	SQSQueueName       string `json:"sqsQueueName,omitempty"`
