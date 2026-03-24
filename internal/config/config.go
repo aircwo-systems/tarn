@@ -52,6 +52,9 @@ type Config struct {
 	SecretsProxySessionToken string
 	// SecretsProxyRequireToken enforces extension token validation.
 	SecretsProxyRequireToken bool
+	// VaultKeyPath is the path to the AES-256 key used to encrypt secret values at rest.
+	// Defaults to ~/.openstack/vault.key. Set to empty string to disable encryption.
+	VaultKeyPath string
 }
 
 // Default returns a Config with sensible defaults.
@@ -79,6 +82,7 @@ func Default() *Config {
 		SecretsProxyPort:         2773,
 		SecretsProxySessionToken: "local-dev-token",
 		SecretsProxyRequireToken: true,
+		VaultKeyPath:             filepath.Join(home, ".openstack", "vault.key"),
 	}
 }
 
@@ -161,11 +165,14 @@ func (c *Config) LoadFromEnv() {
 			c.SecretsProxyRequireToken = b
 		}
 	}
+	if v := os.Getenv("OPENSTACK_VAULT_KEY"); v != "" {
+		c.VaultKeyPath = v
+	}
 }
 
 // EnsureDataDir creates the data directory if it doesn't exist.
 func (c *Config) EnsureDataDir() error {
-	return os.MkdirAll(c.DataDir, 0755)
+	return os.MkdirAll(c.DataDir, 0700)
 }
 
 // FunctionsDir returns the path where function code is stored.

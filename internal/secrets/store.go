@@ -3,6 +3,7 @@ package secrets
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -20,6 +21,7 @@ type Store struct {
 	mu      sync.RWMutex
 	secrets map[string]*types.Secret // keyed by secret name
 	cfg     *config.Config
+	vault   *Vault // nil when encryption is disabled
 }
 
 // NewStore creates a new secrets store.
@@ -28,6 +30,11 @@ func NewStore(cfg *config.Config) *Store {
 		secrets: make(map[string]*types.Secret),
 		cfg:     cfg,
 	}
+}
+
+// SetVault attaches a Vault for encrypting secret values at rest.
+func (s *Store) SetVault(v *Vault) {
+	s.vault = v
 }
 
 // Init loads persisted secret state from disk if persistence is enabled.
@@ -63,7 +70,24 @@ func (s *Store) Init() error {
 		if secret == nil {
 			continue
 		}
-		s.secrets[secret.Name] = cloneSecret(secret)
+		sec := cloneSecret(secret)
+		if s.vault != nil {
+			if IsSealed(sec.SecretString) {
+				plain, err := s.vault.Unseal(sec.SecretString)
+				if err != nil {
+					return fmt.Errorf("unseal secret %s: %w", sec.Name, err)
+				}
+				sec.SecretString = plain
+			}
+			if IsSealed(string(sec.SecretBinary)) {
+				raw, err := s.vault.UnsealBytes(string(sec.SecretBinary))
+				if err != nil {
+					return fmt.Errorf("unseal secret binary %s: %w", sec.Name, err)
+				}
+				sec.SecretBinary = raw
+			}
+		}
+		s.secrets[sec.Name] = sec
 	}
 	return nil
 }
@@ -92,8 +116,8 @@ func (s *Store) GetSecretValue(nameOrArn string) (*types.Secret, error) {
 		return nil, fmt.Errorf("secret %s not found", nameOrArn)
 	}
 
+	// Update in memory only — persisted on next write to avoid re-sealing all secrets on every read.
 	secret.LastAccessedDate = time.Now()
-	s.persistLocked()
 	return cloneSecret(secret), nil
 }
 
@@ -253,7 +277,26 @@ func (s *Store) persistLocked() {
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		snapshot.Secrets = append(snapshot.Secrets, cloneSecret(s.secrets[name]))
+		sec := cloneSecret(s.secrets[name])
+		if s.vault != nil {
+			if sec.SecretString != "" {
+				sealed, err := s.vault.Seal(sec.SecretString)
+				if err != nil {
+					log.Printf("[secrets] ERROR: failed to seal secret %s, aborting persist: %v", name, err)
+					return
+				}
+				sec.SecretString = sealed
+			}
+			if len(sec.SecretBinary) > 0 {
+				sealed, err := s.vault.SealBytes(sec.SecretBinary)
+				if err != nil {
+					log.Printf("[secrets] ERROR: failed to seal secret binary %s, aborting persist: %v", name, err)
+					return
+				}
+				sec.SecretBinary = []byte(sealed)
+			}
+		}
+		snapshot.Secrets = append(snapshot.Secrets, sec)
 	}
 
 	data, err := json.MarshalIndent(snapshot, "", "  ")
@@ -266,7 +309,7 @@ func (s *Store) persistLocked() {
 	}
 
 	tmpPath := s.cfg.SecretsStatePath() + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return
 	}
 	_ = os.Rename(tmpPath, s.cfg.SecretsStatePath())
