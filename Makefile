@@ -53,10 +53,10 @@ dev: build
 	$(BUILD_DIR)/$(BINARY_NAME) start --port 4566
 
 docker-build:
-	docker build -t openstack:$(VERSION) .
+	docker build --build-arg VERSION=$(VERSION) -t openstack:$(VERSION) .
 
 docker-build-ui:
-	docker build --build-arg OPENSTACK_BUILD_UI=true -t openstack:$(VERSION)-ui .
+	docker build --build-arg OPENSTACK_BUILD_UI=true --build-arg VERSION=$(VERSION) -t openstack:$(VERSION)-ui .
 
 docker-run:
 	docker run -p 4566:4566 -v /var/run/docker.sock:/var/run/docker.sock openstack:$(VERSION)
