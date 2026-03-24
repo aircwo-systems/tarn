@@ -1,6 +1,9 @@
 package secrets
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/openstack-project/openstack/internal/config"
@@ -226,6 +229,118 @@ func TestDuplicateNameError(t *testing.T) {
 	_, err = svc.CreateSecret("dupe", "", "val2", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for duplicate name")
+	}
+}
+
+func TestVaultEncryptsPersistAndDecryptsOnLoad(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataDir = dir
+	cfg.PersistenceEnabled = true
+
+	keyPath := filepath.Join(dir, "vault.key")
+	vault, err := LoadOrCreateVault(keyPath)
+	if err != nil {
+		t.Fatalf("create vault: %v", err)
+	}
+
+	// Create service with vault, create a secret
+	svc := NewService(cfg)
+	svc.SetVault(vault)
+	if err := svc.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := svc.CreateSecret("vault-test", "test", "my-api-key", nil, nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Read raw state file — value must be sealed, not plaintext
+	raw, err := os.ReadFile(cfg.SecretsStatePath())
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	rawStr := string(raw)
+	if strings.Contains(rawStr, "my-api-key") {
+		t.Fatal("state file contains plaintext secret value — encryption not working")
+	}
+	if !strings.Contains(rawStr, "vault:v1:") {
+		t.Fatal("state file should contain vault:v1: sealed prefix")
+	}
+
+	// Reload with same vault — should unseal transparently
+	svc2 := NewService(cfg)
+	svc2.SetVault(vault)
+	if err := svc2.Init(); err != nil {
+		t.Fatalf("reload init: %v", err)
+	}
+	got, err := svc2.GetSecretValue("vault-test")
+	if err != nil {
+		t.Fatalf("get after reload: %v", err)
+	}
+	if got.SecretString != "my-api-key" {
+		t.Fatalf("expected 'my-api-key', got %q", got.SecretString)
+	}
+}
+
+func TestVaultEncryptsBinarySecrets(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataDir = dir
+	cfg.PersistenceEnabled = true
+
+	keyPath := filepath.Join(dir, "vault.key")
+	vault, err := LoadOrCreateVault(keyPath)
+	if err != nil {
+		t.Fatalf("create vault: %v", err)
+	}
+
+	svc := NewService(cfg)
+	svc.SetVault(vault)
+	if err := svc.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	binaryData := []byte{0xDE, 0xAD, 0xBE, 0xEF}
+	if _, err := svc.CreateSecret("binary-vault", "", "", binaryData, nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Reload and verify
+	svc2 := NewService(cfg)
+	svc2.SetVault(vault)
+	if err := svc2.Init(); err != nil {
+		t.Fatalf("reload init: %v", err)
+	}
+	got, err := svc2.GetSecretValue("binary-vault")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if len(got.SecretBinary) != 4 || got.SecretBinary[0] != 0xDE {
+		t.Fatalf("binary mismatch: got %x", got.SecretBinary)
+	}
+}
+
+func TestNoVaultPersistsPlaintext(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Default()
+	cfg.DataDir = dir
+	cfg.PersistenceEnabled = true
+
+	// No vault set — should persist in plaintext as before
+	svc := NewService(cfg)
+	if err := svc.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	if _, err := svc.CreateSecret("plain-test", "", "visible-value", nil, nil); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	raw, err := os.ReadFile(cfg.SecretsStatePath())
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if !strings.Contains(string(raw), "visible-value") {
+		t.Fatal("without vault, state should contain plaintext value")
 	}
 }
 

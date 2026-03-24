@@ -90,6 +90,11 @@ func buildConfig(cmd *cobra.Command) (*config.Config, error) {
 			cfg.SecretsProxyRequireToken = v
 		}
 	}
+	if cmd.Flags().Changed("vault-key") {
+		if v, err := cmd.Flags().GetString("vault-key"); err == nil {
+			cfg.VaultKeyPath = v
+		}
+	}
 
 	if err := cfg.EnsureDataDir(); err != nil {
 		return nil, fmt.Errorf("failed to create data directory: %w", err)
@@ -141,6 +146,14 @@ func startServer(cfg *config.Config) error {
 
 	// Initialize Secrets Manager service
 	secretsSvc := secrets.NewService(cfg)
+	if cfg.VaultKeyPath != "" {
+		vault, err := secrets.LoadOrCreateVault(cfg.VaultKeyPath)
+		if err != nil {
+			return fmt.Errorf("failed to initialize vault: %w", err)
+		}
+		secretsSvc.SetVault(vault)
+		log.Printf("[vault] secrets encryption enabled (key: %s)", cfg.VaultKeyPath)
+	}
 	if err := secretsSvc.Init(); err != nil {
 		return fmt.Errorf("failed to initialize secrets store: %w", err)
 	}

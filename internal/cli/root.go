@@ -117,6 +117,7 @@ func newStartCmd() *cobra.Command {
 	cmd.Flags().Int("secrets-proxy-port", 2773, "Port for the local secrets proxy")
 	cmd.Flags().String("secrets-proxy-token", "", "Expected X-Aws-Parameters-Secrets-Token value (defaults to OPENSTACK_SECRETS_PROXY_TOKEN or local-dev-token)")
 	cmd.Flags().Bool("secrets-proxy-require-token", true, "Require X-Aws-Parameters-Secrets-Token validation in the local secrets proxy")
+	cmd.Flags().String("vault-key", "", "Path to AES-256 key file for encrypting secrets at rest (default: ~/.openstack/vault.key)")
 
 	return cmd
 }
@@ -145,6 +146,9 @@ func runStart(cmd *cobra.Command, args []string) error {
 	if cfg.UIEnabled {
 		fmt.Fprintf(os.Stderr, "Dashboard: http://%s:%d/\n", displayHost(cfg.Host), cfg.Port)
 		fmt.Fprintf(os.Stderr, "UI Dir:    %s\n", cfg.UIDir)
+	}
+	if cfg.VaultKeyPath != "" {
+		fmt.Fprintf(os.Stderr, "Vault:     %s\n", cfg.VaultKeyPath)
 	}
 	if cfg.ExposeSecretsProxy {
 		fmt.Fprintf(os.Stderr, "Secrets Proxy: http://%s:%d\n", displayHost(cfg.SecretsProxyHost), cfg.SecretsProxyPort)
