@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -261,6 +262,46 @@ func TestPollerPausesOnMissingQueue(t *testing.T) {
 	// poller must still be stoppable after a not-found error.
 	p.stop()
 	p.stop()
+}
+
+func TestPollerDisablesAfterConsecutiveNotFound(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.PersistenceEnabled = false
+
+	store := NewStore(cfg)
+	store.Init()
+
+	mapping := &types.EventSourceMapping{
+		UUID:                           "poll-disable-missing-queue",
+		QueueName:                      "orders",
+		FunctionName:                   "order-logger",
+		BatchSize:                      10,
+		MaximumBatchingWindowInSeconds: 1,
+		Enabled:                        true,
+		State:                          "Enabled",
+	}
+	if err := store.Save(mapping); err != nil {
+		t.Fatalf("save mapping: %v", err)
+	}
+
+	sqsMock := &mockSQS{receiveErr: errors.New("queue orders not found")}
+	lambdaMock := &mockLambda{}
+
+	p := newPoller(mapping, sqsMock, lambdaMock, store, nil, nil)
+	for i := 0; i < maxConsecutiveNotFoundRetries; i++ {
+		p.poll()
+	}
+
+	if mapping.Enabled {
+		t.Fatal("expected mapping to be auto-disabled after consecutive not-found errors")
+	}
+	if mapping.State != "Disabled" {
+		t.Fatalf("state = %q, want %q", mapping.State, "Disabled")
+	}
+	if !strings.Contains(mapping.LastProcessingResult, "DISABLED: resource not found") {
+		t.Fatalf("expected disabled not-found result, got %q", mapping.LastProcessingResult)
+	}
 }
 
 func TestPollerReleasesFilteredOutMessages(t *testing.T) {

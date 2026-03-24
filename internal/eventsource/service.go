@@ -110,20 +110,21 @@ func (s *Service) dedupeMappings() error {
 }
 
 // Start begins pollers for all mappings.
-// Any mapping that was auto-disabled by a previous error is re-enabled on startup
-// so that transient failures (missing queue/function) do not permanently break
-// pollers across restarts.
+// Legacy compatibility: mappings disabled by an old bug (persisted as Disabled
+// with an ERROR result) are re-enabled on startup.
 func (s *Service) Start() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	for _, m := range s.store.List() {
-		// Re-enable any mapping that was auto-disabled. In a local emulator
-		// each restart is a fresh opportunity to try again.
-		if !m.Enabled || m.State != "Enabled" {
+		legacyDisabled := !m.Enabled && m.State == "Disabled" && strings.HasPrefix(strings.ToUpper(strings.TrimSpace(m.LastProcessingResult)), "ERROR:")
+		if legacyDisabled {
 			m.Enabled = true
 			m.State = "Enabled"
 			_ = s.store.Save(m)
+		}
+		if !m.Enabled || m.State != "Enabled" {
+			continue
 		}
 		p := newPoller(m, s.sqs, s.lambda, s.store, s.traceStore, s.collector)
 		p.start()

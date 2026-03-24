@@ -62,6 +62,13 @@ type flushOverview struct {
 		QueueName    string `json:"queueName"`
 		FunctionName string `json:"functionName"`
 	} `json:"eventSourceMappings"`
+	EventBridgeRules []struct {
+		Name    string `json:"name"`
+		Targets []struct {
+			ID  string `json:"id"`
+			Arn string `json:"arn"`
+		} `json:"targets"`
+	} `json:"eventBridgeRules"`
 	Buckets []struct {
 		Name      string `json:"name"`
 		Objects   int    `json:"objects"`
@@ -109,7 +116,17 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	filteredTopics := filterTopics(overview.Topics, opts.TagFilter)
 	filteredSubscriptions := filterSubscriptions(overview.Subscriptions, opts.TagFilter, filteredTopics, filteredQueues, filteredFunctions)
 	filteredSecrets := filterSecrets(overview.Secrets, opts.TagFilter)
-	filteredMappings := filterEventSourceMappings(overview.EventSourceMappings, opts.TagFilter, filteredQueues, filteredFunctions)
+	allQueueNames := make(map[string]struct{}, len(overview.Queues))
+	for _, queue := range overview.Queues {
+		allQueueNames[queue.Name] = struct{}{}
+	}
+	allFunctionNames := make(map[string]struct{}, len(overview.Functions))
+	for _, fn := range overview.Functions {
+		allFunctionNames[fn.Name] = struct{}{}
+		allFunctionNames[normalizeLambdaRef(fn.Name)] = struct{}{}
+	}
+	filteredMappings := filterEventSourceMappings(overview.EventSourceMappings, opts.TagFilter, filteredQueues, filteredFunctions, allQueueNames, allFunctionNames)
+	filteredEventBridgeRules := filterEventBridgeRules(overview.EventBridgeRules, opts.TagFilter, filteredFunctions)
 	filteredNotificationBuckets := []struct {
 		Name      string
 		Objects   int
@@ -127,7 +144,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		filteredBuckets = filterBuckets(overview.Buckets, opts.TagFilter)
 	}
 
-	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredNotificationBuckets) + len(filteredBuckets)
+	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredEventBridgeRules) + len(filteredNotificationBuckets) + len(filteredBuckets)
 	if total == 0 {
 		if opts.TagFilter != "" {
 			_, _ = fmt.Fprintf(out, "No resources matched tag filter %q\n", opts.TagFilter)
@@ -143,7 +160,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	}
 	_, _ = fmt.Fprintln(out)
 
-	if err := printFlushPlan(out, filteredGateways, filteredFunctions, filteredQueues, filteredTopics, filteredSubscriptions, filteredSecrets, filteredMappings, filteredNotificationBuckets, filteredBuckets); err != nil {
+	if err := printFlushPlan(out, filteredGateways, filteredFunctions, filteredQueues, filteredTopics, filteredSubscriptions, filteredSecrets, filteredMappings, filteredEventBridgeRules, filteredNotificationBuckets, filteredBuckets); err != nil {
 		return err
 	}
 	if opts.DryRun {
@@ -164,6 +181,17 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 			continue
 		}
 		_, _ = fmt.Fprintf(out, "Deleted Trigger: %s (%s -> %s)\n", mapping.UUID, mapping.QueueName, mapping.FunctionName)
+	}
+	for _, rule := range filteredEventBridgeRules {
+		if err := removeEventBridgeTargets(endpoint, rule.Name, rule.Targets); err != nil {
+			recordFailure("eventbridge targets", rule.Name, err)
+			continue
+		}
+		if err := deleteEventBridgeRule(endpoint, rule.Name); err != nil {
+			recordFailure("eventbridge rule", rule.Name, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Deleted EventBridge Rule: %s\n", rule.Name)
 	}
 	for _, bucket := range filteredNotificationBuckets {
 		if err := clearS3BucketNotifications(endpoint, bucket.Name); err != nil {
@@ -283,6 +311,12 @@ func printFlushPlan(out io.Writer, gateways []struct {
 	UUID         string
 	QueueName    string
 	FunctionName string
+}, eventBridgeRules []struct {
+	Name    string
+	Targets []struct {
+		ID  string
+		Arn string
+	}
 }, notificationBuckets []struct {
 	Name      string
 	Objects   int
@@ -358,6 +392,16 @@ func printFlushPlan(out io.Writer, gateways []struct {
 		}
 		for _, mapping := range mappings {
 			if _, err := fmt.Fprintf(out, "  - %s (%s -> %s)\n", mapping.UUID, mapping.QueueName, mapping.FunctionName); err != nil {
+				return err
+			}
+		}
+	}
+	if len(eventBridgeRules) > 0 {
+		if _, err := fmt.Fprintln(out, "EventBridge Rules:"); err != nil {
+			return err
+		}
+		for _, rule := range eventBridgeRules {
+			if _, err := fmt.Fprintf(out, "  - %s (%d targets)\n", rule.Name, len(rule.Targets)); err != nil {
 				return err
 			}
 		}
@@ -681,7 +725,7 @@ func filterEventSourceMappings(items []struct {
 }, functions []struct {
 	Name string
 	Tags map[string]string
-}) []struct {
+}, allQueueNames map[string]struct{}, allFunctionNames map[string]struct{}) []struct {
 	UUID         string
 	QueueName    string
 	FunctionName string
@@ -710,6 +754,9 @@ func filterEventSourceMappings(items []struct {
 
 	// With a tag filter, mappings are selected when attached to a selected
 	// queue or function. Event source mappings are currently untagged.
+	//
+	// Additionally include orphaned mappings (missing queue/function in the
+	// current overview) so flush can clean stale pollers after partial deletes.
 	queueNames := make(map[string]struct{}, len(queues))
 	for _, queue := range queues {
 		queueNames[queue.Name] = struct{}{}
@@ -728,7 +775,11 @@ func filterEventSourceMappings(items []struct {
 			_, functionMatch = functionNames[normalizedFunctionName]
 		}
 
-		if queueMatch || functionMatch {
+		_, queueExists := allQueueNames[item.QueueName]
+		_, functionExists := allFunctionNames[normalizedFunctionName]
+		orphaned := !queueExists || !functionExists
+
+		if queueMatch || functionMatch || orphaned {
 			out = append(out, struct {
 				UUID         string
 				QueueName    string
@@ -741,6 +792,98 @@ func filterEventSourceMappings(items []struct {
 		}
 	}
 
+	return out
+}
+
+func filterEventBridgeRules(items []struct {
+	Name    string `json:"name"`
+	Targets []struct {
+		ID  string `json:"id"`
+		Arn string `json:"arn"`
+	} `json:"targets"`
+}, query string, functions []struct {
+	Name string
+	Tags map[string]string
+}) []struct {
+	Name    string
+	Targets []struct {
+		ID  string
+		Arn string
+	}
+} {
+	var out []struct {
+		Name    string
+		Targets []struct {
+			ID  string
+			Arn string
+		}
+	}
+
+	// Without tag filters, flush all rules.
+	if strings.TrimSpace(query) == "" {
+		for _, item := range items {
+			targets := make([]struct {
+				ID  string
+				Arn string
+			}, 0, len(item.Targets))
+			for _, target := range item.Targets {
+				targets = append(targets, struct {
+					ID  string
+					Arn string
+				}{ID: target.ID, Arn: target.Arn})
+			}
+			out = append(out, struct {
+				Name    string
+				Targets []struct {
+					ID  string
+					Arn string
+				}
+			}{
+				Name:    item.Name,
+				Targets: targets,
+			})
+		}
+		return out
+	}
+
+	// With tag filters, EventBridge rules are selected only if at least one target
+	// points to a filtered Lambda function (rules are currently untagged).
+	functionNames := make(map[string]struct{}, len(functions))
+	for _, fn := range functions {
+		functionNames[fn.Name] = struct{}{}
+	}
+	for _, item := range items {
+		matched := false
+		for _, target := range item.Targets {
+			fnName := normalizeLambdaRef(target.Arn)
+			if _, ok := functionNames[fnName]; ok {
+				matched = true
+				break
+			}
+		}
+		if matched {
+			targets := make([]struct {
+				ID  string
+				Arn string
+			}, 0, len(item.Targets))
+			for _, target := range item.Targets {
+				targets = append(targets, struct {
+					ID  string
+					Arn string
+				}{ID: target.ID, Arn: target.Arn})
+			}
+			out = append(out, struct {
+				Name    string
+				Targets []struct {
+					ID  string
+					Arn string
+				}
+			}{
+				Name:    item.Name,
+				Targets: targets,
+			})
+		}
+	}
 	return out
 }
 
@@ -978,6 +1121,72 @@ func deleteEventSourceMapping(endpoint, uuid string) error {
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusNoContent {
+		return fmt.Errorf("error (%d): %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+func removeEventBridgeTargets(endpoint, ruleName string, targets []struct {
+	ID  string
+	Arn string
+}) error {
+	if len(targets) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if strings.TrimSpace(target.ID) == "" {
+			continue
+		}
+		ids = append(ids, target.ID)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"Rule": ruleName,
+		"Ids":  ids,
+	})
+	req, err := http.NewRequest(http.MethodPost, endpoint+"/", bytes.NewReader(reqBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	req.Header.Set("X-Amz-Target", "AWSEvents.RemoveTargets")
+
+	resp, err := cliHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("error (%d): %s", resp.StatusCode, string(body))
+	}
+	return nil
+}
+
+func deleteEventBridgeRule(endpoint, ruleName string) error {
+	reqBody, _ := json.Marshal(map[string]any{
+		"Name": ruleName,
+	})
+	req, err := http.NewRequest(http.MethodPost, endpoint+"/", bytes.NewReader(reqBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	req.Header.Set("X-Amz-Target", "AWSEvents.DeleteRule")
+
+	resp, err := cliHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("error (%d): %s", resp.StatusCode, string(body))
 	}
 	return nil

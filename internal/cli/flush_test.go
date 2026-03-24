@@ -197,6 +197,77 @@ func TestRunFlushContinuesAfterQueueDeleteError(t *testing.T) {
 	}
 }
 
+func TestRunFlushWithTagDeletesOrphanEventSourceMappings(t *testing.T) {
+	const endpoint = "http://openstack.test"
+	var deleted []string
+
+	prevClient := cliHTTPClient
+	cliHTTPClient = &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_openstack/admin/overview":
+				return jsonResponse(http.StatusOK, `{
+					"config":{"accountId":"000000000000"},
+					"gateways":[],
+					"functions":[
+						{"name":"fn-r10","tags":{"feature":"r10"}},
+						{"name":"fn-r9","tags":{"feature":"r9"}}
+					],
+					"queues":[
+						{"name":"q-r10","url":"`+endpoint+`/000000000000/q-r10","tags":{"feature":"r10"}},
+						{"name":"q-r9","url":"`+endpoint+`/000000000000/q-r9","tags":{"feature":"r9"}}
+					],
+					"topics":[],
+					"subscriptions":[],
+					"secrets":[],
+					"eventBridgeRules":[],
+					"eventSourceMappings":[
+						{"uuid":"esm-r10","queueName":"q-r10","functionName":"fn-r10"},
+						{"uuid":"esm-orphan","queueName":"sns-trace-demo-queue","functionName":"ghost-fn"},
+						{"uuid":"esm-r9","queueName":"q-r9","functionName":"fn-r9"}
+					]
+				}`)
+			case r.Method == http.MethodDelete && r.URL.String() == endpoint+"/2015-03-31/event-source-mappings/esm-r10":
+				deleted = append(deleted, "mapping:esm-r10")
+				return jsonResponse(http.StatusNoContent, "")
+			case r.Method == http.MethodDelete && r.URL.String() == endpoint+"/2015-03-31/event-source-mappings/esm-orphan":
+				deleted = append(deleted, "mapping:esm-orphan")
+				return jsonResponse(http.StatusNoContent, "")
+			case r.Method == http.MethodDelete && r.URL.String() == endpoint+"/2015-03-31/event-source-mappings/esm-r9":
+				deleted = append(deleted, "mapping:esm-r9")
+				return jsonResponse(http.StatusNoContent, "")
+			case r.Method == http.MethodPost && r.URL.String() == endpoint+"/000000000000/q-r10":
+				deleted = append(deleted, "queue:q-r10")
+				return jsonResponse(http.StatusOK, `<DeleteQueueResponse/>`)
+			case r.Method == http.MethodDelete && r.URL.String() == endpoint+"/2015-03-31/functions/fn-r10":
+				deleted = append(deleted, "function:fn-r10")
+				return jsonResponse(http.StatusNoContent, "")
+			}
+			return jsonResponse(http.StatusNotFound, `{"Message":"not found"}`)
+		}),
+	}
+	defer func() { cliHTTPClient = prevClient }()
+
+	cmd := &cobra.Command{Use: "openstack"}
+	t.Setenv("OPENSTACK_ENDPOINT", endpoint)
+
+	var out bytes.Buffer
+	err := runFlush(cmd, &out, flushOptions{TagFilter: "feature=r10"})
+	if err != nil {
+		t.Fatalf("runFlush returned error: %v", err)
+	}
+
+	gotDeleted := strings.Join(deleted, ",")
+	for _, want := range []string{"mapping:esm-r10", "mapping:esm-orphan"} {
+		if !strings.Contains(gotDeleted, want) {
+			t.Fatalf("expected deletion %q in %q", want, gotDeleted)
+		}
+	}
+	if strings.Contains(gotDeleted, "mapping:esm-r9") {
+		t.Fatalf("unexpected deletion of healthy unrelated mapping in %q", gotDeleted)
+	}
+}
+
 func TestDeleteQueueTreatsNonExistentQueueAsSuccess(t *testing.T) {
 	const queueURL = "http://openstack.test/000000000000/missing-queue.fifo"
 

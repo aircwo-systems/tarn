@@ -94,15 +94,18 @@ type LambdaInterface interface {
 }
 
 type poller struct {
-	mapping    *types.EventSourceMapping
-	sqs        SQSInterface
-	lambda     LambdaInterface
-	store      *Store
-	traceStore *tracesvc.Store
-	collector  *tracesvc.Collector
-	done       chan struct{}
-	stopOnce   sync.Once
+	mapping        *types.EventSourceMapping
+	sqs            SQSInterface
+	lambda         LambdaInterface
+	store          *Store
+	traceStore     *tracesvc.Store
+	collector      *tracesvc.Collector
+	done           chan struct{}
+	stopOnce       sync.Once
+	notFoundStreak int
 }
+
+const maxConsecutiveNotFoundRetries = 5
 
 func newPoller(mapping *types.EventSourceMapping, sqsSvc SQSInterface, lambdaSvc LambdaInterface, store *Store, traceStore *tracesvc.Store, collector *tracesvc.Collector) *poller {
 	return &poller{
@@ -158,6 +161,7 @@ func (p *poller) poll() {
 		p.updateResult(fmt.Sprintf("ERROR: %v", err))
 		return
 	}
+	p.notFoundStreak = 0
 	if len(msgs) == 0 {
 		return
 	}
@@ -225,6 +229,7 @@ func (p *poller) poll() {
 		p.recordTrace(pollStart, functionName, sqsDurationMs, lambdaDurationMs, len(msgs), len(msgs), subSpans)
 		return
 	}
+	p.notFoundStreak = 0
 
 	log.Printf("[eventsource] %s: invoke response: statusCode=%d functionError=%q payload=%s",
 		p.mapping.UUID, output.StatusCode, output.FunctionError, truncate(output.Payload, 120))
@@ -332,12 +337,19 @@ func (p *poller) updateResult(result string) {
 }
 
 func (p *poller) disableWithError(err error) {
-	log.Printf("[eventsource] %s: resource not found, will retry: %v", p.mapping.UUID, err)
-	// Record the error but keep the poller running so it retries on the next
-	// tick. In a local emulator the queue/function may not yet exist at startup
-	// (e.g. SQS state still loading, function being created) but will appear
-	// shortly. Stopping permanently caused messages to pile up unprocessed.
-	p.updateResult(fmt.Sprintf("ERROR: %v", err))
+	p.notFoundStreak++
+	if p.notFoundStreak < maxConsecutiveNotFoundRetries {
+		log.Printf("[eventsource] %s: resource not found, will retry (%d/%d): %v", p.mapping.UUID, p.notFoundStreak, maxConsecutiveNotFoundRetries, err)
+		p.updateResult(fmt.Sprintf("ERROR: %v", err))
+		return
+	}
+
+	p.mapping.Enabled = false
+	p.mapping.State = "Disabled"
+	msg := fmt.Sprintf("DISABLED: resource not found after %d retries: %v", maxConsecutiveNotFoundRetries, err)
+	log.Printf("[eventsource] %s: %s", p.mapping.UUID, msg)
+	p.updateResult(msg)
+	p.stop()
 }
 
 func truncate(b []byte, max int) string {
