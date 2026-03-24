@@ -7,7 +7,7 @@
 
 # enable later
 /docs/
-/examples/
+/examples/*
 
 # Go
 *.exe
