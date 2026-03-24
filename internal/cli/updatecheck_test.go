@@ -23,6 +23,11 @@ func TestCompareSemanticVersions(t *testing.T) {
 		{name: "latest newer patch", current: "1.2.3", latest: "1.2.4", wantCmp: -1, wantOK: true},
 		{name: "current newer minor", current: "1.3.0", latest: "1.2.9", wantCmp: 1, wantOK: true},
 		{name: "prerelease lower than release", current: "1.2.3-rc.1", latest: "1.2.3", wantCmp: -1, wantOK: true},
+		{name: "rc.9 before rc.10", current: "1.2.3-rc.9", latest: "1.2.3-rc.10", wantCmp: -1, wantOK: true},
+		{name: "beta.2 before beta.10", current: "1.0.0-beta.2", latest: "1.0.0-beta.10", wantCmp: -1, wantOK: true},
+		{name: "alpha before beta", current: "1.0.0-alpha", latest: "1.0.0-beta", wantCmp: -1, wantOK: true},
+		{name: "beta equal", current: "v0.0.8-beta", latest: "v0.0.8-beta", wantCmp: 0, wantOK: true},
+		{name: "beta versions different patch", current: "v0.0.7-beta", latest: "v0.0.8-beta", wantCmp: -1, wantOK: true},
 		{name: "invalid semver", current: "main", latest: "1.2.3", wantCmp: 0, wantOK: false},
 	}
 
@@ -185,7 +190,7 @@ func TestCheckForUpdatesDisabledByEnv(t *testing.T) {
 	}
 }
 
-func TestCheckForUpdatesUsesPrereleaseWhenNewer(t *testing.T) {
+func TestCheckForUpdatesPrefersStableOverPrerelease(t *testing.T) {
 	origURL := updateCheckLatestReleaseURL
 	origReleasesURL := updateCheckReleasesURL
 	origClient := updateCheckHTTPClient
@@ -207,15 +212,9 @@ func TestCheckForUpdatesUsesPrereleaseWhenNewer(t *testing.T) {
 					StatusCode: http.StatusOK,
 					Header:     make(http.Header),
 					Body: io.NopCloser(strings.NewReader(`[
-						{"tag_name":"v0.0.5","html_url":"https://example.com/releases/v0.0.5"},
-						{"tag_name":"v0.0.6-beta","html_url":"https://example.com/releases/v0.0.6-beta"}
+						{"tag_name":"v1.0.0","html_url":"https://example.com/releases/v1.0.0"},
+						{"tag_name":"v1.1.0-beta","html_url":"https://example.com/releases/v1.1.0-beta"}
 					]`)),
-				}, nil
-			case updateCheckLatestReleaseURL:
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Header:     make(http.Header),
-					Body:       io.NopCloser(strings.NewReader(`{"tag_name":"v0.0.5","html_url":"https://example.com/releases/v0.0.5"}`)),
 				}, nil
 			default:
 				return nil, fmt.Errorf("unexpected URL: %s", r.URL.String())
@@ -227,7 +226,7 @@ func TestCheckForUpdatesUsesPrereleaseWhenNewer(t *testing.T) {
 	}
 
 	result, err := checkForUpdates(context.Background(), updateCheckOptions{
-		CurrentVersion: "v0.0.5",
+		CurrentVersion: "v0.9.0",
 		DataDir:        t.TempDir(),
 		Force:          true,
 	})
@@ -237,7 +236,114 @@ func TestCheckForUpdatesUsesPrereleaseWhenNewer(t *testing.T) {
 	if !result.Outdated {
 		t.Fatalf("expected outdated=true, got %+v", result)
 	}
-	if result.LatestVersion != "v0.0.6-beta" {
-		t.Fatalf("latest version = %q, want v0.0.6-beta", result.LatestVersion)
+	// Should pick v1.0.0 (stable) over v1.1.0-beta (prerelease).
+	if result.LatestVersion != "v1.0.0" {
+		t.Fatalf("latest version = %q, want v1.0.0", result.LatestVersion)
+	}
+}
+
+func TestCheckForUpdatesFallsBackToPrerelease(t *testing.T) {
+	origURL := updateCheckLatestReleaseURL
+	origReleasesURL := updateCheckReleasesURL
+	origClient := updateCheckHTTPClient
+	origNow := updateCheckNow
+	t.Cleanup(func() {
+		updateCheckLatestReleaseURL = origURL
+		updateCheckReleasesURL = origReleasesURL
+		updateCheckHTTPClient = origClient
+		updateCheckNow = origNow
+	})
+
+	updateCheckLatestReleaseURL = "https://example.com/latest"
+	updateCheckReleasesURL = "https://example.com/releases"
+	updateCheckHTTPClient = &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			switch r.URL.String() {
+			case updateCheckReleasesURL:
+				// Only prereleases exist (current state of the project).
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body: io.NopCloser(strings.NewReader(`[
+						{"tag_name":"v0.0.7-beta","html_url":"https://example.com/releases/v0.0.7-beta"},
+						{"tag_name":"v0.0.8-beta","html_url":"https://example.com/releases/v0.0.8-beta"}
+					]`)),
+				}, nil
+			default:
+				return nil, fmt.Errorf("unexpected URL: %s", r.URL.String())
+			}
+		}),
+	}
+	updateCheckNow = func() time.Time {
+		return time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC)
+	}
+
+	result, err := checkForUpdates(context.Background(), updateCheckOptions{
+		CurrentVersion: "v0.0.7-beta",
+		DataDir:        t.TempDir(),
+		Force:          true,
+	})
+	if err != nil {
+		t.Fatalf("checkForUpdates: %v", err)
+	}
+	if !result.Outdated {
+		t.Fatalf("expected outdated=true, got %+v", result)
+	}
+	// No stable releases exist, so the newest prerelease should be used.
+	if result.LatestVersion != "v0.0.8-beta" {
+		t.Fatalf("latest version = %q, want v0.0.8-beta", result.LatestVersion)
+	}
+}
+
+func TestComparePrereleaseIdentifiers(t *testing.T) {
+	tests := []struct {
+		name string
+		a, b string
+		want int
+	}{
+		{name: "equal", a: "beta", b: "beta", want: 0},
+		{name: "alpha before beta", a: "alpha", b: "beta", want: -1},
+		{name: "numeric segments", a: "rc.2", b: "rc.10", want: -1},
+		{name: "numeric less than string", a: "1", b: "alpha", want: -1},
+		{name: "shorter prefix lower", a: "beta", b: "beta.1", want: -1},
+		{name: "beta.2 before beta.10", a: "beta.2", b: "beta.10", want: -1},
+		{name: "rc before rc.1", a: "rc", b: "rc.1", want: -1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := comparePrereleaseIdentifiers(tt.a, tt.b)
+			if got != tt.want {
+				t.Fatalf("comparePrereleaseIdentifiers(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestNewestComparableReleasePrefersStable(t *testing.T) {
+	releases := []latestReleaseResponse{
+		{TagName: "v1.1.0-beta", HTMLURL: "https://example.com/v1.1.0-beta"},
+		{TagName: "v1.0.0", HTMLURL: "https://example.com/v1.0.0"},
+		{TagName: "v0.9.0", HTMLURL: "https://example.com/v0.9.0"},
+	}
+	best, ok := newestComparableRelease(releases)
+	if !ok {
+		t.Fatal("expected a result")
+	}
+	if best.TagName != "v1.0.0" {
+		t.Fatalf("got %q, want v1.0.0 (should prefer stable over prerelease)", best.TagName)
+	}
+}
+
+func TestNewestComparableReleaseFallsBackToPrerelease(t *testing.T) {
+	releases := []latestReleaseResponse{
+		{TagName: "v0.0.7-beta", HTMLURL: "https://example.com/v0.0.7-beta"},
+		{TagName: "v0.0.8-beta", HTMLURL: "https://example.com/v0.0.8-beta"},
+	}
+	best, ok := newestComparableRelease(releases)
+	if !ok {
+		t.Fatal("expected a result")
+	}
+	if best.TagName != "v0.0.8-beta" {
+		t.Fatalf("got %q, want v0.0.8-beta (should use newest prerelease when no stable exists)", best.TagName)
 	}
 }

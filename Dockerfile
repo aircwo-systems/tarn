@@ -1,6 +1,9 @@
 ARG OPENSTACK_BUILD_UI=false
+ARG VERSION=0.1.0-dev
 
 FROM golang:1.26-alpine AS go-builder
+
+ARG VERSION
 
 WORKDIR /app
 
@@ -8,7 +11,9 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /openstack ./cmd/openstack
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w -X github.com/openstack-project/openstack/internal/cli.version=${VERSION}" \
+    -o /openstack ./cmd/openstack
 
 FROM oven/bun:1 AS ui-builder
 

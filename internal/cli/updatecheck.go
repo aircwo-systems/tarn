@@ -229,27 +229,42 @@ func fetchReleaseList(ctx context.Context, url string) ([]latestReleaseResponse,
 }
 
 func newestComparableRelease(releases []latestReleaseResponse) (latestReleaseResponse, bool) {
-	var best latestReleaseResponse
-	bestSet := false
+	var bestStable, bestAny latestReleaseResponse
+	stableSet, anySet := false, false
 
 	for _, release := range releases {
 		if release.Draft || strings.TrimSpace(release.TagName) == "" {
 			continue
 		}
-		if _, ok := parseSemanticVersion(release.TagName); !ok {
+		sv, ok := parseSemanticVersion(release.TagName)
+		if !ok {
 			continue
 		}
-		if !bestSet {
-			best = release
-			bestSet = true
-			continue
+
+		// Track overall best (including prereleases).
+		if !anySet {
+			bestAny = release
+			anySet = true
+		} else if cmp, ok := compareSemanticVersions(bestAny.TagName, release.TagName); ok && cmp < 0 {
+			bestAny = release
 		}
-		if cmp, ok := compareSemanticVersions(best.TagName, release.TagName); ok && cmp < 0 {
-			best = release
+
+		// Track best stable (no prerelease suffix).
+		if sv.Prerelease == "" {
+			if !stableSet {
+				bestStable = release
+				stableSet = true
+			} else if cmp, ok := compareSemanticVersions(bestStable.TagName, release.TagName); ok && cmp < 0 {
+				bestStable = release
+			}
 		}
 	}
 
-	return best, bestSet
+	// Prefer stable releases when available; fall back to prereleases.
+	if stableSet {
+		return bestStable, true
+	}
+	return bestAny, anySet
 }
 
 func loadUpdateCheckCache(path string) (updateCheckCache, bool, error) {
@@ -361,10 +376,60 @@ func compareSemanticVersions(current, latest string) (int, bool) {
 	if b.Prerelease == "" {
 		return -1, true
 	}
-	if a.Prerelease < b.Prerelease {
-		return -1, true
+	return comparePrereleaseIdentifiers(a.Prerelease, b.Prerelease), true
+}
+
+// comparePrereleaseIdentifiers implements semver spec §11.4:
+// identifiers are split by '.', numeric identifiers compared numerically,
+// alphanumeric identifiers compared lexicographically, numeric < alphanumeric,
+// and a shorter set of identifiers has lower precedence when all preceding are equal.
+func comparePrereleaseIdentifiers(a, b string) int {
+	aParts := strings.Split(a, ".")
+	bParts := strings.Split(b, ".")
+
+	limit := len(aParts)
+	if len(bParts) < limit {
+		limit = len(bParts)
 	}
-	return 1, true
+
+	for i := 0; i < limit; i++ {
+		aNum, aIsNum := strconv.Atoi(aParts[i])
+		bNum, bIsNum := strconv.Atoi(bParts[i])
+
+		switch {
+		case aIsNum == nil && bIsNum == nil:
+			// Both numeric: compare as integers.
+			if aNum < bNum {
+				return -1
+			}
+			if aNum > bNum {
+				return 1
+			}
+		case aIsNum == nil:
+			// Numeric < alphanumeric.
+			return -1
+		case bIsNum == nil:
+			// Alphanumeric > numeric.
+			return 1
+		default:
+			// Both alphanumeric: compare lexicographically.
+			if aParts[i] < bParts[i] {
+				return -1
+			}
+			if aParts[i] > bParts[i] {
+				return 1
+			}
+		}
+	}
+
+	// All compared identifiers are equal; shorter set has lower precedence.
+	if len(aParts) < len(bParts) {
+		return -1
+	}
+	if len(aParts) > len(bParts) {
+		return 1
+	}
+	return 0
 }
 
 func parseSemanticVersion(v string) (semanticVersion, bool) {
