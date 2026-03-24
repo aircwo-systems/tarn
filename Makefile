@@ -1,7 +1,7 @@
 BINARY_NAME := openstack
 VERSION := 0.1.0-dev
 BUILD_DIR := ./build
-GO_FILES := $(shell find . -name '*.go' -not -path './vendor/*')
+GO_FILES := $(shell git ls-files '*.go')
 LDFLAGS := -ldflags "-X github.com/openstack-project/openstack/internal/cli.version=$(VERSION)"
 
 .PHONY: all build secrets-proxy db-proxy start run clean test lint fmt vet ui-install ui-dev ui-build docker-build docker-build-ui docker-run
