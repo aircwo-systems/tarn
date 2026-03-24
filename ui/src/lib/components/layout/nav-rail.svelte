@@ -16,6 +16,7 @@
     TrashIcon,
     ShieldWarningIcon,
     BellIcon,
+    BridgeIcon,
   } from "phosphor-svelte";
   import OpenStackLogo from "$lib/components/common/openstack-logo.svelte";
   import NavRailItem from "./nav-rail-item.svelte";
@@ -94,6 +95,7 @@
     { id: "sns", label: "SNS", icon: BellIcon },
     { id: "secrets", label: "Secrets", icon: KeyIcon },
     { id: "triggers", label: "Triggers", icon: ArrowsClockwiseIcon },
+    { id: "eventbridge", label: "EventBridge", icon: BridgeIcon },
     { id: "storage", label: "Storage", icon: HardDriveIcon },
     { id: "logs", label: "Logs", icon: ScrollIcon },
     { id: "xray", label: "Traces", icon: DetectiveIcon },
@@ -437,13 +439,13 @@
           placeholder="/path/to/lambda-repos"
           bind:value={schemaSourceDirDraft}
           onblur={() =>
-            (schemaSourceDirDraft = sanitizeSchemaSourceDir(
-              schemaSourceDirDraft,
-            ))}
+            (schemaSourceDirDraft =
+              sanitizeSchemaSourceDir(schemaSourceDirDraft))}
           class="w-full rounded-md border border-border bg-muted px-2.5 py-1.5 font-mono text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
         />
         <p class="text-[11px] leading-relaxed text-muted-foreground/70">
-          Local directory used by Chaos Probe to discover <code>schemas.ts</code>
+          Local directory used by Chaos Probe to discover <code>schemas.ts</code
+          >
           and event samples. Saved in local project settings.
         </p>
       </div>

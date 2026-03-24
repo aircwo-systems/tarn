@@ -3,6 +3,7 @@
   import { TableCell, TableRow } from "$lib/components/ui/table";
   import Badge from "$lib/components/ui/badge/badge.svelte";
   import ArnCell from "$lib/components/common/arn-cell.svelte";
+  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
   import ResourceTable from "$lib/components/common/resource-table.svelte";
   import { getDashboard, getDashboardFilters, matchesTagFilter } from "$lib/state.svelte";
   import { formatUnixSeconds } from "$lib/utils";
@@ -34,6 +35,14 @@
         return "default";
       default:
         return "secondary";
+    }
+  }
+
+  function formatFilterPolicy(value: string): string | null {
+    try {
+      return JSON.stringify(JSON.parse(value), null, 2);
+    } catch {
+      return null;
     }
   }
 </script>
@@ -96,11 +105,21 @@
             {sub.rawMessageDelivery ? "Raw" : "Envelope"}
           </Badge>
         </TableCell>
-        <TableCell class="max-w-[18rem]">
+        <TableCell class="w-[34rem] min-w-[28rem] align-top">
           {#if sub.filterPolicy}
-            <p class="font-mono text-[11px] text-muted-foreground break-all">
-              {sub.filterPolicy}
-            </p>
+            {@const formattedPolicy = formatFilterPolicy(sub.filterPolicy)}
+            <FormattedMessageViewer
+              raw={sub.filterPolicy}
+              formatted={formattedPolicy}
+              formattedLabel="Filter (JSON)"
+              rawLabel="Raw Filter"
+              formattedOpenByDefault={true}
+              rawOpenByDefault={false}
+              formattedContentClass="text-[11px] text-muted-foreground"
+              rawContentClass="text-[11px] text-muted-foreground"
+              formattedMaxHeightClass="max-h-52"
+              rawMaxHeightClass="max-h-40"
+            />
           {:else}
             <span class="text-xs text-muted-foreground/70">None</span>
           {/if}
