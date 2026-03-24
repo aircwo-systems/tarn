@@ -13,8 +13,8 @@ func newUpdateCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "update",
-		Short: "Update a secret's value",
+		Use:     "update",
+		Short:   "Update a secret's value",
 		Example: `  openstack secrets update --name my-secret --value "new-password"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)

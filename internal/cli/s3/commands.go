@@ -15,8 +15,8 @@ func newMBCmd() *cobra.Command {
 	var name string
 
 	cmd := &cobra.Command{
-		Use:   "mb",
-		Short: "Make a new S3 bucket",
+		Use:     "mb",
+		Short:   "Make a new S3 bucket",
 		Example: `  openstack s3 mb --name my-bucket`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
@@ -51,8 +51,8 @@ func newRBCmd() *cobra.Command {
 	var name string
 
 	cmd := &cobra.Command{
-		Use:   "rb",
-		Short: "Remove an S3 bucket",
+		Use:     "rb",
+		Short:   "Remove an S3 bucket",
 		Example: `  openstack s3 rb --name my-bucket`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
@@ -183,8 +183,8 @@ func newCpCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "cp",
-		Short: "Upload a file to S3",
+		Use:     "cp",
+		Short:   "Upload a file to S3",
 		Example: `  openstack s3 cp --bucket my-bucket --key hello.txt --file ./hello.txt`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
@@ -234,8 +234,8 @@ func newGetCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "get",
-		Short: "Download an object from S3",
+		Use:     "get",
+		Short:   "Download an object from S3",
 		Example: `  openstack s3 get --bucket my-bucket --key hello.txt --output ./hello.txt`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
@@ -287,8 +287,8 @@ func newRmCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "rm",
-		Short: "Delete an object from S3",
+		Use:     "rm",
+		Short:   "Delete an object from S3",
 		Example: `  openstack s3 rm --bucket my-bucket --key hello.txt`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)

@@ -13,11 +13,11 @@ import (
 
 func newSendCmd() *cobra.Command {
 	var (
-		queue    string
-		body     string
-		delay    int
-		groupID  string
-		dedupID  string
+		queue   string
+		body    string
+		delay   int
+		groupID string
+		dedupID string
 	)
 
 	cmd := &cobra.Command{

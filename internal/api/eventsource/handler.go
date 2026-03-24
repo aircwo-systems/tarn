@@ -19,20 +19,20 @@ func NewHandler(svc *eventsourcesvc.Service) *Handler {
 }
 
 type createMappingRequest struct {
-	EventSourceArn                 string                  `json:"EventSourceArn"`
-	FunctionName                   string                  `json:"FunctionName"`
-	BatchSize                      int                     `json:"BatchSize"`
-	MaximumBatchingWindowInSeconds int                     `json:"MaximumBatchingWindowInSeconds"`
-	Enabled                        *bool                   `json:"Enabled"`
-	FilterCriteria                 *types.FilterCriteria   `json:"FilterCriteria,omitempty"`
+	EventSourceArn                 string                `json:"EventSourceArn"`
+	FunctionName                   string                `json:"FunctionName"`
+	BatchSize                      int                   `json:"BatchSize"`
+	MaximumBatchingWindowInSeconds int                   `json:"MaximumBatchingWindowInSeconds"`
+	Enabled                        *bool                 `json:"Enabled"`
+	FilterCriteria                 *types.FilterCriteria `json:"FilterCriteria,omitempty"`
 }
 
 type updateMappingRequest struct {
-	FunctionName                   *string                 `json:"FunctionName,omitempty"`
-	BatchSize                      *int                    `json:"BatchSize,omitempty"`
-	MaximumBatchingWindowInSeconds *int                    `json:"MaximumBatchingWindowInSeconds,omitempty"`
-	Enabled                        *bool                   `json:"Enabled,omitempty"`
-	FilterCriteria                 *types.FilterCriteria   `json:"FilterCriteria,omitempty"`
+	FunctionName                   *string               `json:"FunctionName,omitempty"`
+	BatchSize                      *int                  `json:"BatchSize,omitempty"`
+	MaximumBatchingWindowInSeconds *int                  `json:"MaximumBatchingWindowInSeconds,omitempty"`
+	Enabled                        *bool                 `json:"Enabled,omitempty"`
+	FilterCriteria                 *types.FilterCriteria `json:"FilterCriteria,omitempty"`
 }
 
 // eventSourceMappingResponse mirrors AWS response field names while keeping

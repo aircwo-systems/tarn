@@ -46,14 +46,14 @@ type storeSnapshot struct {
 }
 
 type apiSnapshot struct {
-	API                  *types.RestAPI                    `json:"api"`
-	Resources            []*types.RestResource             `json:"resources"`
-	Methods              []*types.RestMethod               `json:"methods"`
-	Integrations         []*types.RestIntegration          `json:"integrations"`
-	MethodResponses      []*types.RestMethodResponse       `json:"methodResponses"`
-	IntegrationResponses []*types.RestIntegrationResponse  `json:"integrationResponses"`
-	Deployments          []*types.RestDeployment           `json:"deployments"`
-	Stages               []*types.RestStage                `json:"stages"`
+	API                  *types.RestAPI                   `json:"api"`
+	Resources            []*types.RestResource            `json:"resources"`
+	Methods              []*types.RestMethod              `json:"methods"`
+	Integrations         []*types.RestIntegration         `json:"integrations"`
+	MethodResponses      []*types.RestMethodResponse      `json:"methodResponses"`
+	IntegrationResponses []*types.RestIntegrationResponse `json:"integrationResponses"`
+	Deployments          []*types.RestDeployment          `json:"deployments"`
+	Stages               []*types.RestStage               `json:"stages"`
 }
 
 // NewStore creates a new v1 REST API store.

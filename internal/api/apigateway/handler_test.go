@@ -184,11 +184,11 @@ func newTestHandler(t *testing.T) *Handler {
 	}
 	lambdaSvc := lambdasvc.NewService(cfg, store, nil, nil, nil)
 	if err := store.SaveFunction(&types.FunctionConfig{
-		FunctionName: "orders-handler",
-		FunctionArn:  fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", cfg.Region, cfg.AccountID, "orders-handler"),
-		Runtime:      types.RuntimeNodeJS20,
-		Handler:      "index.handler",
-		Role:         "arn:aws:iam::000000000000:role/lambda-role",
+		FunctionName:     "orders-handler",
+		FunctionArn:      fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", cfg.Region, cfg.AccountID, "orders-handler"),
+		Runtime:          types.RuntimeNodeJS20,
+		Handler:          "index.handler",
+		Role:             "arn:aws:iam::000000000000:role/lambda-role",
 		State:            types.FunctionStateActive,
 		LastUpdateStatus: types.LastUpdateStatusSuccessful,
 	}); err != nil {
