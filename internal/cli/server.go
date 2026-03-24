@@ -21,6 +21,7 @@ import (
 	"github.com/openstack-project/openstack/internal/apigatewayv1"
 	"github.com/openstack-project/openstack/internal/config"
 	"github.com/openstack-project/openstack/internal/engine"
+	"github.com/openstack-project/openstack/internal/eventbridge"
 	"github.com/openstack-project/openstack/internal/eventsource"
 	"github.com/openstack-project/openstack/internal/infrastructure"
 	"github.com/openstack-project/openstack/internal/lambda"
@@ -202,6 +203,17 @@ func startServer(cfg *config.Config) error {
 	esmSvc.SetTraceStore(traceStore)
 	esmSvc.SetCollector(collector)
 
+	// Initialize EventBridge scheduled-rules service.
+	eventbridgeStore := eventbridge.NewStore(cfg)
+	eventbridgeSvc := eventbridge.NewService(cfg, eventbridgeStore, lambdaSvc)
+	if err := eventbridgeSvc.Init(); err != nil {
+		return fmt.Errorf("failed to initialize eventbridge store: %w", err)
+	}
+	eventbridgeSvc.SetTraceStore(traceStore)
+	eventbridgeSvc.SetCollector(collector)
+	eventbridgeSvc.Start()
+	defer eventbridgeSvc.Stop()
+
 	esmSvc.Start()
 	defer esmSvc.Stop()
 
@@ -312,7 +324,7 @@ func startServer(cfg *config.Config) error {
 	}
 
 	// Create and start API server
-	server := api.NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, traceStore, collector)
+	server := api.NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, eventbridgeSvc, traceStore, collector)
 
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)

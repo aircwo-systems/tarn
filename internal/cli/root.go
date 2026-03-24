@@ -141,7 +141,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "Region:   %s\n", cfg.Region)
 	fmt.Fprintf(os.Stderr, "Endpoint: %s\n", cfg.Endpoint())
 	fmt.Fprintf(os.Stderr, "Data Dir: %s\n", cfg.DataDir)
-	fmt.Fprintln(os.Stderr, "Services: apigateway, apigatewayv2, lambda, s3, sqs, sns, secretsmanager")
+	fmt.Fprintln(os.Stderr, "Services: apigateway, apigatewayv2, lambda, s3, sqs, sns, secretsmanager, eventbridge")
 	if cfg.UIEnabled {
 		fmt.Fprintf(os.Stderr, "Dashboard: http://%s:%d/\n", displayHost(cfg.Host), cfg.Port)
 		fmt.Fprintf(os.Stderr, "UI Dir:    %s\n", cfg.UIDir)

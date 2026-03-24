@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -29,17 +30,20 @@ type Handler struct {
 	accountID string
 	mu        sync.Mutex
 	roles     map[string]*role
+	// attachedPolicies stores managed policy attachments by role name.
+	attachedPolicies map[string]map[string]struct{}
 	// inlinePolicies stores IAM inline role policies by role name and policy name.
 	inlinePolicies map[string]map[string]string
-	seq       int
+	seq            int
 }
 
 // NewHandler creates a new IAM stub handler.
 func NewHandler(accountID string) *Handler {
 	return &Handler{
-		accountID: accountID,
-		roles:     make(map[string]*role),
-		inlinePolicies: make(map[string]map[string]string),
+		accountID:        accountID,
+		roles:            make(map[string]*role),
+		attachedPolicies: make(map[string]map[string]struct{}),
+		inlinePolicies:   make(map[string]map[string]string),
 	}
 }
 
@@ -74,10 +78,12 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		h.emptyOK(w, action)
 	case "ListRoleTags":
 		h.listRoleTags(w, action)
-	case "AttachRolePolicy", "DetachRolePolicy":
-		h.emptyOK(w, action)
+	case "AttachRolePolicy":
+		h.attachRolePolicy(w, r)
+	case "DetachRolePolicy":
+		h.detachRolePolicy(w, r)
 	case "ListAttachedRolePolicies":
-		h.listAttachedRolePolicies(w)
+		h.listAttachedRolePolicies(w, r)
 	case "PutRolePolicy":
 		h.putRolePolicy(w, r)
 	case "DeleteRolePolicy":
@@ -126,6 +132,9 @@ func (h *Handler) createRole(w http.ResponseWriter, r *http.Request) {
 		MaxSessionDuration:       3600,
 	}
 	h.roles[name] = ro
+	if _, ok := h.attachedPolicies[name]; !ok {
+		h.attachedPolicies[name] = make(map[string]struct{})
+	}
 	if _, ok := h.inlinePolicies[name]; !ok {
 		h.inlinePolicies[name] = make(map[string]string)
 	}
@@ -152,11 +161,14 @@ func (h *Handler) getRole(w http.ResponseWriter, r *http.Request) {
 			CreateDate:               time.Now().UTC().Format(time.RFC3339),
 			MaxSessionDuration:       3600,
 		}
-			h.roles[name] = ro
-			if _, ok := h.inlinePolicies[name]; !ok {
-				h.inlinePolicies[name] = make(map[string]string)
-			}
+		h.roles[name] = ro
+		if _, ok := h.attachedPolicies[name]; !ok {
+			h.attachedPolicies[name] = make(map[string]struct{})
 		}
+		if _, ok := h.inlinePolicies[name]; !ok {
+			h.inlinePolicies[name] = make(map[string]string)
+		}
+	}
 	h.mu.Unlock()
 
 	w.WriteHeader(http.StatusOK)
@@ -167,6 +179,7 @@ func (h *Handler) deleteRole(w http.ResponseWriter, r *http.Request) {
 	name := r.FormValue("RoleName")
 	h.mu.Lock()
 	delete(h.roles, name)
+	delete(h.attachedPolicies, name)
 	delete(h.inlinePolicies, name)
 	h.mu.Unlock()
 	h.emptyOK(w, "DeleteRole")
@@ -200,16 +213,77 @@ func (h *Handler) roleXML(response, result string, ro *role) string {
 
 // ── List/policy handlers ──────────────────────────────────────────────────────
 
-func (h *Handler) listAttachedRolePolicies(w http.ResponseWriter) {
+func (h *Handler) listAttachedRolePolicies(w http.ResponseWriter, r *http.Request) {
+	roleName := r.FormValue("RoleName")
+
+	h.mu.Lock()
+	attached := h.attachedPolicies[roleName]
+	arns := make([]string, 0, len(attached))
+	for arn := range attached {
+		arns = append(arns, arn)
+	}
+	h.mu.Unlock()
+	sort.Strings(arns)
+
+	var members strings.Builder
+	if len(arns) == 0 {
+		members.WriteString("<AttachedPolicies/>")
+	} else {
+		members.WriteString("<AttachedPolicies>")
+		for _, arn := range arns {
+			members.WriteString("<member>")
+			members.WriteString("<PolicyName>")
+			members.WriteString(policyNameFromARN(arn))
+			members.WriteString("</PolicyName>")
+			members.WriteString("<PolicyArn>")
+			members.WriteString(arn)
+			members.WriteString("</PolicyArn>")
+			members.WriteString("</member>")
+		}
+		members.WriteString("</AttachedPolicies>")
+	}
+
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?>`+
 		`<ListAttachedRolePoliciesResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">`+
 		`<ListAttachedRolePoliciesResult>`+
-		`<AttachedPolicies/>`+
+		members.String()+
 		`<IsTruncated>false</IsTruncated>`+
 		`</ListAttachedRolePoliciesResult>`+
 		`<ResponseMetadata><RequestId>openstack-iam-stub</RequestId></ResponseMetadata>`+
 		`</ListAttachedRolePoliciesResponse>`)
+}
+
+func (h *Handler) attachRolePolicy(w http.ResponseWriter, r *http.Request) {
+	roleName := r.FormValue("RoleName")
+	policyARN := r.FormValue("PolicyArn")
+	if strings.TrimSpace(roleName) == "" || strings.TrimSpace(policyARN) == "" {
+		h.noSuchEntity(w, "Role or policy not found.")
+		return
+	}
+
+	h.mu.Lock()
+	h.ensureRoleLocked(roleName)
+	if _, ok := h.attachedPolicies[roleName]; !ok {
+		h.attachedPolicies[roleName] = make(map[string]struct{})
+	}
+	h.attachedPolicies[roleName][policyARN] = struct{}{}
+	h.mu.Unlock()
+
+	h.emptyOK(w, "AttachRolePolicy")
+}
+
+func (h *Handler) detachRolePolicy(w http.ResponseWriter, r *http.Request) {
+	roleName := r.FormValue("RoleName")
+	policyARN := r.FormValue("PolicyArn")
+
+	h.mu.Lock()
+	if attached, ok := h.attachedPolicies[roleName]; ok {
+		delete(attached, policyARN)
+	}
+	h.mu.Unlock()
+
+	h.emptyOK(w, "DetachRolePolicy")
 }
 
 func (h *Handler) putRolePolicy(w http.ResponseWriter, r *http.Request) {
@@ -415,4 +489,27 @@ func (h *Handler) noSuchEntity(w http.ResponseWriter, message string) {
 			`<RequestId>openstack-iam-stub</RequestId>`+
 			`</ErrorResponse>`,
 		message)
+}
+
+func (h *Handler) ensureRoleLocked(roleName string) {
+	if _, ok := h.roles[roleName]; ok {
+		return
+	}
+	h.seq++
+	h.roles[roleName] = &role{
+		Name:                     roleName,
+		RoleID:                   fmt.Sprintf("AROAOPENSTACKSTUB%04d", h.seq),
+		ARN:                      fmt.Sprintf("arn:aws:iam::%s:role/%s", h.accountID, roleName),
+		Path:                     "/",
+		AssumeRolePolicyDocument: "{}",
+		CreateDate:               time.Now().UTC().Format(time.RFC3339),
+		MaxSessionDuration:       3600,
+	}
+}
+
+func policyNameFromARN(arn string) string {
+	if idx := strings.LastIndexByte(arn, '/'); idx >= 0 && idx+1 < len(arn) {
+		return arn[idx+1:]
+	}
+	return arn
 }

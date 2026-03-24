@@ -12,6 +12,7 @@ import (
 	adminhandler "github.com/openstack-project/openstack/internal/api/admin"
 	apigatewayhandler "github.com/openstack-project/openstack/internal/api/apigateway"
 	apigatewayv1handler "github.com/openstack-project/openstack/internal/api/apigatewayv1"
+	eventbridgehandler "github.com/openstack-project/openstack/internal/api/eventbridge"
 	eventsourcehandler "github.com/openstack-project/openstack/internal/api/eventsource"
 	iamhandler "github.com/openstack-project/openstack/internal/api/iam"
 	lambdahandler "github.com/openstack-project/openstack/internal/api/lambda"
@@ -22,6 +23,7 @@ import (
 	apigatewaysvc "github.com/openstack-project/openstack/internal/apigateway"
 	apigatewayv1svc "github.com/openstack-project/openstack/internal/apigatewayv1"
 	"github.com/openstack-project/openstack/internal/config"
+	eventbridgesvc "github.com/openstack-project/openstack/internal/eventbridge"
 	eventsourcesvc "github.com/openstack-project/openstack/internal/eventsource"
 	infrasvc "github.com/openstack-project/openstack/internal/infrastructure"
 	lambdasvc "github.com/openstack-project/openstack/internal/lambda"
@@ -45,6 +47,7 @@ type Server struct {
 	sns         *snshandler.Handler
 	secrets     *secretshandler.Handler
 	eventsource *eventsourcehandler.Handler
+	eventbridge *eventbridgehandler.Handler
 	admin       *adminhandler.Handler
 	iam         *iamhandler.Handler
 	logsSvc     *logssvc.Service
@@ -52,7 +55,7 @@ type Server struct {
 }
 
 // NewServer creates a new API server.
-func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, gatewayV1Svc *apigatewayv1svc.Service, lambdaSvc *lambdasvc.Service, logsSvc *logssvc.Service, sqsSvc *sqssvc.Service, snsSvc *snssvc.Service, secretsSvc *secretssvc.Service, infraSvc *infrasvc.Service, s3Svc *s3svc.Service, esmSvc *eventsourcesvc.Service, traceStore *tracesvc.Store, collector *tracesvc.Collector) *Server {
+func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, gatewayV1Svc *apigatewayv1svc.Service, lambdaSvc *lambdasvc.Service, logsSvc *logssvc.Service, sqsSvc *sqssvc.Service, snsSvc *snssvc.Service, secretsSvc *secretssvc.Service, infraSvc *infrasvc.Service, s3Svc *s3svc.Service, esmSvc *eventsourcesvc.Service, eventbridgeSvc *eventbridgesvc.Service, traceStore *tracesvc.Store, collector *tracesvc.Collector) *Server {
 	lambdaHandler := lambdahandler.NewHandler(lambdaSvc, s3Svc)
 	lambdaHandler.SetTraceStore(traceStore)
 	lambdaHandler.SetCollector(collector)
@@ -70,7 +73,8 @@ func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, gatewayV1S
 		sns:         snshandler.NewHandler(snsSvc),
 		secrets:     secretsHandler,
 		eventsource: eventsourcehandler.NewHandler(esmSvc),
-		admin:       adminhandler.NewHandler(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, traceStore),
+		eventbridge: eventbridgehandler.NewHandler(eventbridgeSvc),
+		admin:       adminhandler.NewHandler(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, eventbridgeSvc, traceStore),
 		iam:         iamhandler.NewHandler(cfg.AccountID),
 		logsSvc:     logsSvc,
 		collector:   collector,
@@ -104,6 +108,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /_openstack/admin/infrastructure", s.admin.Infrastructure)
 	mux.HandleFunc("POST /_openstack/admin/chaos", s.admin.RunChaos)
 	mux.HandleFunc("POST /_openstack/admin/chaos/source", s.admin.ScanChaosSource)
+	mux.HandleFunc("POST /_openstack/admin/eventbridge/fire", s.admin.FireEventBridgeRule)
+	mux.HandleFunc("POST /_openstack/admin/eventbridge/race", s.admin.RunEventBridgeRace)
+	// EventBridge JSON protocol endpoint used by dashboard and tooling to avoid
+	// colliding with UI app-server root routes.
+	mux.HandleFunc("POST /_openstack/events", s.eventbridge.Dispatch)
 
 	// S3 API — path-style REST XML protocol
 	// POST is handled via postAccountDispatch to avoid conflict with SQS POST /{account}/{queue...}
@@ -250,6 +259,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /2015-03-31/functions/{name}/tags", s.lambda.ListTags)
 	mux.HandleFunc("POST /2015-03-31/functions/{name}/tags", s.lambda.TagResource)
 	mux.HandleFunc("DELETE /2015-03-31/functions/{name}/tags", s.lambda.UntagResource)
+	// Resource policy compatibility (Terraform aws_lambda_permission)
+	mux.HandleFunc("POST /2015-03-31/functions/{name}/policy", s.lambda.AddPermission)
+	mux.HandleFunc("GET /2015-03-31/functions/{name}/policy", s.lambda.GetPolicy)
+	mux.HandleFunc("DELETE /2015-03-31/functions/{name}/policy/{statementId}", s.lambda.RemovePermission)
 
 	// Layers
 	mux.HandleFunc("POST /2015-03-31/layers/{layerName}/versions", s.lambda.PublishLayerVersion)
@@ -314,6 +327,11 @@ func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
 		s.secrets.Dispatch(w, r)
 		return
 	}
+	// EventBridge JSON protocol uses X-Amz-Target: AWSEvents.*
+	if strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AWSEvents.") {
+		s.eventbridge.Dispatch(w, r)
+		return
+	}
 	// SQS JSON wire protocol uses X-Amz-Target: AmazonSQS.*
 	if strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AmazonSQS.") {
 		s.sqs.Dispatch(w, r)
@@ -356,20 +374,66 @@ func (s *Server) telemetryDBHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","sns","secretsmanager","eventsource"]}`)
+	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","sns","secretsmanager","eventsource","eventbridge"]}`)
 }
 
 func (s *Server) withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		wrapped := &statusWriter{ResponseWriter: w, status: 200}
-		next.ServeHTTP(wrapped, r)
+		// AWS JSON/query protocol clients may send service requests on non-root
+		// paths when custom endpoints include path components. Route these early
+		// by protocol headers/params so EventBridge (and peers) still work.
+		if !s.dispatchProtocolRequest(wrapped, r) {
+			next.ServeHTTP(wrapped, r)
+		}
 		duration := time.Since(start)
 		log.Printf("%s %s %d %s", r.Method, r.URL.Path, wrapped.status, duration)
 		if s.logsSvc != nil && !strings.HasPrefix(r.URL.Path, "/_openstack/") {
 			s.logsSvc.LogAPIRequest(r.Method, r.URL.Path, wrapped.status, duration)
 		}
 	})
+}
+
+// dispatchProtocolRequest routes AWS protocol requests based on headers/query
+// independent of URL path. Returns true when a request was dispatched.
+func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request) bool {
+	if r.Method != http.MethodPost {
+		return false
+	}
+
+	if secretshandler.IsSecretsManagerRequest(r) {
+		s.secrets.Dispatch(w, r)
+		return true
+	}
+
+	target := strings.TrimSpace(r.Header.Get("X-Amz-Target"))
+	if strings.HasPrefix(target, "AWSEvents.") {
+		s.eventbridge.Dispatch(w, r)
+		return true
+	}
+	if strings.HasPrefix(target, "AmazonSQS.") {
+		s.sqs.Dispatch(w, r)
+		return true
+	}
+
+	if iamhandler.IsIAMRequest(r) {
+		s.iam.Dispatch(w, r)
+		return true
+	}
+
+	// Keep OpenStack admin/control POST APIs on normal route matching unless
+	// one of the protocol dispatchers above claimed the request.
+	if strings.HasPrefix(r.URL.Path, "/_openstack/") || strings.TrimSpace(r.URL.Path) == "/_openstack" {
+		return false
+	}
+
+	if err := r.ParseForm(); err == nil && snshandler.IsSNSAction(r.FormValue("Action")) {
+		s.sns.Dispatch(w, r)
+		return true
+	}
+
+	return false
 }
 
 type statusWriter struct {

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,11 +28,25 @@ type Handler struct {
 	s3         s3Getter
 	traceStore *tracesvc.Store
 	collector  *tracesvc.Collector
+	mu         sync.Mutex
+	policies   map[string]map[string]policyStatement
+}
+
+type policyStatement struct {
+	StatementID   string
+	Action        string
+	Principal     string
+	SourceARN     string
+	SourceAccount string
 }
 
 // NewHandler creates a new Lambda API handler.
 func NewHandler(svc *lambdasvc.Service, s3 s3Getter) *Handler {
-	return &Handler{svc: svc, s3: s3}
+	return &Handler{
+		svc:      svc,
+		s3:       s3,
+		policies: make(map[string]map[string]policyStatement),
+	}
 }
 
 // SetTraceStore attaches a trace store so direct invocations are recorded.
@@ -106,7 +121,7 @@ func (h *Handler) CreateFunction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, result)
+	writeJSON(w, http.StatusCreated, toFunctionConfigResponse(result))
 }
 
 // GetFunction handles GET /2015-03-31/functions/{name}
@@ -122,7 +137,7 @@ func (h *Handler) GetFunction(w http.ResponseWriter, r *http.Request) {
 		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"Configuration": fn,
+		"Configuration": toFunctionConfigResponse(fn),
 		// Terraform AWS provider (v5/v6) treats GetFunction output as empty when
 		// either Configuration or Code is missing.
 		"Code": map[string]interface{}{
@@ -144,7 +159,7 @@ func (h *Handler) GetFunctionConfiguration(w http.ResponseWriter, r *http.Reques
 	if fn.LastUpdateStatus == "" {
 		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
 	}
-	writeJSON(w, http.StatusOK, fn)
+	writeJSON(w, http.StatusOK, toFunctionConfigResponse(fn))
 }
 
 // ListVersionsByFunction handles GET /2015-03-31/functions/{name}/versions.
@@ -164,7 +179,7 @@ func (h *Handler) ListVersionsByFunction(w http.ResponseWriter, r *http.Request)
 		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
 	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"Versions": []*types.FunctionConfig{fn},
+		"Versions": []map[string]any{toFunctionConfigResponse(fn)},
 	})
 }
 
@@ -178,8 +193,12 @@ func (h *Handler) ListFunctions(w http.ResponseWriter, r *http.Request) {
 	if functions == nil {
 		functions = []*types.FunctionConfig{}
 	}
+	functionResults := make([]map[string]any, 0, len(functions))
+	for _, fn := range functions {
+		functionResults = append(functionResults, toFunctionConfigResponse(fn))
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"Functions": functions,
+		"Functions": functionResults,
 	})
 }
 
@@ -226,7 +245,7 @@ func (h *Handler) UpdateFunctionCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, http.StatusOK, toFunctionConfigResponse(result))
 }
 
 // UpdateFunctionConfiguration handles PUT /2015-03-31/functions/{name}/configuration
@@ -250,7 +269,7 @@ func (h *Handler) UpdateFunctionConfiguration(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	writeJSON(w, http.StatusOK, result)
+	writeJSON(w, http.StatusOK, toFunctionConfigResponse(result))
 }
 
 // Invoke handles POST /2015-03-31/functions/{name}/invocations
@@ -339,6 +358,132 @@ func (h *Handler) PutFunctionConcurrency(w http.ResponseWriter, r *http.Request)
 
 // DeleteFunctionConcurrency handles DELETE /2017-10-31/functions/{name}/concurrency.
 func (h *Handler) DeleteFunctionConcurrency(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// AddPermission handles POST /2015-03-31/functions/{name}/policy
+func (h *Handler) AddPermission(w http.ResponseWriter, r *http.Request) {
+	functionName := normalizeFunctionName(r.PathValue("name"))
+	fn, err := h.svc.GetFunction(functionName)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+functionName)
+		return
+	}
+
+	var req struct {
+		StatementID   string `json:"StatementId"`
+		Action        string `json:"Action"`
+		Principal     string `json:"Principal"`
+		SourceARN     string `json:"SourceArn"`
+		SourceAccount string `json:"SourceAccount"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Invalid request body")
+		return
+	}
+	if strings.TrimSpace(req.StatementID) == "" {
+		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "StatementId is required")
+		return
+	}
+
+	h.mu.Lock()
+	if _, ok := h.policies[functionName]; !ok {
+		h.policies[functionName] = make(map[string]policyStatement)
+	}
+	h.policies[functionName][req.StatementID] = policyStatement{
+		StatementID:   req.StatementID,
+		Action:        req.Action,
+		Principal:     req.Principal,
+		SourceARN:     req.SourceARN,
+		SourceAccount: req.SourceAccount,
+	}
+	h.mu.Unlock()
+
+	statement := map[string]any{
+		"Sid":      req.StatementID,
+		"Effect":   "Allow",
+		"Action":   req.Action,
+		"Resource": fn.FunctionArn,
+	}
+	if strings.TrimSpace(req.Principal) != "" {
+		statement["Principal"] = map[string]string{"Service": req.Principal}
+	}
+	if strings.TrimSpace(req.SourceARN) != "" {
+		statement["Condition"] = map[string]any{
+			"ArnLike": map[string]string{"AWS:SourceArn": req.SourceARN},
+		}
+	}
+
+	raw, _ := json.Marshal(statement)
+	writeJSON(w, http.StatusOK, map[string]string{"Statement": string(raw)})
+}
+
+// GetPolicy handles GET /2015-03-31/functions/{name}/policy
+func (h *Handler) GetPolicy(w http.ResponseWriter, r *http.Request) {
+	functionName := normalizeFunctionName(r.PathValue("name"))
+	fn, err := h.svc.GetFunction(functionName)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+functionName)
+		return
+	}
+
+	h.mu.Lock()
+	functionPolicies := h.policies[functionName]
+	h.mu.Unlock()
+
+	if len(functionPolicies) == 0 {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "The resource policy for the function does not exist.")
+		return
+	}
+
+	statements := make([]map[string]any, 0, len(functionPolicies))
+	for _, stmt := range functionPolicies {
+		entry := map[string]any{
+			"Sid":      stmt.StatementID,
+			"Effect":   "Allow",
+			"Action":   stmt.Action,
+			"Resource": fn.FunctionArn,
+		}
+		if strings.TrimSpace(stmt.Principal) != "" {
+			entry["Principal"] = map[string]string{"Service": stmt.Principal}
+		}
+		if strings.TrimSpace(stmt.SourceARN) != "" {
+			entry["Condition"] = map[string]any{
+				"ArnLike": map[string]string{"AWS:SourceArn": stmt.SourceARN},
+			}
+		}
+		statements = append(statements, entry)
+	}
+
+	policy := map[string]any{
+		"Version":   "2012-10-17",
+		"Id":        "default",
+		"Statement": statements,
+	}
+	raw, _ := json.Marshal(policy)
+	writeJSON(w, http.StatusOK, map[string]string{"Policy": string(raw), "RevisionId": "1"})
+}
+
+// RemovePermission handles DELETE /2015-03-31/functions/{name}/policy/{statementId}
+func (h *Handler) RemovePermission(w http.ResponseWriter, r *http.Request) {
+	functionName := normalizeFunctionName(r.PathValue("name"))
+	statementID := strings.TrimSpace(r.PathValue("statementId"))
+	if statementID == "" {
+		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "StatementId is required")
+		return
+	}
+
+	if _, err := h.svc.GetFunction(functionName); err != nil {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+functionName)
+		return
+	}
+
+	h.mu.Lock()
+	if functionPolicies, ok := h.policies[functionName]; ok {
+		delete(functionPolicies, statementID)
+	}
+	h.mu.Unlock()
+
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -566,6 +711,61 @@ type publishLayerRequest struct {
 	Content            *codeInput `json:"Content,omitempty"`
 }
 
+func toFunctionConfigResponse(fn *types.FunctionConfig) map[string]any {
+	if fn == nil {
+		return map[string]any{}
+	}
+
+	result := map[string]any{
+		"FunctionName": fn.FunctionName,
+		"FunctionArn":  fn.FunctionArn,
+		"Runtime":      fn.Runtime,
+		"Handler":      fn.Handler,
+		"Role":         fn.Role,
+		"Timeout":      fn.Timeout,
+		"MemorySize":   fn.MemorySize,
+		"State":        fn.State,
+		"CodeSha256":   fn.CodeSHA256,
+		"CodeSize":     fn.CodeSize,
+		"Version":      fn.Version,
+		"LastModified": fn.LastModified,
+	}
+
+	if fn.Description != "" {
+		result["Description"] = fn.Description
+	}
+	if len(fn.Environment) > 0 {
+		result["Environment"] = fn.Environment
+	}
+	if len(fn.Tags) > 0 {
+		result["Tags"] = fn.Tags
+	}
+	if fn.DeadLetterConfig != nil {
+		result["DeadLetterConfig"] = fn.DeadLetterConfig
+	}
+	if fn.LastUpdateStatus != "" {
+		result["LastUpdateStatus"] = fn.LastUpdateStatus
+	}
+	if len(fn.Layers) > 0 {
+		layers := make([]map[string]any, 0, len(fn.Layers))
+		for _, arn := range fn.Layers {
+			layerArn := strings.TrimSpace(arn)
+			if layerArn == "" {
+				continue
+			}
+			layers = append(layers, map[string]any{
+				"Arn":      layerArn,
+				"CodeSize": int64(0),
+			})
+		}
+		if len(layers) > 0 {
+			result["Layers"] = layers
+		}
+	}
+
+	return result
+}
+
 // fetchS3Code downloads a Lambda deployment package from an S3 bucket.
 func (h *Handler) fetchS3Code(bucket, key string) ([]byte, error) {
 	if h.s3 == nil {
@@ -594,4 +794,18 @@ func writeError(w http.ResponseWriter, status int, code string, message string) 
 		"__type":  code,
 		"Message": message,
 	})
+}
+
+func normalizeFunctionName(name string) string {
+	trimmed := strings.TrimSpace(name)
+	const marker = ":function:"
+	idx := strings.Index(trimmed, marker)
+	if idx < 0 {
+		return trimmed
+	}
+	tail := trimmed[idx+len(marker):]
+	if colon := strings.IndexByte(tail, ':'); colon >= 0 {
+		tail = tail[:colon]
+	}
+	return strings.TrimSpace(tail)
 }

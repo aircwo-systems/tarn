@@ -17,6 +17,7 @@ import (
 	apigatewayv1svc "github.com/openstack-project/openstack/internal/apigatewayv1"
 	"github.com/openstack-project/openstack/internal/collection"
 	"github.com/openstack-project/openstack/internal/config"
+	eventbridgesvc "github.com/openstack-project/openstack/internal/eventbridge"
 	eventsourcesvc "github.com/openstack-project/openstack/internal/eventsource"
 	infrasvc "github.com/openstack-project/openstack/internal/infrastructure"
 	lambdasvc "github.com/openstack-project/openstack/internal/lambda"
@@ -42,10 +43,11 @@ type Handler struct {
 	secrets    *secretssvc.Service
 	infra      *infrasvc.Service
 	esm        *eventsourcesvc.Service
+	eventbridge *eventbridgesvc.Service
 	traceStore *tracesvc.Store
 }
 
-func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apigatewayv1svc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, sns *snssvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, traceStore *tracesvc.Store) *Handler {
+func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apigatewayv1svc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, sns *snssvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, eventbridge *eventbridgesvc.Service, traceStore *tracesvc.Store) *Handler {
 	return &Handler{
 		cfg:        cfg,
 		apigw:      apigw,
@@ -58,6 +60,7 @@ func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apiga
 		secrets:    secrets,
 		infra:      infra,
 		esm:        esm,
+		eventbridge: eventbridge,
 		traceStore: traceStore,
 	}
 }
@@ -76,6 +79,7 @@ type overviewResponse struct {
 	Secrets             []secretSummary        `json:"secrets"`
 	Buckets             []s3BucketSummary      `json:"buckets"`
 	EventSourceMappings []esmSummary           `json:"eventSourceMappings"`
+	EventBridgeRules    []eventBridgeRuleSummary `json:"eventBridgeRules,omitempty"`
 	Infrastructure      []infrasvc.ProbeResult `json:"infrastructure"`
 	Connections         []infraConnection      `json:"connections,omitempty"`
 	RecentTraces        []*tracesvc.Trace      `json:"recentTraces,omitempty"`
@@ -100,6 +104,7 @@ type overviewCounts struct {
 	Buckets             int `json:"buckets"`
 	LogGroups           int `json:"logGroups"`
 	EventSourceMappings int `json:"eventSourceMappings"`
+	EventBridgeRules    int `json:"eventBridgeRules"`
 }
 
 type esmSummary struct {
@@ -110,6 +115,25 @@ type esmSummary struct {
 	State          string                `json:"state"`
 	LastResult     string                `json:"lastResult,omitempty"`
 	FilterCriteria *types.FilterCriteria `json:"filterCriteria,omitempty"`
+}
+
+type eventBridgeTargetSummary struct {
+	ID           string    `json:"id"`
+	Arn          string    `json:"arn"`
+	LastResult   string    `json:"lastResult,omitempty"`
+	LastInvokedAt *time.Time `json:"lastInvokedAt,omitempty"`
+}
+
+type eventBridgeRuleSummary struct {
+	Name               string                    `json:"name"`
+	Arn                string                    `json:"arn"`
+	ScheduleExpression string                    `json:"scheduleExpression"`
+	State              string                    `json:"state"`
+	Description        string                    `json:"description,omitempty"`
+	LastRunAt          *time.Time                `json:"lastRunAt,omitempty"`
+	NextRunAt          *time.Time                `json:"nextRunAt,omitempty"`
+	LastResult         string                    `json:"lastResult,omitempty"`
+	Targets            []eventBridgeTargetSummary `json:"targets,omitempty"`
 }
 
 type s3BucketSummary struct {
@@ -342,11 +366,15 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	if h.esm != nil {
 		esmMappings = h.esm.ListMappings("", "")
 	}
+	var eventBridgeRules []*types.EventBridgeRule
+	if h.eventbridge != nil {
+		eventBridgeRules, _, _ = h.eventbridge.ListRules("", "", 500, "")
+	}
 
 	resp := overviewResponse{
 		Status:    "running",
 		Timestamp: time.Now().UTC(),
-		Services:  []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "sns", "secretsmanager", "eventsource"},
+		Services:  []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "sns", "secretsmanager", "eventsource", "eventbridge"},
 		Config: overviewConfig{
 			Region:    h.cfg.Region,
 			AccountID: h.cfg.AccountID,
@@ -364,6 +392,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			Buckets:             len(buckets),
 			LogGroups:           len(logGroups),
 			EventSourceMappings: len(esmMappings),
+			EventBridgeRules:    len(eventBridgeRules),
 		},
 		Gateways:            make([]gatewaySummary, 0, len(gateways)),
 		Functions:           make([]functionSummary, 0, len(functions)),
@@ -373,6 +402,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		Secrets:             make([]secretSummary, 0, len(secrets)),
 		Buckets:             make([]s3BucketSummary, 0, len(buckets)),
 		EventSourceMappings: make([]esmSummary, 0, len(esmMappings)),
+		EventBridgeRules:    make([]eventBridgeRuleSummary, 0, len(eventBridgeRules)),
 		Infrastructure:      infraResults,
 		Connections:         inferInfraConnections(functions, infraResults),
 		RecentTraces:        h.recentTraces(),
@@ -401,6 +431,40 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			FilterCriteria: m.FilterCriteria,
 		})
 	}
+
+	// EventBridge scheduled-rule summaries + EventBridge→Lambda connections.
+	for _, rule := range eventBridgeRules {
+		targets := make([]eventBridgeTargetSummary, 0, len(rule.Targets))
+		for _, target := range rule.Targets {
+			targets = append(targets, eventBridgeTargetSummary{
+				ID:            target.ID,
+				Arn:           target.Arn,
+				LastResult:    target.LastResult,
+				LastInvokedAt: target.LastInvokedAt,
+			})
+			targetName := lambdaNameFromARNOrName(target.Arn)
+			resp.Connections = append(resp.Connections, infraConnection{
+				SourceFunction: rule.Name,
+				TargetID:       targetName,
+				TargetName:     targetName,
+				TargetKind:     "eventbridge-lambda",
+				Evidence:       "rule-target",
+				Source:         target.ID,
+			})
+		}
+		resp.EventBridgeRules = append(resp.EventBridgeRules, eventBridgeRuleSummary{
+			Name:               rule.Name,
+			Arn:                rule.Arn,
+			ScheduleExpression: rule.ScheduleExpression,
+			State:              rule.State,
+			Description:        rule.Description,
+			LastRunAt:          rule.LastRunAt,
+			NextRunAt:          rule.NextRunAt,
+			LastResult:         rule.LastResult,
+			Targets:            targets,
+		})
+	}
+	sort.Slice(resp.EventBridgeRules, func(i, j int) bool { return resp.EventBridgeRules[i].Name < resp.EventBridgeRules[j].Name })
 
 	// S3→Lambda notification connections
 	for _, b := range buckets {
@@ -1123,6 +1187,82 @@ func (h *Handler) RunChaos(w http.ResponseWriter, r *http.Request) {
 		}
 		flusher.Flush()
 	}
+}
+
+// FireEventBridgeRule manually triggers one EventBridge rule now.
+func (h *Handler) FireEventBridgeRule(w http.ResponseWriter, r *http.Request) {
+	if h.eventbridge == nil {
+		writeError(w, http.StatusServiceUnavailable, "eventbridge service unavailable")
+		return
+	}
+	var req struct {
+		RuleName string `json:"ruleName"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	req.RuleName = strings.TrimSpace(req.RuleName)
+	if req.RuleName == "" {
+		writeError(w, http.StatusBadRequest, "ruleName is required")
+		return
+	}
+
+	result, err := h.eventbridge.FireRuleNow(req.RuleName, map[string]string{"trigger": "manual"})
+	if err != nil {
+		if se, ok := err.(*eventbridgesvc.ServiceError); ok {
+			writeError(w, se.StatusCode(), se.Message)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+// RunEventBridgeRace triggers one rule repeatedly with bounded concurrency.
+func (h *Handler) RunEventBridgeRace(w http.ResponseWriter, r *http.Request) {
+	if h.eventbridge == nil {
+		writeError(w, http.StatusServiceUnavailable, "eventbridge service unavailable")
+		return
+	}
+	var req struct {
+		RuleName    string `json:"ruleName"`
+		Runs        int    `json:"runs"`
+		Concurrency int    `json:"concurrency"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	req.RuleName = strings.TrimSpace(req.RuleName)
+	if req.RuleName == "" {
+		writeError(w, http.StatusBadRequest, "ruleName is required")
+		return
+	}
+	if req.Runs == 0 {
+		req.Runs = 10
+	}
+	if req.Concurrency == 0 {
+		req.Concurrency = 2
+	}
+
+	result, err := h.eventbridge.RunRuleRace(req.RuleName, req.Runs, req.Concurrency)
+	if err != nil {
+		if se, ok := err.(*eventbridgesvc.ServiceError); ok {
+			writeError(w, se.StatusCode(), se.Message)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // ScanChaosSource scans a local directory for Lambda project directories,
