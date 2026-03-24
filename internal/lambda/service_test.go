@@ -211,3 +211,45 @@ func TestIsTransientRIEInvokeError(t *testing.T) {
 		})
 	}
 }
+
+func TestResolveLayerDirsSkipsUnavailableExternalManagedLayer(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+
+	store := NewStore(cfg)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+
+	svc := NewService(cfg, store, nil, nil, nil)
+	externalLayer := "arn:aws:lambda:us-east-1:177933569100:layer:AWS-Parameters-and-Secrets-Lambda-Extension:12"
+
+	dirs, skipped, err := svc.ResolveLayerDirs([]string{externalLayer})
+	if err != nil {
+		t.Fatalf("ResolveLayerDirs returned error for unavailable external layer: %v", err)
+	}
+	if len(dirs) != 0 {
+		t.Fatalf("expected 0 resolved dirs, got %d", len(dirs))
+	}
+	if len(skipped) != 1 || skipped[0] != externalLayer {
+		t.Fatalf("unexpected skipped layers: %+v", skipped)
+	}
+}
+
+func TestResolveLayerDirsFailsForUnavailableLocalAccountLayer(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+
+	store := NewStore(cfg)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+
+	svc := NewService(cfg, store, nil, nil, nil)
+	localAccountLayer := fmt.Sprintf("arn:aws:lambda:%s:%s:layer:missing-local-layer:1", cfg.Region, cfg.AccountID)
+
+	_, _, err := svc.ResolveLayerDirs([]string{localAccountLayer})
+	if err == nil {
+		t.Fatalf("expected ResolveLayerDirs to fail for missing local-account layer")
+	}
+}

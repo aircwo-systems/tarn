@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/openstack-project/openstack/internal/config"
@@ -204,5 +205,98 @@ func TestListVersionsByFunction(t *testing.T) {
 	}
 	if resp.Versions[0].Version == "" {
 		t.Fatalf("expected non-empty version")
+	}
+}
+
+func TestPermissionLifecycle(t *testing.T) {
+	h := newLambdaHandler(t)
+	_, err := h.svc.CreateFunction(context.Background(), &types.FunctionConfig{
+		FunctionName: "perm-fn",
+		Runtime:      types.RuntimeNodeJS20,
+		Handler:      "index.handler",
+		Role:         "arn:aws:iam::000000000000:role/test",
+	}, nil)
+	if err != nil {
+		t.Fatalf("create function: %v", err)
+	}
+
+	addReq := httptest.NewRequest(http.MethodPost, "/2015-03-31/functions/perm-fn/policy", strings.NewReader(`{"StatementId":"AllowEventBridgeInvoke","Action":"lambda:InvokeFunction","Principal":"events.amazonaws.com","SourceArn":"arn:aws:events:us-east-1:000000000000:rule/demo"}`))
+	addReq.SetPathValue("name", "perm-fn")
+	addRec := httptest.NewRecorder()
+	h.AddPermission(addRec, addReq)
+	if addRec.Code != http.StatusOK {
+		t.Fatalf("AddPermission status=%d body=%s", addRec.Code, addRec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/2015-03-31/functions/perm-fn/policy", nil)
+	getReq.SetPathValue("name", "perm-fn")
+	getRec := httptest.NewRecorder()
+	h.GetPolicy(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetPolicy status=%d body=%s", getRec.Code, getRec.Body.String())
+	}
+	var getBody struct {
+		Policy string `json:"Policy"`
+	}
+	if err := json.NewDecoder(getRec.Body).Decode(&getBody); err != nil {
+		t.Fatalf("decode policy body: %v", err)
+	}
+	if !strings.Contains(getBody.Policy, "AllowEventBridgeInvoke") {
+		t.Fatalf("expected statement in policy, got %s", getBody.Policy)
+	}
+
+	removeReq := httptest.NewRequest(http.MethodDelete, "/2015-03-31/functions/perm-fn/policy/AllowEventBridgeInvoke", nil)
+	removeReq.SetPathValue("name", "perm-fn")
+	removeReq.SetPathValue("statementId", "AllowEventBridgeInvoke")
+	removeRec := httptest.NewRecorder()
+	h.RemovePermission(removeRec, removeReq)
+	if removeRec.Code != http.StatusNoContent {
+		t.Fatalf("RemovePermission status=%d body=%s", removeRec.Code, removeRec.Body.String())
+	}
+
+	getAfterRec := httptest.NewRecorder()
+	h.GetPolicy(getAfterRec, getReq)
+	if getAfterRec.Code != http.StatusNotFound {
+		t.Fatalf("GetPolicy after remove status=%d body=%s", getAfterRec.Code, getAfterRec.Body.String())
+	}
+}
+
+func TestCreateFunctionWithLayersReturnsAWSLayerObjects(t *testing.T) {
+	h := newLambdaHandler(t)
+
+	layerArn := "arn:aws:lambda:us-east-1:177933569100:layer:AWS-Parameters-and-Secrets-Lambda-Extension:12"
+	body := `{
+		"FunctionName":"layered-fn",
+		"Runtime":"nodejs20.x",
+		"Handler":"index.handler",
+		"Role":"arn:aws:iam::000000000000:role/test",
+		"Layers":["` + layerArn + `"]
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/2015-03-31/functions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.CreateFunction(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		FunctionName string `json:"FunctionName"`
+		Layers       []struct {
+			Arn      string `json:"Arn"`
+			CodeSize int64  `json:"CodeSize"`
+		} `json:"Layers"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if resp.FunctionName != "layered-fn" {
+		t.Fatalf("unexpected function name %q", resp.FunctionName)
+	}
+	if len(resp.Layers) != 1 {
+		t.Fatalf("expected 1 layer, got %d", len(resp.Layers))
+	}
+	if resp.Layers[0].Arn != layerArn {
+		t.Fatalf("unexpected layer arn %q", resp.Layers[0].Arn)
 	}
 }

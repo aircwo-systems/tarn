@@ -109,3 +109,42 @@ func TestDeleteRolePolicyRemovesPolicy(t *testing.T) {
 		t.Fatalf("GetRolePolicy after delete status = %d, want 404; body=%s", getRec.Code, getRec.Body.String())
 	}
 }
+
+func TestAttachRolePolicyShowsInList(t *testing.T) {
+	h := NewHandler("000000000000")
+	roleName := "lambda-role"
+	policyARN := "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+
+	attachRec := doIAMAction(t, h, "AttachRolePolicy", map[string]string{
+		"RoleName":  roleName,
+		"PolicyArn": policyARN,
+	})
+	if attachRec.Code != http.StatusOK {
+		t.Fatalf("AttachRolePolicy status = %d, want 200; body=%s", attachRec.Code, attachRec.Body.String())
+	}
+
+	listRec := doIAMAction(t, h, "ListAttachedRolePolicies", map[string]string{
+		"RoleName": roleName,
+	})
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("ListAttachedRolePolicies status = %d, want 200; body=%s", listRec.Code, listRec.Body.String())
+	}
+	if !strings.Contains(listRec.Body.String(), "<PolicyArn>"+policyARN+"</PolicyArn>") {
+		t.Fatalf("expected attached policy in response, got: %s", listRec.Body.String())
+	}
+
+	detachRec := doIAMAction(t, h, "DetachRolePolicy", map[string]string{
+		"RoleName":  roleName,
+		"PolicyArn": policyARN,
+	})
+	if detachRec.Code != http.StatusOK {
+		t.Fatalf("DetachRolePolicy status = %d, want 200; body=%s", detachRec.Code, detachRec.Body.String())
+	}
+
+	listAfterRec := doIAMAction(t, h, "ListAttachedRolePolicies", map[string]string{
+		"RoleName": roleName,
+	})
+	if strings.Contains(listAfterRec.Body.String(), "<PolicyArn>"+policyARN+"</PolicyArn>") {
+		t.Fatalf("expected detached policy to be absent, got: %s", listAfterRec.Body.String())
+	}
+}

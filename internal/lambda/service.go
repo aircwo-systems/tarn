@@ -381,20 +381,46 @@ func (s *Service) DeleteLayerVersion(name string, version int64) error {
 }
 
 // ResolveLayerDirs extracts and returns paths for all layer ARNs on a function.
-func (s *Service) ResolveLayerDirs(layers []string) ([]string, error) {
+// External managed layers that are unavailable in the local emulator are skipped.
+func (s *Service) ResolveLayerDirs(layers []string) ([]string, []string, error) {
 	var dirs []string
+	var skipped []string
 	for _, arn := range layers {
 		name, version, err := parseLayerArn(arn)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		dir, err := s.store.ExtractLayer(name, version)
 		if err != nil {
-			return nil, fmt.Errorf("failed to extract layer %s v%d: %w", name, version, err)
+			if shouldSkipUnavailableExternalLayer(arn, s.cfg.AccountID, err) {
+				skipped = append(skipped, arn)
+				continue
+			}
+			return nil, nil, fmt.Errorf("failed to extract layer %s v%d: %w", name, version, err)
 		}
 		dirs = append(dirs, dir)
 	}
-	return dirs, nil
+	return dirs, skipped, nil
+}
+
+func shouldSkipUnavailableExternalLayer(layerARN, localAccountID string, err error) bool {
+	layerARN = strings.TrimSpace(layerARN)
+	if layerARN == "" || err == nil {
+		return false
+	}
+	if !strings.HasPrefix(layerARN, "arn:aws:lambda:") || !strings.Contains(layerARN, ":layer:") {
+		return false
+	}
+	parts := strings.Split(layerARN, ":")
+	if len(parts) < 8 {
+		return false
+	}
+	accountID := strings.TrimSpace(parts[4])
+	if accountID == "" || accountID == localAccountID {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "layer code not found") || strings.Contains(msg, "no such file or directory")
 }
 
 // parseLayerArn extracts the layer name and version from an ARN like
@@ -478,10 +504,14 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	}
 
 	if fn.State != types.FunctionStateActive {
-		return nil, fmt.Errorf("function %s is not active (state: %s)", fn.FunctionName, fn.State)
+		err := fmt.Errorf("function %s is not active (state: %s)", fn.FunctionName, fn.State)
+		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, err.Error())
+		return nil, err
 	}
 	if s.engine == nil || s.pool == nil {
-		return nil, fmt.Errorf("lambda execution engine is not configured")
+		err := fmt.Errorf("lambda execution engine is not configured")
+		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, err.Error())
+		return nil, err
 	}
 
 	// DryRun just validates the function exists and is active
@@ -492,21 +522,31 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	// Ensure code is extracted
 	codeDir, err := s.store.ExtractCode(fn.FunctionName)
 	if err != nil {
-		return nil, fmt.Errorf("failed to extract code: %w", err)
+		wrapped := fmt.Errorf("failed to extract code: %w", err)
+		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
+		return nil, wrapped
 	}
 
 	// Resolve layer directories
 	var layerDirs []string
 	if len(fn.Layers) > 0 {
-		layerDirs, err = s.ResolveLayerDirs(fn.Layers)
+		var skippedLayers []string
+		layerDirs, skippedLayers, err = s.ResolveLayerDirs(fn.Layers)
 		if err != nil {
-			return nil, fmt.Errorf("failed to resolve layers: %w", err)
+			wrapped := fmt.Errorf("failed to resolve layers: %w", err)
+			s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
+			return nil, wrapped
+		}
+		for _, layerARN := range skippedLayers {
+			s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelWARN, fmt.Sprintf("Skipping unavailable external layer %s; invocation continues without it", layerARN))
 		}
 	}
 
 	// Ensure runtime image is available (block if needed)
 	if err := s.engine.EnsureImage(ctx, fn.Runtime); err != nil {
-		return nil, fmt.Errorf("runtime image not available: %w", err)
+		wrapped := fmt.Errorf("runtime image not available: %w", err)
+		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
+		return nil, wrapped
 	}
 
 	// Per-function mutex prevents duplicate cold starts from concurrent invokes
@@ -523,13 +563,17 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 		info, err = s.engine.CreateContainer(ctx, fn, codeDir, layerDirs)
 		if err != nil {
 			fnMu.Unlock()
-			return nil, fmt.Errorf("failed to create container: %w", err)
+			wrapped := fmt.Errorf("failed to create container: %w", err)
+			s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
+			return nil, wrapped
 		}
 
 		if err := s.engine.StartContainer(ctx, info); err != nil {
 			_ = s.engine.RemoveContainer(ctx, info.ID)
 			fnMu.Unlock()
-			return nil, fmt.Errorf("failed to start container: %w", err)
+			wrapped := fmt.Errorf("failed to start container: %w", err)
+			s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
+			return nil, wrapped
 		}
 
 		// Wait for the RIE to be ready
@@ -543,7 +587,9 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 			if s.logsSvc != nil {
 				s.logsSvc.LogSystemEvent(logssvc.LevelERROR, fmt.Sprintf("Container failed to start: %s: %v", fn.FunctionName, err))
 			}
-			return nil, fmt.Errorf("container not ready: %w", err)
+			wrapped := fmt.Errorf("container not ready: %w", err)
+			s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
+			return nil, wrapped
 		}
 	} else {
 		log.Printf("[lambda] warm invoke for %s (container %s)", fn.FunctionName, info.ID[:12])
@@ -558,7 +604,9 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 
 	output, err := s.invokeWithRetry(invokeCtx, info, input, coldStart)
 	if err != nil {
-		return nil, fmt.Errorf("invocation failed: %w", err)
+		wrapped := fmt.Errorf("invocation failed: %w", err)
+		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
+		return nil, wrapped
 	}
 
 	output.ExecutedVersion = fn.Version
@@ -725,6 +773,27 @@ func (s *Service) ingestContainerLogs(functionName string, info *engine.Containe
 		streamName = streamName[:12]
 	}
 	s.logsSvc.IngestContainerLogs(functionName, streamName, newLogs)
+}
+
+func (s *Service) logFunctionRuntimeEvent(functionName string, level logssvc.LogLevel, message string) {
+	if s.logsSvc == nil {
+		return
+	}
+	functionName = strings.TrimSpace(functionName)
+	message = strings.TrimSpace(message)
+	if functionName == "" || message == "" {
+		return
+	}
+
+	groupName := fmt.Sprintf("/aws/lambda/%s", functionName)
+	s.logsSvc.CreateLogGroup(groupName)
+	s.logsSvc.PutLogEvents(groupName, "openstack", []logssvc.LogEvent{{
+		Timestamp: time.Now().UTC(),
+		Message:   message,
+		Level:     level,
+		Source:    logssvc.SourceRuntime,
+	}})
+	s.logsSvc.LogSystemEvent(level, fmt.Sprintf("%s: %s", functionName, message))
 }
 
 func (s *Service) consumeNewContainerLogs(containerID, rawLogs string) string {

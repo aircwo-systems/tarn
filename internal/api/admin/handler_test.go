@@ -15,6 +15,7 @@ import (
 	apigatewaysvc "github.com/openstack-project/openstack/internal/apigateway"
 	apigatewayv1svc "github.com/openstack-project/openstack/internal/apigatewayv1"
 	"github.com/openstack-project/openstack/internal/config"
+	eventbridgesvc "github.com/openstack-project/openstack/internal/eventbridge"
 	eventsourcesvc "github.com/openstack-project/openstack/internal/eventsource"
 	infrasvc "github.com/openstack-project/openstack/internal/infrastructure"
 	lambdasvc "github.com/openstack-project/openstack/internal/lambda"
@@ -459,5 +460,7 @@ func newTestHandler(t *testing.T) *Handler {
 	infra := infrasvc.NewService("", false)
 	esmStore := eventsourcesvc.NewStore(cfg)
 	esm := eventsourcesvc.NewService(cfg, esmStore, nil, nil)
-	return NewHandler(cfg, apigw, apigwv1, lambda, logs, sqs, sns, secrets, infra, s3, esm, nil)
+	eventbridgeStore := eventbridgesvc.NewStore(cfg)
+	eventbridge := eventbridgesvc.NewService(cfg, eventbridgeStore, lambda)
+	return NewHandler(cfg, apigw, apigwv1, lambda, logs, sqs, sns, secrets, infra, s3, esm, eventbridge, nil)
 }
