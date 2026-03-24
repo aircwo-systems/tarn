@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -31,6 +32,9 @@ func LoadOrCreateVault(keyPath string) (*Vault, error) {
 		key = make([]byte, vaultKeyLen)
 		if _, err := rand.Read(key); err != nil {
 			return nil, fmt.Errorf("generate vault key: %w", err)
+		}
+		if err := os.MkdirAll(filepath.Dir(keyPath), 0700); err != nil {
+			return nil, fmt.Errorf("create vault key directory: %w", err)
 		}
 		if err := os.WriteFile(keyPath, key, 0600); err != nil {
 			return nil, fmt.Errorf("write vault key: %w", err)
