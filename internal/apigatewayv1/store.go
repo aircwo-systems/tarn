@@ -618,7 +618,7 @@ func (s *Store) persistLocked() {
 		return
 	}
 	tmpPath := s.cfg.APIGatewayV1StatePath() + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
 		return
 	}
 	_ = os.Rename(tmpPath, s.cfg.APIGatewayV1StatePath())
