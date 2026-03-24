@@ -1,6 +1,7 @@
 package logs
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -116,6 +117,23 @@ func (s *Store) DeleteGroup(name string) error {
 	defer s.mu.Unlock()
 
 	delete(s.groups, name)
+	return nil
+}
+
+// ClearGroup removes all events and streams from a group but keeps the group itself.
+func (s *Store) ClearGroup(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	g, exists := s.groups[name]
+	if !exists {
+		return fmt.Errorf("log group not found: %s", name)
+	}
+
+	g.events = make([]LogEvent, g.maxEvents)
+	g.head = 0
+	g.count = 0
+	g.streams = make(map[string]*LogStream)
 	return nil
 }
 
@@ -274,6 +292,92 @@ func (s *Store) lastEventTime(g *logGroup) time.Time {
 	// The most recent event is at head-1 (wrapping)
 	lastIdx := (g.head - 1 + g.maxEvents) % g.maxEvents
 	return g.events[lastIdx].Timestamp
+}
+
+// PruneOlderThan removes events older than the given cutoff from all groups.
+func (s *Store) PruneOlderThan(cutoff time.Time) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	totalPruned := 0
+	for _, g := range s.groups {
+		if g.count == 0 {
+			continue
+		}
+
+		// Rebuild the ring buffer keeping only events newer than cutoff
+		kept := make([]LogEvent, g.maxEvents)
+		keptCount := 0
+		start := (g.head - g.count + g.maxEvents) % g.maxEvents
+
+		for i := 0; i < g.count; i++ {
+			idx := (start + i) % g.maxEvents
+			evt := g.events[idx]
+			if !evt.Timestamp.Before(cutoff) {
+				kept[keptCount%g.maxEvents] = evt
+				keptCount++
+			}
+		}
+
+		pruned := g.count - keptCount
+		totalPruned += pruned
+		g.events = kept
+		g.count = keptCount
+		if keptCount > g.maxEvents {
+			g.count = g.maxEvents
+		}
+		g.head = g.count % g.maxEvents
+	}
+	return totalPruned
+}
+
+// GetAllLogEvents returns filtered events across ALL log groups, merged and sorted by timestamp.
+func (s *Store) GetAllLogEvents(filter *LogFilter) ([]LogEvent, int) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var all []LogEvent
+
+	for _, g := range s.groups {
+		if g.count == 0 {
+			continue
+		}
+		start := (g.head - g.count + g.maxEvents) % g.maxEvents
+		for i := 0; i < g.count; i++ {
+			idx := (start + i) % g.maxEvents
+			evt := g.events[idx]
+
+			if filter != nil && filter.Cursor != nil && !evt.Timestamp.After(*filter.Cursor) {
+				continue
+			}
+			if !matchesFilter(evt, filter) {
+				continue
+			}
+			// Tag group name into StreamName for context (prefix with group)
+			tagged := evt
+			tagged.StreamName = g.name + "/" + evt.StreamName
+			all = append(all, tagged)
+		}
+	}
+
+	// Sort by timestamp ascending (oldest first)
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].Timestamp.Before(all[j].Timestamp)
+	})
+
+	total := len(all)
+
+	if filter != nil && filter.Offset > 0 {
+		if filter.Offset >= len(all) {
+			return nil, total
+		}
+		all = all[filter.Offset:]
+	}
+	if filter != nil && filter.Limit > 0 && filter.Limit < len(all) {
+		all = all[:filter.Limit]
+	}
+
+	return all, total
 }
 
 func matchesFilter(evt LogEvent, filter *LogFilter) bool {

@@ -32,6 +32,7 @@
     setInfraEnabledKinds,
     setInfraFrontendTargets,
     refresh,
+    setLogRetentionMinutes,
     setPersistenceEnabled,
     setPollingIntervalSeconds,
     setSchemaSourceDir,
@@ -72,6 +73,7 @@
   let themeModeDraft = $state<ThemeMode>(uiSettings.themeMode);
   let persistenceDraft = $state(uiSettings.persistenceEnabled);
   let schemaSourceDirDraft = $state(uiSettings.schemaSourceDir);
+  let logRetentionMinutesDraft = $state(uiSettings.logRetentionMinutes);
   let infraEnabledKindsDraft = $state<InfraProbeKind[]>([]);
   let infraFrontendTargetsDraft = $state<FrontendTarget[]>([]);
   let newTargetName = $state("");
@@ -133,6 +135,7 @@
     themeModeDraft = uiSettings.themeMode;
     persistenceDraft = uiSettings.persistenceEnabled;
     schemaSourceDirDraft = uiSettings.schemaSourceDir;
+    logRetentionMinutesDraft = uiSettings.logRetentionMinutes;
     infraEnabledKindsDraft = [...infraSettings.enabledKinds];
     infraFrontendTargetsDraft = infraSettings.frontendTargets.map((t) => ({
       ...t,
@@ -151,6 +154,7 @@
     setThemeMode(themeModeDraft);
     setPersistenceEnabled(persistenceDraft);
     setSchemaSourceDir(schemaSourceDirDraft);
+    setLogRetentionMinutes(logRetentionMinutesDraft);
     setInfraEnabledKinds(infraEnabledKindsDraft);
     setInfraFrontendTargets(infraFrontendTargetsDraft);
     settingsOpen = false;
@@ -375,6 +379,25 @@
           bind:value={pollingIntervalDraft}
           class="w-full rounded-md border border-border bg-muted px-2.5 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
         />
+      </div>
+
+      <div class="space-y-1.5">
+        <label
+          class="text-xs font-medium text-foreground"
+          for="log-retention">Log Retention (minutes)</label
+        >
+        <input
+          id="log-retention"
+          type="number"
+          min="1"
+          max="1440"
+          step="1"
+          bind:value={logRetentionMinutesDraft}
+          class="w-full rounded-md border border-border bg-muted px-2.5 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
+        />
+        <p class="text-[11px] leading-relaxed text-muted-foreground/70">
+          Automatically remove log events older than this. Default 15 minutes. Max 1440 (24h).
+        </p>
       </div>
 
       <div class="space-y-1.5">

@@ -1,4 +1,4 @@
-import { fetchOverview } from "$lib/api";
+import { fetchOverview, pruneOldLogs } from "$lib/api";
 import type { InfraProbe, OverviewResponse } from "$lib/types";
 
 export type InfraProbeKind = "docker" | "postgresql" | "redis" | "mysql" | "mongodb";
@@ -26,6 +26,9 @@ const MIN_POLLING_INTERVAL_SECONDS = 1;
 const MAX_POLLING_INTERVAL_SECONDS = 120;
 const DEFAULT_PERSISTENCE_ENABLED = false;
 const MAX_SCHEMA_SOURCE_LENGTH = 1024;
+const DEFAULT_LOG_RETENTION_MINUTES = 15;
+const MIN_LOG_RETENTION_MINUTES = 1;
+const MAX_LOG_RETENTION_MINUTES = 1440; // 24 hours
 
 export type ThemeMode = "system" | "light" | "dark";
 
@@ -36,6 +39,7 @@ let persistenceEnabled = $state(DEFAULT_PERSISTENCE_ENABLED);
 let dashboardTagFilter = $state("");
 let settingsInitialized = false;
 let schemaSourceDir = $state("");
+let logRetentionMinutes = $state(DEFAULT_LOG_RETENTION_MINUTES);
 
 let infraEnabledKinds = $state<InfraProbeKind[]>(["docker"]);
 let infraFrontendTargets = $state<FrontendTarget[]>([]);
@@ -77,6 +81,9 @@ export function getUISettings() {
     },
     get schemaSourceDir() {
       return schemaSourceDir;
+    },
+    get logRetentionMinutes() {
+      return logRetentionMinutes;
     },
   };
 }
@@ -128,6 +135,7 @@ export function initUISettings() {
   pollingIntervalSeconds = normalizePollingInterval(settings.pollingIntervalSeconds);
   themeMode = normalizeThemeMode(settings.themeMode);
   persistenceEnabled = normalizePersistenceEnabled(settings.persistenceEnabled);
+  logRetentionMinutes = normalizeLogRetention(settings.logRetentionMinutes);
   applyTheme(themeMode);
   initInfraSettings();
   initProjectSettings();
@@ -197,6 +205,14 @@ export function setSchemaSourceDir(next: string) {
   persistProjectSettings();
 }
 
+export function setLogRetentionMinutes(next: number) {
+  const normalized = normalizeLogRetention(next);
+  if (normalized === logRetentionMinutes) return;
+
+  logRetentionMinutes = normalized;
+  persistSettingsToCookie();
+}
+
 export function setDashboardTagFilter(next: string) {
   dashboardTagFilter = next.trim();
 }
@@ -246,8 +262,21 @@ function schedulePolling() {
     if (!document.hidden) {
       refresh();
       probeFrontendTargets();
+      pruneLogsIfNeeded();
     }
   }, pollingIntervalSeconds * 1000);
+}
+
+let lastPruneTime = 0;
+const PRUNE_INTERVAL_MS = 60_000; // Only call prune endpoint once per minute
+
+function pruneLogsIfNeeded() {
+  const now = Date.now();
+  if (now - lastPruneTime < PRUNE_INTERVAL_MS) return;
+  lastPruneTime = now;
+  pruneOldLogs(logRetentionMinutes).catch(() => {
+    // Silently ignore prune failures
+  });
 }
 
 function restartPollingIfActive() {
@@ -306,6 +335,7 @@ function persistSettingsToCookie() {
       pollingIntervalSeconds,
       themeMode,
       persistenceEnabled,
+      logRetentionMinutes,
     }),
   );
   document.cookie = `${SETTINGS_COOKIE}=${payload}; Path=/; Max-Age=31536000; SameSite=Lax`;
@@ -315,6 +345,7 @@ function readSettingsFromCookie(): {
   pollingIntervalSeconds?: number;
   themeMode?: ThemeMode;
   persistenceEnabled?: boolean;
+  logRetentionMinutes?: number;
 } {
   if (typeof document === "undefined") return {};
 
@@ -328,6 +359,7 @@ function readSettingsFromCookie(): {
       pollingIntervalSeconds?: number;
       themeMode?: ThemeMode;
       persistenceEnabled?: boolean;
+      logRetentionMinutes?: number;
     };
     return parsed ?? {};
   } catch {
@@ -351,6 +383,13 @@ function normalizeThemeMode(value: unknown): ThemeMode {
 
 function normalizePersistenceEnabled(value: unknown): boolean {
   return value === true;
+}
+
+function normalizeLogRetention(value: unknown): number {
+  const numeric = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(numeric)) return DEFAULT_LOG_RETENTION_MINUTES;
+  const rounded = Math.round(numeric);
+  return Math.min(MAX_LOG_RETENTION_MINUTES, Math.max(MIN_LOG_RETENTION_MINUTES, rounded));
 }
 
 export function sanitizeSchemaSourceDir(value: unknown): string {

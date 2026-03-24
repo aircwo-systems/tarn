@@ -205,9 +205,15 @@
     }
   }
 
-  function viewInLogs(span: TraceSpan) {
+  function viewInLogs(span: TraceSpan, traceStartedAt?: string) {
     const group = span.kind === "lambda" ? `/aws/lambda/${span.name}` : null;
-    if (group) window.location.hash = `logs?group=${encodeURIComponent(group)}`;
+    if (group) {
+      let hash = `logs?group=${encodeURIComponent(group)}`;
+      if (traceStartedAt) {
+        hash += `&ts=${encodeURIComponent(traceStartedAt)}`;
+      }
+      window.location.hash = hash;
+    }
   }
 
   function statusDotClass(s: number): string {
@@ -523,7 +529,7 @@
                 <div class="px-3 pb-2">
                   <button
                     type="button"
-                    onclick={() => viewInLogs(lambdaSpan)}
+                    onclick={() => viewInLogs(lambdaSpan, trace.startedAt)}
                     class="inline-flex items-center gap-1 text-[10px] font-mono text-destructive/70 hover:text-destructive transition-colors"
                   >
                     <ArrowUpRightIcon size={9} />
@@ -889,7 +895,7 @@
                         {#if hasErr && span.kind === "lambda"}
                           <button
                             type="button"
-                            onclick={() => viewInLogs(span)}
+                            onclick={() => viewInLogs(span, selectedTrace?.startedAt)}
                             class="inline-flex items-center gap-1 rounded border border-red/30 bg-red/8 px-1.5 py-0.5 text-[10px] font-mono text-destructive hover:bg-red/14 transition-colors shrink-0"
                           >
                             <ArrowUpRightIcon size={10} />
