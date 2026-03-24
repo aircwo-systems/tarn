@@ -24,6 +24,11 @@ func NewService(cfg *config.Config) *Service {
 	}
 }
 
+// SetVault attaches a Vault for encrypting secret values at rest.
+func (s *Service) SetVault(v *Vault) {
+	s.store.SetVault(v)
+}
+
 // Init loads persisted secret state if configured.
 func (s *Service) Init() error {
 	return s.store.Init()
