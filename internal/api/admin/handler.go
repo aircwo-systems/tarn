@@ -32,58 +32,58 @@ import (
 
 // Handler serves JSON endpoints used by the dashboard UI.
 type Handler struct {
-	cfg        *config.Config
-	apigw      *apigatewaysvc.Service
-	apigwv1    *apigatewayv1svc.Service
-	lambda     *lambdasvc.Service
-	logs       *logssvc.Service
-	s3         *s3svc.Service
-	sqs        *sqssvc.Service
-	sns        *snssvc.Service
-	secrets    *secretssvc.Service
-	infra      *infrasvc.Service
-	esm        *eventsourcesvc.Service
+	cfg         *config.Config
+	apigw       *apigatewaysvc.Service
+	apigwv1     *apigatewayv1svc.Service
+	lambda      *lambdasvc.Service
+	logs        *logssvc.Service
+	s3          *s3svc.Service
+	sqs         *sqssvc.Service
+	sns         *snssvc.Service
+	secrets     *secretssvc.Service
+	infra       *infrasvc.Service
+	esm         *eventsourcesvc.Service
 	eventbridge *eventbridgesvc.Service
-	traceStore *tracesvc.Store
+	traceStore  *tracesvc.Store
 }
 
 func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apigatewayv1svc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, sns *snssvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, eventbridge *eventbridgesvc.Service, traceStore *tracesvc.Store) *Handler {
 	return &Handler{
-		cfg:        cfg,
-		apigw:      apigw,
-		apigwv1:    apigwv1,
-		lambda:     lambda,
-		logs:       logs,
-		s3:         s3,
-		sqs:        sqs,
-		sns:        sns,
-		secrets:    secrets,
-		infra:      infra,
-		esm:        esm,
+		cfg:         cfg,
+		apigw:       apigw,
+		apigwv1:     apigwv1,
+		lambda:      lambda,
+		logs:        logs,
+		s3:          s3,
+		sqs:         sqs,
+		sns:         sns,
+		secrets:     secrets,
+		infra:       infra,
+		esm:         esm,
 		eventbridge: eventbridge,
-		traceStore: traceStore,
+		traceStore:  traceStore,
 	}
 }
 
 type overviewResponse struct {
-	Status              string                 `json:"status"`
-	Timestamp           time.Time              `json:"timestamp"`
-	Services            []string               `json:"services"`
-	Config              overviewConfig         `json:"config"`
-	Counts              overviewCounts         `json:"counts"`
-	Gateways            []gatewaySummary       `json:"gateways"`
-	Functions           []functionSummary      `json:"functions"`
-	Queues              []queueSummary         `json:"queues"`
-	Topics              []topicSummary         `json:"topics"`
-	Subscriptions       []subscriptionSummary  `json:"subscriptions"`
-	Secrets             []secretSummary        `json:"secrets"`
-	Buckets             []s3BucketSummary      `json:"buckets"`
-	EventSourceMappings []esmSummary           `json:"eventSourceMappings"`
+	Status              string                   `json:"status"`
+	Timestamp           time.Time                `json:"timestamp"`
+	Services            []string                 `json:"services"`
+	Config              overviewConfig           `json:"config"`
+	Counts              overviewCounts           `json:"counts"`
+	Gateways            []gatewaySummary         `json:"gateways"`
+	Functions           []functionSummary        `json:"functions"`
+	Queues              []queueSummary           `json:"queues"`
+	Topics              []topicSummary           `json:"topics"`
+	Subscriptions       []subscriptionSummary    `json:"subscriptions"`
+	Secrets             []secretSummary          `json:"secrets"`
+	Buckets             []s3BucketSummary        `json:"buckets"`
+	EventSourceMappings []esmSummary             `json:"eventSourceMappings"`
 	EventBridgeRules    []eventBridgeRuleSummary `json:"eventBridgeRules,omitempty"`
-	Infrastructure      []infrasvc.ProbeResult `json:"infrastructure"`
-	Connections         []infraConnection      `json:"connections,omitempty"`
-	RecentTraces        []*tracesvc.Trace      `json:"recentTraces,omitempty"`
-	Warnings            []string               `json:"warnings,omitempty"`
+	Infrastructure      []infrasvc.ProbeResult   `json:"infrastructure"`
+	Connections         []infraConnection        `json:"connections,omitempty"`
+	RecentTraces        []*tracesvc.Trace        `json:"recentTraces,omitempty"`
+	Warnings            []string                 `json:"warnings,omitempty"`
 }
 
 type overviewConfig struct {
@@ -118,21 +118,21 @@ type esmSummary struct {
 }
 
 type eventBridgeTargetSummary struct {
-	ID           string    `json:"id"`
-	Arn          string    `json:"arn"`
-	LastResult   string    `json:"lastResult,omitempty"`
+	ID            string     `json:"id"`
+	Arn           string     `json:"arn"`
+	LastResult    string     `json:"lastResult,omitempty"`
 	LastInvokedAt *time.Time `json:"lastInvokedAt,omitempty"`
 }
 
 type eventBridgeRuleSummary struct {
-	Name               string                    `json:"name"`
-	Arn                string                    `json:"arn"`
-	ScheduleExpression string                    `json:"scheduleExpression"`
-	State              string                    `json:"state"`
-	Description        string                    `json:"description,omitempty"`
-	LastRunAt          *time.Time                `json:"lastRunAt,omitempty"`
-	NextRunAt          *time.Time                `json:"nextRunAt,omitempty"`
-	LastResult         string                    `json:"lastResult,omitempty"`
+	Name               string                     `json:"name"`
+	Arn                string                     `json:"arn"`
+	ScheduleExpression string                     `json:"scheduleExpression"`
+	State              string                     `json:"state"`
+	Description        string                     `json:"description,omitempty"`
+	LastRunAt          *time.Time                 `json:"lastRunAt,omitempty"`
+	NextRunAt          *time.Time                 `json:"nextRunAt,omitempty"`
+	LastResult         string                     `json:"lastResult,omitempty"`
 	Targets            []eventBridgeTargetSummary `json:"targets,omitempty"`
 }
 

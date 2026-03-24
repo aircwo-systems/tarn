@@ -13,8 +13,8 @@ func newDeleteQueueCmd() *cobra.Command {
 	var name string
 
 	cmd := &cobra.Command{
-		Use:   "delete-queue",
-		Short: "Delete an SQS queue",
+		Use:     "delete-queue",
+		Short:   "Delete an SQS queue",
 		Example: `  openstack sqs delete-queue --name my-queue`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
