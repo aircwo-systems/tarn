@@ -131,7 +131,7 @@ func (s *Store) CreateBucket(name, region string) (*types.Bucket, error) {
 	}
 
 	data, _ := json.Marshal(bucket)
-	if err := os.WriteFile(filepath.Join(dir, ".meta.json"), data, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, ".meta.json"), data, 0600); err != nil {
 		return nil, fmt.Errorf("write bucket meta: %w", err)
 	}
 
@@ -239,7 +239,7 @@ func (s *Store) PutObject(bucket, key, contentType string, body io.Reader, metad
 		Metadata:     metadata,
 	}
 	data, _ := json.Marshal(meta)
-	if err := os.WriteFile(metaPath, data, 0644); err != nil {
+	if err := os.WriteFile(metaPath, data, 0600); err != nil {
 		_ = os.Remove(objPath)
 		return nil, fmt.Errorf("write object meta: %w", err)
 	}
@@ -576,7 +576,7 @@ func (s *Store) PutBucketNotification(bucket string, cfg *types.BucketNotificati
 		return err
 	}
 	notifPath := filepath.Join(s.baseDir, bucket, ".notifications.json")
-	return os.WriteFile(notifPath, data, 0644)
+	return os.WriteFile(notifPath, data, 0600)
 }
 
 // GetBucketNotification returns notification config for a bucket.

@@ -26,10 +26,7 @@ func main() {
 	if sessionToken == "" {
 		sessionToken = "local-dev-token"
 	}
-	requireToken := true
-	if isInternalLambdaRuntime(os.Getenv("OPENSTACK_INTERNAL_LAMBDA")) {
-		requireToken = false
-	}
+	requireToken := !isInternalLambdaRuntime(os.Getenv("OPENSTACK_INTERNAL_LAMBDA"))
 
 	opts := secretsproxy.Options{
 		UpstreamURL:  endpoint,
