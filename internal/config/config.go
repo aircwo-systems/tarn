@@ -238,6 +238,16 @@ func (c *Config) EventSourceDir() string {
 	return filepath.Join(c.DataDir, "eventsource")
 }
 
+// EventBridgeDir returns the path where EventBridge state is stored.
+func (c *Config) EventBridgeDir() string {
+	return filepath.Join(c.DataDir, "eventbridge")
+}
+
+// EventBridgeStatePath returns the state snapshot path for EventBridge resources.
+func (c *Config) EventBridgeStatePath() string {
+	return filepath.Join(c.EventBridgeDir(), "state.json")
+}
+
 // Endpoint returns the full API endpoint URL.
 // Unspecified/wildcard bind addresses are normalised to 127.0.0.1 so that
 // generated URLs (queue URLs, API endpoints, invoke URLs) are routable.

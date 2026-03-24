@@ -11,6 +11,7 @@ import (
 	"github.com/openstack-project/openstack/internal/apigateway"
 	"github.com/openstack-project/openstack/internal/apigatewayv1"
 	"github.com/openstack-project/openstack/internal/config"
+	"github.com/openstack-project/openstack/internal/eventbridge"
 	"github.com/openstack-project/openstack/internal/eventsource"
 	"github.com/openstack-project/openstack/internal/infrastructure"
 	"github.com/openstack-project/openstack/internal/lambda"
@@ -42,7 +43,9 @@ func TestNewServerRegistersRoutes(t *testing.T) {
 	infraSvc := infrastructure.NewService("", false)
 	esmStore := eventsource.NewStore(cfg)
 	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil)
-	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, nil, nil)
+	ebStore := eventbridge.NewStore(cfg)
+	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
+	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
 	if s == nil {
 		t.Fatal("NewServer returned nil")
 	}
@@ -113,5 +116,198 @@ func TestNewServerRegistersRoutes(t *testing.T) {
 	}
 	if cfg2.State != types.FunctionStateActive {
 		t.Fatalf("expected state active after second fetch, got %s", cfg2.State)
+	}
+}
+
+func TestEventBridgeProtocolDispatchSupportsNonRootPath(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+
+	store := lambda.NewStore(cfg)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init lambda store: %v", err)
+	}
+	lambdaSvc := lambda.NewService(cfg, store, nil, nil, nil)
+	gatewaySvc := apigateway.NewService(cfg, lambdaSvc, nil)
+	gatewayV1Svc := apigatewayv1.NewService(cfg, lambdaSvc, nil)
+	logsSvc := logs.NewService(cfg)
+	sqsSvc := sqs.NewService(cfg)
+	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
+	secretsSvc := secrets.NewService(cfg)
+	s3Svc := s3store.NewService(cfg)
+	infraSvc := infrastructure.NewService("", false)
+	esmStore := eventsource.NewStore(cfg)
+	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil)
+	ebStore := eventbridge.NewStore(cfg)
+	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
+	if err := ebSvc.Init(); err != nil {
+		t.Fatalf("init eventbridge service: %v", err)
+	}
+
+	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
+	mux := http.NewServeMux()
+	s.registerRoutes(mux)
+	handler := s.withLogging(mux)
+
+	putBody := []byte(`{"Name":"rule-a","ScheduleExpression":"rate(1 minute)","State":"ENABLED"}`)
+	putReq := httptest.NewRequest(http.MethodPost, "/events", bytes.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	putReq.Header.Set("X-Amz-Target", "AWSEvents.PutRule")
+	putRec := httptest.NewRecorder()
+	handler.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("put rule via /events status=%d body=%s", putRec.Code, putRec.Body.String())
+	}
+
+	disableBody := []byte(`{"Name":"rule-a","EventBusName":"default"}`)
+	disableReq := httptest.NewRequest(http.MethodPost, "/events", bytes.NewReader(disableBody))
+	disableReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	disableReq.Header.Set("X-Amz-Target", "AWSEvents.DisableRule")
+	disableRec := httptest.NewRecorder()
+	handler.ServeHTTP(disableRec, disableReq)
+	if disableRec.Code != http.StatusOK {
+		t.Fatalf("disable rule via /events status=%d body=%s", disableRec.Code, disableRec.Body.String())
+	}
+
+	describeBody := []byte(`{"Name":"rule-a"}`)
+	describeReq := httptest.NewRequest(http.MethodPost, "/events", bytes.NewReader(describeBody))
+	describeReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	describeReq.Header.Set("X-Amz-Target", "AWSEvents.DescribeRule")
+	describeRec := httptest.NewRecorder()
+	handler.ServeHTTP(describeRec, describeReq)
+	if describeRec.Code != http.StatusOK {
+		t.Fatalf("describe rule via /events status=%d body=%s", describeRec.Code, describeRec.Body.String())
+	}
+
+	var describeResp struct {
+		State string `json:"State"`
+	}
+	if err := json.NewDecoder(describeRec.Body).Decode(&describeResp); err != nil {
+		t.Fatalf("decode describe response: %v", err)
+	}
+	if describeResp.State != types.EventBridgeRuleStateDisabled {
+		t.Fatalf("expected disabled state, got %q", describeResp.State)
+	}
+}
+
+func TestEventBridgeProtocolDispatchSupportsOpenStackPrefixedPath(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+
+	store := lambda.NewStore(cfg)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init lambda store: %v", err)
+	}
+	lambdaSvc := lambda.NewService(cfg, store, nil, nil, nil)
+	gatewaySvc := apigateway.NewService(cfg, lambdaSvc, nil)
+	gatewayV1Svc := apigatewayv1.NewService(cfg, lambdaSvc, nil)
+	logsSvc := logs.NewService(cfg)
+	sqsSvc := sqs.NewService(cfg)
+	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
+	secretsSvc := secrets.NewService(cfg)
+	s3Svc := s3store.NewService(cfg)
+	infraSvc := infrastructure.NewService("", false)
+	esmStore := eventsource.NewStore(cfg)
+	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil)
+	ebStore := eventbridge.NewStore(cfg)
+	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
+	if err := ebSvc.Init(); err != nil {
+		t.Fatalf("init eventbridge service: %v", err)
+	}
+
+	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
+	mux := http.NewServeMux()
+	s.registerRoutes(mux)
+	handler := s.withLogging(mux)
+
+	putBody := []byte(`{"Name":"rule-b","ScheduleExpression":"rate(1 minute)","State":"ENABLED"}`)
+	putReq := httptest.NewRequest(http.MethodPost, "/_openstack", bytes.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	putReq.Header.Set("X-Amz-Target", "AWSEvents.PutRule")
+	putRec := httptest.NewRecorder()
+	handler.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("put rule via /_openstack status=%d body=%s", putRec.Code, putRec.Body.String())
+	}
+
+	disableBody := []byte(`{"Name":"rule-b","EventBusName":"default"}`)
+	disableReq := httptest.NewRequest(http.MethodPost, "/_openstack", bytes.NewReader(disableBody))
+	disableReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	disableReq.Header.Set("X-Amz-Target", "AWSEvents.DisableRule")
+	disableRec := httptest.NewRecorder()
+	handler.ServeHTTP(disableRec, disableReq)
+	if disableRec.Code != http.StatusOK {
+		t.Fatalf("disable rule via /_openstack status=%d body=%s", disableRec.Code, disableRec.Body.String())
+	}
+}
+
+func TestEventBridgeProtocolDispatchSupportsOpenStackEventsPath(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+
+	store := lambda.NewStore(cfg)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init lambda store: %v", err)
+	}
+	lambdaSvc := lambda.NewService(cfg, store, nil, nil, nil)
+	gatewaySvc := apigateway.NewService(cfg, lambdaSvc, nil)
+	gatewayV1Svc := apigatewayv1.NewService(cfg, lambdaSvc, nil)
+	logsSvc := logs.NewService(cfg)
+	sqsSvc := sqs.NewService(cfg)
+	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
+	secretsSvc := secrets.NewService(cfg)
+	s3Svc := s3store.NewService(cfg)
+	infraSvc := infrastructure.NewService("", false)
+	esmStore := eventsource.NewStore(cfg)
+	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil)
+	ebStore := eventbridge.NewStore(cfg)
+	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
+	if err := ebSvc.Init(); err != nil {
+		t.Fatalf("init eventbridge service: %v", err)
+	}
+
+	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
+	mux := http.NewServeMux()
+	s.registerRoutes(mux)
+	handler := s.withLogging(mux)
+
+	putBody := []byte(`{"Name":"rule-c","ScheduleExpression":"rate(1 minute)","State":"ENABLED"}`)
+	putReq := httptest.NewRequest(http.MethodPost, "/_openstack/events", bytes.NewReader(putBody))
+	putReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	putReq.Header.Set("X-Amz-Target", "AWSEvents.PutRule")
+	putRec := httptest.NewRecorder()
+	handler.ServeHTTP(putRec, putReq)
+	if putRec.Code != http.StatusOK {
+		t.Fatalf("put rule via /_openstack/events status=%d body=%s", putRec.Code, putRec.Body.String())
+	}
+
+	disableBody := []byte(`{"Name":"rule-c","EventBusName":"default"}`)
+	disableReq := httptest.NewRequest(http.MethodPost, "/_openstack/events", bytes.NewReader(disableBody))
+	disableReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	disableReq.Header.Set("X-Amz-Target", "AWSEvents.DisableRule")
+	disableRec := httptest.NewRecorder()
+	handler.ServeHTTP(disableRec, disableReq)
+	if disableRec.Code != http.StatusOK {
+		t.Fatalf("disable rule via /_openstack/events status=%d body=%s", disableRec.Code, disableRec.Body.String())
+	}
+
+	describeBody := []byte(`{"Name":"rule-c"}`)
+	describeReq := httptest.NewRequest(http.MethodPost, "/_openstack/events", bytes.NewReader(describeBody))
+	describeReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	describeReq.Header.Set("X-Amz-Target", "AWSEvents.DescribeRule")
+	describeRec := httptest.NewRecorder()
+	handler.ServeHTTP(describeRec, describeReq)
+	if describeRec.Code != http.StatusOK {
+		t.Fatalf("describe rule via /_openstack/events status=%d body=%s", describeRec.Code, describeRec.Body.String())
+	}
+
+	var describeResp struct {
+		State string `json:"State"`
+	}
+	if err := json.NewDecoder(describeRec.Body).Decode(&describeResp); err != nil {
+		t.Fatalf("decode describe response: %v", err)
+	}
+	if describeResp.State != types.EventBridgeRuleStateDisabled {
+		t.Fatalf("expected disabled state, got %q", describeResp.State)
 	}
 }
