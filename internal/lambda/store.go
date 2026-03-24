@@ -61,7 +61,7 @@ func (s *Store) SaveFunction(fn *types.FunctionConfig) error {
 		return err
 	}
 
-	return os.WriteFile(filepath.Join(fnDir, configFileName), data, 0644)
+	return os.WriteFile(filepath.Join(fnDir, configFileName), data, 0600)
 }
 
 // GetFunction loads a function configuration from disk.
@@ -141,7 +141,7 @@ func (s *Store) SaveCode(name string, code []byte) (string, error) {
 	}
 
 	codePath := filepath.Join(codeDir, functionZipName)
-	if err := os.WriteFile(codePath, code, 0644); err != nil {
+	if err := os.WriteFile(codePath, code, 0600); err != nil {
 		return "", err
 	}
 
@@ -253,7 +253,7 @@ func (s *Store) ExtractCode(name string) (string, error) {
 	}
 
 	// Write marker
-	_ = os.WriteFile(markerPath, []byte(zipInfo.ModTime().String()), 0644)
+	_ = os.WriteFile(markerPath, []byte(zipInfo.ModTime().String()), 0600)
 
 	return extractDir, nil
 }
@@ -272,7 +272,7 @@ func (s *Store) SaveLayer(name string, version int64, code []byte, cfg *types.La
 	}
 
 	// Save zip
-	if err := os.WriteFile(filepath.Join(versionDir, "layer.zip"), code, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(versionDir, "layer.zip"), code, 0600); err != nil {
 		return "", err
 	}
 
@@ -287,7 +287,7 @@ func (s *Store) SaveLayer(name string, version int64, code []byte, cfg *types.La
 	if err != nil {
 		return "", err
 	}
-	if err := os.WriteFile(filepath.Join(versionDir, configFileName), data, 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(versionDir, configFileName), data, 0600); err != nil {
 		return "", err
 	}
 
@@ -491,6 +491,6 @@ func (s *Store) ExtractLayer(name string, version int64) (string, error) {
 		}
 	}
 
-	_ = os.WriteFile(markerPath, []byte(zipInfo.ModTime().String()), 0644)
+	_ = os.WriteFile(markerPath, []byte(zipInfo.ModTime().String()), 0600)
 	return extractDir, nil
 }

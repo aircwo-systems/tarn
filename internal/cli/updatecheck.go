@@ -277,7 +277,7 @@ func saveUpdateCheckCache(path string, cached updateCheckCache) error {
 	if err != nil {
 		return fmt.Errorf("encode update-check cache: %w", err)
 	}
-	return os.WriteFile(path, payload, 0o644)
+	return os.WriteFile(path, payload, 0o600)
 }
 
 func resolveCLIDataDir(cmd *cobra.Command) string {
