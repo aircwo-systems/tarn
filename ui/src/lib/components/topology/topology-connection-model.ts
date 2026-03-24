@@ -22,6 +22,7 @@ export const CONNECTION_CANVAS = {
   cacheHalfHeight: 34,
   infraHalfWidth: 108,
   colGateway: 170,
+  colEventBridge: 300,
   colTopic: 390,
   colQueue: 560,
   colFunction: 760,
@@ -80,6 +81,7 @@ export interface TopologyGraphModel {
   infraById: Map<string, InfraProbe>;
   nodes: {
     gateways: ConnectionNode[];
+    eventbridges: ConnectionNode[];
     topics: ConnectionNode[];
     queues: ConnectionNode[];
     functions: ConnectionNode[];
@@ -91,6 +93,7 @@ export interface TopologyGraphModel {
   edges: {
     apigwToQueue: GwEdge[];
     apigwToFunction: GwEdge[];
+    eventbridgeToFunction: SnsEdge[];
     snsToQueue: SnsEdge[];
     snsToFunction: SnsEdge[];
     queueToFunction: QueueFnEdge[];
@@ -175,6 +178,23 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       label: trimLabel(gw.name, 13),
       sub: `${gw.routes} routes`,
       kind: "gateway",
+    }),
+  );
+
+  const eventBridgeTargetCounts = new Map<string, number>();
+  for (const connection of infraConnections) {
+    if (connection.targetKind !== "eventbridge-lambda") continue;
+    const key = connection.sourceFunction;
+    eventBridgeTargetCounts.set(key, (eventBridgeTargetCounts.get(key) ?? 0) + 1);
+  }
+  const connEventBridges = [...eventBridgeTargetCounts.entries()].slice(0, 4).map(
+    ([ruleName, targetCount], i): ConnectionNode => ({
+      id: ruleName,
+      x: CONNECTION_CANVAS.colEventBridge,
+      y: 170 + i * 104,
+      label: trimLabel(ruleName, 13),
+      sub: `${targetCount} target${targetCount === 1 ? "" : "s"}`,
+      kind: "eventbridge",
     }),
   );
 
@@ -294,6 +314,22 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       const fn = functionByName.get(fnName);
       const activity = traceEdgeActivity.get(`gw::${gwId}→${fnName}`);
       return [{ from, to, active: (fn?.messagesProcessed ?? 0) > 0, activity }];
+    }),
+    (edge) => `${edge.from.id}→${edge.to.id}`,
+  ).map((edge) => ({
+    ...edge,
+    path: laneAwarePath(edge.from, edge.to, edge.lane, edge.laneCount),
+  }));
+
+  const eventbridgeToFunction = withLanes(
+    infraConnections.flatMap((c) => {
+      if (c.targetKind !== "eventbridge-lambda") return [];
+      const from = connEventBridges.find((n) => n.id === c.sourceFunction);
+      const fnName = c.targetId || c.targetName;
+      const to = connFunctions.find((n) => n.id === fnName);
+      if (!from || !to) return [];
+      const activity = traceEdgeActivity.get(`eventbridge::${from.id}→${to.id}`);
+      return [{ from, to, activity }];
     }),
     (edge) => `${edge.from.id}→${edge.to.id}`,
   ).map((edge) => ({
@@ -500,6 +536,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
   return {
     hasData:
       gateways.length > 0 ||
+      connEventBridges.length > 0 ||
       topics.length > 0 ||
       functions.length > 0 ||
       queues.length > 0 ||
@@ -511,6 +548,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     ),
     nodes: {
       gateways: connGateways,
+      eventbridges: connEventBridges,
       topics: connTopics,
       queues: connQueues,
       functions: connFunctions,
@@ -522,6 +560,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     edges: {
       apigwToQueue,
       apigwToFunction,
+      eventbridgeToFunction,
       snsToQueue,
       snsToFunction,
       queueToFunction,
@@ -590,6 +629,7 @@ export function selectedTraceNodes(
   if (!trace) return [];
 
   const lambdaSpan = trace.spans.find((span) => span.kind === "lambda");
+  const eventBridgeSpan = trace.spans.find((span) => span.kind === "eventbridge");
   const topicSpan = trace.spans.find((span) => span.kind === "topic");
   const queueSpan = trace.spans.find((span) => span.kind === "queue");
   const dlqSpan = trace.spans.find((span) => span.kind === "dlq");
@@ -606,6 +646,9 @@ export function selectedTraceNodes(
   const matchedFunction = lambdaSpan
     ? model.nodes.functions.find((node) => node.id === lambdaSpan.name)
     : undefined;
+  const matchedEventBridge = eventBridgeSpan
+    ? model.nodes.eventbridges.find((node) => node.id === eventBridgeSpan.name)
+    : undefined;
   const matchedTopic = topicSpan
     ? model.nodes.topics.find((node) => node.id === topicSpan.name)
     : undefined;
@@ -620,7 +663,7 @@ export function selectedTraceNodes(
     ? model.nodes.secrets.find((node) => node.id === secretsSpan.name)
     : undefined;
 
-  return [matchedGateway, matchedFunction, matchedTopic, matchedQueue, matchedDlq, matchedCache, matchedSecret].filter(
+  return [matchedGateway, matchedEventBridge, matchedFunction, matchedTopic, matchedQueue, matchedDlq, matchedCache, matchedSecret].filter(
     (node): node is ConnectionNode => !!node,
   );
 }
@@ -657,6 +700,7 @@ export function findNodeAt(model: TopologyGraphModel, x: number, y: number): Con
     ...model.nodes.secrets,
     ...(model.nodes.cacheExtension ? [model.nodes.cacheExtension] : []),
     ...model.nodes.functions,
+    ...model.nodes.eventbridges,
     ...model.nodes.topics,
     ...model.nodes.queues,
     ...model.nodes.buckets,
@@ -779,6 +823,7 @@ export function hoverFocusState(
   const allEdges: Array<{ id: string; from: ConnectionNode; to: ConnectionNode }> = [
     ...model.edges.apigwToQueue,
     ...model.edges.apigwToFunction,
+    ...model.edges.eventbridgeToFunction,
     ...model.edges.snsToQueue,
     ...model.edges.snsToFunction,
     ...model.edges.queueToFunction,
@@ -1080,6 +1125,7 @@ function buildTraceEdgeActivity(recentTraces: RequestTrace[], now: number): Map<
     const age = now - new Date(trace.startedAt).getTime();
     if (age > TRACE_WINDOW_MS) continue;
 
+    const eventBridgeSpan = trace.spans.find((span) => span.kind === "eventbridge");
     const lambdaSpan = trace.spans.find((span) => span.kind === "lambda");
     const topicSpan = trace.spans.find((span) => span.kind === "topic");
     const queueSpan = trace.spans.find((span) => span.kind === "queue");
@@ -1096,6 +1142,8 @@ function buildTraceEdgeActivity(recentTraces: RequestTrace[], now: number): Map<
     if (trace.gatewayId) {
       const target = lambdaSpan ? lambdaSpan.name : queueSpan ? queueSpan.name : null;
       if (target) key = `gw::${trace.gatewayId}→${target}`;
+    } else if (eventBridgeSpan && lambdaSpan) {
+      key = `eventbridge::${eventBridgeSpan.name}→${lambdaSpan.name}`;
     } else if (topicSpan && queueSpan) {
       key = `sns::${topicSpan.name}→${queueSpan.name}`;
     } else if (topicSpan && lambdaSpan) {

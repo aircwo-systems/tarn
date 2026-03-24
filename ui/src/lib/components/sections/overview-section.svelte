@@ -79,6 +79,7 @@
 
   const buckets = $derived(dashboard.data?.buckets ?? []);
   const eventMappings = $derived(dashboard.data?.eventSourceMappings ?? []);
+  const eventBridgeRules = $derived(dashboard.data?.eventBridgeRules ?? []);
   const visibleInfra = $derived(
     getVisibleInfra(dashboard.data?.infrastructure ?? []),
   );
@@ -257,6 +258,16 @@
             <span>Triggers</span>
           </Button>
         {/if}
+        <Button
+          variant="outline"
+          size="sm"
+          onclick={() => onNavigate("eventbridge")}
+          class="gap-1.5"
+        >
+          <ArrowsClockwiseIcon size={12} />
+          <span class="font-mono">{eventBridgeRules.length}</span>
+          <span>EventBridge</span>
+        </Button>
         {#if visibleInfra.length > 0}
           <Badge variant={infraConnected > 0 ? "secondary" : "destructive"}>
             {infraConnected}/{visibleInfra.length} infra connected

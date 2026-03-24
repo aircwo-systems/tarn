@@ -1,31 +1,61 @@
 <script lang="ts">
   import { DetectiveIcon, ArrowUpRightIcon } from "phosphor-svelte";
-  import { getDashboard } from "$lib/state.svelte";
+  import { runEventBridgeRace } from "$lib/api";
+  import { getDashboard, refresh } from "$lib/state.svelte";
   import type { RequestTrace, TraceSpan } from "$lib/types";
 
   const dashboard = getDashboard();
   const traces = $derived(dashboard.data?.recentTraces ?? []);
+  const eventBridgeRules = $derived(dashboard.data?.eventBridgeRules ?? []);
 
   let selectedTraceId = $state<string | null>(null);
   let searchQuery = $state("");
+  let raceRuleName = $state("");
+  let raceRuns = $state(20);
+  let raceConcurrency = $state(4);
+  let raceRunning = $state(false);
+  let raceSessionFilter = $state("");
+  let raceMessage = $state("");
+
+  const raceSessions = $derived(
+    [...new Set(traces.map((trace) => traceRaceSession(trace)).filter(Boolean))] as string[],
+  );
+
+  $effect(() => {
+    if (!raceRuleName && eventBridgeRules.length > 0) {
+      raceRuleName = eventBridgeRules[0].name;
+    }
+    if (raceRuleName && !eventBridgeRules.some((rule) => rule.name === raceRuleName)) {
+      raceRuleName = eventBridgeRules[0]?.name ?? "";
+    }
+  });
+
+  $effect(() => {
+    if (raceSessionFilter && !raceSessions.includes(raceSessionFilter)) {
+      raceSessionFilter = "";
+    }
+  });
 
   const filteredTraces = $derived(
-    searchQuery.trim()
-      ? traces.filter((t) => {
-          const q = searchQuery.toLowerCase();
-          return (
-            (t.path ?? "").toLowerCase().includes(q) ||
-            (t.method ?? "").toLowerCase().includes(q) ||
-            (t.gatewayName ?? "").toLowerCase().includes(q) ||
-            t.id.toLowerCase().includes(q) ||
-            t.spans.some(
-              (s) =>
-                s.name.toLowerCase().includes(q) ||
-                s.kind.toLowerCase().includes(q),
-            )
-          );
-        })
-      : traces,
+    traces.filter((trace) => {
+      if (raceSessionFilter && traceRaceSession(trace) !== raceSessionFilter) {
+        return false;
+      }
+      const query = searchQuery.trim().toLowerCase();
+      if (!query) return true;
+      return (
+        (trace.path ?? "").toLowerCase().includes(query) ||
+        (trace.method ?? "").toLowerCase().includes(query) ||
+        (trace.gatewayName ?? "").toLowerCase().includes(query) ||
+        trace.id.toLowerCase().includes(query) ||
+        traceRaceSession(trace).toLowerCase().includes(query) ||
+        trace.spans.some(
+          (span) =>
+            span.name.toLowerCase().includes(query) ||
+            span.kind.toLowerCase().includes(query),
+        )
+      );
+    }),
   );
 
   // If the current selection is no longer in filtered results, fall back to the first item
@@ -63,6 +93,8 @@
         return "var(--color-red)";
       case "lambda":
         return "var(--chart-6)";
+      case "eventbridge":
+        return "var(--color-blue)";
       case "queue":
         return "var(--color-amber)";
       case "topic":
@@ -91,6 +123,8 @@
         return "API GW";
       case "lambda":
         return "Lambda";
+      case "eventbridge":
+        return "EventBridge";
       case "queue":
         return "SQS";
       case "topic":
@@ -128,6 +162,8 @@
   }
 
   function traceTitle(t: RequestTrace): string {
+    const eventBridge = t.spans.find((s) => s.kind === "eventbridge");
+    if (eventBridge) return `EventBridge → ${eventBridge.name}`;
     if (t.method && t.path) return `${t.method} ${t.path}`;
     const s3 = t.spans.find((s) => s.kind === "s3");
     if (s3) return `S3 → ${s3.name}`;
@@ -138,6 +174,35 @@
     const fn = t.spans.find((s) => s.kind === "lambda");
     if (fn) return `Invoke: ${fn.name}`;
     return `trace:${t.id.slice(0, 8)}`;
+  }
+
+  function traceRaceSession(trace: RequestTrace): string {
+    return (
+      trace.spans.find((span) => span.kind === "eventbridge")?.meta?.raceSession ?? ""
+    );
+  }
+
+  async function launchRace() {
+    if (!raceRuleName) {
+      raceMessage = "Pick an EventBridge rule first.";
+      return;
+    }
+    raceRunning = true;
+    raceMessage = "";
+    try {
+      const result = await runEventBridgeRace(
+        raceRuleName,
+        Math.max(1, Math.min(500, raceRuns)),
+        Math.max(1, Math.min(100, raceConcurrency)),
+      );
+      raceSessionFilter = result.sessionId;
+      raceMessage = `Race ${result.sessionId}: ${result.successful}/${result.runs} successful`;
+      await refresh();
+    } catch (err) {
+      raceMessage = err instanceof Error ? err.message : "Race run failed";
+    } finally {
+      raceRunning = false;
+    }
   }
 
   function viewInLogs(span: TraceSpan) {
@@ -282,6 +347,56 @@
         <span class="text-muted-foreground/70">p95 {formatMs(p95Ms)}</span>
       {/if}
     </div>
+
+    <div class="w-full border-t border-border pt-2 mt-1">
+      <div class="flex flex-wrap items-center gap-2">
+        <select
+          bind:value={raceRuleName}
+          class="h-8 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary min-w-48"
+        >
+          <option value="">Select EventBridge rule</option>
+          {#each eventBridgeRules as rule (rule.name)}
+            <option value={rule.name}>{rule.name}</option>
+          {/each}
+        </select>
+        <input
+          type="number"
+          min="1"
+          max="500"
+          bind:value={raceRuns}
+          class="h-8 w-24 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
+          title="Runs"
+        />
+        <input
+          type="number"
+          min="1"
+          max="100"
+          bind:value={raceConcurrency}
+          class="h-8 w-24 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
+          title="Concurrency"
+        />
+        <button
+          type="button"
+          disabled={raceRunning || !raceRuleName}
+          onclick={launchRace}
+          class="inline-flex items-center gap-1 rounded border border-primary/50 bg-primary/10 px-2 py-1 text-xs text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
+        >
+          {raceRunning ? "Running race..." : "Run race"}
+        </button>
+        <select
+          bind:value={raceSessionFilter}
+          class="h-8 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary min-w-40"
+        >
+          <option value="">All sessions</option>
+          {#each raceSessions as session (session)}
+            <option value={session}>{session}</option>
+          {/each}
+        </select>
+      </div>
+      {#if raceMessage}
+        <p class="mt-1 text-xs text-muted-foreground">{raceMessage}</p>
+      {/if}
+    </div>
   </div>
 
   {#if traces.length === 0}
@@ -394,6 +509,15 @@
                   <span>{formatMs(trace.durationMs)}</span>
                   <span class="ml-auto">{timeAgo(trace.startedAt)}</span>
                 </div>
+                {#if traceRaceSession(trace)}
+                  <div class="pl-3.5 mt-1">
+                    <span
+                      class="inline-flex items-center rounded border border-blue/30 bg-blue/10 px-1.5 py-0.5 text-[10px] font-mono text-blue"
+                    >
+                      race {traceRaceSession(trace)}
+                    </span>
+                  </div>
+                {/if}
               </button>
               {#if trace.status >= 500 && lambdaSpan}
                 <div class="px-3 pb-2">
@@ -436,6 +560,13 @@
                     ? `via ${selectedTrace.gatewayName}`
                     : "Event trigger")}
               </span>
+              {#if traceRaceSession(selectedTrace)}
+                <span
+                  class="shrink-0 inline-flex items-center rounded border border-blue/30 bg-blue/10 px-2 py-0.5 text-[10px] font-mono text-blue"
+                >
+                  race {traceRaceSession(selectedTrace)}
+                </span>
+              {/if}
               <span
                 class="shrink-0 inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-mono {statusBadgeClass(
                   selectedTrace.status,

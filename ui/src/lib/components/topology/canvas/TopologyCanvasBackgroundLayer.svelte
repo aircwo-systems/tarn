@@ -57,6 +57,9 @@
 
     if (model.hasData) {
       context.fillText("API Gateway", CONNECTION_CANVAS.colGateway, 96);
+      if (model.nodes.eventbridges.length > 0) {
+        context.fillText("EventBridge", CONNECTION_CANVAS.colEventBridge, 96);
+      }
       if (model.nodes.topics.length > 0) {
         context.fillText("SNS", CONNECTION_CANVAS.colTopic, 96);
       }
