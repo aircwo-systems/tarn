@@ -47,19 +47,29 @@ func TestIsOutdatedVersionSkipsDevBuilds(t *testing.T) {
 
 func TestCheckForUpdatesFetchesThenUsesFreshCache(t *testing.T) {
 	origURL := updateCheckLatestReleaseURL
+	origReleasesURL := updateCheckReleasesURL
 	origClient := updateCheckHTTPClient
 	origNow := updateCheckNow
 	t.Cleanup(func() {
 		updateCheckLatestReleaseURL = origURL
+		updateCheckReleasesURL = origReleasesURL
 		updateCheckHTTPClient = origClient
 		updateCheckNow = origNow
 	})
 
 	var hits int
 	updateCheckLatestReleaseURL = "https://example.com/latest"
+	updateCheckReleasesURL = "https://example.com/releases"
 	updateCheckHTTPClient = &http.Client{
 		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			hits++
+			if r.URL.String() == updateCheckReleasesURL {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`[{"tag_name":"v9.9.9","html_url":"https://example.com/releases/v9.9.9"}]`)),
+				}, nil
+			}
 			return &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     make(http.Header),
@@ -114,10 +124,12 @@ func TestCheckForUpdatesFetchesThenUsesFreshCache(t *testing.T) {
 
 func TestCheckForUpdatesFallsBackToStaleCacheOnFetchFailure(t *testing.T) {
 	origURL := updateCheckLatestReleaseURL
+	origReleasesURL := updateCheckReleasesURL
 	origClient := updateCheckHTTPClient
 	origNow := updateCheckNow
 	t.Cleanup(func() {
 		updateCheckLatestReleaseURL = origURL
+		updateCheckReleasesURL = origReleasesURL
 		updateCheckHTTPClient = origClient
 		updateCheckNow = origNow
 	})
@@ -135,6 +147,7 @@ func TestCheckForUpdatesFallsBackToStaleCacheOnFetchFailure(t *testing.T) {
 	}
 
 	updateCheckLatestReleaseURL = "http://127.0.0.1:1"
+	updateCheckReleasesURL = "http://127.0.0.1:1"
 	updateCheckHTTPClient = &http.Client{
 		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			return nil, fmt.Errorf("network unavailable")
@@ -169,5 +182,62 @@ func TestCheckForUpdatesDisabledByEnv(t *testing.T) {
 	}
 	if strings.TrimSpace(result.LatestVersion) != "" {
 		t.Fatalf("expected no latest version while disabled, got %+v", result)
+	}
+}
+
+func TestCheckForUpdatesUsesPrereleaseWhenNewer(t *testing.T) {
+	origURL := updateCheckLatestReleaseURL
+	origReleasesURL := updateCheckReleasesURL
+	origClient := updateCheckHTTPClient
+	origNow := updateCheckNow
+	t.Cleanup(func() {
+		updateCheckLatestReleaseURL = origURL
+		updateCheckReleasesURL = origReleasesURL
+		updateCheckHTTPClient = origClient
+		updateCheckNow = origNow
+	})
+
+	updateCheckLatestReleaseURL = "https://example.com/latest"
+	updateCheckReleasesURL = "https://example.com/releases"
+	updateCheckHTTPClient = &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			switch r.URL.String() {
+			case updateCheckReleasesURL:
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body: io.NopCloser(strings.NewReader(`[
+						{"tag_name":"v0.0.5","html_url":"https://example.com/releases/v0.0.5"},
+						{"tag_name":"v0.0.6-beta","html_url":"https://example.com/releases/v0.0.6-beta"}
+					]`)),
+				}, nil
+			case updateCheckLatestReleaseURL:
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     make(http.Header),
+					Body:       io.NopCloser(strings.NewReader(`{"tag_name":"v0.0.5","html_url":"https://example.com/releases/v0.0.5"}`)),
+				}, nil
+			default:
+				return nil, fmt.Errorf("unexpected URL: %s", r.URL.String())
+			}
+		}),
+	}
+	updateCheckNow = func() time.Time {
+		return time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC)
+	}
+
+	result, err := checkForUpdates(context.Background(), updateCheckOptions{
+		CurrentVersion: "v0.0.5",
+		DataDir:        t.TempDir(),
+		Force:          true,
+	})
+	if err != nil {
+		t.Fatalf("checkForUpdates: %v", err)
+	}
+	if !result.Outdated {
+		t.Fatalf("expected outdated=true, got %+v", result)
+	}
+	if result.LatestVersion != "v0.0.6-beta" {
+		t.Fatalf("latest version = %q, want v0.0.6-beta", result.LatestVersion)
 	}
 }
