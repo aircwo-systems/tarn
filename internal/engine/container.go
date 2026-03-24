@@ -195,6 +195,7 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 		env = append(env,
 			"PARAMETERS_SECRETS_EXTENSION_HTTP_PORT=2773",
 			"AWS_SESSION_TOKEN=local-dev-token",
+			"OPENSTACK_INTERNAL_LAMBDA=1",
 		)
 		bgCmds = append(bgCmds, "/opt/openstack/secrets-proxy &")
 	}
