@@ -1,5 +1,6 @@
 export type NodeKind =
   | "gateway"
+  | "eventbridge"
   | "topic"
   | "queue"
   | "bucket"

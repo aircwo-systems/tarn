@@ -19,6 +19,7 @@ export interface OverviewResponse {
     buckets: number;
     logGroups: number;
     eventSourceMappings: number;
+    eventBridgeRules: number;
   };
   gateways: GatewaySummary[];
   functions: FunctionSummary[];
@@ -28,6 +29,7 @@ export interface OverviewResponse {
   secrets: SecretSummary[];
   buckets: BucketSummary[];
   eventSourceMappings: EventSourceMappingSummary[];
+  eventBridgeRules?: EventBridgeRuleSummary[];
   infrastructure: InfraProbe[];
   connections?: InfraConnection[];
   recentTraces?: RequestTrace[];
@@ -35,7 +37,7 @@ export interface OverviewResponse {
 }
 
 export interface TraceSpan {
-  kind: "gateway" | "lambda" | "topic" | "queue" | "dlq" | string;
+  kind: "gateway" | "lambda" | "topic" | "queue" | "dlq" | "eventbridge" | string;
   name: string;
   durationMs: number;
   status: "ok" | "error" | "client_error" | string;
@@ -293,6 +295,46 @@ export interface EventSourceMappingSummary {
   state: string;
   lastResult: string;
   filterCriteria?: FilterCriteria;
+}
+
+export interface EventBridgeTargetSummary {
+  id: string;
+  arn: string;
+  lastResult?: string;
+  lastInvokedAt?: string;
+}
+
+export interface EventBridgeRuleSummary {
+  name: string;
+  arn: string;
+  scheduleExpression: string;
+  state: "ENABLED" | "DISABLED" | string;
+  description?: string;
+  lastRunAt?: string;
+  nextRunAt?: string;
+  lastResult?: string;
+  targets?: EventBridgeTargetSummary[];
+}
+
+export interface EventBridgeFireResult {
+  ruleName: string;
+  traceId?: string;
+  firedAt: string;
+  targets: number;
+  successful: number;
+  failed: number;
+}
+
+export interface EventBridgeRaceResult {
+  sessionId: string;
+  ruleName: string;
+  runs: number;
+  concurrency: number;
+  successful: number;
+  failed: number;
+  traceIds?: string[];
+  startedAt: string;
+  finishedAt: string;
 }
 
 export interface LogGroupSummary {

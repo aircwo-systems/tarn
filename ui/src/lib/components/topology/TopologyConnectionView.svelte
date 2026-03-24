@@ -135,6 +135,8 @@
         return "var(--color-chart-1)";
       case "queue":
         return "var(--color-chart-4)";
+      case "eventbridge":
+        return "var(--color-chart-5, var(--color-primary))";
       case "topic":
         return "var(--color-chart-1)";
       case "function":

@@ -26,6 +26,8 @@
   function traceLabel(trace: RequestTrace): string {
     const method = trace.method ?? "";
     const path = trace.path ?? "";
+    const eventBridge = trace.spans.find((span) => span.kind === "eventbridge");
+    if (eventBridge) return `EVENTBRIDGE ${eventBridge.name}`;
     return `${method} ${path}`.trim() || `trace:${trace.id.slice(0, 8)}`;
   }
 

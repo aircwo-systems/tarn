@@ -8,6 +8,7 @@
   import SNSSection from "$lib/components/sections/sns-section.svelte";
   import SecretsSection from "$lib/components/sections/secrets-section.svelte";
   import TriggersSection from "$lib/components/sections/triggers-section.svelte";
+  import EventBridgeSection from "$lib/components/sections/eventbridge-section.svelte";
   import StorageSection from "$lib/components/sections/storage-section.svelte";
   import LogsSection from "$lib/components/sections/logs-section.svelte";
   import XraySection from "$lib/components/sections/xray-section.svelte";
@@ -24,6 +25,7 @@
     "sns",
     "secrets",
     "triggers",
+    "eventbridge",
     "storage",
     "logs",
     "xray",
@@ -82,6 +84,8 @@
         <SecretsSection />
       {:else if activeTab === "triggers"}
         <TriggersSection />
+      {:else if activeTab === "eventbridge"}
+        <EventBridgeSection />
       {:else if activeTab === "storage"}
         <StorageSection />
       {:else if activeTab === "logs"}
