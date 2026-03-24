@@ -34,6 +34,7 @@
 
   let activeTab = $state("overview");
   let logsInitialGroup = $state("");
+  let logsInitialTimestamp = $state("");
 
   function readHash() {
     const raw = window.location.hash.replace("#", "");
@@ -44,6 +45,7 @@
     if (tab === "logs" && qs) {
       const params = new URLSearchParams(qs);
       logsInitialGroup = params.get("group") ?? "";
+      logsInitialTimestamp = params.get("ts") ?? "";
     }
   }
 
@@ -89,7 +91,7 @@
       {:else if activeTab === "storage"}
         <StorageSection />
       {:else if activeTab === "logs"}
-        <LogsSection initialGroup={logsInitialGroup} />
+        <LogsSection initialGroup={logsInitialGroup} initialTimestamp={logsInitialTimestamp} />
       {:else if activeTab === "xray"}
         <XraySection />
       {:else if activeTab === "chaos"}

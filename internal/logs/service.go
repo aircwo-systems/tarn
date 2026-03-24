@@ -35,6 +35,21 @@ func (s *Service) DeleteLogGroup(name string) error {
 	return s.store.DeleteGroup(name)
 }
 
+// ClearLogGroup removes all events from a group but keeps the group.
+func (s *Service) ClearLogGroup(name string) error {
+	return s.store.ClearGroup(name)
+}
+
+// GetAllLogEvents returns filtered events across all log groups.
+func (s *Service) GetAllLogEvents(filter *LogFilter) ([]LogEvent, int) {
+	return s.store.GetAllLogEvents(filter)
+}
+
+// PruneOlderThan removes events older than the given cutoff from all groups.
+func (s *Service) PruneOlderThan(cutoff time.Time) int {
+	return s.store.PruneOlderThan(cutoff)
+}
+
 // PutLogEvents appends events to a log group.
 func (s *Service) PutLogEvents(groupName, streamName string, events []LogEvent) {
 	s.store.PutLogEvents(groupName, streamName, events)

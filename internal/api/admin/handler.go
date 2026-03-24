@@ -1102,6 +1102,14 @@ func (h *Handler) LogEvents(w http.ResponseWriter, r *http.Request) {
 		events = []logssvc.LogEvent{}
 	}
 
+	// Support ?order=desc to return newest-first
+	order := strings.ToLower(q.Get("order"))
+	if order == "desc" {
+		for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+			events[i], events[j] = events[j], events[i]
+		}
+	}
+
 	var nextCursor string
 	if len(events) > 0 {
 		last := events[len(events)-1]
@@ -1114,6 +1122,95 @@ func (h *Handler) LogEvents(w http.ResponseWriter, r *http.Request) {
 		"events":     events,
 		"total":      total,
 		"nextCursor": nextCursor,
+	})
+}
+
+// ClearLogGroup removes all events from a log group but keeps the group.
+func (h *Handler) ClearLogGroup(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "group name is required")
+		return
+	}
+
+	if err := h.logs.ClearLogGroup(name); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"cleared": true})
+}
+
+// AllLogEvents returns filtered events across all log groups (virtual "All" group).
+func (h *Handler) AllLogEvents(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	filter := &logssvc.LogFilter{}
+
+	if v := q.Get("level"); v != "" {
+		filter.Level = logssvc.LogLevel(strings.ToUpper(v))
+	}
+	if v := q.Get("pattern"); v != "" {
+		filter.Pattern = v
+	}
+	if v := q.Get("stream"); v != "" {
+		filter.StreamName = v
+	}
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			filter.Limit = n
+		}
+	}
+	if v := q.Get("cursor"); v != "" {
+		if ts, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			filter.Cursor = &ts
+		}
+	}
+
+	events, total := h.logs.GetAllLogEvents(filter)
+	if events == nil {
+		events = []logssvc.LogEvent{}
+	}
+
+	order := strings.ToLower(q.Get("order"))
+	if order == "desc" {
+		for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
+			events[i], events[j] = events[j], events[i]
+		}
+	}
+
+	var nextCursor string
+	if len(events) > 0 {
+		last := events[len(events)-1]
+		nextCursor = last.Timestamp.Format(time.RFC3339Nano)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"events":     events,
+		"total":      total,
+		"nextCursor": nextCursor,
+	})
+}
+
+// PruneLogs removes events older than the requested retention window from all groups.
+func (h *Handler) PruneLogs(w http.ResponseWriter, r *http.Request) {
+	retentionStr := r.URL.Query().Get("retention")
+	retentionMin, err := strconv.Atoi(retentionStr)
+	if err != nil || retentionMin < 1 {
+		retentionMin = 15 // default 15 minutes
+	}
+
+	cutoff := time.Now().UTC().Add(-time.Duration(retentionMin) * time.Minute)
+	pruned := h.logs.PruneOlderThan(cutoff)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"pruned":           pruned,
+		"retentionMinutes": retentionMin,
 	})
 }
 

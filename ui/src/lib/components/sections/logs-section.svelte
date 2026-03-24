@@ -1,16 +1,18 @@
 <script lang="ts">
-	import { ScrollIcon, MagnifyingGlassIcon, FunnelIcon, ArrowLeftIcon, ArrowsClockwiseIcon, CaretDownIcon, XIcon, CopySimpleIcon } from 'phosphor-svelte';
+	import { ScrollIcon, MagnifyingGlassIcon, FunnelIcon, ArrowLeftIcon, ArrowsClockwiseIcon, CaretDownIcon, XIcon, CopySimpleIcon, TrashIcon, SortAscendingIcon, SortDescendingIcon, ClipboardTextIcon } from 'phosphor-svelte';
 	import Badge from '$lib/components/ui/badge/badge.svelte';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import EmptyState from '$lib/components/common/empty-state.svelte';
 	import FormattedMessageViewer from '$lib/components/common/formatted-message-viewer.svelte';
-	import { fetchLogGroups, fetchLogEvents, type FetchLogEventsParams } from '$lib/api';
+	import { fetchLogGroups, fetchLogEvents, fetchAllLogEvents, clearLogGroup, type FetchLogEventsParams } from '$lib/api';
 	import type { LogGroupSummary, LogEvent } from '$lib/types';
 
 	let {
-		initialGroup = ''
+		initialGroup = '',
+		initialTimestamp = ''
 	}: {
 		initialGroup?: string;
+		initialTimestamp?: string;
 	} = $props();
 
 	// ── State ────────────────────────────────────────────────────────────
@@ -36,13 +38,22 @@
 	let autoRefreshTimer = $state<ReturnType<typeof setInterval> | null>(null);
 	let groupSearch = $state('');
 	let serviceFilter = $state('all');
+	let sortOrder = $state<'desc' | 'asc'>('desc');
 
 	// Detail panel
 	let selectedEvent = $state<LogEvent | null>(null);
 	let copiedMessage = $state(false);
 
-	// Newest first for display
-	const displayEvents = $derived([...events].reverse());
+	// Clear logs
+	let clearing = $state(false);
+	let copyingStream = $state(false);
+
+	// Deep-link highlight
+	let highlightTimestamp = $state('');
+
+	// "All" virtual group
+	const ALL_GROUP = '__all__';
+	const isAllGroup = $derived(selectedGroup === ALL_GROUP);
 
 	// ── Lifecycle ────────────────────────────────────────────────────────
 	$effect(() => {
@@ -52,6 +63,12 @@
 	$effect(() => {
 		if (initialGroup) {
 			selectedGroup = initialGroup;
+		}
+	});
+
+	$effect(() => {
+		if (initialTimestamp) {
+			highlightTimestamp = initialTimestamp;
 		}
 	});
 
@@ -75,6 +92,22 @@
 		};
 	});
 
+	// Auto-scroll to highlighted event after events load
+	$effect(() => {
+		if (highlightTimestamp && events.length > 0) {
+			// Wait for DOM to render
+			requestAnimationFrame(() => {
+				const el = document.getElementById(`log-event-${highlightTimestamp}`);
+				if (el) {
+					el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+					// Find and select the event
+					const match = events.find(e => e.timestamp === highlightTimestamp);
+					if (match) selectedEvent = match;
+				}
+			});
+		}
+	});
+
 	// ── Data fetching ────────────────────────────────────────────────────
 	async function loadGroups() {
 		groupsLoading = true;
@@ -93,12 +126,18 @@
 		eventsLoading = true;
 		eventsError = '';
 		try {
-			const params: FetchLogEventsParams = { limit: eventsLimit };
+			const params: FetchLogEventsParams = { limit: eventsLimit, order: sortOrder };
 			if (eventsCursor) params.cursor = eventsCursor;
 			if (filterLevel) params.level = filterLevel;
 			if (filterPattern) params.pattern = filterPattern;
 			if (filterStream) params.stream = filterStream;
-			const result = await fetchLogEvents(selectedGroup, params);
+
+			let result;
+			if (isAllGroup) {
+				result = await fetchAllLogEvents(params);
+			} else {
+				result = await fetchLogEvents(selectedGroup, params);
+			}
 			events = result.events ?? [];
 			eventsTotal = result.total ?? 0;
 			nextCursor = result.nextCursor || null;
@@ -113,7 +152,12 @@
 	function selectGroup(name: string) {
 		selectedGroup = name;
 		selectedEvent = null;
-		window.location.hash = `logs?group=${encodeURIComponent(name)}`;
+		highlightTimestamp = '';
+		if (name === ALL_GROUP) {
+			window.location.hash = 'logs?group=__all__';
+		} else {
+			window.location.hash = `logs?group=${encodeURIComponent(name)}`;
+		}
 	}
 
 	function backToGroups() {
@@ -122,6 +166,7 @@
 		eventsTotal = 0;
 		autoRefresh = false;
 		selectedEvent = null;
+		highlightTimestamp = '';
 		window.location.hash = 'logs';
 	}
 
@@ -140,6 +185,54 @@
 		prevCursors = [];
 		selectedEvent = null;
 		loadEvents();
+	}
+
+	function toggleSort() {
+		sortOrder = sortOrder === 'desc' ? 'asc' : 'desc';
+		eventsCursor = null;
+		prevCursors = [];
+		selectedEvent = null;
+		loadEvents();
+	}
+
+	async function handleClearLogs() {
+		if (!selectedGroup || isAllGroup) return;
+		clearing = true;
+		try {
+			await clearLogGroup(selectedGroup);
+			events = [];
+			eventsTotal = 0;
+			selectedEvent = null;
+			eventsCursor = null;
+			prevCursors = [];
+			// Refresh group list to update counts
+			loadGroups();
+		} catch (err) {
+			eventsError = err instanceof Error ? err.message : 'Failed to clear logs';
+		} finally {
+			clearing = false;
+		}
+	}
+
+	async function handleCopyStream() {
+		if (!filterStream || !selectedGroup) return;
+		copyingStream = true;
+		try {
+			// Fetch the entire stream (up to 10k events) from the API
+			const params: FetchLogEventsParams = { limit: 10000, stream: filterStream, order: sortOrder };
+			const result = isAllGroup
+				? await fetchAllLogEvents(params)
+				: await fetchLogEvents(selectedGroup, params);
+			const allEvents = result.events ?? [];
+			const text = allEvents.map(e => {
+				const ts = new Date(e.timestamp).toISOString();
+				return `${ts} [${e.level}] ${e.message}`;
+			}).join('\n');
+			await navigator.clipboard.writeText(text);
+			setTimeout(() => { copyingStream = false; }, 2000);
+		} catch {
+			copyingStream = false;
+		}
 	}
 
 	let nextCursor: string | null = null;
@@ -184,6 +277,19 @@
 	function formatDetailTimestamp(ts: string): string {
 		try {
 			return new Date(ts).toISOString().replace('T', '  ').replace('Z', '  UTC');
+		} catch {
+			return ts;
+		}
+	}
+
+	function formatCompactTime(ts: string): string {
+		try {
+			const d = new Date(ts);
+			const h = String(d.getHours()).padStart(2, '0');
+			const m = String(d.getMinutes()).padStart(2, '0');
+			const s = String(d.getSeconds()).padStart(2, '0');
+			const ms = String(d.getMilliseconds()).padStart(3, '0');
+			return `${h}:${m}:${s}.${ms}`;
 		} catch {
 			return ts;
 		}
@@ -260,6 +366,18 @@
 			return formatJavaToString(content);
 		}
 		return null;
+	}
+
+	// ── Inline JSON formatting for compact view ─────────────────────────
+	function tryFormatInlineJSON(msg: string): { isJSON: boolean; formatted: string } {
+		const trimmed = msg.trim();
+		if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+			try {
+				const parsed = JSON.parse(trimmed);
+				return { isJSON: true, formatted: JSON.stringify(parsed, null, 2) };
+			} catch { /* not JSON */ }
+		}
+		return { isJSON: false, formatted: msg };
 	}
 
 	// ── Syntax highlighting ───────────────────────────────────────────────
@@ -404,6 +522,16 @@
 		}
 	}
 
+	function levelTextColor(level: string): string {
+		switch (level) {
+			case 'ERROR': return 'text-red-400';
+			case 'WARN': return 'text-amber-400';
+			case 'DEBUG': return 'text-muted-foreground/50';
+			case 'INFO': return 'text-primary/70';
+			default: return 'text-muted-foreground';
+		}
+	}
+
 	function groupDisplayName(name: string): string {
 		if (name.startsWith('/aws/lambda/')) return name.slice('/aws/lambda/'.length);
 		if (name.startsWith('/openstack/')) return name.slice(1);
@@ -448,13 +576,21 @@
 		return isLambdaGroup(selectedGroup) && event.source === 'output';
 	}
 
+	function truncateMessage(msg: string, maxLen: number = 200): string {
+		if (msg.length <= maxLen) return msg;
+		return msg.slice(0, maxLen) + '...';
+	}
+
 	const hasNextPage = $derived(!!nextCursor && events.length === eventsLimit);
 	const hasPrevPage = $derived(prevCursors.length > 0 || !!eventsCursor);
 	const selectedGroupIsLambda = $derived(isLambdaGroup(selectedGroup));
 	const pageInfo = $derived(
 		eventsTotal > 0 && events.length > 0
-			? `${events[0].timestamp} – ${events[events.length - 1].timestamp} (${events.length} events)`
+			? `${events.length} of ${eventsTotal} events`
 			: 'No events'
+	);
+	const totalEventCount = $derived(
+		groups.reduce((sum, g) => sum + g.eventCount, 0)
 	);
 	const serviceOptions = $derived((() => {
 		const counts = new Map<string, number>();
@@ -511,11 +647,26 @@
 					<ArrowLeftIcon size={16} />
 				</button>
 				<div class="min-w-0">
-					<h2 class="text-sm font-semibold text-foreground truncate">{selectedGroup}</h2>
+					<h2 class="text-sm font-semibold text-foreground truncate">{isAllGroup ? 'All Log Groups' : selectedGroup}</h2>
 					<p class="text-[10px] text-muted-foreground/70 font-mono">{pageInfo}</p>
 				</div>
 			</div>
 			<div class="flex items-center gap-2 shrink-0">
+				<!-- Sort toggle -->
+				<button
+					type="button"
+					onclick={toggleSort}
+					class="inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+					title={sortOrder === 'desc' ? 'Showing newest first' : 'Showing oldest first'}
+				>
+					{#if sortOrder === 'desc'}
+						<SortDescendingIcon size={12} />
+						Newest
+					{:else}
+						<SortAscendingIcon size={12} />
+						Oldest
+					{/if}
+				</button>
 				<button
 					type="button"
 					onclick={() => autoRefresh = !autoRefresh}
@@ -533,6 +684,18 @@
 					Filters
 					<CaretDownIcon size={10} class="transition-transform {showFilters ? 'rotate-180' : ''}" />
 				</button>
+				{#if !isAllGroup}
+					<button
+						type="button"
+						onclick={handleClearLogs}
+						disabled={clearing || events.length === 0}
+						class="inline-flex items-center gap-1.5 rounded-md border border-red/30 bg-red/8 px-2.5 py-1 text-xs text-destructive hover:bg-red/14 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+						title="Clear all logs in this group"
+					>
+						<TrashIcon size={12} />
+						Clear
+					</button>
+				{/if}
 				<button
 					type="button"
 					onclick={loadEvents}
@@ -603,6 +766,16 @@
 						>
 							Clear
 						</button>
+						<button
+							type="button"
+							onclick={handleCopyStream}
+							disabled={!filterStream}
+							class="inline-flex items-center gap-1 rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+							title={filterStream ? 'Copy entire stream output to clipboard' : 'Filter by a stream name first'}
+						>
+							<ClipboardTextIcon size={12} />
+							{copyingStream ? 'Copied!' : 'Copy entire stream'}
+						</button>
 					</div>
 				</div>
 			</div>
@@ -615,9 +788,9 @@
 			</div>
 		{:else if eventsLoading && events.length === 0}
 			<div class="rounded-lg border border-border overflow-hidden">
-				<div class="p-3 space-y-2">
-					{#each Array(8) as _, i (i)}
-						<Skeleton class="h-6 w-full" />
+				<div class="p-3 space-y-1">
+					{#each Array(12) as _, i (i)}
+						<Skeleton class="h-5 w-full" />
 					{/each}
 				</div>
 			</div>
@@ -625,59 +798,54 @@
 			<EmptyState message="No log events found. Try adjusting your filters or invoke a function." icon={ScrollIcon} />
 		{:else}
 			<!-- Two-panel layout: event list + detail panel -->
-			<div class="rounded-lg border border-border overflow-hidden flex" style="max-height: calc(100vh - 16rem)">
-				<!-- Event rows -->
-				<div class="flex-1 min-w-0 divide-y divide-border/60 overflow-y-auto font-mono">
-					{#each displayEvents as event, i (event.timestamp + '-' + i)}
+			<div class="rounded-lg border border-border overflow-hidden flex flex-1" style="min-height: 0; height: calc(100vh - 10rem)">
+				<!-- Event rows — compact view -->
+				<div class="flex-1 min-w-0 overflow-y-auto font-mono text-[12px] leading-tight">
+					{#each events as event, i (event.timestamp + '-' + i + '-' + event.streamName)}
 						{@const isSelected = selectedEvent === event}
-						{@const isOutput = isLambdaOutputEvent(event)}
+						{@const isHighlighted = highlightTimestamp && event.timestamp === highlightTimestamp}
 						<div
+							id="log-event-{event.timestamp}"
 							role="button"
 							tabindex="0"
 							onclick={() => selectEvent(event)}
 							onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectEvent(event); } }}
-							class="group relative flex items-start gap-0 cursor-pointer transition-colors duration-100 {
-								isSelected
-									? 'bg-muted'
-									: 'hover:bg-muted/70'
+							class="group relative flex items-start cursor-pointer transition-colors duration-75 border-b border-border/30 {
+								isHighlighted
+									? 'bg-amber-500/10 border-l-2 border-l-amber-400'
+									: isSelected
+										? 'bg-muted'
+										: 'hover:bg-muted/50'
 							}"
 						>
 							<!-- Level strip -->
-							<div class="w-0.5 self-stretch shrink-0 {levelStripColor(event.level)} {isSelected ? 'opacity-100' : 'opacity-40 group-hover:opacity-70'} transition-opacity"></div>
+							<div class="w-0.5 self-stretch shrink-0 {levelStripColor(event.level)} {isSelected || isHighlighted ? 'opacity-100' : 'opacity-30 group-hover:opacity-60'} transition-opacity"></div>
 
-							<div class="flex items-start gap-2.5 px-3 py-2 flex-1 min-w-0">
-								<!-- Timestamp -->
-								<span class="text-[11px] text-muted-foreground/70 whitespace-nowrap shrink-0 w-[130px] tabular-nums pt-px">
-									{new Date(event.timestamp).toLocaleTimeString()}<span class="text-muted-foreground/70/50">.{String(new Date(event.timestamp).getMilliseconds()).padStart(3, '0')}</span>
-								</span>
+							<div class="flex items-baseline gap-2 px-2 py-[3px] flex-1 min-w-0">
+								<!-- Compact timestamp -->
+								<span class="text-[11px] text-muted-foreground/50 whitespace-nowrap shrink-0 tabular-nums select-none">{formatCompactTime(event.timestamp)}</span>
 
-								<!-- Level badge -->
-								<span class="shrink-0 w-[50px] pt-px">
-									<Badge variant={levelColor(event.level)} class="text-[10px] px-1.5 py-0">{event.level}</Badge>
-								</span>
+								<!-- Level — compact text instead of badge -->
+								<span class="text-[10px] font-semibold uppercase shrink-0 w-[38px] {levelTextColor(event.level)} select-none">{event.level}</span>
 
-								<!-- Source tag (lambda only) -->
-								{#if selectedGroupIsLambda}
-									<span class="hidden xl:inline-flex shrink-0 items-center rounded-full border px-1.5 py-0.5 text-[10px] uppercase tracking-wide mt-px {
-										isOutput
-											? 'border-primary/50 bg-primary/10 text-primary'
-											: 'border-border bg-muted text-muted-foreground/70'
-									}">
-										{isOutput ? 'Output' : 'Runtime'}
+								<!-- Source group tag (for "All" view) -->
+								{#if isAllGroup}
+									<span class="text-[10px] text-primary/60 whitespace-nowrap shrink-0 max-w-[120px] truncate" title={event.streamName}>
+										{event.streamName.split('/').slice(1, -1).join('/')}
 									</span>
 								{/if}
 
-								<!-- Message -->
-								<span class="break-all whitespace-pre-wrap flex-1 min-w-0 text-[13px] leading-snug {
-									isSelected ? 'text-foreground' : isOutput ? 'text-foreground' : 'text-muted-foreground'
-								}">
-									{event.message}
+								<!-- Message — single line, truncated -->
+								<span class="truncate flex-1 min-w-0 {
+									isSelected ? 'text-foreground' : event.level === 'ERROR' ? 'text-red-300/80' : 'text-foreground/80'
+								}" title={event.message}>
+									{truncateMessage(event.message.replace(/\n/g, ' '))}
 								</span>
 
-								<!-- Stream name (hidden when panel open) -->
-								{#if event.streamName && !selectedEvent}
-									<span class="text-[11px] text-muted-foreground/70 whitespace-nowrap shrink-0 hidden lg:inline pt-px" title={event.streamName}>
-										{event.streamName.length > 24 ? event.streamName.slice(-24) : event.streamName}
+								<!-- Stream name (compact) -->
+								{#if event.streamName && !selectedEvent && !isAllGroup}
+									<span class="text-[10px] text-muted-foreground/40 whitespace-nowrap shrink-0 hidden lg:inline" title={event.streamName}>
+										{event.streamName.length > 20 ? event.streamName.slice(-20) : event.streamName}
 									</span>
 								{/if}
 							</div>
@@ -685,20 +853,20 @@
 					{/each}
 				</div>
 
-				<!-- Detail panel — CSS width transition, no Svelte dependency -->
+				<!-- Detail panel -->
 				<div
 					class="shrink-0 border-l border-border bg-card overflow-hidden transition-[width,opacity] duration-200 ease-out {selectedEvent ? 'opacity-100' : 'opacity-0'}"
-					style="width: {selectedEvent ? '400px' : '0px'}"
+					style="width: {selectedEvent ? '420px' : '0px'}"
 				>
 					{#if selectedEvent}
 						{@const ev = selectedEvent}
-						<div class="flex flex-col h-full min-w-[400px]">
+						<div class="flex flex-col h-full min-w-[420px]">
 							<!-- Panel header -->
 							<div class="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5 shrink-0 bg-card">
 								<div class="flex items-center gap-2 min-w-0">
 									<Badge variant={levelColor(ev.level)} class="shrink-0">{ev.level}</Badge>
 									<span class="text-[11px] text-muted-foreground/70 font-mono tabular-nums truncate">
-										{new Date(ev.timestamp).toLocaleTimeString()}.{String(new Date(ev.timestamp).getMilliseconds()).padStart(3, '0')}
+										{formatCompactTime(ev.timestamp)}
 									</span>
 								</div>
 								<button
@@ -737,8 +905,14 @@
 											formattedMaxHeightClass="max-h-[55vh]"
 											rawMaxHeightClass="max-h-[40vh]"
 										/>
+									{:else if looksLikeJSON(ev.message)}
+										{@const jsonResult = tryFormatInlineJSON(ev.message)}
+										{#if jsonResult.isJSON}
+											<pre class="rounded-md border border-border bg-background-base px-3 py-3 text-[12px] font-mono text-foreground leading-relaxed whitespace-pre-wrap break-all log-highlight max-h-[55vh] overflow-y-auto">{@html highlightJSON(jsonResult.formatted)}</pre>
+										{:else}
+											<pre class="rounded-md border border-border bg-background-base px-3 py-3 text-[13px] font-mono text-foreground leading-relaxed whitespace-pre-wrap break-all">{ev.message}</pre>
+										{/if}
 									{:else}
-										<!-- Simple message — no collapsing needed -->
 										<pre class="rounded-md border border-border bg-background-base px-3 py-3 text-[13px] font-mono text-foreground leading-relaxed whitespace-pre-wrap break-all">{ev.message}</pre>
 									{/if}
 								</div>
@@ -880,42 +1054,69 @@
 			</div>
 		{:else if groups.length === 0}
 			<EmptyState message="No log groups yet. Create a Lambda function or invoke one to see logs." icon={ScrollIcon} />
-		{:else if filteredGroups.length === 0}
-			<EmptyState message="No log groups match the current service or search filters." icon={ScrollIcon} />
 		{:else}
-			<div class="grid grid-cols-1 gap-2">
-				{#each filteredGroups as group (group.name)}
-					<button
-						type="button"
-						onclick={() => selectGroup(group.name)}
-						class="flex items-center justify-between gap-4 rounded-lg border border-border bg-card px-4 py-3 text-left hover:border-primary/40 hover:bg-muted/50 transition-colors group"
-					>
-						<div class="min-w-0 flex-1">
-							<div class="flex items-center gap-2 mb-1">
-								<Badge variant="secondary" class="text-[10px]">{groupCategory(group.name)}</Badge>
-								<span class="text-sm font-medium text-foreground truncate">{groupDisplayName(group.name)}</span>
-							</div>
-							<p class="text-[10px] font-mono text-muted-foreground/70 truncate">{group.name}</p>
-						</div>
-						<div class="flex items-center gap-4 shrink-0 text-right">
-							<div>
-								<p class="text-sm font-semibold text-foreground tabular-nums">{group.eventCount}</p>
-								<p class="text-[10px] text-muted-foreground/70">events</p>
-							</div>
-							<div>
-								<p class="text-sm font-semibold text-foreground tabular-nums">{group.streamCount}</p>
-								<p class="text-[10px] text-muted-foreground/70">streams</p>
-							</div>
-							{#if group.lastEvent}
-								<div class="hidden sm:block">
-									<p class="text-xs text-muted-foreground tabular-nums">{new Date(group.lastEvent).toLocaleTimeString()}</p>
-									<p class="text-[10px] text-muted-foreground/70">last event</p>
+			<!-- "All" virtual group card -->
+			<button
+				type="button"
+				onclick={() => selectGroup(ALL_GROUP)}
+				class="flex items-center justify-between gap-4 rounded-lg border border-dashed border-primary/30 bg-primary/5 px-4 py-3 text-left hover:border-primary/50 hover:bg-primary/10 transition-colors group w-full"
+			>
+				<div class="min-w-0 flex-1">
+					<div class="flex items-center gap-2 mb-1">
+						<Badge variant="default" class="text-[10px]">All Services</Badge>
+						<span class="text-sm font-medium text-foreground">All Logs</span>
+					</div>
+					<p class="text-[10px] font-mono text-muted-foreground/70">Aggregated view across all log groups — Lambda, Secrets, API, System, etc.</p>
+				</div>
+				<div class="flex items-center gap-4 shrink-0 text-right">
+					<div>
+						<p class="text-sm font-semibold text-foreground tabular-nums">{totalEventCount}</p>
+						<p class="text-[10px] text-muted-foreground/70">total events</p>
+					</div>
+					<div>
+						<p class="text-sm font-semibold text-foreground tabular-nums">{groups.length}</p>
+						<p class="text-[10px] text-muted-foreground/70">groups</p>
+					</div>
+				</div>
+			</button>
+
+			{#if filteredGroups.length === 0}
+				<EmptyState message="No log groups match the current service or search filters." icon={ScrollIcon} />
+			{:else}
+				<div class="grid grid-cols-1 gap-2">
+					{#each filteredGroups as group (group.name)}
+						<button
+							type="button"
+							onclick={() => selectGroup(group.name)}
+							class="flex items-center justify-between gap-4 rounded-lg border border-border bg-card px-4 py-3 text-left hover:border-primary/40 hover:bg-muted/50 transition-colors group"
+						>
+							<div class="min-w-0 flex-1">
+								<div class="flex items-center gap-2 mb-1">
+									<Badge variant="secondary" class="text-[10px]">{groupCategory(group.name)}</Badge>
+									<span class="text-sm font-medium text-foreground truncate">{groupDisplayName(group.name)}</span>
 								</div>
-							{/if}
-						</div>
-					</button>
-				{/each}
-			</div>
+								<p class="text-[10px] font-mono text-muted-foreground/70 truncate">{group.name}</p>
+							</div>
+							<div class="flex items-center gap-4 shrink-0 text-right">
+								<div>
+									<p class="text-sm font-semibold text-foreground tabular-nums">{group.eventCount}</p>
+									<p class="text-[10px] text-muted-foreground/70">events</p>
+								</div>
+								<div>
+									<p class="text-sm font-semibold text-foreground tabular-nums">{group.streamCount}</p>
+									<p class="text-[10px] text-muted-foreground/70">streams</p>
+								</div>
+								{#if group.lastEvent}
+									<div class="hidden sm:block">
+										<p class="text-xs text-muted-foreground tabular-nums">{new Date(group.lastEvent).toLocaleTimeString()}</p>
+										<p class="text-[10px] text-muted-foreground/70">last event</p>
+									</div>
+								{/if}
+							</div>
+						</button>
+					{/each}
+				</div>
+			{/if}
 		{/if}
 	</div>
 {/if}

@@ -149,6 +149,7 @@ export interface FetchLogEventsParams {
   pattern?: string;
   stream?: string;
   cursor?: string;
+  order?: "asc" | "desc";
 }
 
 export async function fetchLogEvents(
@@ -163,6 +164,7 @@ export async function fetchLogEvents(
   if (params.pattern) query.set("pattern", params.pattern);
   if (params.stream) query.set("stream", params.stream);
   if (params.cursor) query.set("cursor", params.cursor);
+  if (params.order) query.set("order", params.order);
 
   const qs = query.toString();
   const url = endpoint(
@@ -177,6 +179,65 @@ export async function fetchLogEvents(
     throw new Error(`Failed to load log events: HTTP ${response.status}`);
   }
   return (await response.json()) as LogEventsResponse;
+}
+
+export async function fetchAllLogEvents(
+  params: FetchLogEventsParams = {},
+  signal?: AbortSignal,
+): Promise<LogEventsResponse> {
+  const query = new URLSearchParams();
+  if (params.limit) query.set("limit", String(params.limit));
+  if (params.level) query.set("level", params.level);
+  if (params.pattern) query.set("pattern", params.pattern);
+  if (params.stream) query.set("stream", params.stream);
+  if (params.cursor) query.set("cursor", params.cursor);
+  if (params.order) query.set("order", params.order);
+
+  const qs = query.toString();
+  const url = endpoint(`/_openstack/admin/logs/events-all${qs ? "?" + qs : ""}`);
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load log events: HTTP ${response.status}`);
+  }
+  return (await response.json()) as LogEventsResponse;
+}
+
+export async function pruneOldLogs(
+  retentionMinutes: number,
+  signal?: AbortSignal,
+): Promise<void> {
+  const url = endpoint(
+    `/_openstack/admin/logs/prune?retention=${retentionMinutes}`,
+  );
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to prune logs: HTTP ${response.status}`);
+  }
+}
+
+export async function clearLogGroup(
+  groupName: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const url = endpoint(
+    `/_openstack/admin/logs/events/${encodeURIComponent(groupName)}`,
+  );
+  const response = await fetch(url, {
+    method: "DELETE",
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to clear logs: HTTP ${response.status}`);
+  }
 }
 
 export interface PutEventBridgeRuleInput {
