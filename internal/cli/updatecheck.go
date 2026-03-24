@@ -28,6 +28,7 @@ var (
 		Timeout: 2 * time.Second,
 	}
 	updateCheckLatestReleaseURL = "https://api.github.com/repos/openstack-project/openstack/releases/latest"
+	updateCheckReleasesURL      = "https://api.github.com/repos/openstack-project/openstack/releases?per_page=20"
 )
 
 type updateCheckOptions struct {
@@ -53,8 +54,10 @@ type updateCheckCache struct {
 }
 
 type latestReleaseResponse struct {
-	TagName string `json:"tag_name"`
-	HTMLURL string `json:"html_url"`
+	TagName    string `json:"tag_name"`
+	HTMLURL    string `json:"html_url"`
+	Prerelease bool   `json:"prerelease"`
+	Draft      bool   `json:"draft"`
 }
 
 func maybePrintUpdateNotice(out io.Writer, dataDir, currentVersion string) {
@@ -161,7 +164,46 @@ func checkForUpdates(ctx context.Context, opts updateCheckOptions) (updateCheckR
 }
 
 func fetchLatestRelease(ctx context.Context) (*latestReleaseResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, updateCheckLatestReleaseURL, nil)
+	releases, err := fetchReleaseList(ctx, updateCheckReleasesURL)
+	if err != nil {
+		// Fallback to GitHub's /latest endpoint for compatibility.
+		return fetchSingleRelease(ctx, updateCheckLatestReleaseURL)
+	}
+	best, ok := newestComparableRelease(releases)
+	if ok {
+		return &best, nil
+	}
+	// If list endpoint had no comparable tags, still try /latest.
+	return fetchSingleRelease(ctx, updateCheckLatestReleaseURL)
+}
+
+func fetchSingleRelease(ctx context.Context, url string) (*latestReleaseResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("User-Agent", "openstack-cli-version-check")
+
+	resp, err := updateCheckHTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("release lookup failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var release latestReleaseResponse
+	if err := json.Unmarshal(body, &release); err != nil {
+		return nil, fmt.Errorf("parse release response: %w", err)
+	}
+	return &release, nil
+}
+
+func fetchReleaseList(ctx context.Context, url string) ([]latestReleaseResponse, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -176,14 +218,38 @@ func fetchLatestRelease(ctx context.Context) (*latestReleaseResponse, error) {
 
 	body, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("latest release lookup failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, fmt.Errorf("releases lookup failed (%d): %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
-	var release latestReleaseResponse
-	if err := json.Unmarshal(body, &release); err != nil {
-		return nil, fmt.Errorf("parse latest release response: %w", err)
+	var releases []latestReleaseResponse
+	if err := json.Unmarshal(body, &releases); err != nil {
+		return nil, fmt.Errorf("parse releases response: %w", err)
 	}
-	return &release, nil
+	return releases, nil
+}
+
+func newestComparableRelease(releases []latestReleaseResponse) (latestReleaseResponse, bool) {
+	var best latestReleaseResponse
+	bestSet := false
+
+	for _, release := range releases {
+		if release.Draft || strings.TrimSpace(release.TagName) == "" {
+			continue
+		}
+		if _, ok := parseSemanticVersion(release.TagName); !ok {
+			continue
+		}
+		if !bestSet {
+			best = release
+			bestSet = true
+			continue
+		}
+		if cmp, ok := compareSemanticVersions(best.TagName, release.TagName); ok && cmp < 0 {
+			best = release
+		}
+	}
+
+	return best, bestSet
 }
 
 func loadUpdateCheckCache(path string) (updateCheckCache, bool, error) {
