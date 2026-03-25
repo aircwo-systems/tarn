@@ -79,7 +79,7 @@
       <TableRow
         class={`cursor-pointer focus-within:bg-muted/60 ${gateway.apiId === selectedGatewayId ? "bg-muted/60" : ""}`}
         role="button"
-        tabindex="0"
+        tabindex={0}
         aria-label={`Open details for API Gateway ${gateway.name}`}
         onclick={() => selectGateway(gateway.apiId)}
         onkeydown={(event: KeyboardEvent) =>
