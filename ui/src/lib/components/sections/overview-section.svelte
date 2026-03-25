@@ -307,7 +307,8 @@
               Primary responsive container for canvas composition.
             </p>
           </div>
-          <Badge variant="secondary" class="shrink-0">w-full · responsive</Badge
+          <Badge variant="secondary" class="shrink-0" hidden
+            >w-full · responsive</Badge
           >
         </div>
       </CardHeader>
@@ -334,8 +335,8 @@
           selectedTraceId={selectedRecentTraceId}
           onSelect={(id) => (selectedRecentTraceId = id)}
         />
-
-        <Card>
+        <!-- To enable once used -->
+        <Card hidden>
           <CardHeader class="border-b border-border">
             <h4 class="text-sm font-semibold text-foreground">
               Filters / Detail Rail

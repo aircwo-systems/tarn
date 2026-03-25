@@ -104,15 +104,15 @@ export interface RouteDetail {
 
 export interface ProbeBody {
   label: string;
-  body?: string;       // JSON string, omitted for nil body
+  body?: string; // JSON string, omitted for nil body
   headers?: Record<string, string>;
   malformed?: boolean;
 }
 
 export interface SchemaField {
   name: string;
-  kind: 'string' | 'number' | 'bool' | 'enum' | 'literal' | 'array' | 'object' | 'unknown';
-  format?: 'datetime' | 'email' | 'url' | 'uuid' | '';
+  kind: "string" | "number" | "bool" | "enum" | "literal" | "array" | "object" | "unknown";
+  format?: "datetime" | "email" | "url" | "uuid" | "";
   optional?: boolean;
   enum?: string[];
   literal?: string;

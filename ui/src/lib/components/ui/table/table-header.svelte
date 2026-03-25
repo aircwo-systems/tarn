@@ -1,13 +1,20 @@
 <script lang="ts">
-	import { cn } from '$lib/utils';
+	import { cn, type WithElementRef } from "$lib/lib/utils.js";
+	import type { HTMLAttributes } from "svelte/elements";
 
 	let {
+		ref = $bindable(null),
 		class: className,
 		children,
-		...rest
-	}: { class?: string; children?: import('svelte').Snippet; [key: string]: any } = $props();
+		...restProps
+	}: WithElementRef<HTMLAttributes<HTMLTableSectionElement>> = $props();
 </script>
 
-<thead class={cn('[&_tr]:border-b', className)} {...rest}>
+<thead
+	bind:this={ref}
+	data-slot="table-header"
+	class={cn("[&_tr]:border-b", className)}
+	{...restProps}
+>
 	{@render children?.()}
 </thead>

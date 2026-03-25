@@ -23,7 +23,6 @@
   import ThemeToggle from "./theme-toggle.svelte";
   import StatusIndicator from "$lib/components/common/status-indicator.svelte";
   import ConnectionPanel from "$lib/components/topology/connection-panel.svelte";
-  import LedDot from "$lib/components/common/led-dot.svelte";
   import { Separator } from "$lib/components/ui/separator";
   import {
     getDashboard,
@@ -197,15 +196,15 @@
 >
   <!-- Brand -->
   <div class="flex items-center gap-2.5 px-3 py-3 shrink-0">
-    <TarnLogo class="h-8 w-8 shrink-0" color="#007a5a" />
+    <TarnLogo class="h-12 w-12 shrink-0" color="#007a5a" />
     {#if !collapsed}
       <div class="min-w-0">
         <p
-          class="text-[10px] font-mono uppercase tracking-wider text-sidebar-foreground/50"
+          class="text-[14px] font-mono uppercase tracking-wider text-sidebar-foreground/50"
         >
           Tarn
         </p>
-        <p class="text-sm font-semibold text-sidebar-foreground truncate">
+        <p class="text-[14px] font-semibold text-sidebar-foreground truncate">
           Rack Console
         </p>
       </div>
@@ -349,7 +348,7 @@
     <div
       class="flex items-center justify-between border-b border-border px-4 py-3"
     >
-      <h2 class="text-sm font-semibold text-foreground">UI Settings</h2>
+      <h2 class="text-[14px] font-semibold text-foreground">UI Settings</h2>
       <button
         type="button"
         onclick={closeSettings}
@@ -361,13 +360,13 @@
     </div>
 
     <div class="space-y-4 px-4 py-4 max-h-[70vh] overflow-y-auto">
-      <p class="text-xs text-muted-foreground/70">
+      <p class="text-sm text-muted-foreground/70">
         These preferences are saved in a browser cookie and local storage.
       </p>
 
       <div class="space-y-1.5">
         <label
-          class="text-xs font-medium text-foreground"
+          class="text-sm font-medium text-foreground"
           for="polling-interval">Polling Interval (seconds)</label
         >
         <input
@@ -382,9 +381,8 @@
       </div>
 
       <div class="space-y-1.5">
-        <label
-          class="text-xs font-medium text-foreground"
-          for="log-retention">Log Retention (minutes)</label
+        <label class="text-sm font-medium text-foreground" for="log-retention"
+          >Log Retention (minutes)</label
         >
         <input
           id="log-retention"
@@ -396,12 +394,13 @@
           class="w-full rounded-md border border-border bg-muted px-2.5 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
         />
         <p class="text-[11px] leading-relaxed text-muted-foreground/70">
-          Automatically remove log events older than this. Default 15 minutes. Max 1440 (24h).
+          Automatically remove log events older than this. Default 15 minutes.
+          Max 1440 (24h).
         </p>
       </div>
 
       <div class="space-y-1.5">
-        <label class="text-xs font-medium text-foreground" for="theme-mode"
+        <label class="text-sm font-medium text-foreground" for="theme-mode"
           >Theme</label
         >
         <select
@@ -419,15 +418,15 @@
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
             <label
-              class="text-xs font-medium text-foreground"
+              class="text-sm font-medium text-foreground"
               for="persistence-enabled">Persistence</label
             >
             <p
               class="mt-1 text-[11px] leading-relaxed text-muted-foreground/70"
             >
-              Persist configuration over Tarn sessions. Intended to allow
-              for config to be saved and reused instead of building instance
-              each time.
+              Persist configuration over Tarn sessions. Intended to allow for
+              config to be saved and reused instead of building instance each
+              time.
             </p>
           </div>
           <label
@@ -453,7 +452,7 @@
       </div>
 
       <div class="space-y-1.5">
-        <label class="text-xs font-medium text-foreground" for="schema-source"
+        <label class="text-sm font-medium text-foreground" for="schema-source"
           >Schema Source</label
         >
         <input
@@ -476,7 +475,7 @@
       <!-- Infrastructure Probes -->
       <div class="rounded-md border border-border bg-muted/70 p-3 space-y-2">
         <p
-          class="text-xs font-semibold uppercase tracking-wide text-muted-foreground/70"
+          class="text-sm font-semibold uppercase tracking-wide text-muted-foreground/70"
         >
           Infrastructure Probes
         </p>
@@ -495,7 +494,7 @@
                 style="accent-color: var(--color-accent)"
               />
               <span
-                class="text-xs text-foreground group-hover:text-foreground flex-1"
+                class="text-sm text-foreground group-hover:text-foreground flex-1"
                 >{k.label}</span
               >
               <span class="text-[10px] font-mono text-muted-foreground/70"
@@ -509,7 +508,7 @@
       <!-- Frontend Services -->
       <div class="rounded-md border border-border bg-muted/70 p-3 space-y-2">
         <p
-          class="text-xs font-semibold uppercase tracking-wide text-muted-foreground/70"
+          class="text-sm font-semibold uppercase tracking-wide text-muted-foreground/70"
         >
           Frontend Services
         </p>
@@ -569,11 +568,11 @@
 
       <div class="rounded-md border border-border bg-muted/70 p-3">
         <p
-          class="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground/70"
+          class="mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground/70"
         >
           Instance Info
         </p>
-        <div class="space-y-1.5 text-xs">
+        <div class="space-y-1.5 text-sm">
           <div class="grid grid-cols-[6.5rem_1fr] gap-2">
             <span class="text-muted-foreground/70">Region</span>
             <span class="font-mono text-foreground break-all"

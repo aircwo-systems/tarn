@@ -206,13 +206,8 @@ export async function fetchAllLogEvents(
   return (await response.json()) as LogEventsResponse;
 }
 
-export async function pruneOldLogs(
-  retentionMinutes: number,
-  signal?: AbortSignal,
-): Promise<void> {
-  const url = endpoint(
-    `/_tarn/admin/logs/prune?retention=${retentionMinutes}`,
-  );
+export async function pruneOldLogs(retentionMinutes: number, signal?: AbortSignal): Promise<void> {
+  const url = endpoint(`/_tarn/admin/logs/prune?retention=${retentionMinutes}`);
   const response = await fetch(url, {
     method: "POST",
     headers: { Accept: "application/json" },
@@ -223,13 +218,8 @@ export async function pruneOldLogs(
   }
 }
 
-export async function clearLogGroup(
-  groupName: string,
-  signal?: AbortSignal,
-): Promise<void> {
-  const url = endpoint(
-    `/_tarn/admin/logs/events/${encodeURIComponent(groupName)}`,
-  );
+export async function clearLogGroup(groupName: string, signal?: AbortSignal): Promise<void> {
+  const url = endpoint(`/_tarn/admin/logs/events/${encodeURIComponent(groupName)}`);
   const response = await fetch(url, {
     method: "DELETE",
     headers: { Accept: "application/json" },
@@ -369,9 +359,7 @@ export async function removeEventBridgeTargets(
   };
 }
 
-export async function fireEventBridgeRule(
-  ruleName: string,
-): Promise<EventBridgeFireResult> {
+export async function fireEventBridgeRule(ruleName: string): Promise<EventBridgeFireResult> {
   const response = await fetch(endpoint("/_tarn/admin/eventbridge/fire"), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },

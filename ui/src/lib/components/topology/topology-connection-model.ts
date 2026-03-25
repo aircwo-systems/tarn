@@ -291,9 +291,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       if (!from || !to) return [];
       const queue = queueByName.get(queueName);
       const total =
-        (queue?.approxVisible ?? 0) +
-        (queue?.approxInFlight ?? 0) +
-        (queue?.approxDelayed ?? 0);
+        (queue?.approxVisible ?? 0) + (queue?.approxInFlight ?? 0) + (queue?.approxDelayed ?? 0);
       const activity = traceEdgeActivity.get(`gw::${gwId}→${queueName}`);
       return [{ from, to, active: total > 0, activity }];
     }),
@@ -502,22 +500,20 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       }))
     : [];
 
-  const cacheActivity = aggregateActivity(
-    [
-      ...functionToCache.flatMap((edge) => (edge.activity ? [edge.activity] : [])),
-      ...(traceEdgeActivity.get("cache::global")
-        ? [traceEdgeActivity.get("cache::global")!]
-        : []),
-    ],
-  );
+  const cacheActivity = aggregateActivity([
+    ...functionToCache.flatMap((edge) => (edge.activity ? [edge.activity] : [])),
+    ...(traceEdgeActivity.get("cache::global") ? [traceEdgeActivity.get("cache::global")!] : []),
+  ]);
 
   const cacheToSecret = connCacheExtension
     ? withLanes(
-        [...connSecrets].sort((a, b) => a.y - b.y).map((secret) => ({
-          from: connCacheExtension,
-          to: secret,
-          activity: cacheActivity,
-        })),
+        [...connSecrets]
+          .sort((a, b) => a.y - b.y)
+          .map((secret) => ({
+            from: connCacheExtension,
+            to: secret,
+            activity: cacheActivity,
+          })),
         (edge) => `cache→${edge.to.id}`,
       ).map((edge) => ({
         ...edge,
@@ -580,18 +576,12 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
   };
 }
 
-export function activityStroke(
-  activity: EdgeActivity | undefined,
-  defaultStroke: string,
-): string {
+export function activityStroke(activity: EdgeActivity | undefined, defaultStroke: string): string {
   if (!activity) return defaultStroke;
   return activity.hasError ? "destructive" : "primary";
 }
 
-export function activityOpacity(
-  activity: EdgeActivity | undefined,
-  base: number,
-): number {
+export function activityOpacity(activity: EdgeActivity | undefined, base: number): number {
   if (!activity) return base;
   return Math.min(0.95, base + activity.count * 0.12);
 }
@@ -636,9 +626,7 @@ export function selectedTraceNodes(
   const cacheSpan = trace.spans.find(
     (span) => span.kind === "cache_extension" || span.kind === "cache-extension",
   );
-  const secretsSpan = trace.spans.find(
-    (span) => span.kind === "secrets" || span.kind === "secret",
-  );
+  const secretsSpan = trace.spans.find((span) => span.kind === "secrets" || span.kind === "secret");
 
   const matchedGateway = trace.gatewayId
     ? model.nodes.gateways.find((node) => node.id === trace.gatewayId)
@@ -658,14 +646,22 @@ export function selectedTraceNodes(
   const matchedDlq = dlqSpan
     ? model.nodes.queues.find((node) => node.id === dlqSpan.name)
     : undefined;
-  const matchedCache = cacheSpan || secretsSpan ? model.nodes.cacheExtension ?? undefined : undefined;
+  const matchedCache =
+    cacheSpan || secretsSpan ? (model.nodes.cacheExtension ?? undefined) : undefined;
   const matchedSecret = secretsSpan
     ? model.nodes.secrets.find((node) => node.id === secretsSpan.name)
     : undefined;
 
-  return [matchedGateway, matchedEventBridge, matchedFunction, matchedTopic, matchedQueue, matchedDlq, matchedCache, matchedSecret].filter(
-    (node): node is ConnectionNode => !!node,
-  );
+  return [
+    matchedGateway,
+    matchedEventBridge,
+    matchedFunction,
+    matchedTopic,
+    matchedQueue,
+    matchedDlq,
+    matchedCache,
+    matchedSecret,
+  ].filter((node): node is ConnectionNode => !!node);
 }
 
 export function nodeBounds(node: ConnectionNode): {
@@ -761,18 +757,8 @@ export function clampViewportTransform(
 
   return {
     scale: transform.scale,
-    offsetX: clampOffsetAxis(
-      safeWidth,
-      contentWidth,
-      transform.offsetX,
-      overscrollX,
-    ),
-    offsetY: clampOffsetAxis(
-      safeHeight,
-      contentHeight,
-      transform.offsetY,
-      overscrollY,
-    ),
+    offsetX: clampOffsetAxis(safeWidth, contentWidth, transform.offsetX, overscrollX),
+    offsetY: clampOffsetAxis(safeHeight, contentHeight, transform.offsetY, overscrollY),
   };
 }
 
@@ -787,21 +773,14 @@ export function viewportToCanvasPoint(
   };
 }
 
-export function clampInfraNodePosition(
-  x: number,
-  y: number,
-): InfraNodePosition {
+export function clampInfraNodePosition(x: number, y: number): InfraNodePosition {
   return {
     x: clamp(
       x,
       CONNECTION_CANVAS.infraHalfWidth + 24,
       CONNECTION_CANVAS.width - CONNECTION_CANVAS.infraHalfWidth - 24,
     ),
-    y: clamp(
-      y,
-      120,
-      CONNECTION_CANVAS.height - CONNECTION_CANVAS.nodeHalfHeight - 24,
-    ),
+    y: clamp(y, 120, CONNECTION_CANVAS.height - CONNECTION_CANVAS.nodeHalfHeight - 24),
   };
 }
 
@@ -1106,7 +1085,10 @@ function filterLabel(filterCriteria: FilterCriteria | undefined): string | null 
   }
 }
 
-function buildTraceEdgeActivity(recentTraces: RequestTrace[], now: number): Map<string, EdgeActivity> {
+function buildTraceEdgeActivity(
+  recentTraces: RequestTrace[],
+  now: number,
+): Map<string, EdgeActivity> {
   const map = new Map<string, EdgeActivity>();
   const bump = (key: string, trace: RequestTrace) => {
     const activity = map.get(key) ?? {
