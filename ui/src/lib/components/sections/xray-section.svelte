@@ -452,6 +452,20 @@
         <span class="flex items-center gap-1.5">
           <span
             class="h-2 w-2 rounded-sm inline-block"
+            style="background:var(--color-primary);opacity:0.6"
+          ></span>
+          SNS
+        </span>
+        <span class="flex items-center gap-1.5">
+          <span
+            class="h-2 w-2 rounded-sm inline-block"
+            style="background:var(--color-blue);opacity:0.6"
+          ></span>
+          EventBridge
+        </span>
+        <span class="flex items-center gap-1.5">
+          <span
+            class="h-2 w-2 rounded-sm inline-block"
             style="background:var(--color-blue);opacity:0.6"
           ></span>
           Secrets / DB
