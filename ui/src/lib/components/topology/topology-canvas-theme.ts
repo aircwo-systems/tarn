@@ -44,11 +44,7 @@ export function readTopologyCanvasPalette(): TopologyCanvasPalette {
     isDark,
     background: readVar(styles, "--color-background", FALLBACK_PALETTE.background),
     foreground: readVar(styles, "--color-foreground", FALLBACK_PALETTE.foreground),
-    mutedForeground: readVar(
-      styles,
-      "--color-muted-foreground",
-      FALLBACK_PALETTE.mutedForeground,
-    ),
+    mutedForeground: readVar(styles, "--color-muted-foreground", FALLBACK_PALETTE.mutedForeground),
     border: readVar(styles, "--color-border", FALLBACK_PALETTE.border),
     popover: readVar(styles, "--color-popover", FALLBACK_PALETTE.popover),
     muted: readVar(styles, "--color-muted", FALLBACK_PALETTE.muted),

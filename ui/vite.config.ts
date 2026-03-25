@@ -4,9 +4,7 @@ import { defineConfig, loadEnv } from "vite";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, ".", "");
-  const proxyTarget = normalizeProxyTarget(
-    env.TARN_UI_PROXY_TARGET || "http://127.0.0.1:4566",
-  );
+  const proxyTarget = normalizeProxyTarget(env.TARN_UI_PROXY_TARGET || "http://127.0.0.1:4566");
   const proxy = {
     "/_tarn": {
       target: proxyTarget,

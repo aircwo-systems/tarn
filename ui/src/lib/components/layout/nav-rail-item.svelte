@@ -24,10 +24,10 @@
     active
       ? collapsed
         ? "text-sidebar-foreground bg-sidebar-accent"
-        : "text-sidebar-foreground bg-sidebar-accent border-l-2 border-l-sidebar-primary pl-2"
+        : "text-[13px] text-sidebar-foreground bg-sidebar-accent border-l-2 border-l-sidebar-primary pl-2"
       : collapsed
         ? "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50"
-        : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50 border-l-2 border-l-transparent pl-2",
+        : "text-[13px] text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent/50 border-l-2 border-l-transparent pl-2",
   )}
   {onclick}
   aria-current={active ? "page" : undefined}

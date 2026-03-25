@@ -448,10 +448,7 @@ function initProjectSettings() {
 
 function persistProjectSettings() {
   if (typeof localStorage === "undefined") return;
-  localStorage.setItem(
-    PROJECT_SETTINGS_KEY,
-    JSON.stringify({ schemaSourceDir }),
-  );
+  localStorage.setItem(PROJECT_SETTINGS_KEY, JSON.stringify({ schemaSourceDir }));
 }
 
 async function probeFrontendTargets() {
