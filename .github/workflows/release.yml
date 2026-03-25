@@ -87,12 +87,6 @@ jobs:
           name: bin-tarn-${{ matrix.goos }}-${{ matrix.goarch }}
           path: ./build/tarn-*
 
-      - name: Upload secrets-proxy artifact
-        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
-        uses: actions/upload-artifact@v4
-        with:
-          name: secrets-proxy-linux-amd64
-          path: ./build/secrets-proxy-*
 
   create-release:
     needs: build-binaries
@@ -115,9 +109,6 @@ jobs:
               tar -czvf "./to-upload/${name}.tar.gz" "$f"
             fi
           done
-          if [ -f ./raw-bins/secrets-proxy-linux-amd64 ]; then
-            tar -czvf "./to-upload/secrets-proxy-linux-amd64.tar.gz" ./raw-bins/secrets-proxy-linux-amd64
-          fi
 
       - name: Create Release
         uses: softprops/action-gh-release@v2
