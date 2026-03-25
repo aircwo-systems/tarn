@@ -78,7 +78,7 @@ resource "aws_s3_object" "processor_code" {
 
 resource "aws_lambda_function" "processor" {
   function_name    = "order-processor"
-  runtime          = "nodejs20.x"
+  runtime          = "nodejs24.x"
   handler          = "index.handler"
   role             = "arn:aws:iam::000000000000:role/lambda-role"
   s3_bucket        = aws_s3_bucket.artifacts.id

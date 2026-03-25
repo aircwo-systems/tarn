@@ -10,8 +10,8 @@ It does not run schema or data operations. The handler just connects, releases t
 
 ## Prerequisites
 
-- OpenStack server running at `http://localhost:4566`
-- OpenStack CLI binary (`./build/openstack` or `openstack` in `PATH`)
+- Tarn server running at `http://localhost:4566`
+- Tarn CLI binary (`./build/tarn` or `tarn` in `PATH`)
 - `bun`, `zip`, and `curl`
 - A PostgreSQL instance reachable from the Lambda container at `host.docker.internal:5432`
 
@@ -33,10 +33,10 @@ Expected response shape:
 
 ## Configurable env vars
 
-- `OPENSTACK_ENDPOINT` (default: `http://localhost:4566`)
+- `TARN_ENDPOINT` (default: `http://localhost:4566`)
 - `AWS_DEFAULT_REGION` (default: `us-east-1`)
-- `OPENSTACK_ACCOUNT_ID` (default: `000000000000`)
-- `OPENSTACK_BIN` (optional path to the `openstack` CLI)
+- `TARN_ACCOUNT_ID` (default: `000000000000`)
+- `TARN_BIN` (optional path to the `tarn` CLI)
 - `FUNCTION_NAME` (default: `kysely-postgres-lambda-test`)
 - `RUNTIME` (default: `nodejs24.x`)
 - `HANDLER` (default: `index.handler`)

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openstack-project/openstack/internal/config"
+	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -27,8 +27,8 @@ var (
 	updateCheckHTTPClient = &http.Client{
 		Timeout: 2 * time.Second,
 	}
-	updateCheckLatestReleaseURL = "https://api.github.com/repos/openstack-project/openstack/releases/latest"
-	updateCheckReleasesURL      = "https://api.github.com/repos/openstack-project/openstack/releases?per_page=20"
+	updateCheckLatestReleaseURL = "https://api.github.com/repos/aircwo-systems/tarn/releases/latest"
+	updateCheckReleasesURL      = "https://api.github.com/repos/aircwo-systems/tarn/releases?per_page=20"
 )
 
 type updateCheckOptions struct {
@@ -76,7 +76,7 @@ func maybePrintUpdateNotice(out io.Writer, dataDir, currentVersion string) {
 		if err != nil || !result.Outdated {
 			return
 		}
-		_, _ = fmt.Fprintf(out, "Update available: openstack %s -> %s (%s)\n", result.CurrentVersion, result.LatestVersion, result.ReleaseURL)
+		_, _ = fmt.Fprintf(out, "Update available: tarn %s -> %s (%s)\n", result.CurrentVersion, result.LatestVersion, result.ReleaseURL)
 	}()
 }
 
@@ -95,7 +95,7 @@ func runVersionUpdateCheck(cmd *cobra.Command, out io.Writer, currentVersion str
 	}
 
 	if result.Outdated {
-		_, _ = fmt.Fprintf(out, "Update available: openstack %s -> %s\n", result.CurrentVersion, result.LatestVersion)
+		_, _ = fmt.Fprintf(out, "Update available: tarn %s -> %s\n", result.CurrentVersion, result.LatestVersion)
 		if strings.TrimSpace(result.ReleaseURL) != "" {
 			_, _ = fmt.Fprintf(out, "Release notes: %s\n", result.ReleaseURL)
 		}
@@ -106,7 +106,7 @@ func runVersionUpdateCheck(cmd *cobra.Command, out io.Writer, currentVersion str
 		_, _ = fmt.Fprintln(out, "No release information available.")
 		return nil
 	}
-	_, _ = fmt.Fprintf(out, "openstack %s is up to date\n", result.CurrentVersion)
+	_, _ = fmt.Fprintf(out, "tarn %s is up to date\n", result.CurrentVersion)
 	return nil
 }
 
@@ -183,7 +183,7 @@ func fetchSingleRelease(ctx context.Context, url string) (*latestReleaseResponse
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "openstack-cli-version-check")
+	req.Header.Set("User-Agent", "tarn-cli-version-check")
 
 	resp, err := updateCheckHTTPClient.Do(req)
 	if err != nil {
@@ -208,7 +208,7 @@ func fetchReleaseList(ctx context.Context, url string) ([]latestReleaseResponse,
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "openstack-cli-version-check")
+	req.Header.Set("User-Agent", "tarn-cli-version-check")
 
 	resp, err := updateCheckHTTPClient.Do(req)
 	if err != nil {
@@ -307,7 +307,7 @@ func resolveCLIDataDir(cmd *cobra.Command) string {
 }
 
 func shouldDisableUpdateCheck() bool {
-	v := strings.TrimSpace(os.Getenv("OPENSTACK_DISABLE_UPDATE_CHECK"))
+	v := strings.TrimSpace(os.Getenv("TARN_DISABLE_UPDATE_CHECK"))
 	if v == "" {
 		return false
 	}

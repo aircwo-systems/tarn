@@ -10,8 +10,8 @@ import type {
 } from "$lib/types";
 
 const configuredBase = normalizeBase(
-  typeof import.meta !== "undefined" && import.meta.env?.VITE_OPENSTACK_API_BASE
-    ? String(import.meta.env.VITE_OPENSTACK_API_BASE)
+  typeof import.meta !== "undefined" && import.meta.env?.VITE_TARN_API_BASE
+    ? String(import.meta.env.VITE_TARN_API_BASE)
     : "",
 );
 const awsProtocolBase = normalizeAWSProtocolBase(configuredBase);
@@ -25,8 +25,8 @@ function awsEndpoint(path: string): string {
 }
 
 export async function fetchOverview(signal?: AbortSignal): Promise<OverviewResponse> {
-  const overviewPath = "/_openstack/admin/overview";
-  const healthPath = "/_openstack/health";
+  const overviewPath = "/_tarn/admin/overview";
+  const healthPath = "/_tarn/health";
   const overviewURL = endpoint(overviewPath);
   const response = await fetch(overviewURL, {
     method: "GET",
@@ -48,7 +48,7 @@ export async function fetchOverview(signal?: AbortSignal): Promise<OverviewRespo
 
     if (health?.ok) {
       throw new Error(
-        "Connected to OpenStack, but this instance does not expose /_openstack/admin/overview yet. Rebuild and restart OpenStack from the latest code.",
+        "Connected to Tarn, but this instance does not expose /_tarn/admin/overview yet. Rebuild and restart Tarn from the latest code.",
       );
     }
   }
@@ -75,7 +75,7 @@ export async function fetchQueueMessages(
   queueName: string,
   signal?: AbortSignal,
 ): Promise<QueueMessageSummary[]> {
-  const messagesPath = `/_openstack/admin/queues/${encodeURIComponent(queueName)}/messages?limit=20`;
+  const messagesPath = `/_tarn/admin/queues/${encodeURIComponent(queueName)}/messages?limit=20`;
   const response = await fetch(endpoint(messagesPath), {
     method: "GET",
     headers: {
@@ -99,7 +99,7 @@ export async function fetchSecretValue(
   secretName: string,
   signal?: AbortSignal,
 ): Promise<SecretValueResult> {
-  const secretPath = `/_openstack/admin/secrets/${encodeURIComponent(secretName)}/value`;
+  const secretPath = `/_tarn/admin/secrets/${encodeURIComponent(secretName)}/value`;
   const response = await fetch(endpoint(secretPath), {
     method: "GET",
     headers: {
@@ -130,7 +130,7 @@ export async function fetchSecretValue(
 }
 
 export async function fetchLogGroups(signal?: AbortSignal): Promise<LogGroupSummary[]> {
-  const response = await fetch(endpoint("/_openstack/admin/logs/groups"), {
+  const response = await fetch(endpoint("/_tarn/admin/logs/groups"), {
     method: "GET",
     headers: { Accept: "application/json" },
     signal,
@@ -168,7 +168,7 @@ export async function fetchLogEvents(
 
   const qs = query.toString();
   const url = endpoint(
-    `/_openstack/admin/logs/events/${encodeURIComponent(groupName)}${qs ? "?" + qs : ""}`,
+    `/_tarn/admin/logs/events/${encodeURIComponent(groupName)}${qs ? "?" + qs : ""}`,
   );
   const response = await fetch(url, {
     method: "GET",
@@ -194,7 +194,7 @@ export async function fetchAllLogEvents(
   if (params.order) query.set("order", params.order);
 
   const qs = query.toString();
-  const url = endpoint(`/_openstack/admin/logs/events-all${qs ? "?" + qs : ""}`);
+  const url = endpoint(`/_tarn/admin/logs/events-all${qs ? "?" + qs : ""}`);
   const response = await fetch(url, {
     method: "GET",
     headers: { Accept: "application/json" },
@@ -211,7 +211,7 @@ export async function pruneOldLogs(
   signal?: AbortSignal,
 ): Promise<void> {
   const url = endpoint(
-    `/_openstack/admin/logs/prune?retention=${retentionMinutes}`,
+    `/_tarn/admin/logs/prune?retention=${retentionMinutes}`,
   );
   const response = await fetch(url, {
     method: "POST",
@@ -228,7 +228,7 @@ export async function clearLogGroup(
   signal?: AbortSignal,
 ): Promise<void> {
   const url = endpoint(
-    `/_openstack/admin/logs/events/${encodeURIComponent(groupName)}`,
+    `/_tarn/admin/logs/events/${encodeURIComponent(groupName)}`,
   );
   const response = await fetch(url, {
     method: "DELETE",
@@ -372,7 +372,7 @@ export async function removeEventBridgeTargets(
 export async function fireEventBridgeRule(
   ruleName: string,
 ): Promise<EventBridgeFireResult> {
-  const response = await fetch(endpoint("/_openstack/admin/eventbridge/fire"), {
+  const response = await fetch(endpoint("/_tarn/admin/eventbridge/fire"), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ ruleName }),
@@ -388,7 +388,7 @@ export async function runEventBridgeRace(
   runs: number,
   concurrency: number,
 ): Promise<EventBridgeRaceResult> {
-  const response = await fetch(endpoint("/_openstack/admin/eventbridge/race"), {
+  const response = await fetch(endpoint("/_tarn/admin/eventbridge/race"), {
     method: "POST",
     headers: { "Content-Type": "application/json", Accept: "application/json" },
     body: JSON.stringify({ ruleName, runs, concurrency }),
@@ -463,9 +463,9 @@ async function eventBridgeCall<T = unknown>(action: string, body: unknown): Prom
     Accept: "application/json",
   };
   const payload = JSON.stringify(body ?? {});
-  const candidateURLs = [endpoint("/_openstack/events")];
+  const candidateURLs = [endpoint("/_tarn/events")];
   if (awsProtocolBase) {
-    const protocolScopedPath = awsEndpoint("/_openstack/events");
+    const protocolScopedPath = awsEndpoint("/_tarn/events");
     if (!candidateURLs.includes(protocolScopedPath)) {
       candidateURLs.push(protocolScopedPath);
     }

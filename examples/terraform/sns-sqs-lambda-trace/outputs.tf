@@ -19,11 +19,11 @@ output "publish_order_created_curl" {
 }
 
 output "open_lambda_logs_curl" {
-  description = "Inspect Lambda logs from the OpenStack admin endpoint."
-  value       = "curl -sS ${var.endpoint}/_openstack/admin/logs/events/%2Faws%2Flambda%2F${aws_lambda_function.worker.function_name}?limit=50"
+  description = "Inspect Lambda logs from the Tarn admin endpoint."
+  value       = "curl -sS ${var.endpoint}/_tarn/admin/logs/events/%2Faws%2Flambda%2F${aws_lambda_function.worker.function_name}?limit=50"
 }
 
 output "overview_traces_curl" {
   description = "Inspect recent traces; spans should include topic + queue after publish."
-  value       = "curl -sS ${var.endpoint}/_openstack/admin/overview"
+  value       = "curl -sS ${var.endpoint}/_tarn/admin/overview"
 }

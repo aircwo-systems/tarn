@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openstack-project/openstack/internal/config"
-	lambdasvc "github.com/openstack-project/openstack/internal/lambda"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/config"
+	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 func newLambdaHandler(t *testing.T) *Handler {

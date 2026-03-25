@@ -18,8 +18,8 @@ func newInvokeCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "invoke",
 		Short: "Invoke a Lambda function",
-		Example: `  openstack lambda invoke --name my-func
-  openstack lambda invoke --name my-func --payload '{"key": "value"}'`,
+		Example: `  tarn lambda invoke --name my-func
+  tarn lambda invoke --name my-func --payload '{"key": "value"}'`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
@@ -39,7 +39,7 @@ func newInvokeCmd() *cobra.Command {
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer resp.Body.Close()
 

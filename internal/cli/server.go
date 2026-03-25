@@ -16,23 +16,23 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/openstack-project/openstack/internal/api"
-	"github.com/openstack-project/openstack/internal/apigateway"
-	"github.com/openstack-project/openstack/internal/apigatewayv1"
-	"github.com/openstack-project/openstack/internal/config"
-	"github.com/openstack-project/openstack/internal/engine"
-	"github.com/openstack-project/openstack/internal/eventbridge"
-	"github.com/openstack-project/openstack/internal/eventsource"
-	"github.com/openstack-project/openstack/internal/infrastructure"
-	"github.com/openstack-project/openstack/internal/lambda"
-	"github.com/openstack-project/openstack/internal/logs"
-	s3store "github.com/openstack-project/openstack/internal/s3"
-	"github.com/openstack-project/openstack/internal/secrets"
-	"github.com/openstack-project/openstack/internal/secretsproxy"
-	"github.com/openstack-project/openstack/internal/sns"
-	"github.com/openstack-project/openstack/internal/sqs"
-	"github.com/openstack-project/openstack/internal/trace"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/api"
+	"github.com/aircwo-systems/tarn/internal/apigateway"
+	"github.com/aircwo-systems/tarn/internal/apigatewayv1"
+	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/internal/engine"
+	"github.com/aircwo-systems/tarn/internal/eventbridge"
+	"github.com/aircwo-systems/tarn/internal/eventsource"
+	"github.com/aircwo-systems/tarn/internal/infrastructure"
+	"github.com/aircwo-systems/tarn/internal/lambda"
+	"github.com/aircwo-systems/tarn/internal/logs"
+	s3store "github.com/aircwo-systems/tarn/internal/s3"
+	"github.com/aircwo-systems/tarn/internal/secrets"
+	"github.com/aircwo-systems/tarn/internal/secretsproxy"
+	"github.com/aircwo-systems/tarn/internal/sns"
+	"github.com/aircwo-systems/tarn/internal/sqs"
+	"github.com/aircwo-systems/tarn/internal/trace"
+	"github.com/aircwo-systems/tarn/pkg/types"
 	"github.com/spf13/cobra"
 )
 
@@ -60,32 +60,32 @@ func buildConfig(cmd *cobra.Command) (*config.Config, error) {
 	if v, _ := cmd.Flags().GetString("ui-dir"); v != "" {
 		cfg.UIDir = v
 	}
-	if cmd.Flags().Changed("persist") || os.Getenv("OPENSTACK_PERSIST") == "" {
+	if cmd.Flags().Changed("persist") || os.Getenv("TARN_PERSIST") == "" {
 		if v, err := cmd.Flags().GetBool("persist"); err == nil {
 			cfg.PersistenceEnabled = v
 		}
 	}
-	if cmd.Flags().Changed("expose-secrets-proxy") || os.Getenv("OPENSTACK_EXPOSE_SECRETS_PROXY") == "" {
+	if cmd.Flags().Changed("expose-secrets-proxy") || os.Getenv("TARN_EXPOSE_SECRETS_PROXY") == "" {
 		if v, err := cmd.Flags().GetBool("expose-secrets-proxy"); err == nil {
 			cfg.ExposeSecretsProxy = v
 		}
 	}
-	if cmd.Flags().Changed("secrets-proxy-host") || os.Getenv("OPENSTACK_SECRETS_PROXY_HOST") == "" {
+	if cmd.Flags().Changed("secrets-proxy-host") || os.Getenv("TARN_SECRETS_PROXY_HOST") == "" {
 		if v, err := cmd.Flags().GetString("secrets-proxy-host"); err == nil && v != "" {
 			cfg.SecretsProxyHost = v
 		}
 	}
-	if cmd.Flags().Changed("secrets-proxy-port") || os.Getenv("OPENSTACK_SECRETS_PROXY_PORT") == "" {
+	if cmd.Flags().Changed("secrets-proxy-port") || os.Getenv("TARN_SECRETS_PROXY_PORT") == "" {
 		if v, err := cmd.Flags().GetInt("secrets-proxy-port"); err == nil && v > 0 {
 			cfg.SecretsProxyPort = v
 		}
 	}
-	if cmd.Flags().Changed("secrets-proxy-token") || os.Getenv("OPENSTACK_SECRETS_PROXY_TOKEN") == "" {
+	if cmd.Flags().Changed("secrets-proxy-token") || os.Getenv("TARN_SECRETS_PROXY_TOKEN") == "" {
 		if v, err := cmd.Flags().GetString("secrets-proxy-token"); err == nil && v != "" {
 			cfg.SecretsProxySessionToken = v
 		}
 	}
-	if cmd.Flags().Changed("secrets-proxy-require-token") || os.Getenv("OPENSTACK_SECRETS_PROXY_REQUIRE_TOKEN") == "" {
+	if cmd.Flags().Changed("secrets-proxy-require-token") || os.Getenv("TARN_SECRETS_PROXY_REQUIRE_TOKEN") == "" {
 		if v, err := cmd.Flags().GetBool("secrets-proxy-require-token"); err == nil {
 			cfg.SecretsProxyRequireToken = v
 		}
@@ -296,7 +296,7 @@ func startServer(cfg *config.Config) error {
 
 	var secretsProxyServer *http.Server
 	if cfg.ExposeSecretsProxy {
-		logsSvc.CreateLogGroup("/openstack/secrets-proxy")
+		logsSvc.CreateLogGroup("/tarn/secrets-proxy")
 		addr := fmt.Sprintf("%s:%d", cfg.SecretsProxyHost, cfg.SecretsProxyPort)
 		upstream := cfg.Endpoint()
 		token := cfg.SecretsProxySessionToken
@@ -345,7 +345,7 @@ func startServer(cfg *config.Config) error {
 
 	go func() {
 		<-sigCh
-		log.Println("\nShutting down OpenStack...")
+		log.Println("\nShutting down Tarn...")
 		eng.Cleanup(ctx)
 		if secretsProxyServer != nil {
 			if err := secretsProxyServer.Shutdown(ctx); err != nil && !errors.Is(err, context.Canceled) {
@@ -410,7 +410,7 @@ func recordSecretsProxyTelemetry(logsSvc *logs.Service, traceStore *trace.Store,
 		if event.Error != "" {
 			msg += " error=" + event.Error
 		}
-		logsSvc.PutLogEvents("/openstack/secrets-proxy", "requests", []logs.LogEvent{
+		logsSvc.PutLogEvents("/tarn/secrets-proxy", "requests", []logs.LogEvent{
 			{
 				Timestamp: startedAt,
 				Message:   msg,

@@ -19,8 +19,8 @@ import (
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
-	"github.com/openstack-project/openstack/internal/config"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 const rieContainerPort = "8080/tcp"
@@ -161,7 +161,7 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 		fmt.Sprintf("AWS_LAMBDA_LOG_STREAM_NAME=%s", time.Now().Format("2006/01/02")),
 		fmt.Sprintf("_HANDLER=%s", fn.Handler),
 		fmt.Sprintf("AWS_LAMBDA_FUNCTION_TIMEOUT=%d", fn.Timeout),
-		// Point SDK calls back to OpenStack
+		// Point SDK calls back to Tarn
 		fmt.Sprintf("AWS_ENDPOINT_URL=http://host.docker.internal:%d", e.cfg.Port),
 		"AWS_ACCESS_KEY_ID=test",
 		"AWS_SECRET_ACCESS_KEY=test",
@@ -191,23 +191,23 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 
 	secretsProxyPath := e.findSecretsProxy()
 	if secretsProxyPath != "" {
-		binds = append(binds, fmt.Sprintf("%s:/opt/openstack/secrets-proxy:ro", secretsProxyPath))
+		binds = append(binds, fmt.Sprintf("%s:/opt/tarn/secrets-proxy:ro", secretsProxyPath))
 		env = append(env,
 			"PARAMETERS_SECRETS_EXTENSION_HTTP_PORT=2773",
 			"AWS_SESSION_TOKEN=local-dev-token",
-			"OPENSTACK_INTERNAL_LAMBDA=1",
+			"TARN_INTERNAL_LAMBDA=1",
 		)
-		bgCmds = append(bgCmds, "/opt/openstack/secrets-proxy &")
+		bgCmds = append(bgCmds, "/opt/tarn/secrets-proxy &")
 	}
 
 	if dbProxyPath != "" {
-		binds = append(binds, fmt.Sprintf("%s:/opt/openstack/db-proxy:ro", dbProxyPath))
+		binds = append(binds, fmt.Sprintf("%s:/opt/tarn/db-proxy:ro", dbProxyPath))
 		env = append(env,
-			fmt.Sprintf("OPENSTACK_DB_UPSTREAM=%s", dbUpstream),
-			fmt.Sprintf("OPENSTACK_DB_NAME=%s", dbName),
-			fmt.Sprintf("OPENSTACK_DB_PROXY_PORT=%d", dbProxyPort),
+			fmt.Sprintf("TARN_DB_UPSTREAM=%s", dbUpstream),
+			fmt.Sprintf("TARN_DB_NAME=%s", dbName),
+			fmt.Sprintf("TARN_DB_PROXY_PORT=%d", dbProxyPort),
 		)
-		bgCmds = append(bgCmds, "/opt/openstack/db-proxy &")
+		bgCmds = append(bgCmds, "/opt/tarn/db-proxy &")
 	}
 
 	var entrypoint []string
@@ -255,7 +255,7 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
 	}
 
-	name := fmt.Sprintf("openstack-lambda-%s-%d", sanitizeName(fn.FunctionName), time.Now().UnixMilli())
+	name := fmt.Sprintf("tarn-lambda-%s-%d", sanitizeName(fn.FunctionName), time.Now().UnixMilli())
 
 	resp, err := e.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, name)
 	if err != nil {

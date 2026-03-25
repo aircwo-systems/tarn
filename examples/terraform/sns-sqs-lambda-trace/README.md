@@ -1,6 +1,6 @@
 # Terraform Example: SNS -> SQS Subscription -> Lambda Consumer (Traceable)
 
-This example provisions a minimal but fully working SNS flow in OpenStack:
+This example provisions a minimal but fully working SNS flow in Tarn:
 
 1. Publish event to SNS topic.
 2. SNS fans out to subscribed SQS queue.
@@ -19,11 +19,11 @@ It is designed to exercise the new SNS support and make the SNS component visibl
 
 ## Usage
 
-Start OpenStack:
+Start Tarn:
 
 ```bash
 make build
-./build/openstack start --ui
+./build/tarn start --ui
 ```
 
 Provision infrastructure:

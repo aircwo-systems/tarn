@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 
-	eventsourcesvc "github.com/openstack-project/openstack/internal/eventsource"
-	"github.com/openstack-project/openstack/pkg/types"
+	eventsourcesvc "github.com/aircwo-systems/tarn/internal/eventsource"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // Handler serves event source mapping REST endpoints.

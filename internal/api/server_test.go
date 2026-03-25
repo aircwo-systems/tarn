@@ -8,19 +8,19 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/openstack-project/openstack/internal/apigateway"
-	"github.com/openstack-project/openstack/internal/apigatewayv1"
-	"github.com/openstack-project/openstack/internal/config"
-	"github.com/openstack-project/openstack/internal/eventbridge"
-	"github.com/openstack-project/openstack/internal/eventsource"
-	"github.com/openstack-project/openstack/internal/infrastructure"
-	"github.com/openstack-project/openstack/internal/lambda"
-	"github.com/openstack-project/openstack/internal/logs"
-	s3store "github.com/openstack-project/openstack/internal/s3"
-	"github.com/openstack-project/openstack/internal/secrets"
-	"github.com/openstack-project/openstack/internal/sns"
-	"github.com/openstack-project/openstack/internal/sqs"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/apigateway"
+	"github.com/aircwo-systems/tarn/internal/apigatewayv1"
+	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/internal/eventbridge"
+	"github.com/aircwo-systems/tarn/internal/eventsource"
+	"github.com/aircwo-systems/tarn/internal/infrastructure"
+	"github.com/aircwo-systems/tarn/internal/lambda"
+	"github.com/aircwo-systems/tarn/internal/logs"
+	s3store "github.com/aircwo-systems/tarn/internal/s3"
+	"github.com/aircwo-systems/tarn/internal/secrets"
+	"github.com/aircwo-systems/tarn/internal/sns"
+	"github.com/aircwo-systems/tarn/internal/sqs"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 func TestNewServerRegistersRoutes(t *testing.T) {
@@ -190,7 +190,7 @@ func TestEventBridgeProtocolDispatchSupportsNonRootPath(t *testing.T) {
 	}
 }
 
-func TestEventBridgeProtocolDispatchSupportsOpenStackPrefixedPath(t *testing.T) {
+func TestEventBridgeProtocolDispatchSupportsTarnPrefixedPath(t *testing.T) {
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
 
@@ -221,27 +221,27 @@ func TestEventBridgeProtocolDispatchSupportsOpenStackPrefixedPath(t *testing.T) 
 	handler := s.withLogging(mux)
 
 	putBody := []byte(`{"Name":"rule-b","ScheduleExpression":"rate(1 minute)","State":"ENABLED"}`)
-	putReq := httptest.NewRequest(http.MethodPost, "/_openstack", bytes.NewReader(putBody))
+	putReq := httptest.NewRequest(http.MethodPost, "/_tarn", bytes.NewReader(putBody))
 	putReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	putReq.Header.Set("X-Amz-Target", "AWSEvents.PutRule")
 	putRec := httptest.NewRecorder()
 	handler.ServeHTTP(putRec, putReq)
 	if putRec.Code != http.StatusOK {
-		t.Fatalf("put rule via /_openstack status=%d body=%s", putRec.Code, putRec.Body.String())
+		t.Fatalf("put rule via /_tarn status=%d body=%s", putRec.Code, putRec.Body.String())
 	}
 
 	disableBody := []byte(`{"Name":"rule-b","EventBusName":"default"}`)
-	disableReq := httptest.NewRequest(http.MethodPost, "/_openstack", bytes.NewReader(disableBody))
+	disableReq := httptest.NewRequest(http.MethodPost, "/_tarn", bytes.NewReader(disableBody))
 	disableReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	disableReq.Header.Set("X-Amz-Target", "AWSEvents.DisableRule")
 	disableRec := httptest.NewRecorder()
 	handler.ServeHTTP(disableRec, disableReq)
 	if disableRec.Code != http.StatusOK {
-		t.Fatalf("disable rule via /_openstack status=%d body=%s", disableRec.Code, disableRec.Body.String())
+		t.Fatalf("disable rule via /_tarn status=%d body=%s", disableRec.Code, disableRec.Body.String())
 	}
 }
 
-func TestEventBridgeProtocolDispatchSupportsOpenStackEventsPath(t *testing.T) {
+func TestEventBridgeProtocolDispatchSupportsTarnEventsPath(t *testing.T) {
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
 
@@ -272,33 +272,33 @@ func TestEventBridgeProtocolDispatchSupportsOpenStackEventsPath(t *testing.T) {
 	handler := s.withLogging(mux)
 
 	putBody := []byte(`{"Name":"rule-c","ScheduleExpression":"rate(1 minute)","State":"ENABLED"}`)
-	putReq := httptest.NewRequest(http.MethodPost, "/_openstack/events", bytes.NewReader(putBody))
+	putReq := httptest.NewRequest(http.MethodPost, "/_tarn/events", bytes.NewReader(putBody))
 	putReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	putReq.Header.Set("X-Amz-Target", "AWSEvents.PutRule")
 	putRec := httptest.NewRecorder()
 	handler.ServeHTTP(putRec, putReq)
 	if putRec.Code != http.StatusOK {
-		t.Fatalf("put rule via /_openstack/events status=%d body=%s", putRec.Code, putRec.Body.String())
+		t.Fatalf("put rule via /_tarn/events status=%d body=%s", putRec.Code, putRec.Body.String())
 	}
 
 	disableBody := []byte(`{"Name":"rule-c","EventBusName":"default"}`)
-	disableReq := httptest.NewRequest(http.MethodPost, "/_openstack/events", bytes.NewReader(disableBody))
+	disableReq := httptest.NewRequest(http.MethodPost, "/_tarn/events", bytes.NewReader(disableBody))
 	disableReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	disableReq.Header.Set("X-Amz-Target", "AWSEvents.DisableRule")
 	disableRec := httptest.NewRecorder()
 	handler.ServeHTTP(disableRec, disableReq)
 	if disableRec.Code != http.StatusOK {
-		t.Fatalf("disable rule via /_openstack/events status=%d body=%s", disableRec.Code, disableRec.Body.String())
+		t.Fatalf("disable rule via /_tarn/events status=%d body=%s", disableRec.Code, disableRec.Body.String())
 	}
 
 	describeBody := []byte(`{"Name":"rule-c"}`)
-	describeReq := httptest.NewRequest(http.MethodPost, "/_openstack/events", bytes.NewReader(describeBody))
+	describeReq := httptest.NewRequest(http.MethodPost, "/_tarn/events", bytes.NewReader(describeBody))
 	describeReq.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	describeReq.Header.Set("X-Amz-Target", "AWSEvents.DescribeRule")
 	describeRec := httptest.NewRecorder()
 	handler.ServeHTTP(describeRec, describeReq)
 	if describeRec.Code != http.StatusOK {
-		t.Fatalf("describe rule via /_openstack/events status=%d body=%s", describeRec.Code, describeRec.Body.String())
+		t.Fatalf("describe rule via /_tarn/events status=%d body=%s", describeRec.Code, describeRec.Body.String())
 	}
 
 	var describeResp struct {

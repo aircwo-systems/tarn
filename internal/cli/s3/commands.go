@@ -17,7 +17,7 @@ func newMBCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "mb",
 		Short:   "Make a new S3 bucket",
-		Example: `  openstack s3 mb --name my-bucket`,
+		Example: `  tarn s3 mb --name my-bucket`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
@@ -28,7 +28,7 @@ func newMBCmd() *cobra.Command {
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer resp.Body.Close()
 
@@ -53,7 +53,7 @@ func newRBCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "rb",
 		Short:   "Remove an S3 bucket",
-		Example: `  openstack s3 rb --name my-bucket`,
+		Example: `  tarn s3 rb --name my-bucket`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
@@ -64,7 +64,7 @@ func newRBCmd() *cobra.Command {
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer resp.Body.Close()
 
@@ -90,8 +90,8 @@ func newLsCmd() *cobra.Command {
 		Use:     "ls",
 		Aliases: []string{"list"},
 		Short:   "List buckets or objects in a bucket",
-		Example: `  openstack s3 ls
-  openstack s3 ls --bucket my-bucket`,
+		Example: `  tarn s3 ls
+  tarn s3 ls --bucket my-bucket`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
@@ -109,7 +109,7 @@ func newLsCmd() *cobra.Command {
 func listBuckets(endpoint string) error {
 	resp, err := http.Get(s3URL(endpoint, ""))
 	if err != nil {
-		return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+		return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
 
@@ -143,7 +143,7 @@ func listBuckets(endpoint string) error {
 func listObjects(endpoint, bucket string) error {
 	resp, err := http.Get(s3URL(endpoint, bucket+"?list-type=2"))
 	if err != nil {
-		return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+		return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
 
@@ -185,7 +185,7 @@ func newCpCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "cp",
 		Short:   "Upload a file to S3",
-		Example: `  openstack s3 cp --bucket my-bucket --key hello.txt --file ./hello.txt`,
+		Example: `  tarn s3 cp --bucket my-bucket --key hello.txt --file ./hello.txt`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
@@ -203,7 +203,7 @@ func newCpCmd() *cobra.Command {
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer resp.Body.Close()
 
@@ -236,14 +236,14 @@ func newGetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "get",
 		Short:   "Download an object from S3",
-		Example: `  openstack s3 get --bucket my-bucket --key hello.txt --output ./hello.txt`,
+		Example: `  tarn s3 get --bucket my-bucket --key hello.txt --output ./hello.txt`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
 			url := s3URL(endpoint, bucket+"/"+key)
 			resp, err := http.Get(url)
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer resp.Body.Close()
 
@@ -289,7 +289,7 @@ func newRmCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "rm",
 		Short:   "Delete an object from S3",
-		Example: `  openstack s3 rm --bucket my-bucket --key hello.txt`,
+		Example: `  tarn s3 rm --bucket my-bucket --key hello.txt`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
@@ -301,7 +301,7 @@ func newRmCmd() *cobra.Command {
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer resp.Body.Close()
 

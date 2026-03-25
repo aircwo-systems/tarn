@@ -9,33 +9,33 @@ import (
 	"strings"
 	"time"
 
-	adminhandler "github.com/openstack-project/openstack/internal/api/admin"
-	apigatewayhandler "github.com/openstack-project/openstack/internal/api/apigateway"
-	apigatewayv1handler "github.com/openstack-project/openstack/internal/api/apigatewayv1"
-	eventbridgehandler "github.com/openstack-project/openstack/internal/api/eventbridge"
-	eventsourcehandler "github.com/openstack-project/openstack/internal/api/eventsource"
-	iamhandler "github.com/openstack-project/openstack/internal/api/iam"
-	lambdahandler "github.com/openstack-project/openstack/internal/api/lambda"
-	s3handler "github.com/openstack-project/openstack/internal/api/s3"
-	secretshandler "github.com/openstack-project/openstack/internal/api/secrets"
-	snshandler "github.com/openstack-project/openstack/internal/api/sns"
-	sqshandler "github.com/openstack-project/openstack/internal/api/sqs"
-	apigatewaysvc "github.com/openstack-project/openstack/internal/apigateway"
-	apigatewayv1svc "github.com/openstack-project/openstack/internal/apigatewayv1"
-	"github.com/openstack-project/openstack/internal/config"
-	eventbridgesvc "github.com/openstack-project/openstack/internal/eventbridge"
-	eventsourcesvc "github.com/openstack-project/openstack/internal/eventsource"
-	infrasvc "github.com/openstack-project/openstack/internal/infrastructure"
-	lambdasvc "github.com/openstack-project/openstack/internal/lambda"
-	logssvc "github.com/openstack-project/openstack/internal/logs"
-	s3svc "github.com/openstack-project/openstack/internal/s3"
-	secretssvc "github.com/openstack-project/openstack/internal/secrets"
-	snssvc "github.com/openstack-project/openstack/internal/sns"
-	sqssvc "github.com/openstack-project/openstack/internal/sqs"
-	tracesvc "github.com/openstack-project/openstack/internal/trace"
+	adminhandler "github.com/aircwo-systems/tarn/internal/api/admin"
+	apigatewayhandler "github.com/aircwo-systems/tarn/internal/api/apigateway"
+	apigatewayv1handler "github.com/aircwo-systems/tarn/internal/api/apigatewayv1"
+	eventbridgehandler "github.com/aircwo-systems/tarn/internal/api/eventbridge"
+	eventsourcehandler "github.com/aircwo-systems/tarn/internal/api/eventsource"
+	iamhandler "github.com/aircwo-systems/tarn/internal/api/iam"
+	lambdahandler "github.com/aircwo-systems/tarn/internal/api/lambda"
+	s3handler "github.com/aircwo-systems/tarn/internal/api/s3"
+	secretshandler "github.com/aircwo-systems/tarn/internal/api/secrets"
+	snshandler "github.com/aircwo-systems/tarn/internal/api/sns"
+	sqshandler "github.com/aircwo-systems/tarn/internal/api/sqs"
+	apigatewaysvc "github.com/aircwo-systems/tarn/internal/apigateway"
+	apigatewayv1svc "github.com/aircwo-systems/tarn/internal/apigatewayv1"
+	"github.com/aircwo-systems/tarn/internal/config"
+	eventbridgesvc "github.com/aircwo-systems/tarn/internal/eventbridge"
+	eventsourcesvc "github.com/aircwo-systems/tarn/internal/eventsource"
+	infrasvc "github.com/aircwo-systems/tarn/internal/infrastructure"
+	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
+	logssvc "github.com/aircwo-systems/tarn/internal/logs"
+	s3svc "github.com/aircwo-systems/tarn/internal/s3"
+	secretssvc "github.com/aircwo-systems/tarn/internal/secrets"
+	snssvc "github.com/aircwo-systems/tarn/internal/sns"
+	sqssvc "github.com/aircwo-systems/tarn/internal/sqs"
+	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 )
 
-// Server is the main OpenStack API server.
+// Server is the main Tarn API server.
 type Server struct {
 	cfg         *config.Config
 	httpServer  *http.Server
@@ -96,26 +96,26 @@ func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, gatewayV1S
 
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Health check
-	mux.HandleFunc("GET /_openstack/health", s.healthHandler)
+	mux.HandleFunc("GET /_tarn/health", s.healthHandler)
 	// Telemetry — called by in-container proxies to report observability spans
-	mux.HandleFunc("POST /_openstack/telemetry/db", s.telemetryDBHandler)
-	mux.HandleFunc("GET /_openstack/admin/overview", s.admin.Overview)
-	mux.HandleFunc("GET /_openstack/admin/secrets/{name}/value", s.admin.SecretValue)
-	mux.HandleFunc("GET /_openstack/admin/queues/{name}/messages", s.admin.QueueMessages)
-	mux.HandleFunc("GET /_openstack/admin/logs/groups", s.admin.LogGroups)
-	mux.HandleFunc("GET /_openstack/admin/logs/groups/{name...}", s.admin.LogGroupDetail)
-	mux.HandleFunc("GET /_openstack/admin/logs/events-all", s.admin.AllLogEvents)
-	mux.HandleFunc("GET /_openstack/admin/logs/events/{name...}", s.admin.LogEvents)
-	mux.HandleFunc("DELETE /_openstack/admin/logs/events/{name...}", s.admin.ClearLogGroup)
-	mux.HandleFunc("POST /_openstack/admin/logs/prune", s.admin.PruneLogs)
-	mux.HandleFunc("GET /_openstack/admin/infrastructure", s.admin.Infrastructure)
-	mux.HandleFunc("POST /_openstack/admin/chaos", s.admin.RunChaos)
-	mux.HandleFunc("POST /_openstack/admin/chaos/source", s.admin.ScanChaosSource)
-	mux.HandleFunc("POST /_openstack/admin/eventbridge/fire", s.admin.FireEventBridgeRule)
-	mux.HandleFunc("POST /_openstack/admin/eventbridge/race", s.admin.RunEventBridgeRace)
+	mux.HandleFunc("POST /_tarn/telemetry/db", s.telemetryDBHandler)
+	mux.HandleFunc("GET /_tarn/admin/overview", s.admin.Overview)
+	mux.HandleFunc("GET /_tarn/admin/secrets/{name}/value", s.admin.SecretValue)
+	mux.HandleFunc("GET /_tarn/admin/queues/{name}/messages", s.admin.QueueMessages)
+	mux.HandleFunc("GET /_tarn/admin/logs/groups", s.admin.LogGroups)
+	mux.HandleFunc("GET /_tarn/admin/logs/groups/{name...}", s.admin.LogGroupDetail)
+	mux.HandleFunc("GET /_tarn/admin/logs/events-all", s.admin.AllLogEvents)
+	mux.HandleFunc("GET /_tarn/admin/logs/events/{name...}", s.admin.LogEvents)
+	mux.HandleFunc("DELETE /_tarn/admin/logs/events/{name...}", s.admin.ClearLogGroup)
+	mux.HandleFunc("POST /_tarn/admin/logs/prune", s.admin.PruneLogs)
+	mux.HandleFunc("GET /_tarn/admin/infrastructure", s.admin.Infrastructure)
+	mux.HandleFunc("POST /_tarn/admin/chaos", s.admin.RunChaos)
+	mux.HandleFunc("POST /_tarn/admin/chaos/source", s.admin.ScanChaosSource)
+	mux.HandleFunc("POST /_tarn/admin/eventbridge/fire", s.admin.FireEventBridgeRule)
+	mux.HandleFunc("POST /_tarn/admin/eventbridge/race", s.admin.RunEventBridgeRace)
 	// EventBridge JSON protocol endpoint used by dashboard and tooling to avoid
 	// colliding with UI app-server root routes.
-	mux.HandleFunc("POST /_openstack/events", s.eventbridge.Dispatch)
+	mux.HandleFunc("POST /_tarn/events", s.eventbridge.Dispatch)
 
 	// S3 API — path-style REST XML protocol
 	// POST is handled via postAccountDispatch to avoid conflict with SQS POST /{account}/{queue...}
@@ -299,7 +299,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 // Start begins listening for requests.
 func (s *Server) Start() error {
-	log.Printf("OpenStack API server listening on %s", s.httpServer.Addr)
+	log.Printf("Tarn API server listening on %s", s.httpServer.Addr)
 	return s.httpServer.ListenAndServe()
 }
 
@@ -392,7 +392,7 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 		}
 		duration := time.Since(start)
 		log.Printf("%s %s %d %s", r.Method, r.URL.Path, wrapped.status, duration)
-		if s.logsSvc != nil && !strings.HasPrefix(r.URL.Path, "/_openstack/") {
+		if s.logsSvc != nil && !strings.HasPrefix(r.URL.Path, "/_tarn/") {
 			s.logsSvc.LogAPIRequest(r.Method, r.URL.Path, wrapped.status, duration)
 		}
 	})
@@ -425,9 +425,9 @@ func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request)
 		return true
 	}
 
-	// Keep OpenStack admin/control POST APIs on normal route matching unless
+	// Keep Tarn admin/control POST APIs on normal route matching unless
 	// one of the protocol dispatchers above claimed the request.
-	if strings.HasPrefix(r.URL.Path, "/_openstack/") || strings.TrimSpace(r.URL.Path) == "/_openstack" {
+	if strings.HasPrefix(r.URL.Path, "/_tarn/") || strings.TrimSpace(r.URL.Path) == "/_tarn" {
 		return false
 	}
 

@@ -22,10 +22,10 @@ func newSetDLQCmd() *cobra.Command {
 		Use:   "set-dlq",
 		Short: "Configure a dead-letter queue (redrive policy) for an SQS queue",
 		Example: `  # Attach a DLQ — move messages after 3 failed receives
-  openstack sqs set-dlq --queue my-queue --dlq my-queue-dlq --max-receive-count 3
+  tarn sqs set-dlq --queue my-queue --dlq my-queue-dlq --max-receive-count 3
 
   # Remove the DLQ configuration from a queue
-  openstack sqs set-dlq --queue my-queue --remove`,
+  tarn sqs set-dlq --queue my-queue --remove`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !remove && dlq == "" {
 				return fmt.Errorf("either --dlq or --remove is required")
@@ -56,7 +56,7 @@ func newSetDLQCmd() *cobra.Command {
 
 			resp, err := http.PostForm(queueURL, form)
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer func() { _ = resp.Body.Close() }()
 

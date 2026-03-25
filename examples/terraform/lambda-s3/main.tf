@@ -12,7 +12,7 @@ terraform {
 }
 
 variable "endpoint" {
-  description = "OpenStack API endpoint"
+  description = "Tarn API endpoint"
   type        = string
   default     = "http://localhost:4566"
 }

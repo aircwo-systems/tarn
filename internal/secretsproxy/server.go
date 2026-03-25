@@ -13,7 +13,7 @@ import (
 
 const (
 	tokenHeader        = "X-Aws-Parameters-Secrets-Token"
-	functionNameHeader = "X-OpenStack-Function-Name"
+	functionNameHeader = "X-Tarn-Function-Name"
 )
 
 // Options configures the local secrets extension proxy behavior.

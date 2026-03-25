@@ -146,7 +146,7 @@
 
         let resp: Response;
         try {
-          resp = await fetch("/_openstack/admin/chaos", {
+          resp = await fetch("/_tarn/admin/chaos", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ invokeBase, routes }),
@@ -367,7 +367,7 @@
     const unique = [...new Set(functionNames)];
 
     try {
-      const resp = await fetch("/_openstack/admin/chaos/source", {
+      const resp = await fetch("/_tarn/admin/chaos/source", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -430,7 +430,7 @@
       const invokeBase = normalizeInvokeUrl(gw.invokeUrl);
       let resp: Response;
       try {
-        resp = await fetch("/_openstack/admin/chaos", {
+        resp = await fetch("/_tarn/admin/chaos", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({

@@ -1,8 +1,8 @@
-BINARY_NAME := openstack
+BINARY_NAME := tarn
 VERSION := 0.1.0-dev
 BUILD_DIR := ./build
 GO_FILES := $(shell git ls-files '*.go')
-LDFLAGS := -ldflags "-X github.com/openstack-project/openstack/internal/cli.version=$(VERSION)"
+LDFLAGS := -ldflags "-X github.com/aircwo-systems/tarn/internal/cli.version=$(VERSION)"
 
 .PHONY: all build secrets-proxy db-proxy start run clean test lint fmt vet ui-install ui-dev ui-build docker-build docker-build-ui docker-run
 
@@ -10,7 +10,7 @@ all: build
 
 build: secrets-proxy db-proxy
 	@mkdir -p $(BUILD_DIR)
-	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/openstack
+	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/tarn
 
 secrets-proxy:
 	@mkdir -p $(BUILD_DIR)
@@ -27,7 +27,7 @@ run: build
 	$(BUILD_DIR)/$(BINARY_NAME) start
 
 install:
-	go install $(LDFLAGS) ./cmd/openstack
+	go install $(LDFLAGS) ./cmd/tarn
 
 clean:
 	rm -rf $(BUILD_DIR)
@@ -53,13 +53,13 @@ dev: build
 	$(BUILD_DIR)/$(BINARY_NAME) start --port 4566
 
 docker-build:
-	docker build --build-arg VERSION=$(VERSION) -t openstack:$(VERSION) .
+	docker build --build-arg VERSION=$(VERSION) -t tarn:$(VERSION) .
 
 docker-build-ui:
-	docker build --build-arg OPENSTACK_BUILD_UI=true --build-arg VERSION=$(VERSION) -t openstack:$(VERSION)-ui .
+	docker build --build-arg TARN_BUILD_UI=true --build-arg VERSION=$(VERSION) -t tarn:$(VERSION)-ui .
 
 docker-run:
-	docker run -p 4566:4566 -v /var/run/docker.sock:/var/run/docker.sock openstack:$(VERSION)
+	docker run -p 4566:4566 -v /var/run/docker.sock:/var/run/docker.sock tarn:$(VERSION)
 
 ui-install:
 	cd ui && bun install

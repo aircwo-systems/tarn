@@ -1,4 +1,4 @@
-module github.com/openstack-project/openstack
+module github.com/aircwo-systems/tarn
 
 go 1.26.0
 

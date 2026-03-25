@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openstack-project/openstack/internal/config"
-	sqssvc "github.com/openstack-project/openstack/internal/sqs"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/config"
+	sqssvc "github.com/aircwo-systems/tarn/internal/sqs"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 type recordingLambda struct {

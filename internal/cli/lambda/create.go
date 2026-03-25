@@ -10,7 +10,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/openstack-project/openstack/internal/cli/common"
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -30,8 +30,8 @@ func newCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a new Lambda function",
-		Example: `  openstack lambda create --name my-func --runtime nodejs20.x --handler index.handler --zip ./code.zip
-  openstack lambda create --name hello --runtime python3.12 --handler lambda_function.lambda_handler --zip ./hello.zip`,
+		Example: `  tarn lambda create --name my-func --runtime nodejs20.x --handler index.handler --zip ./code.zip
+  tarn lambda create --name hello --runtime python3.12 --handler lambda_function.lambda_handler --zip ./hello.zip`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
@@ -79,7 +79,7 @@ func newCreateCmd() *cobra.Command {
 			body, _ := json.Marshal(reqBody)
 			resp, err := http.Post(endpoint+"/2015-03-31/functions", "application/json", bytes.NewReader(body))
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer resp.Body.Close()
 

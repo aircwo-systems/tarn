@@ -50,7 +50,7 @@ func newSubscribeCmd() *cobra.Command {
 
 			resp, err := http.PostForm(endpoint, form)
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer func() { _ = resp.Body.Close() }()
 

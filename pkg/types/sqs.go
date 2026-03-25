@@ -40,7 +40,7 @@ type SQSMessage struct {
 	DelayUntil                       int64                        `json:"-"` // epoch ms: per-message delay
 	ExpiresAt                        int64                        `json:"-"` // epoch ms: retention expiry
 	Deleted                          bool                         `json:"-"`
-	// Stale is set by OpenStack when a message has failed too many times with no DLQ configured.
+	// Stale is set by Tarn when a message has failed too many times with no DLQ configured.
 	// Stale messages are never re-delivered; they remain visible in the UI until they expire.
 	Stale bool `json:"-"`
 }

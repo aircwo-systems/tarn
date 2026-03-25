@@ -4,12 +4,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// NewSecretsCmd creates the `openstack secrets` command group.
+// NewSecretsCmd creates the `tarn secrets` command group.
 func NewSecretsCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "secrets",
 		Short: "Manage Secrets Manager secrets",
-		Long:  "Create, get, update, list, and delete secrets on your local OpenStack instance.",
+		Long:  "Create, get, update, list, and delete secrets on your local Tarn instance.",
 	}
 
 	cmd.AddCommand(newCreateCmd())

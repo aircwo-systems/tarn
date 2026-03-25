@@ -225,7 +225,7 @@
       <Package size={28} class="mx-auto text-muted-foreground/70 mb-2" />
       <p class="text-sm text-muted-foreground">No S3 buckets</p>
       <p class="text-xs text-muted-foreground/70 mt-1">
-        Create one with <code class="bg-muted px-1 py-0.5 rounded text-primary">openstack s3 mb --name my-bucket</code>
+        Create one with <code class="bg-muted px-1 py-0.5 rounded text-primary">tarn s3 mb --name my-bucket</code>
       </p>
     </div>
   {:else}

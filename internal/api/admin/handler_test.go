@@ -12,19 +12,19 @@ import (
 	"testing"
 	"time"
 
-	apigatewaysvc "github.com/openstack-project/openstack/internal/apigateway"
-	apigatewayv1svc "github.com/openstack-project/openstack/internal/apigatewayv1"
-	"github.com/openstack-project/openstack/internal/config"
-	eventbridgesvc "github.com/openstack-project/openstack/internal/eventbridge"
-	eventsourcesvc "github.com/openstack-project/openstack/internal/eventsource"
-	infrasvc "github.com/openstack-project/openstack/internal/infrastructure"
-	lambdasvc "github.com/openstack-project/openstack/internal/lambda"
-	logssvc "github.com/openstack-project/openstack/internal/logs"
-	s3svc "github.com/openstack-project/openstack/internal/s3"
-	secretssvc "github.com/openstack-project/openstack/internal/secrets"
-	snssvc "github.com/openstack-project/openstack/internal/sns"
-	sqssvc "github.com/openstack-project/openstack/internal/sqs"
-	"github.com/openstack-project/openstack/pkg/types"
+	apigatewaysvc "github.com/aircwo-systems/tarn/internal/apigateway"
+	apigatewayv1svc "github.com/aircwo-systems/tarn/internal/apigatewayv1"
+	"github.com/aircwo-systems/tarn/internal/config"
+	eventbridgesvc "github.com/aircwo-systems/tarn/internal/eventbridge"
+	eventsourcesvc "github.com/aircwo-systems/tarn/internal/eventsource"
+	infrasvc "github.com/aircwo-systems/tarn/internal/infrastructure"
+	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
+	logssvc "github.com/aircwo-systems/tarn/internal/logs"
+	s3svc "github.com/aircwo-systems/tarn/internal/s3"
+	secretssvc "github.com/aircwo-systems/tarn/internal/secrets"
+	snssvc "github.com/aircwo-systems/tarn/internal/sns"
+	sqssvc "github.com/aircwo-systems/tarn/internal/sqs"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 func TestQueueMessagesReturnsMessages(t *testing.T) {
@@ -37,7 +37,7 @@ func TestQueueMessagesReturnsMessages(t *testing.T) {
 		t.Fatalf("send message: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/_openstack/admin/queues/jobs/messages?limit=10", nil)
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/queues/jobs/messages?limit=10", nil)
 	req.SetPathValue("name", "jobs")
 	rec := httptest.NewRecorder()
 
@@ -69,7 +69,7 @@ func TestQueueMessagesReturnsMessages(t *testing.T) {
 func TestQueueMessagesInvalidLimit(t *testing.T) {
 	h := newTestHandler(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/_openstack/admin/queues/jobs/messages?limit=abc", nil)
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/queues/jobs/messages?limit=abc", nil)
 	req.SetPathValue("name", "jobs")
 	rec := httptest.NewRecorder()
 
@@ -83,7 +83,7 @@ func TestQueueMessagesInvalidLimit(t *testing.T) {
 func TestQueueMessagesNotFound(t *testing.T) {
 	h := newTestHandler(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/_openstack/admin/queues/missing/messages", nil)
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/queues/missing/messages", nil)
 	req.SetPathValue("name", "missing")
 	rec := httptest.NewRecorder()
 
@@ -101,7 +101,7 @@ func TestSecretValueReturnsSecretString(t *testing.T) {
 		t.Fatalf("create secret: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/_openstack/admin/secrets/api-key/value", nil)
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/secrets/api-key/value", nil)
 	req.SetPathValue("name", "api-key")
 	rec := httptest.NewRecorder()
 
@@ -134,7 +134,7 @@ func TestSecretValueReturnsSecretString(t *testing.T) {
 func TestSecretValueNotFound(t *testing.T) {
 	h := newTestHandler(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/_openstack/admin/secrets/missing/value", nil)
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/secrets/missing/value", nil)
 	req.SetPathValue("name", "missing")
 	rec := httptest.NewRecorder()
 
@@ -156,7 +156,7 @@ func TestOverviewIncludesGateways(t *testing.T) {
 		t.Fatalf("list stages: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/_openstack/admin/overview", nil)
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
 	rec := httptest.NewRecorder()
 
 	h.Overview(rec, req)
@@ -220,7 +220,7 @@ func TestOverviewIncludesResourceTags(t *testing.T) {
 		t.Fatalf("create secret: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/_openstack/admin/overview", nil)
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
 	rec := httptest.NewRecorder()
 
 	h.Overview(rec, req)
@@ -285,7 +285,7 @@ func TestOverviewInfersInfraConnectionsFromEnvironment(t *testing.T) {
 		ProbedAt: time.Now().UTC().Format(time.RFC3339),
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/_openstack/admin/overview", nil)
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
 	rec := httptest.NewRecorder()
 
 	h.Overview(rec, req)
@@ -340,7 +340,7 @@ func TestOverviewInfersRedisInfraConnectionsFromEnvironment(t *testing.T) {
 		ProbedAt: time.Now().UTC().Format(time.RFC3339),
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/_openstack/admin/overview", nil)
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
 	rec := httptest.NewRecorder()
 
 	h.Overview(rec, req)
@@ -374,7 +374,7 @@ func TestScanChaosSourceRejectsInvalidBaseDir(t *testing.T) {
 	h := newTestHandler(t)
 
 	body := bytes.NewBufferString("{\"baseDir\":\"bad\\u0000path\",\"functionNames\":[\"orders\"]}")
-	req := httptest.NewRequest(http.MethodPost, "/_openstack/admin/chaos/source", body)
+	req := httptest.NewRequest(http.MethodPost, "/_tarn/admin/chaos/source", body)
 	rec := httptest.NewRecorder()
 
 	h.ScanChaosSource(rec, req)
@@ -408,7 +408,7 @@ func TestScanChaosSourceSanitizesQuotedBaseDir(t *testing.T) {
 		t.Fatalf("marshal payload: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/_openstack/admin/chaos/source", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/_tarn/admin/chaos/source", bytes.NewReader(body))
 	rec := httptest.NewRecorder()
 
 	h.ScanChaosSource(rec, req)

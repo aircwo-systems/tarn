@@ -6,8 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	eventbridgesvc "github.com/openstack-project/openstack/internal/eventbridge"
-	"github.com/openstack-project/openstack/pkg/types"
+	eventbridgesvc "github.com/aircwo-systems/tarn/internal/eventbridge"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 const servicePrefix = "AWSEvents."

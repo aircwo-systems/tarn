@@ -1,5 +1,5 @@
 output "feature_tag" {
-  description = "Tag used to filter this stack in the OpenStack UI"
+  description = "Tag used to filter this stack in the Tarn UI"
   value       = "feature:develop-mvp"
 }
 

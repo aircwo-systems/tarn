@@ -203,7 +203,7 @@ func (h *Handler) roleXML(response, result string, ro *role) string {
 			`<MaxSessionDuration>%d</MaxSessionDuration>`+
 			`</Role>`+
 			`</%s>`+
-			`<ResponseMetadata><RequestId>openstack-iam-stub</RequestId></ResponseMetadata>`+
+			`<ResponseMetadata><RequestId>tarn-iam-stub</RequestId></ResponseMetadata>`+
 			`</%s>`,
 		response, result,
 		ro.Name, ro.RoleID, ro.ARN, ro.Path, ro.CreateDate, policyEncoded, ro.MaxSessionDuration,
@@ -250,7 +250,7 @@ func (h *Handler) listAttachedRolePolicies(w http.ResponseWriter, r *http.Reques
 		members.String()+
 		`<IsTruncated>false</IsTruncated>`+
 		`</ListAttachedRolePoliciesResult>`+
-		`<ResponseMetadata><RequestId>openstack-iam-stub</RequestId></ResponseMetadata>`+
+		`<ResponseMetadata><RequestId>tarn-iam-stub</RequestId></ResponseMetadata>`+
 		`</ListAttachedRolePoliciesResponse>`)
 }
 
@@ -341,7 +341,7 @@ func (h *Handler) getRolePolicy(w http.ResponseWriter, r *http.Request) {
 		`<PolicyName>%s</PolicyName>`+
 		`<PolicyDocument>%s</PolicyDocument>`+
 		`</GetRolePolicyResult>`+
-		`<ResponseMetadata><RequestId>openstack-iam-stub</RequestId></ResponseMetadata>`+
+		`<ResponseMetadata><RequestId>tarn-iam-stub</RequestId></ResponseMetadata>`+
 		`</GetRolePolicyResponse>`,
 		roleName, policyName, encoded)
 }
@@ -389,7 +389,7 @@ func (h *Handler) listRolePolicies(w http.ResponseWriter, r *http.Request) {
 		policyNamesXML+
 		`<IsTruncated>false</IsTruncated>`+
 		`</ListRolePoliciesResult>`+
-		`<ResponseMetadata><RequestId>openstack-iam-stub</RequestId></ResponseMetadata>`+
+		`<ResponseMetadata><RequestId>tarn-iam-stub</RequestId></ResponseMetadata>`+
 		`</ListRolePoliciesResponse>`)
 }
 
@@ -401,7 +401,7 @@ func (h *Handler) listRoleTags(w http.ResponseWriter, action string) {
 		`<Tags/>`+
 		`<IsTruncated>false</IsTruncated>`+
 		`</%sResult>`+
-		`<ResponseMetadata><RequestId>openstack-iam-stub</RequestId></ResponseMetadata>`+
+		`<ResponseMetadata><RequestId>tarn-iam-stub</RequestId></ResponseMetadata>`+
 		`</%sResponse>`, action, action, action, action)
 }
 
@@ -428,7 +428,7 @@ func (h *Handler) createInstanceProfile(w http.ResponseWriter, r *http.Request) 
 		`<CreateDate>%s</CreateDate>`+
 		`</InstanceProfile>`+
 		`</CreateInstanceProfileResult>`+
-		`<ResponseMetadata><RequestId>openstack-iam-stub</RequestId></ResponseMetadata>`+
+		`<ResponseMetadata><RequestId>tarn-iam-stub</RequestId></ResponseMetadata>`+
 		`</CreateInstanceProfileResponse>`,
 		name, arn, path, now)
 }
@@ -450,7 +450,7 @@ func (h *Handler) getInstanceProfile(w http.ResponseWriter, r *http.Request) {
 		`<CreateDate>%s</CreateDate>`+
 		`</InstanceProfile>`+
 		`</GetInstanceProfileResult>`+
-		`<ResponseMetadata><RequestId>openstack-iam-stub</RequestId></ResponseMetadata>`+
+		`<ResponseMetadata><RequestId>tarn-iam-stub</RequestId></ResponseMetadata>`+
 		`</GetInstanceProfileResponse>`,
 		name, arn, now)
 }
@@ -463,7 +463,7 @@ func (h *Handler) listInstanceProfilesForRole(w http.ResponseWriter) {
 		`<InstanceProfiles/>`+
 		`<IsTruncated>false</IsTruncated>`+
 		`</ListInstanceProfilesForRoleResult>`+
-		`<ResponseMetadata><RequestId>openstack-iam-stub</RequestId></ResponseMetadata>`+
+		`<ResponseMetadata><RequestId>tarn-iam-stub</RequestId></ResponseMetadata>`+
 		`</ListInstanceProfilesForRoleResponse>`)
 }
 
@@ -475,7 +475,7 @@ func (h *Handler) emptyOK(w http.ResponseWriter, action string) {
 		`<?xml version="1.0" encoding="UTF-8"?>`+
 			`<%sResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">`+
 			`<%sResult/>`+
-			`<ResponseMetadata><RequestId>openstack-iam-stub</RequestId></ResponseMetadata>`+
+			`<ResponseMetadata><RequestId>tarn-iam-stub</RequestId></ResponseMetadata>`+
 			`</%sResponse>`,
 		action, action, action)
 }
@@ -486,7 +486,7 @@ func (h *Handler) noSuchEntity(w http.ResponseWriter, message string) {
 		`<?xml version="1.0" encoding="UTF-8"?>`+
 			`<ErrorResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">`+
 			`<Error><Type>Sender</Type><Code>NoSuchEntity</Code><Message>%s</Message></Error>`+
-			`<RequestId>openstack-iam-stub</RequestId>`+
+			`<RequestId>tarn-iam-stub</RequestId>`+
 			`</ErrorResponse>`,
 		message)
 }

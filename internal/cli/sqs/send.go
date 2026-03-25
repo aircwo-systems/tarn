@@ -23,8 +23,8 @@ func newSendCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "send",
 		Short: "Send a message to an SQS queue",
-		Example: `  openstack sqs send --queue my-queue --body "hello world"
-  openstack sqs send --queue my-queue.fifo --body "hello" --group-id g1 --dedup-id d1`,
+		Example: `  tarn sqs send --queue my-queue --body "hello world"
+  tarn sqs send --queue my-queue.fifo --body "hello" --group-id g1 --dedup-id d1`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
@@ -45,7 +45,7 @@ func newSendCmd() *cobra.Command {
 
 			resp, err := http.PostForm(endpoint+"/"+getAccountID()+"/"+queue, form)
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer resp.Body.Close()
 

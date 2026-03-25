@@ -12,8 +12,8 @@ func newGetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "get",
 		Short: "Get a secret's value",
-		Example: `  openstack secrets get --name my-secret
-  openstack secrets get --name arn:aws:secretsmanager:us-east-1:000000000000:secret:my-secret-abc123`,
+		Example: `  tarn secrets get --name my-secret
+  tarn secrets get --name arn:aws:secretsmanager:us-east-1:000000000000:secret:my-secret-abc123`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 

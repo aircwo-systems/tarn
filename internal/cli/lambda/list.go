@@ -21,7 +21,7 @@ func newListCmd() *cobra.Command {
 
 			resp, err := http.Get(endpoint + "/2015-03-31/functions")
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer resp.Body.Close()
 

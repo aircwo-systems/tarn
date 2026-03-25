@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	sqssvc "github.com/openstack-project/openstack/internal/sqs"
-	"github.com/openstack-project/openstack/pkg/types"
+	sqssvc "github.com/aircwo-systems/tarn/internal/sqs"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 const xmlNS = "http://queue.amazonaws.com/doc/2012-11-05/"

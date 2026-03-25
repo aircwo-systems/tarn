@@ -50,7 +50,7 @@ func (c *Collector) Collect(functionName string) []SubSpan {
 // CollectWithFlush waits briefly before collecting to let async telemetry
 // reporters (e.g. the db-proxy) deliver any in-flight spans.
 //
-// The Lambda's HTTP response reaches OpenStack before the db-proxy finishes
+// The Lambda's HTTP response reaches Tarn before the db-proxy finishes
 // its reportSpan POST — both happen after the Lambda closes its DB connection,
 // but the HTTP response path is shorter. Without this pause, successful DB
 // calls are invisible in the trace because the inflight entry is cleared

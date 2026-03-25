@@ -5,8 +5,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/openstack-project/openstack/internal/config"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 func testStore(t *testing.T) *Store {

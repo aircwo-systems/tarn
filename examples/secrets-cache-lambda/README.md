@@ -9,8 +9,8 @@ The Lambda fetches the secret through the built-in Parameters and Secrets extens
 
 ## Prerequisites
 
-- OpenStack server running at `http://localhost:4566`
-- OpenStack CLI binary (`./build/openstack` or `openstack` in `PATH`)
+- Tarn server running at `http://localhost:4566`
+- Tarn CLI binary (`./build/tarn` or `tarn` in `PATH`)
 - `zip`
 
 ## Usage
@@ -31,13 +31,13 @@ Expected invoke output includes:
 
 ## Configurable env vars
 
-- `OPENSTACK_ENDPOINT` (default: `http://localhost:4566`)
+- `TARN_ENDPOINT` (default: `http://localhost:4566`)
 - `AWS_DEFAULT_REGION` (default: `us-east-1`)
-- `OPENSTACK_ACCOUNT_ID` (default: `000000000000`)
+- `TARN_ACCOUNT_ID` (default: `000000000000`)
 - `SECRET_NAME` (default: `test`)
 - `SECRET_VALUE` (default: `test-secret`)
 - `FUNCTION_NAME` (default: `cache-extension-lambda-test`)
 - `RUNTIME` (default: `nodejs24.x`)
 - `HANDLER` (default: `index.handler`)
 - `ROLE_ARN` (default: `arn:aws:iam::<account-id>:role/lambda-role`)
-- `OPENSTACK_BIN` (optional path to the `openstack` CLI)
+- `TARN_BIN` (optional path to the `tarn` CLI)

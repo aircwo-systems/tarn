@@ -12,7 +12,7 @@ import (
 )
 
 func getEndpoint(cmd *cobra.Command) string {
-	if v := os.Getenv("OPENSTACK_ENDPOINT"); v != "" {
+	if v := os.Getenv("TARN_ENDPOINT"); v != "" {
 		return v
 	}
 
@@ -42,7 +42,7 @@ func secretsRequest(endpoint, action string, body interface{}) (map[string]inter
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+		return nil, fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
 

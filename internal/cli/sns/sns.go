@@ -2,12 +2,12 @@ package sns
 
 import "github.com/spf13/cobra"
 
-// NewSNSCmd creates the `openstack sns` command group.
+// NewSNSCmd creates the `tarn sns` command group.
 func NewSNSCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sns",
 		Short: "Manage SNS topics and subscriptions",
-		Long:  "Create, publish, subscribe, list, and delete SNS topics on your local OpenStack instance.",
+		Long:  "Create, publish, subscribe, list, and delete SNS topics on your local Tarn instance.",
 	}
 
 	cmd.AddCommand(newCreateTopicCmd())

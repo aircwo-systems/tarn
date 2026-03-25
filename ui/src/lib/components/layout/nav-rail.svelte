@@ -18,7 +18,7 @@
     BellIcon,
     BridgeIcon,
   } from "phosphor-svelte";
-  import OpenStackLogo from "$lib/components/common/openstack-logo.svelte";
+  import TarnLogo from "$lib/components/common/tarn-logo.svelte";
   import NavRailItem from "./nav-rail-item.svelte";
   import ThemeToggle from "./theme-toggle.svelte";
   import StatusIndicator from "$lib/components/common/status-indicator.svelte";
@@ -80,12 +80,12 @@
   let newTargetPort = $state("");
 
   if (typeof window !== "undefined") {
-    collapsed = localStorage.getItem("openstack-nav-collapsed") === "true";
+    collapsed = localStorage.getItem("tarn-nav-collapsed") === "true";
   }
 
   function toggleCollapsed() {
     collapsed = !collapsed;
-    localStorage.setItem("openstack-nav-collapsed", String(collapsed));
+    localStorage.setItem("tarn-nav-collapsed", String(collapsed));
   }
 
   const tabs = [
@@ -197,13 +197,13 @@
 >
   <!-- Brand -->
   <div class="flex items-center gap-2.5 px-3 py-3 shrink-0">
-    <OpenStackLogo class="h-8 w-8 shrink-0" color="#007a5a" />
+    <TarnLogo class="h-8 w-8 shrink-0" color="#007a5a" />
     {#if !collapsed}
       <div class="min-w-0">
         <p
           class="text-[10px] font-mono uppercase tracking-wider text-sidebar-foreground/50"
         >
-          OpenStack
+          Tarn
         </p>
         <p class="text-sm font-semibold text-sidebar-foreground truncate">
           Rack Console
@@ -425,7 +425,7 @@
             <p
               class="mt-1 text-[11px] leading-relaxed text-muted-foreground/70"
             >
-              Persist configuration over OpenStack sessions. Intended to allow
+              Persist configuration over Tarn sessions. Intended to allow
               for config to be saved and reused instead of building instance
               each time.
             </p>

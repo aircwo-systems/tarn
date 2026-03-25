@@ -180,7 +180,7 @@
           {#if (queue.approxStale ?? 0) > 0}
             <span
               class="text-destructive"
-              title="Parked by OpenStack after repeated failures (no DLQ). On real AWS these would retry indefinitely."
+              title="Parked by Tarn after repeated failures (no DLQ). On real AWS these would retry indefinitely."
               >{queue.approxStale}</span
             >
           {:else}
@@ -335,7 +335,7 @@
               {#if message.state === "stale"}
                 <p class="mt-1.5 text-[11px] text-destructive/80">
                   Parked — failed {message.receiveCount}× with no DLQ. On AWS
-                  this would retry indefinitely; OpenStack parks it to prevent
+                  this would retry indefinitely; Tarn parks it to prevent
                   wasted invocations.
                 </p>
               {/if}

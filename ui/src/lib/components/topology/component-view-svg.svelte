@@ -85,7 +85,7 @@
 				<animate attributeName="opacity" values="0.8;0.4;0.8" dur="2s" repeatCount="indefinite" />
 			</circle>
 			<text x={endpoint.x - 26} y={endpoint.y + 3.5} class="fill-foreground" font-size="9" font-family="var(--font-mono)">
-				OpenStack
+				Tarn
 			</text>
 		</g>
 

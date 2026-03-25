@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // rieInvokePath is the endpoint the AWS RIE exposes for invoking functions.

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openstack-project/openstack/internal/config"
-	s3svc "github.com/openstack-project/openstack/internal/s3"
+	"github.com/aircwo-systems/tarn/internal/config"
+	s3svc "github.com/aircwo-systems/tarn/internal/s3"
 )
 
 func newTestHandler(t *testing.T) *Handler {

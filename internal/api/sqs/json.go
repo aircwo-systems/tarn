@@ -18,8 +18,8 @@ import (
 	"strconv"
 	"strings"
 
-	sqssvc "github.com/openstack-project/openstack/internal/sqs"
-	"github.com/openstack-project/openstack/pkg/types"
+	sqssvc "github.com/aircwo-systems/tarn/internal/sqs"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // isJSONProtocol reports whether the request uses the SQS JSON wire protocol.

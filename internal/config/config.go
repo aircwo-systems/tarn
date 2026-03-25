@@ -7,7 +7,7 @@ import (
 	"strconv"
 )
 
-// Config holds all OpenStack configuration.
+// Config holds all Tarn configuration.
 type Config struct {
 	// Host is the address the API server binds to.
 	Host string
@@ -42,7 +42,7 @@ type Config struct {
 	// InfraProbeTargets is a comma-separated list of "kind:host:port" targets.
 	InfraProbeTargets string
 	// ExposeSecretsProxy enables the local secrets extension-compatible proxy
-	// alongside `openstack start`.
+	// alongside `tarn start`.
 	ExposeSecretsProxy bool
 	// SecretsProxyHost is the interface bind address for the local secrets proxy.
 	SecretsProxyHost string
@@ -53,7 +53,7 @@ type Config struct {
 	// SecretsProxyRequireToken enforces extension token validation.
 	SecretsProxyRequireToken bool
 	// VaultKeyPath is the path to the AES-256 key used to encrypt secret values at rest.
-	// Defaults to ~/.openstack/vault.key. Set to empty string to disable encryption.
+	// Defaults to ~/.tarn/vault.key. Set to empty string to disable encryption.
 	VaultKeyPath string
 }
 
@@ -63,7 +63,7 @@ func Default() *Config {
 	return &Config{
 		Host:                     "0.0.0.0",
 		Port:                     4566,
-		DataDir:                  filepath.Join(home, ".openstack", "data"),
+		DataDir:                  filepath.Join(home, ".tarn", "data"),
 		DockerHost:               "unix:///var/run/docker.sock",
 		LambdaKeepAliveMS:        600000, // 10 minutes
 		LambdaDefaultTimeout:     3,
@@ -82,90 +82,90 @@ func Default() *Config {
 		SecretsProxyPort:         2773,
 		SecretsProxySessionToken: "local-dev-token",
 		SecretsProxyRequireToken: true,
-		VaultKeyPath:             filepath.Join(home, ".openstack", "vault.key"),
+		VaultKeyPath:             filepath.Join(home, ".tarn", "vault.key"),
 	}
 }
 
 // LoadFromEnv overrides config values from environment variables.
 func (c *Config) LoadFromEnv() {
-	if v := os.Getenv("OPENSTACK_HOST"); v != "" {
+	if v := os.Getenv("TARN_HOST"); v != "" {
 		c.Host = v
 	}
-	if v := os.Getenv("OPENSTACK_PORT"); v != "" {
+	if v := os.Getenv("TARN_PORT"); v != "" {
 		if port, err := strconv.Atoi(v); err == nil {
 			c.Port = port
 		}
 	}
-	if v := os.Getenv("OPENSTACK_DATA_DIR"); v != "" {
+	if v := os.Getenv("TARN_DATA_DIR"); v != "" {
 		c.DataDir = v
 	}
 	if v := os.Getenv("DOCKER_HOST"); v != "" {
 		c.DockerHost = v
 	}
-	if v := os.Getenv("OPENSTACK_LAMBDA_KEEPALIVE_MS"); v != "" {
+	if v := os.Getenv("TARN_LAMBDA_KEEPALIVE_MS"); v != "" {
 		if ms, err := strconv.Atoi(v); err == nil {
 			c.LambdaKeepAliveMS = ms
 		}
 	}
-	if v := os.Getenv("OPENSTACK_REGION"); v != "" {
+	if v := os.Getenv("TARN_REGION"); v != "" {
 		c.Region = v
 	}
-	if v := os.Getenv("OPENSTACK_ACCOUNT_ID"); v != "" {
+	if v := os.Getenv("TARN_ACCOUNT_ID"); v != "" {
 		c.AccountID = v
 	}
-	if v := os.Getenv("OPENSTACK_UI_ENABLED"); v != "" {
+	if v := os.Getenv("TARN_UI_ENABLED"); v != "" {
 		if enabled, err := strconv.ParseBool(v); err == nil {
 			c.UIEnabled = enabled
 		}
 	}
-	if v := os.Getenv("OPENSTACK_UI_DIR"); v != "" {
+	if v := os.Getenv("TARN_UI_DIR"); v != "" {
 		c.UIDir = v
 	}
-	if v := os.Getenv("OPENSTACK_PERSIST"); v != "" {
+	if v := os.Getenv("TARN_PERSIST"); v != "" {
 		if enabled, err := strconv.ParseBool(v); err == nil {
 			c.PersistenceEnabled = enabled
 		}
 	}
-	if v := os.Getenv("OPENSTACK_LOGS_MAX_EVENTS"); v != "" {
+	if v := os.Getenv("TARN_LOGS_MAX_EVENTS"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			c.LogsMaxEventsPerGroup = n
 		}
 	}
-	if v := os.Getenv("OPENSTACK_LOGS_PERSIST"); v != "" {
+	if v := os.Getenv("TARN_LOGS_PERSIST"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			c.LogsPersistToDisk = b
 		}
 	}
-	if v := os.Getenv("OPENSTACK_INFRA_PROBE"); v != "" {
+	if v := os.Getenv("TARN_INFRA_PROBE"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			c.InfraProbeEnabled = b
 		}
 	}
-	if v := os.Getenv("OPENSTACK_INFRA_TARGETS"); v != "" {
+	if v := os.Getenv("TARN_INFRA_TARGETS"); v != "" {
 		c.InfraProbeTargets = v
 	}
-	if v := os.Getenv("OPENSTACK_EXPOSE_SECRETS_PROXY"); v != "" {
+	if v := os.Getenv("TARN_EXPOSE_SECRETS_PROXY"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			c.ExposeSecretsProxy = b
 		}
 	}
-	if v := os.Getenv("OPENSTACK_SECRETS_PROXY_HOST"); v != "" {
+	if v := os.Getenv("TARN_SECRETS_PROXY_HOST"); v != "" {
 		c.SecretsProxyHost = v
 	}
-	if v := os.Getenv("OPENSTACK_SECRETS_PROXY_PORT"); v != "" {
+	if v := os.Getenv("TARN_SECRETS_PROXY_PORT"); v != "" {
 		if port, err := strconv.Atoi(v); err == nil {
 			c.SecretsProxyPort = port
 		}
 	}
-	if v := os.Getenv("OPENSTACK_SECRETS_PROXY_TOKEN"); v != "" {
+	if v := os.Getenv("TARN_SECRETS_PROXY_TOKEN"); v != "" {
 		c.SecretsProxySessionToken = v
 	}
-	if v := os.Getenv("OPENSTACK_SECRETS_PROXY_REQUIRE_TOKEN"); v != "" {
+	if v := os.Getenv("TARN_SECRETS_PROXY_REQUIRE_TOKEN"); v != "" {
 		if b, err := strconv.ParseBool(v); err == nil {
 			c.SecretsProxyRequireToken = b
 		}
 	}
-	if v := os.Getenv("OPENSTACK_VAULT_KEY"); v != "" {
+	if v := os.Getenv("TARN_VAULT_KEY"); v != "" {
 		c.VaultKeyPath = v
 	}
 }

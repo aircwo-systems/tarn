@@ -14,7 +14,7 @@ func newDeleteCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "delete",
 		Short:   "Delete a Lambda function",
-		Example: `  openstack lambda delete --name my-func`,
+		Example: `  tarn lambda delete --name my-func`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
@@ -26,7 +26,7 @@ func newDeleteCmd() *cobra.Command {
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer resp.Body.Close()
 
