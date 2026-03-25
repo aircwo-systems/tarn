@@ -43,7 +43,7 @@ func newUIHandler(static fs.FS) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// API Protection
-		apiPrefixes := []string{"/2015-03-31/", "/_openstack/", "/v2", "/_apigateway"}
+		apiPrefixes := []string{"/2015-03-31/", "/_tarn/", "/v2", "/_apigateway"}
 		for _, prefix := range apiPrefixes {
 			if strings.HasPrefix(r.URL.Path, prefix) {
 				http.NotFound(w, r)

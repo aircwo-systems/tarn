@@ -1,5 +1,5 @@
 {
-  "name": "openstack-example-kysely-postgres-lambda",
+  "name": "tarn-example-kysely-postgres-lambda",
   "private": true,
   "type": "commonjs",
   "dependencies": {

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/openstack-project/openstack/internal/cli"
+	"github.com/aircwo-systems/tarn/internal/cli"
 )
 
 func main() {

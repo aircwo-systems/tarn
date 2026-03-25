@@ -18,13 +18,13 @@ variable "region" {
 }
 
 variable "endpoint" {
-  description = "OpenStack API endpoint"
+  description = "Tarn API endpoint"
   type        = string
   default     = "http://localhost:4566"
 }
 
 variable "account_id" {
-  description = "OpenStack emulated account ID"
+  description = "Tarn emulated account ID"
   type        = string
   default     = "000000000000"
 }

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	s3svc "github.com/openstack-project/openstack/internal/s3"
-	"github.com/openstack-project/openstack/pkg/types"
+	s3svc "github.com/aircwo-systems/tarn/internal/s3"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 const s3Namespace = "http://s3.amazonaws.com/doc/2006-03-01/"
@@ -689,7 +689,7 @@ func (h *Handler) createMultipartUpload(w http.ResponseWriter, r *http.Request, 
 
 	h.mu.Lock()
 	h.uploadSeq++
-	uploadID := fmt.Sprintf("openstack-mpu-%d", h.uploadSeq)
+	uploadID := fmt.Sprintf("tarn-mpu-%d", h.uploadSeq)
 	h.uploads[uploadID] = &multipartUpload{
 		bucket:      bucket,
 		key:         key,
@@ -817,7 +817,7 @@ type xmlOwner struct {
 }
 
 func defaultOwner() xmlOwner {
-	return xmlOwner{ID: "openstack", DisplayName: "OpenStack"}
+	return xmlOwner{ID: "tarn", DisplayName: "Tarn"}
 }
 
 func extractMetadata(r *http.Request) map[string]string {

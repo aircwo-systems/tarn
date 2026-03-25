@@ -18,13 +18,13 @@ variable "region" {
 }
 
 variable "endpoint" {
-  description = "OpenStack API endpoint"
+  description = "Tarn API endpoint"
   type        = string
   default     = "http://localhost:4566"
 }
 
 variable "account_id" {
-  description = "OpenStack emulated account ID"
+  description = "Tarn emulated account ID"
   type        = string
   default     = "000000000000"
 }
@@ -133,7 +133,7 @@ resource "aws_lambda_function" "status_api" {
       ARTIFACT_BUCKET    = aws_s3_bucket.media_assets.id
       REDIS_URL          = var.redis_url
       CACHE_NAMESPACE    = "image:asset"
-      OPENSTACK_ENDPOINT = var.endpoint
+      TARN_ENDPOINT = var.endpoint
     }
   }
 
@@ -163,7 +163,7 @@ resource "aws_lambda_function" "queue_worker" {
       ARTIFACT_BUCKET    = aws_s3_bucket.media_assets.id
       REDIS_URL          = var.redis_url
       CACHE_NAMESPACE    = "image:asset"
-      OPENSTACK_ENDPOINT = var.endpoint
+      TARN_ENDPOINT = var.endpoint
     }
   }
 
@@ -193,7 +193,7 @@ resource "aws_lambda_function" "s3_indexer" {
       ARTIFACT_BUCKET    = aws_s3_bucket.media_assets.id
       REDIS_URL          = var.redis_url
       CACHE_NAMESPACE    = "image:asset"
-      OPENSTACK_ENDPOINT = var.endpoint
+      TARN_ENDPOINT = var.endpoint
     }
   }
 

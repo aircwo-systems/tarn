@@ -3,7 +3,7 @@ package secrets
 import (
 	"fmt"
 
-	"github.com/openstack-project/openstack/internal/cli/common"
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -18,8 +18,8 @@ func newCreateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create",
 		Short: "Create a new secret",
-		Example: `  openstack secrets create --name my-secret --value "password123"
-  openstack secrets create --name db-creds --value '{"user":"admin","pass":"secret"}' --description "Database credentials"`,
+		Example: `  tarn secrets create --name my-secret --value "password123"
+  tarn secrets create --name db-creds --value '{"user":"admin","pass":"secret"}' --description "Database credentials"`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 

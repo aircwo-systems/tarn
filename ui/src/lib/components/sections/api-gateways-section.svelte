@@ -56,7 +56,7 @@
 
   function downloadAll() {
     downloadJSON(
-      "openstack-all-gateways.postman_collection.json",
+      "tarn-all-gateways.postman_collection.json",
       buildCombinedCollection(gateways),
     );
   }

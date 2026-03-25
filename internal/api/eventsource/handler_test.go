@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/openstack-project/openstack/internal/config"
-	eventsourcesvc "github.com/openstack-project/openstack/internal/eventsource"
+	"github.com/aircwo-systems/tarn/internal/config"
+	eventsourcesvc "github.com/aircwo-systems/tarn/internal/eventsource"
 )
 
 const (

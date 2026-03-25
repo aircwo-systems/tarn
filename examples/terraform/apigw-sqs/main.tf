@@ -33,7 +33,7 @@ variable "region" {
 }
 
 variable "endpoint" {
-  description = "OpenStack endpoint URL"
+  description = "Tarn endpoint URL"
   default     = "http://localhost:4566"
 }
 
@@ -41,7 +41,8 @@ variable "endpoint" {
 # SQS queue that receives enqueued orders
 # ──────────────────────────────────────────────
 resource "aws_sqs_queue" "orders" {
-  name = "orders"
+  name       = "orders.fifo"
+  fifo_queue = true
 }
 
 # ──────────────────────────────────────────────
@@ -61,7 +62,7 @@ resource "aws_apigatewayv2_api" "orders" {
 #     "application/json" = "Action=SendMessage&MessageBody=$input.body"
 #   }
 #
-# Supported expressions evaluated by OpenStack:
+# Supported expressions evaluated by Tarn:
 #   $request.body              — full request body
 #   $request.body.<field>      — top-level JSON field
 #   $request.header.<name>     — request header
@@ -74,29 +75,23 @@ resource "aws_apigatewayv2_integration" "orders_sqs" {
   integration_type = "AWS"
   integration_uri  = aws_sqs_queue.orders.arn
 
-  # Map the full HTTP request body as the SQS MessageBody.
-  # Change to "$request.body.payload" to forward only a nested field.
+  # FIFO queue mappings:
+  # - MessageBody from a top-level body field
+  # - MessageGroupId from route path param
+  # - MessageDeduplicationId from request header
   request_parameters = {
-    "MessageBody" = "$request.body"
+    "MessageBody"            = "$request.body.payload"
+    "MessageGroupId"         = "$request.path.orderId"
+    "MessageDeduplicationId" = "$request.header.x-dedup-id"
   }
 }
 
 # ──────────────────────────────────────────────
-# Route: POST /orders → SQS integration
+# Route: POST /orders/{orderId} → SQS integration
 # ──────────────────────────────────────────────
 resource "aws_apigatewayv2_route" "post_orders" {
   api_id    = aws_apigatewayv2_api.orders.id
-  route_key = "POST /orders"
-  target    = "integrations/${aws_apigatewayv2_integration.orders_sqs.id}"
-}
-
-# ──────────────────────────────────────────────
-# Optional: GET /orders/{id} route as a
-# reminder that path params also work in mappings
-# ──────────────────────────────────────────────
-resource "aws_apigatewayv2_route" "get_order" {
-  api_id    = aws_apigatewayv2_api.orders.id
-  route_key = "GET /orders/{orderId}"
+  route_key = "POST /orders/{orderId}"
   target    = "integrations/${aws_apigatewayv2_integration.orders_sqs.id}"
 }
 
@@ -116,7 +111,7 @@ resource "aws_lambda_function" "order_logger" {
   source_code_hash = data.archive_file.order_logger.output_base64sha256
   handler          = "index.handler"
   runtime          = "nodejs24.x"
-  # OpenStack does not enforce IAM; a placeholder ARN is sufficient.
+  # Tarn does not enforce IAM; a placeholder ARN is sufficient.
   role = "arn:aws:iam::000000000000:role/lambda-exec"
 }
 

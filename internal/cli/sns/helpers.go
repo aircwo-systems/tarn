@@ -8,7 +8,7 @@ import (
 )
 
 func getEndpoint(cmd *cobra.Command) string {
-	if v := os.Getenv("OPENSTACK_ENDPOINT"); v != "" {
+	if v := os.Getenv("TARN_ENDPOINT"); v != "" {
 		return v
 	}
 

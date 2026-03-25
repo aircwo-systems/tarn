@@ -52,18 +52,18 @@ terraform output -raw upload_artifact_curl | sh
 Then inspect logs:
 
 ```bash
-curl -s "http://localhost:4566/_openstack/admin/logs/events/%2Faws%2Flambda%2Fdevelop-mvp-content-queue-worker?limit=50"
-curl -s "http://localhost:4566/_openstack/admin/logs/events/%2Faws%2Flambda%2Fdevelop-mvp-content-ingest-status?limit=50"
-curl -s "http://localhost:4566/_openstack/admin/logs/events/%2Faws%2Flambda%2Fdevelop-mvp-content-s3-listener?limit=50"
+curl -s "http://localhost:4566/_tarn/admin/logs/events/%2Faws%2Flambda%2Fdevelop-mvp-content-queue-worker?limit=50"
+curl -s "http://localhost:4566/_tarn/admin/logs/events/%2Faws%2Flambda%2Fdevelop-mvp-content-ingest-status?limit=50"
+curl -s "http://localhost:4566/_tarn/admin/logs/events/%2Faws%2Flambda%2Fdevelop-mvp-content-s3-listener?limit=50"
 ```
 
 ## Usage
 
-Start OpenStack:
+Start Tarn:
 
 ```bash
 make build
-./build/openstack start --ui
+./build/tarn start --ui
 ```
 
 Provision:
@@ -92,7 +92,7 @@ Trigger the S3 -> Lambda path:
 terraform output -raw upload_artifact_curl | sh
 ```
 
-In the OpenStack UI:
+In the Tarn UI:
 - Filter by `feature:develop-mvp`
 - Check the canvas and triggers view for API, queue trigger, and S3 trigger wiring
 

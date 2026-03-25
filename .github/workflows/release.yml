@@ -61,7 +61,7 @@ jobs:
           go-version: '1.26'
           cache: true
 
-      - name: Build openstack
+      - name: Build tarn
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -69,9 +69,9 @@ jobs:
           EXT=""
           if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
           CGO_ENABLED=0 go build \
-            -ldflags="-s -w -X github.com/openstack-project/openstack/internal/cli.version=${{ github.ref_name }}" \
-            -o ./build/openstack-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
-            ./cmd/openstack
+            -ldflags="-s -w -X github.com/aircwo-systems/tarn/internal/cli.version=${{ github.ref_name }}" \
+            -o ./build/tarn-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
+            ./cmd/tarn
 
       - name: Build secrets-proxy (linux/amd64 only)
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
@@ -84,8 +84,8 @@ jobs:
       - name: Upload Binary
         uses: actions/upload-artifact@v4
         with:
-          name: bin-openstack-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: ./build/openstack-*
+          name: bin-tarn-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: ./build/tarn-*
 
       - name: Upload secrets-proxy artifact
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
@@ -107,7 +107,7 @@ jobs:
       - name: Package Release
         run: |
           mkdir ./to-upload
-          for f in ./raw-bins/openstack-*; do
+          for f in ./raw-bins/tarn-*; do
             name=$(basename "$f")
             if [[ "$name" == *.exe ]]; then
               zip "./to-upload/${name%.exe}.zip" "$f"

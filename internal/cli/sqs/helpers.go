@@ -8,7 +8,7 @@ import (
 )
 
 func getEndpoint(cmd *cobra.Command) string {
-	if v := os.Getenv("OPENSTACK_ENDPOINT"); v != "" {
+	if v := os.Getenv("TARN_ENDPOINT"); v != "" {
 		return v
 	}
 
@@ -23,7 +23,7 @@ func getEndpoint(cmd *cobra.Command) string {
 }
 
 func getAccountID() string {
-	if v := os.Getenv("OPENSTACK_ACCOUNT_ID"); v != "" {
+	if v := os.Getenv("TARN_ACCOUNT_ID"); v != "" {
 		return v
 	}
 	return "000000000000"

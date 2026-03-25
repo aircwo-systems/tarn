@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openstack-project/openstack/internal/config"
-	logssvc "github.com/openstack-project/openstack/internal/logs"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/config"
+	logssvc "github.com/aircwo-systems/tarn/internal/logs"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 func TestCreateFunctionCreatesLambdaLogGroup(t *testing.T) {

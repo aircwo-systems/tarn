@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	apisvc "github.com/openstack-project/openstack/internal/apigateway"
+	apisvc "github.com/aircwo-systems/tarn/internal/apigateway"
 )
 
 // Handler implements API Gateway v2 management and invoke endpoints.

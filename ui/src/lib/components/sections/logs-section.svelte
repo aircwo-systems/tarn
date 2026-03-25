@@ -534,7 +534,7 @@
 
 	function groupDisplayName(name: string): string {
 		if (name.startsWith('/aws/lambda/')) return name.slice('/aws/lambda/'.length);
-		if (name.startsWith('/openstack/')) return name.slice(1);
+		if (name.startsWith('/tarn/')) return name.slice(1);
 		return name;
 	}
 
@@ -544,13 +544,13 @@
 
 	function groupServiceKey(name: string): string {
 		if (name.startsWith('/aws/lambda/')) return 'lambda';
-		if (name === '/openstack/api') return 'api';
-		if (name === '/openstack/system') return 'system';
-		if (name.startsWith('/openstack/apigateway')) return 'apigatewayv2';
-		if (name.startsWith('/openstack/sns')) return 'sns';
-		if (name.startsWith('/openstack/sqs')) return 'sqs';
-		if (name.startsWith('/openstack/secrets')) return 'secretsmanager';
-		if (name.startsWith('/openstack/')) return 'system';
+		if (name === '/tarn/api') return 'api';
+		if (name === '/tarn/system') return 'system';
+		if (name.startsWith('/tarn/apigateway')) return 'apigatewayv2';
+		if (name.startsWith('/tarn/sns')) return 'sns';
+		if (name.startsWith('/tarn/sqs')) return 'sqs';
+		if (name.startsWith('/tarn/secrets')) return 'secretsmanager';
+		if (name.startsWith('/tarn/')) return 'system';
 		return 'other';
 	}
 

@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/openstack-project/openstack/internal/config"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // Store is an in-memory store for SNS topics and subscriptions.

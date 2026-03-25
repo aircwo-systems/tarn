@@ -31,7 +31,7 @@ variable "region" {
 }
 
 variable "endpoint" {
-  description = "OpenStack endpoint URL"
+  description = "Tarn endpoint URL"
   default     = "http://localhost:4566"
 }
 

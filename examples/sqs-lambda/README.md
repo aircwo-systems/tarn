@@ -1,8 +1,8 @@
 # SQS -> Lambda Example (Local Bridge)
 
-This example provides a local SQS-to-Lambda bridge for OpenStack.
+This example provides a local SQS-to-Lambda bridge for Tarn.
 
-OpenStack does not yet include native SQS event source mappings, so `pump.sh` continuously polls an SQS queue and invokes a Lambda function with an SQS-style `Records` payload.
+Tarn does not yet include native SQS event source mappings, so `pump.sh` continuously polls an SQS queue and invokes a Lambda function with an SQS-style `Records` payload.
 
 ## Files
 
@@ -13,8 +13,8 @@ OpenStack does not yet include native SQS event source mappings, so `pump.sh` co
 
 ## Prerequisites
 
-- OpenStack server running at `http://localhost:4566`
-- OpenStack CLI binary (default: `./build/openstack` or `openstack` in `PATH`)
+- Tarn server running at `http://localhost:4566`
+- Tarn CLI binary (default: `./build/tarn` or `tarn` in `PATH`)
 - `python3`, `zip`, `curl`
 
 ## Usage
@@ -33,14 +33,14 @@ OpenStack does not yet include native SQS event source mappings, so `pump.sh` co
 
 You should see `pump.sh` invoke the Lambda and then delete each processed message.
 
-The scripts use the OpenStack CLI for queue/function operations. The only direct API call is `DeleteMessage` (via `curl`) because that action is not exposed by the current CLI yet.
+The scripts use the Tarn CLI for queue/function operations. The only direct API call is `DeleteMessage` (via `curl`) because that action is not exposed by the current CLI yet.
 
 ## Configurable env vars
 
-- `OPENSTACK_ENDPOINT` (default: `http://localhost:4566`)
-- `OPENSTACK_ACCOUNT_ID` (default: `000000000000`)
+- `TARN_ENDPOINT` (default: `http://localhost:4566`)
+- `TARN_ACCOUNT_ID` (default: `000000000000`)
 - `AWS_DEFAULT_REGION` (default: `us-east-1`)
 - `QUEUE_NAME` (default: `orders-queue`)
 - `FUNCTION_NAME` (default: `orders-consumer`)
-- `OPENSTACK_BIN` (optional path to `openstack` CLI)
+- `TARN_BIN` (optional path to `tarn` CLI)
 - `WAIT_SECONDS` (default: `10`, used by `pump.sh`)

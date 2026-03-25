@@ -29,6 +29,6 @@ output "lambda_function_name" {
 }
 
 output "lambda_logs_curl" {
-  description = "Fetch Lambda log events from the OpenStack dashboard API"
-  value       = "curl -s ${var.endpoint}/_openstack/admin/logs/groups/%2Faws%2Flambda%2Forder-logger/events | jq ."
+  description = "Fetch Lambda log events from the Tarn dashboard API"
+  value       = "curl -s ${var.endpoint}/_tarn/admin/logs/groups/%2Faws%2Flambda%2Forder-logger/events | jq ."
 }

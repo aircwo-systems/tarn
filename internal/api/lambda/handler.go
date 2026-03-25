@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	lambdasvc "github.com/openstack-project/openstack/internal/lambda"
-	tracesvc "github.com/openstack-project/openstack/internal/trace"
-	"github.com/openstack-project/openstack/pkg/types"
+	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
+	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // s3Getter is the subset of the S3 service used to fetch Lambda deployment packages.

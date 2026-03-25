@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/openstack-project/openstack/internal/config"
-	eventbridgesvc "github.com/openstack-project/openstack/internal/eventbridge"
+	"github.com/aircwo-systems/tarn/internal/config"
+	eventbridgesvc "github.com/aircwo-systems/tarn/internal/eventbridge"
 )
 
 func newTestHandler(t *testing.T) *Handler {
@@ -137,7 +137,7 @@ func TestResourceTagsLifecycle(t *testing.T) {
 		"ResourceARN": putBody.RuleArn,
 		"Tags": []map[string]string{
 			{"Key": "env", "Value": "test"},
-			{"Key": "team", "Value": "openstack"},
+			{"Key": "team", "Value": "tarn"},
 		},
 	})
 	if tag.Code != http.StatusOK {

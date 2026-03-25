@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"sort"
 
-	"github.com/openstack-project/openstack/internal/cli/common"
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -24,9 +24,9 @@ func newCreateQueueCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "create-queue",
 		Short: "Create a new SQS queue",
-		Example: `  openstack sqs create-queue --name my-queue
-  openstack sqs create-queue --name my-queue.fifo --fifo
-  openstack sqs create-queue --name my-queue --dlq my-queue-dlq --max-receive-count 3`,
+		Example: `  tarn sqs create-queue --name my-queue
+  tarn sqs create-queue --name my-queue.fifo --fifo
+  tarn sqs create-queue --name my-queue --dlq my-queue-dlq --max-receive-count 3`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
@@ -76,7 +76,7 @@ func newCreateQueueCmd() *cobra.Command {
 
 			resp, err := http.PostForm(endpoint, form)
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer func() { _ = resp.Body.Close() }()
 

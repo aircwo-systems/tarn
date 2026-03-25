@@ -21,8 +21,8 @@ func newReceiveCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "receive",
 		Short: "Receive messages from an SQS queue",
-		Example: `  openstack sqs receive --queue my-queue
-  openstack sqs receive --queue my-queue --max 5 --wait 10`,
+		Example: `  tarn sqs receive --queue my-queue
+  tarn sqs receive --queue my-queue --max 5 --wait 10`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
@@ -37,7 +37,7 @@ func newReceiveCmd() *cobra.Command {
 
 			resp, err := http.PostForm(endpoint+"/"+getAccountID()+"/"+queue, form)
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer resp.Body.Close()
 

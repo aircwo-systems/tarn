@@ -47,14 +47,14 @@ func TestMatchesTagSelector(t *testing.T) {
 }
 
 func TestRunFlushDeletesOnlyMatchingTaggedResources(t *testing.T) {
-	const endpoint = "http://openstack.test"
+	const endpoint = "http://tarn.test"
 	var deleted []string
 
 	prevClient := cliHTTPClient
 	cliHTTPClient = &http.Client{
 		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
-			case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_openstack/admin/overview":
+			case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_tarn/admin/overview":
 				return jsonResponse(http.StatusOK, `{
 						"config":{"accountId":"000000000000"},
 						"gateways":[
@@ -105,8 +105,8 @@ func TestRunFlushDeletesOnlyMatchingTaggedResources(t *testing.T) {
 	}
 	defer func() { cliHTTPClient = prevClient }()
 
-	cmd := &cobra.Command{Use: "openstack"}
-	t.Setenv("OPENSTACK_ENDPOINT", endpoint)
+	cmd := &cobra.Command{Use: "tarn"}
+	t.Setenv("TARN_ENDPOINT", endpoint)
 
 	var out bytes.Buffer
 	err := runFlush(cmd, &out, flushOptions{TagFilter: "feature=r10"})
@@ -141,14 +141,14 @@ func TestRunFlushDeletesOnlyMatchingTaggedResources(t *testing.T) {
 }
 
 func TestRunFlushContinuesAfterQueueDeleteError(t *testing.T) {
-	const endpoint = "http://openstack.test"
+	const endpoint = "http://tarn.test"
 	var deleted []string
 
 	prevClient := cliHTTPClient
 	cliHTTPClient = &http.Client{
 		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
-			case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_openstack/admin/overview":
+			case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_tarn/admin/overview":
 				return jsonResponse(http.StatusOK, `{
 					"config":{"accountId":"000000000000"},
 					"gateways":[],
@@ -176,8 +176,8 @@ func TestRunFlushContinuesAfterQueueDeleteError(t *testing.T) {
 	}
 	defer func() { cliHTTPClient = prevClient }()
 
-	cmd := &cobra.Command{Use: "openstack"}
-	t.Setenv("OPENSTACK_ENDPOINT", endpoint)
+	cmd := &cobra.Command{Use: "tarn"}
+	t.Setenv("TARN_ENDPOINT", endpoint)
 
 	var out bytes.Buffer
 	err := runFlush(cmd, &out, flushOptions{TagFilter: "feature=r10"})
@@ -198,14 +198,14 @@ func TestRunFlushContinuesAfterQueueDeleteError(t *testing.T) {
 }
 
 func TestRunFlushWithTagDeletesOrphanEventSourceMappings(t *testing.T) {
-	const endpoint = "http://openstack.test"
+	const endpoint = "http://tarn.test"
 	var deleted []string
 
 	prevClient := cliHTTPClient
 	cliHTTPClient = &http.Client{
 		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
-			case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_openstack/admin/overview":
+			case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_tarn/admin/overview":
 				return jsonResponse(http.StatusOK, `{
 					"config":{"accountId":"000000000000"},
 					"gateways":[],
@@ -248,8 +248,8 @@ func TestRunFlushWithTagDeletesOrphanEventSourceMappings(t *testing.T) {
 	}
 	defer func() { cliHTTPClient = prevClient }()
 
-	cmd := &cobra.Command{Use: "openstack"}
-	t.Setenv("OPENSTACK_ENDPOINT", endpoint)
+	cmd := &cobra.Command{Use: "tarn"}
+	t.Setenv("TARN_ENDPOINT", endpoint)
 
 	var out bytes.Buffer
 	err := runFlush(cmd, &out, flushOptions{TagFilter: "feature=r10"})
@@ -269,7 +269,7 @@ func TestRunFlushWithTagDeletesOrphanEventSourceMappings(t *testing.T) {
 }
 
 func TestDeleteQueueTreatsNonExistentQueueAsSuccess(t *testing.T) {
-	const queueURL = "http://openstack.test/000000000000/missing-queue.fifo"
+	const queueURL = "http://tarn.test/000000000000/missing-queue.fifo"
 
 	prevClient := cliHTTPClient
 	cliHTTPClient = &http.Client{
@@ -285,14 +285,14 @@ func TestDeleteQueueTreatsNonExistentQueueAsSuccess(t *testing.T) {
 }
 
 func TestRunFlushClearsS3TriggersWithoutStorage(t *testing.T) {
-	const endpoint = "http://openstack.test"
+	const endpoint = "http://tarn.test"
 	var cleared []string
 
 	prevClient := cliHTTPClient
 	cliHTTPClient = &http.Client{
 		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 			switch {
-			case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_openstack/admin/overview":
+			case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_tarn/admin/overview":
 				return jsonResponse(http.StatusOK, `{
 					"config":{"accountId":"000000000000"},
 					"gateways":[],
@@ -316,8 +316,8 @@ func TestRunFlushClearsS3TriggersWithoutStorage(t *testing.T) {
 	}
 	defer func() { cliHTTPClient = prevClient }()
 
-	cmd := &cobra.Command{Use: "openstack"}
-	t.Setenv("OPENSTACK_ENDPOINT", endpoint)
+	cmd := &cobra.Command{Use: "tarn"}
+	t.Setenv("TARN_ENDPOINT", endpoint)
 
 	var out bytes.Buffer
 	err := runFlush(cmd, &out, flushOptions{TagFilter: "r10"})
@@ -334,7 +334,7 @@ func TestRunFlushClearsS3TriggersWithoutStorage(t *testing.T) {
 }
 
 func TestClearS3BucketNotificationsTreatsMissingBucketAsSuccess(t *testing.T) {
-	const endpoint = "http://openstack.test"
+	const endpoint = "http://tarn.test"
 
 	prevClient := cliHTTPClient
 	cliHTTPClient = &http.Client{

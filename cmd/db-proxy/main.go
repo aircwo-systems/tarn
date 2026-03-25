@@ -3,7 +3,7 @@
 // traffic unchanged while detecting query boundaries in the PostgreSQL wire protocol.
 //
 // When the server sends ReadyForQuery ('Z') — which marks the end of every query
-// cycle — the proxy immediately reports a "postgres" span to the OpenStack telemetry
+// cycle — the proxy immediately reports a "postgres" span to the Tarn telemetry
 // endpoint. This happens before the Lambda sends its HTTP response, so the span is
 // always visible in the X-Ray trace regardless of whether the connection is short-lived
 // or kept alive by a connection pool.
@@ -24,22 +24,22 @@ import (
 )
 
 func main() {
-	listenPort := os.Getenv("OPENSTACK_DB_PROXY_PORT")
+	listenPort := os.Getenv("TARN_DB_PROXY_PORT")
 	if listenPort == "" {
 		listenPort = "15432"
 	}
 
-	upstreamAddr := os.Getenv("OPENSTACK_DB_UPSTREAM")
+	upstreamAddr := os.Getenv("TARN_DB_UPSTREAM")
 	if upstreamAddr == "" {
-		log.Fatal("[db-proxy] OPENSTACK_DB_UPSTREAM not set")
+		log.Fatal("[db-proxy] TARN_DB_UPSTREAM not set")
 	}
 
-	openstackEndpoint := os.Getenv("AWS_ENDPOINT_URL")
-	if openstackEndpoint == "" {
-		openstackEndpoint = "http://host.docker.internal:4566"
+	tarnEndpoint := os.Getenv("AWS_ENDPOINT_URL")
+	if tarnEndpoint == "" {
+		tarnEndpoint = "http://host.docker.internal:4566"
 	}
 
-	dbName := os.Getenv("OPENSTACK_DB_NAME")
+	dbName := os.Getenv("TARN_DB_NAME")
 	if dbName == "" {
 		dbName = upstreamAddr
 	}
@@ -56,17 +56,17 @@ func main() {
 			log.Printf("[db-proxy] accept error: %v", err)
 			continue
 		}
-		go handleConn(conn, upstreamAddr, openstackEndpoint, dbName)
+		go handleConn(conn, upstreamAddr, tarnEndpoint, dbName)
 	}
 }
 
-func handleConn(client net.Conn, upstreamAddr, openstackEndpoint, dbName string) {
+func handleConn(client net.Conn, upstreamAddr, tarnEndpoint, dbName string) {
 	defer client.Close()
 
 	upstream, err := net.Dial("tcp", upstreamAddr)
 	if err != nil {
 		log.Printf("[db-proxy] dial %s error: %v", upstreamAddr, err)
-		reportSpan(openstackEndpoint, dbName, 0, "error")
+		reportSpan(tarnEndpoint, dbName, 0, "error")
 		return
 	}
 	defer upstream.Close()
@@ -111,7 +111,7 @@ func handleConn(client net.Conn, upstreamAddr, openstackEndpoint, dbName string)
 		if txStatus == 'E' { // error in transaction
 			status = "error"
 		}
-		go reportSpan(openstackEndpoint, dbName, dur, status)
+		go reportSpan(tarnEndpoint, dbName, dur, status)
 	}
 
 	done := make(chan struct{}, 2)
@@ -309,7 +309,7 @@ func reportSpan(endpoint, dbName string, durationMs int64, status string) {
 		"durationMs": durationMs,
 		"status":     status,
 	})
-	resp, err := http.Post(fmt.Sprintf("%s/_openstack/telemetry/db", endpoint), "application/json", bytes.NewReader(body))
+	resp, err := http.Post(fmt.Sprintf("%s/_tarn/telemetry/db", endpoint), "application/json", bytes.NewReader(body))
 	if err != nil {
 		log.Printf("[db-proxy] report span error: %v", err)
 		return

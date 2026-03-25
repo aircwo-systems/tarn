@@ -15,7 +15,7 @@ func newDeleteQueueCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "delete-queue",
 		Short:   "Delete an SQS queue",
-		Example: `  openstack sqs delete-queue --name my-queue`,
+		Example: `  tarn sqs delete-queue --name my-queue`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
@@ -26,7 +26,7 @@ func newDeleteQueueCmd() *cobra.Command {
 
 			resp, err := http.PostForm(endpoint+"/"+getAccountID()+"/"+name, form)
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer func() { _ = resp.Body.Close() }()
 

@@ -51,7 +51,7 @@ func TestHandlerForwardsGetSecret(t *testing.T) {
 	}
 
 	h := NewHandler(Options{
-		UpstreamURL:  "http://openstack.local",
+		UpstreamURL:  "http://tarn.local",
 		SessionToken: "expected-token",
 		RequireToken: true,
 		HTTPClient:   httpClient,
@@ -94,7 +94,7 @@ func TestHandlerEmitsRequestEvent(t *testing.T) {
 	}
 
 	h := NewHandler(Options{
-		UpstreamURL:  "http://openstack.local",
+		UpstreamURL:  "http://tarn.local",
 		SessionToken: "expected-token",
 		RequireToken: true,
 		HTTPClient:   httpClient,
@@ -105,7 +105,7 @@ func TestHandlerEmitsRequestEvent(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/secretsmanager/get?secretId=my-secret", nil)
 	req.Header.Set(tokenHeader, "expected-token")
-	req.Header.Set("X-OpenStack-Function-Name", "local-fn")
+	req.Header.Set("X-Tarn-Function-Name", "local-fn")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -129,7 +129,7 @@ func TestHandlerEmitsRequestEvent(t *testing.T) {
 func TestHandlerEmitsEventForInvalidToken(t *testing.T) {
 	var emitted RequestEvent
 	h := NewHandler(Options{
-		UpstreamURL:  "http://openstack.local",
+		UpstreamURL:  "http://tarn.local",
 		SessionToken: "expected-token",
 		RequireToken: true,
 		OnRequest: func(event RequestEvent) {

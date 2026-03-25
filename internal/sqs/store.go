@@ -14,12 +14,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/openstack-project/openstack/internal/config"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // defaultStaleReceiveCount is the number of failed receive attempts after which
-// OpenStack marks a message as stale when no DLQ is configured.
+// Tarn marks a message as stale when no DLQ is configured.
 // On real AWS the message would retry indefinitely; here we park it to avoid
 // burning CPU. The message remains visible in the UI with a "stale" indicator.
 const defaultStaleReceiveCount = 5
@@ -674,7 +674,7 @@ func (s *Store) Reap() {
 			}
 			// No DLQ: mark as stale instead of retrying indefinitely.
 			// On real AWS the message would keep retrying until it expires, but in
-			// OpenStack we park it to avoid burning CPU. The UI shows it as "stale".
+			// Tarn we park it to avoid burning CPU. The UI shows it as "stale".
 			if !hasDLQ && !m.Stale && m.VisibleAt <= now && m.ApproximateReceiveCount >= staleThreshold {
 				m.Stale = true
 				changed = true

@@ -77,8 +77,8 @@
   let infraNodePositions = $state<Record<string, InfraNodePosition>>({});
   let infraPositionsHydrated = $state(false);
 
-  const INFRA_ORDER_STORAGE_KEY = "openstack-ui-topology-infra-order-v1";
-  const INFRA_POSITIONS_STORAGE_KEY = "openstack-ui-topology-infra-position-v1";
+  const INFRA_ORDER_STORAGE_KEY = "tarn-ui-topology-infra-order-v1";
+  const INFRA_POSITIONS_STORAGE_KEY = "tarn-ui-topology-infra-position-v1";
 
   function infraNodeId(probe: InfraProbe): string {
     return `${probe.kind}-${probe.host}-${probe.port}`;

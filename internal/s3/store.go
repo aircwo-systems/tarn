@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // Store is a filesystem-backed S3 object store.

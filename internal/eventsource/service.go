@@ -8,9 +8,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/openstack-project/openstack/internal/config"
-	tracesvc "github.com/openstack-project/openstack/internal/trace"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/config"
+	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // Service manages event source mappings and their background pollers.

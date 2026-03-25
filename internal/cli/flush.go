@@ -81,17 +81,17 @@ func newFlushCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "flush",
-		Short: "Delete provisioned resources from the current OpenStack instance",
+		Short: "Delete provisioned resources from the current Tarn instance",
 		Long: `Flush deletes provisioned API Gateways, Lambda functions, SQS queues, event source mappings, and Secrets Manager secrets
-from the current OpenStack instance.
+from the current Tarn instance.
 
 Use --tag to scope deletion to a feature slice such as feature=r10.
 Use --storage to also purge S3 bucket contents and delete buckets.`,
-		Example: `  openstack flush
-  openstack flush --storage
-  openstack flush --tag feature=r10
-  openstack flush --tag r10 --dry-run
-  openstack flush --tag develop-mvp --storage`,
+		Example: `  tarn flush
+  tarn flush --storage
+  tarn flush --tag feature=r10
+  tarn flush --tag r10 --dry-run
+  tarn flush --tag develop-mvp --storage`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runFlush(cmd, os.Stdout, opts)
 		},
@@ -260,13 +260,13 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 }
 
 func fetchFlushOverview(endpoint string) (*flushOverview, error) {
-	req, err := http.NewRequest(http.MethodGet, endpoint+"/_openstack/admin/overview", nil)
+	req, err := http.NewRequest(http.MethodGet, endpoint+"/_tarn/admin/overview", nil)
 	if err != nil {
 		return nil, err
 	}
 	resp, err := cliHTTPClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+		return nil, fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 	}
 	defer resp.Body.Close()
 
@@ -1418,7 +1418,7 @@ func deleteS3Bucket(endpoint, bucket string) error {
 }
 
 func getCLIEndpoint(cmd *cobra.Command) string {
-	if v := os.Getenv("OPENSTACK_ENDPOINT"); v != "" {
+	if v := os.Getenv("TARN_ENDPOINT"); v != "" {
 		return v
 	}
 

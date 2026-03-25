@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"strings"
 
-	svc "github.com/openstack-project/openstack/internal/apigatewayv1"
+	svc "github.com/aircwo-systems/tarn/internal/apigatewayv1"
 )
 
 // Handler implements the AWS API Gateway REST API (v1) management and invoke endpoints.

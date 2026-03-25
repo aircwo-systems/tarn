@@ -12,9 +12,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/openstack-project/openstack/internal/config"
-	tracesvc "github.com/openstack-project/openstack/internal/trace"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/config"
+	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 const (
@@ -928,7 +928,7 @@ func lambdaNameFromTarget(arn string) (string, error) {
 func buildScheduledEventPayload(rule *types.EventBridgeRule, at time.Time, sessionMeta map[string]string) []byte {
 	detail := map[string]any{}
 	if len(sessionMeta) > 0 {
-		detail["openstack"] = sessionMeta
+		detail["tarn"] = sessionMeta
 	}
 	ruleARN := ""
 	account := "000000000000"

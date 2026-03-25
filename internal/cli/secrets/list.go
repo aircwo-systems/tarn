@@ -10,7 +10,7 @@ func newListCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "list",
 		Short:   "List all secrets",
-		Example: `  openstack secrets list`,
+		Example: `  tarn secrets list`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 

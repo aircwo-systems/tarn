@@ -1,4 +1,4 @@
-# Contributing to OpenStack
+# Contributing to Tarn
 
 Thanks for contributing.
 

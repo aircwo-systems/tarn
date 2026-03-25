@@ -18,9 +18,9 @@ let lastRefresh = $state("");
 let pollHandle: ReturnType<typeof setInterval> | null = null;
 let inFlight = false;
 
-const SETTINGS_COOKIE = "openstack-ui-settings";
-const INFRA_SETTINGS_KEY = "openstack-infra-settings";
-const PROJECT_SETTINGS_KEY = "openstack-project-settings";
+const SETTINGS_COOKIE = "tarn-ui-settings";
+const INFRA_SETTINGS_KEY = "tarn-infra-settings";
+const PROJECT_SETTINGS_KEY = "tarn-project-settings";
 const DEFAULT_POLLING_INTERVAL_SECONDS = 5;
 const MIN_POLLING_INTERVAL_SECONDS = 1;
 const MAX_POLLING_INTERVAL_SECONDS = 120;

@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 func isBindPermissionError(err error) bool {

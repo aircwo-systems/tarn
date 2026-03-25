@@ -263,7 +263,7 @@ func probeHTTP(ctx context.Context, t ProbeTarget) ProbeResult {
 		result.Error = err.Error()
 		return result
 	}
-	req.Header.Set("User-Agent", "OpenStack-Probe/1.0")
+	req.Header.Set("User-Agent", "Tarn-Probe/1.0")
 
 	client := &http.Client{
 		Timeout: 3 * time.Second,
@@ -328,8 +328,8 @@ func probePgVersion(conn net.Conn) string {
 		return ""
 	}
 
-	// Send startup message: version 3.0, user=openstack_probe
-	user := "openstack_probe"
+	// Send startup message: version 3.0, user=tarn_probe
+	user := "tarn_probe"
 	// Startup: int32 length, int32 protocol(196608=3.0), "user\0" + user + "\0\0"
 	payload := []byte("user\x00" + user + "\x00\x00")
 	startupLen := 4 + 4 + len(payload)

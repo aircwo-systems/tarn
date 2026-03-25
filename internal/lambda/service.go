@@ -12,10 +12,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/openstack-project/openstack/internal/config"
-	"github.com/openstack-project/openstack/internal/engine"
-	logssvc "github.com/openstack-project/openstack/internal/logs"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/internal/engine"
+	logssvc "github.com/aircwo-systems/tarn/internal/logs"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // Service implements Lambda business logic.
@@ -787,7 +787,7 @@ func (s *Service) logFunctionRuntimeEvent(functionName string, level logssvc.Log
 
 	groupName := fmt.Sprintf("/aws/lambda/%s", functionName)
 	s.logsSvc.CreateLogGroup(groupName)
-	s.logsSvc.PutLogEvents(groupName, "openstack", []logssvc.LogEvent{{
+	s.logsSvc.PutLogEvents(groupName, "tarn", []logssvc.LogEvent{{
 		Timestamp: time.Now().UTC(),
 		Message:   message,
 		Level:     level,

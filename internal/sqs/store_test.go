@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openstack-project/openstack/internal/config"
+	"github.com/aircwo-systems/tarn/internal/config"
 )
 
 func newTestStore() *Store {

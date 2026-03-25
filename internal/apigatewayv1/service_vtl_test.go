@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 func TestEvaluateVTL_MultilineSetPayloadToJson(t *testing.T) {
@@ -178,7 +178,7 @@ func TestInvokeAWSIntegration_UsesTemplateFallbackAndForwardsFIFOFields(t *testi
 
 		input := &InvokeInput{
 			Headers: http.Header{
-				"Content-Type": []string{"application/vnd.openstack+json; charset=utf-8"},
+				"Content-Type": []string{"application/vnd.tarn+json; charset=utf-8"},
 				"X-Dedup-Id":   []string{"dedup-42"},
 			},
 			Query: url.Values{},

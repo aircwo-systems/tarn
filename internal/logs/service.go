@@ -5,7 +5,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openstack-project/openstack/internal/config"
+	"github.com/aircwo-systems/tarn/internal/config"
 )
 
 // Service implements logging business logic.
@@ -20,8 +20,8 @@ func NewService(cfg *config.Config) *Service {
 		cfg:   cfg,
 		store: NewStore(cfg.LogsMaxEventsPerGroup),
 	}
-	s.store.CreateGroup("/openstack/api")
-	s.store.CreateGroup("/openstack/system")
+	s.store.CreateGroup("/tarn/api")
+	s.store.CreateGroup("/tarn/system")
 	return s
 }
 
@@ -75,9 +75,9 @@ func (s *Service) ListStreams(groupName string) []LogStream {
 	return s.store.ListStreams(groupName)
 }
 
-// LogSystemEvent writes an event to the /openstack/system log group.
+// LogSystemEvent writes an event to the /tarn/system log group.
 func (s *Service) LogSystemEvent(level LogLevel, message string) {
-	s.store.PutLogEvents("/openstack/system", "system", []LogEvent{
+	s.store.PutLogEvents("/tarn/system", "system", []LogEvent{
 		{
 			Timestamp: time.Now().UTC(),
 			Message:   message,
@@ -87,7 +87,7 @@ func (s *Service) LogSystemEvent(level LogLevel, message string) {
 	})
 }
 
-// LogAPIRequest writes an event to the /openstack/api log group.
+// LogAPIRequest writes an event to the /tarn/api log group.
 func (s *Service) LogAPIRequest(method, path string, status int, duration time.Duration) {
 	level := LevelINFO
 	if status >= 500 {
@@ -97,7 +97,7 @@ func (s *Service) LogAPIRequest(method, path string, status int, duration time.D
 	}
 
 	msg := fmt.Sprintf("%s %s %d %s", method, path, status, duration)
-	s.store.PutLogEvents("/openstack/api", "requests", []LogEvent{
+	s.store.PutLogEvents("/tarn/api", "requests", []LogEvent{
 		{
 			Timestamp: time.Now().UTC(),
 			Message:   msg,

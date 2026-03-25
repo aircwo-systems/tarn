@@ -19,7 +19,7 @@ func newListTopicsCmd() *cobra.Command {
 			endpoint := getEndpoint(cmd)
 			resp, err := http.PostForm(endpoint, url.Values{"Action": {"ListTopics"}})
 			if err != nil {
-				return fmt.Errorf("failed to connect to OpenStack at %s: %w", endpoint, err)
+				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
 			defer func() { _ = resp.Body.Close() }()
 

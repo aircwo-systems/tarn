@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // ParseTagMap parses a comma-separated KEY=VALUE string into a tag map.

@@ -9,15 +9,15 @@ Resources created:
 - SQS queue: `r10-orders`
 - Secrets Manager secret: `r10-shared-config`
 
-The setup script prefers the local `./build/openstack` CLI for resource creation. It uses direct AWS-compatible API calls only for tag operations and API Gateway management, because those flows are not exposed in the CLI yet.
+The setup script prefers the local `./build/tarn` CLI for resource creation. It uses direct AWS-compatible API calls only for tag operations and API Gateway management, because those flows are not exposed in the CLI yet.
 
 ## Usage
 
-Start OpenStack first:
+Start Tarn first:
 
 ```bash
 make build
-./build/openstack start --ui
+./build/tarn start --ui
 ```
 
 Provision the tagged feature stack:
@@ -49,5 +49,5 @@ Remove the example resources:
 If a previous run left stale `r10` resources behind, flush them directly from the CLI:
 
 ```bash
-./build/openstack flush --tag feature=r10
+./build/tarn flush --tag feature=r10
 ```

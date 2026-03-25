@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/openstack-project/openstack/internal/config"
-	secretssvc "github.com/openstack-project/openstack/internal/secrets"
+	"github.com/aircwo-systems/tarn/internal/config"
+	secretssvc "github.com/aircwo-systems/tarn/internal/secrets"
 )
 
 func newTestHandler(t *testing.T) *Handler {
@@ -42,7 +42,7 @@ func TestGetResourcePolicyNoPolicy(t *testing.T) {
 	if policyRec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d, body: %s", policyRec.Code, http.StatusOK, policyRec.Body.String())
 	}
-	if !strings.Contains(policyRec.Body.String(), "OpenStackDefaultSecretPolicy") {
+	if !strings.Contains(policyRec.Body.String(), "TarnDefaultSecretPolicy") {
 		t.Fatalf("expected default policy document, got: %s", policyRec.Body.String())
 	}
 }

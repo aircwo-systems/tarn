@@ -62,7 +62,7 @@
 </script>
 
 <svelte:head>
-  <title>Rack Console — OpenStack</title>
+  <title>Rack Console — Tarn</title>
 </svelte:head>
 
 <div class="flex min-h-screen bg-background">

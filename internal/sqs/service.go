@@ -5,8 +5,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/openstack-project/openstack/internal/config"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // Service implements SQS business logic.

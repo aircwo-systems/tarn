@@ -3,7 +3,7 @@ package cli
 import (
 	"testing"
 
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 func TestMatchesNotificationEventPattern(t *testing.T) {

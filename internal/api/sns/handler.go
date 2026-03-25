@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
-	snssvc "github.com/openstack-project/openstack/internal/sns"
-	"github.com/openstack-project/openstack/pkg/types"
+	snssvc "github.com/aircwo-systems/tarn/internal/sns"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 const xmlNS = "http://sns.amazonaws.com/doc/2010-03-31/"

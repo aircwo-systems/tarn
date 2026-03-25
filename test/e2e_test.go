@@ -22,7 +22,7 @@ const serverPort = "14566" // use a non-default port to avoid conflicts
 
 var endpoint = "http://127.0.0.1:" + serverPort
 
-// TestMain starts the OpenStack server before running tests and stops it after.
+// TestMain starts the Tarn server before running tests and stops it after.
 func TestMain(m *testing.M) {
 	// Check Docker is available
 	if err := exec.Command("docker", "info").Run(); err != nil {
@@ -39,9 +39,9 @@ func TestMain(m *testing.M) {
 		projectRoot = filepath.Dir(wd)
 	}
 
-	binaryPath := filepath.Join(projectRoot, "build", "openstack-test")
+	binaryPath := filepath.Join(projectRoot, "build", "tarn-test")
 
-	build := exec.Command("go", "build", "-o", binaryPath, "./cmd/openstack")
+	build := exec.Command("go", "build", "-o", binaryPath, "./cmd/tarn")
 	build.Dir = projectRoot
 	if out, err := build.CombinedOutput(); err != nil {
 		fmt.Printf("Failed to build: %s\n%s\n", err, out)
@@ -49,7 +49,7 @@ func TestMain(m *testing.M) {
 	}
 
 	// Start the server
-	dataDir, _ := os.MkdirTemp("", "openstack-e2e-*")
+	dataDir, _ := os.MkdirTemp("", "tarn-e2e-*")
 	defer os.RemoveAll(dataDir)
 
 	server := exec.Command(binaryPath, "start",
@@ -69,7 +69,7 @@ func TestMain(m *testing.M) {
 	// Wait for server to be ready
 	ready := false
 	for i := 0; i < 30; i++ {
-		resp, err := http.Get(endpoint + "/_openstack/health")
+		resp, err := http.Get(endpoint + "/_tarn/health")
 		if err == nil && resp.StatusCode == 200 {
 			resp.Body.Close()
 			ready = true
@@ -94,7 +94,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestHealthCheck(t *testing.T) {
-	resp, err := http.Get(endpoint + "/_openstack/health")
+	resp, err := http.Get(endpoint + "/_tarn/health")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestNodeJSLambdaE2E(t *testing.T) {
 	t.Log("Function created, invoking...")
 
 	// Invoke
-	invokePayload := `{"name": "openstack"}`
+	invokePayload := `{"name": "tarn"}`
 	invokeResp, err := http.Post(
 		endpoint+"/2015-03-31/functions/e2e-node-test/invocations",
 		"application/json",
@@ -197,8 +197,8 @@ func TestNodeJSLambdaE2E(t *testing.T) {
 	if !strings.Contains(bodyStr, "hello from node") {
 		t.Fatalf("expected 'hello from node' in body, got: %s", bodyStr)
 	}
-	if !strings.Contains(bodyStr, "openstack") {
-		t.Fatalf("expected 'openstack' in body, got: %s", bodyStr)
+	if !strings.Contains(bodyStr, "tarn") {
+		t.Fatalf("expected 'tarn' in body, got: %s", bodyStr)
 	}
 
 	// Second invoke should be warm
@@ -282,7 +282,7 @@ func TestLambdaLogsAppearInAdminLogs(t *testing.T) {
 		t.Fatalf("invoke failed (%d): %s", invokeResp.StatusCode, string(invokeBody))
 	}
 
-	logGroupPath := endpoint + "/_openstack/admin/logs/events/" + url.PathEscape("/aws/lambda/e2e-log-test") + "?limit=200"
+	logGroupPath := endpoint + "/_tarn/admin/logs/events/" + url.PathEscape("/aws/lambda/e2e-log-test") + "?limit=200"
 	found := false
 
 	for attempt := 0; attempt < 20; attempt++ {
@@ -549,7 +549,7 @@ func TestAPIGatewayLambdaE2E(t *testing.T) {
 		t.Fatalf("decode route create: %v", err)
 	}
 
-	invokeURL := endpoint + "/_apigateway/" + apiCreated.APIID + "/$default/hello/42?name=openstack"
+	invokeURL := endpoint + "/_apigateway/" + apiCreated.APIID + "/$default/hello/42?name=tarn"
 	invokeResp, err := http.Get(invokeURL)
 	if err != nil {
 		t.Fatal(err)
@@ -570,7 +570,7 @@ func TestAPIGatewayLambdaE2E(t *testing.T) {
 	if err := json.Unmarshal(invokeBody, &invokeResult); err != nil {
 		t.Fatalf("decode invoke response: %v (%s)", err, string(invokeBody))
 	}
-	if !invokeResult.OK || invokeResult.ID != "42" || invokeResult.Name != "openstack" {
+	if !invokeResult.OK || invokeResult.ID != "42" || invokeResult.Name != "tarn" {
 		t.Fatalf("unexpected invoke payload: %+v", invokeResult)
 	}
 
@@ -1179,7 +1179,7 @@ func TestFunctionTags(t *testing.T) {
 		},
 		"Tags": map[string]string{
 			"env":     "test",
-			"project": "openstack",
+			"project": "tarn",
 		},
 	}
 
@@ -1206,8 +1206,8 @@ func TestFunctionTags(t *testing.T) {
 	if tagResult.Tags["env"] != "test" {
 		t.Fatalf("expected tag env=test, got %v", tagResult.Tags)
 	}
-	if tagResult.Tags["project"] != "openstack" {
-		t.Fatalf("expected tag project=openstack, got %v", tagResult.Tags)
+	if tagResult.Tags["project"] != "tarn" {
+		t.Fatalf("expected tag project=tarn, got %v", tagResult.Tags)
 	}
 
 	// Add tags
@@ -1262,7 +1262,7 @@ func TestFunctionTags(t *testing.T) {
 	if _, exists := tagResult3.Tags["env"]; exists {
 		t.Fatal("tag 'env' should have been removed")
 	}
-	if tagResult3.Tags["project"] != "openstack" {
+	if tagResult3.Tags["project"] != "tarn" {
 		t.Fatal("tag 'project' should still exist")
 	}
 

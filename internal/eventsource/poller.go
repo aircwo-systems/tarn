@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	tracesvc "github.com/openstack-project/openstack/internal/trace"
-	"github.com/openstack-project/openstack/pkg/types"
+	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // lambdaErrorMessage extracts the errorMessage field from a Lambda error payload.

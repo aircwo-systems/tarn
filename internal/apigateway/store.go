@@ -8,8 +8,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/openstack-project/openstack/internal/config"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // Store is an API Gateway store with optional disk-backed persistence.

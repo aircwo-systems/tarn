@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/openstack-project/openstack/internal/config"
-	secretssvc "github.com/openstack-project/openstack/internal/secrets"
-	tracesvc "github.com/openstack-project/openstack/internal/trace"
-	"github.com/openstack-project/openstack/pkg/types"
+	"github.com/aircwo-systems/tarn/internal/config"
+	secretssvc "github.com/aircwo-systems/tarn/internal/secrets"
+	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // Handler handles Secrets Manager API requests using JSON-RPC style (X-Amz-Target header).
@@ -188,7 +188,7 @@ func (h *Handler) getResourcePolicy(w http.ResponseWriter, r *http.Request) {
   "Version":"2012-10-17",
   "Statement":[
     {
-      "Sid":"OpenStackDefaultSecretPolicy",
+      "Sid":"TarnDefaultSecretPolicy",
       "Effect":"Allow",
       "Principal":{"AWS":"*"},
       "Action":["secretsmanager:GetSecretValue","secretsmanager:DescribeSecret"],

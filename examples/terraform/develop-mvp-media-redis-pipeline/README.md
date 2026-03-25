@@ -1,6 +1,6 @@
 # Terraform Example: `develop-mvp` Image Pipeline with Redis + S3
 
-This example provisions a frontend/API-driven image workflow that uses the full OpenStack stack in one slice:
+This example provisions a frontend/API-driven image workflow that uses the full Tarn stack in one slice:
 
 - API Gateway HTTP API
 - SQS queue
@@ -30,17 +30,17 @@ Note: S3 bucket tag APIs are not fully emulated yet, so bucket scoping is done v
 
 ## Prerequisites
 
-1. OpenStack running locally:
+1. Tarn running locally:
 
 ```bash
 make build
-./build/openstack start --ui
+./build/tarn start --ui
 ```
 
 2. Redis running on host port `6379`:
 
 ```bash
-docker run --name openstack-redis -p 6379:6379 -d redis:7-alpine
+docker run --name tarn-redis -p 6379:6379 -d redis:7-alpine
 ```
 
 Default Lambda Redis endpoint: `redis://host.docker.internal:6379/0`.
@@ -96,12 +96,12 @@ terraform output -raw redis_manifest_command | sh
 Inspect Lambda logs:
 
 ```bash
-curl -s "http://localhost:4566/_openstack/admin/logs/events/%2Faws%2Flambda%2Fdevelop-mvp-images-redis-queue-worker?limit=50"
-curl -s "http://localhost:4566/_openstack/admin/logs/events/%2Faws%2Flambda%2Fdevelop-mvp-images-redis-s3-indexer?limit=50"
-curl -s "http://localhost:4566/_openstack/admin/logs/events/%2Faws%2Flambda%2Fdevelop-mvp-images-redis-status-api?limit=50"
+curl -s "http://localhost:4566/_tarn/admin/logs/events/%2Faws%2Flambda%2Fdevelop-mvp-images-redis-queue-worker?limit=50"
+curl -s "http://localhost:4566/_tarn/admin/logs/events/%2Faws%2Flambda%2Fdevelop-mvp-images-redis-s3-indexer?limit=50"
+curl -s "http://localhost:4566/_tarn/admin/logs/events/%2Faws%2Flambda%2Fdevelop-mvp-images-redis-status-api?limit=50"
 ```
 
-In the OpenStack UI:
+In the Tarn UI:
 
 - Filter by `feature:develop-mvp`
 - Verify API -> queue -> worker -> bucket trigger -> indexer edges

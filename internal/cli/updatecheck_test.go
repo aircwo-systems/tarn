@@ -176,7 +176,7 @@ func TestCheckForUpdatesFallsBackToStaleCacheOnFetchFailure(t *testing.T) {
 }
 
 func TestCheckForUpdatesDisabledByEnv(t *testing.T) {
-	t.Setenv("OPENSTACK_DISABLE_UPDATE_CHECK", "true")
+	t.Setenv("TARN_DISABLE_UPDATE_CHECK", "true")
 	result, err := checkForUpdates(context.Background(), updateCheckOptions{
 		CurrentVersion: "v0.1.0",
 		DataDir:        t.TempDir(),

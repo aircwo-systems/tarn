@@ -1,6 +1,6 @@
 // secrets-proxy is a lightweight HTTP proxy that runs inside Lambda containers.
 // It implements the AWS Parameters and Secrets Lambda Extension HTTP API on port 2773,
-// forwarding requests to the OpenStack Secrets Manager API via host.docker.internal.
+// forwarding requests to the Tarn Secrets Manager API via host.docker.internal.
 package main
 
 import (
@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/openstack-project/openstack/internal/secretsproxy"
+	"github.com/aircwo-systems/tarn/internal/secretsproxy"
 )
 
 func main() {
@@ -26,7 +26,7 @@ func main() {
 	if sessionToken == "" {
 		sessionToken = "local-dev-token"
 	}
-	requireToken := !isInternalLambdaRuntime(os.Getenv("OPENSTACK_INTERNAL_LAMBDA"))
+	requireToken := !isInternalLambdaRuntime(os.Getenv("TARN_INTERNAL_LAMBDA"))
 
 	opts := secretsproxy.Options{
 		UpstreamURL:  endpoint,
