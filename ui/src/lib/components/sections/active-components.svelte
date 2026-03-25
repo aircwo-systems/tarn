@@ -204,7 +204,7 @@
                   title={q.url}>{q.name}</span
                 >
                 <Badge
-                  variant={q.fifo ? "amber" : "secondary"}
+                  variant={q.fifo ? "destructive" : "secondary"}
                   class="text-[10px] px-1.5 py-0"
                 >
                   {q.fifo ? "FIFO" : "Std"}
@@ -243,7 +243,7 @@
                   title={topic.arn}>{topic.name}</span
                 >
                 <Badge
-                  variant={topic.fifo ? "amber" : "secondary"}
+                  variant={topic.fifo ? "destructive" : "secondary"}
                   class="text-[10px] px-1.5 py-0"
                 >
                   {topic.fifo ? "FIFO" : "Std"}
@@ -356,8 +356,9 @@
                   {esm.queueName} → {esm.functionName}
                 </span>
                 {#if hasFilter}
-                  <Badge variant="amber" class="text-[9px] px-1 py-0 shrink-0"
-                    >filter</Badge
+                  <Badge
+                    variant="destructive"
+                    class="text-[9px] px-1 py-0 shrink-0">filter</Badge
                   >
                 {/if}
                 <span

@@ -155,7 +155,7 @@
       <TableRow
         class={`cursor-pointer focus-within:bg-muted/60 ${queue.name === selectedQueueName ? "bg-muted/60" : ""}`}
         role="button"
-        tabindex="0"
+        tabindex={0}
         aria-label={`Open messages for queue ${queue.name}`}
         onclick={() => void selectQueue(queue.name)}
         onkeydown={(event: KeyboardEvent) =>

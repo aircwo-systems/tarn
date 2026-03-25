@@ -325,7 +325,7 @@
         <TableCell>
           <Badge
             variant={trigger.type === "SQS"
-              ? "amber"
+              ? "destructive"
               : trigger.type === "SNS"
                 ? "default"
                 : trigger.type === "EVENTBRIDGE"
