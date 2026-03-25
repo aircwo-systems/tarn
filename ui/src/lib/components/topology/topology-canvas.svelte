@@ -298,7 +298,7 @@
 <svelte:document onkeydown={handleShortcutKeydown} />
 
 <div
-  class="h-full w-full min-w-0 overflow-hidden rounded-t-lg border-x border-t border-border bg-background flex flex-col"
+  class="h-full w-full min-w-0 overflow-hidden rounded-t-lg bg-background flex flex-col"
 >
   <!-- Toolbar -->
   <div

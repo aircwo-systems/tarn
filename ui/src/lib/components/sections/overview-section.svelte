@@ -101,7 +101,7 @@
   );
 </script>
 
-<div class="flex w-full min-w-0 flex-col gap-4">
+<div class="flex w-full min-w-0 flex-col gap-4 pl-4">
   <Card class="w-full min-w-0">
     <CardContent class="space-y-3 px-4 py-3 md:px-5">
       <div class="flex flex-wrap items-center gap-2">
@@ -304,7 +304,7 @@
               Topology Stage
             </h3>
             <p class="text-xs text-muted-foreground">
-              Primary responsive container for canvas composition.
+              Visualize infrastructure and service connections
             </p>
           </div>
           <Badge variant="secondary" class="shrink-0" hidden

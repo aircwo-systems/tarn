@@ -83,10 +83,10 @@
 		<TableRow>
 			<TableCell><ArnCell name={secret.name} arn={secret.arn} /></TableCell>
 			<TableCell class="text-muted-foreground text-xs">{secret.description || '--'}</TableCell>
-			<TableCell class="min-w-[18rem]">
-				<div class="flex items-center gap-2">
+			<TableCell class="!whitespace-normal">
+				<div class="flex items-center gap-2 w-48">
 					<span
-						class={`max-w-[20rem] break-all font-mono text-xs ${secretErrors[secret.name] ? 'text-destructive-300' : 'text-muted-foreground/70'}`}
+						class={`break-all font-mono text-xs ${secretErrors[secret.name] ? 'text-destructive-300' : 'text-muted-foreground/70'}`}
 						title={secretVisible[secret.name] ? renderSecretValue(secret.name) : 'Hidden'}
 					>
 						{renderSecretValue(secret.name)}
