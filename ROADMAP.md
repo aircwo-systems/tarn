@@ -51,6 +51,7 @@ Tarn already supports core AWS-shaped APIs, but the next step is broader compati
 - Attribute and policy endpoints required for drift-free plans
 - Compatibility responses for APIs that do not need full runtime behavior yet
 - Better coverage around dependencies between Lambda, API Gateway, SQS, SNS, S3, Secrets Manager, and EventBridge
+- A broader library of production-shaped Terraform examples for supported local workflows
 
 ### Outcome
 
@@ -104,6 +105,8 @@ The docs should stay tightly coupled to the shipped product.
 - Keep service docs aligned with real implementation
 - Version docs with releases
 - Surface current support levels clearly
+- Add broader SDK testing coverage across supported services
+- Expand the example library for Terraform, CLI, and SDK-based workflows
 - Make recommended workflows obvious:
   - Tarn native CLI
   - AWS-compatible CLI usage
