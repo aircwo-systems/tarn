@@ -6,6 +6,8 @@ Get Tarn up and running on your system.
 The current release is `v0.0.10-beta`.
 
 Prebuilt Docker images, a Homebrew tap, and a one-line installer script are planned for future releases. For now, the primary install paths are release binaries or building Tarn from source.
+
+See the [project roadmap](https://github.com/aircwo-systems/tarn/blob/develop-docs/ROADMAP.md) for the broader direction.
 :::
 
 ## From Releases
