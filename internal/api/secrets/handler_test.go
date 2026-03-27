@@ -46,3 +46,20 @@ func TestGetResourcePolicyNoPolicy(t *testing.T) {
 		t.Fatalf("expected default policy document, got: %s", policyRec.Body.String())
 	}
 }
+
+func TestUnknownActionReturnsEmptyOK(t *testing.T) {
+	h := newTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
+	req.Header.Set("X-Amz-Target", "secretsmanager.UnknownAction")
+	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	rec := httptest.NewRecorder()
+	h.Dispatch(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if strings.TrimSpace(rec.Body.String()) != "{}" {
+		t.Fatalf("expected empty JSON object response, got: %s", rec.Body.String())
+	}
+}

@@ -14,6 +14,7 @@ package sqs
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -80,7 +81,8 @@ func (h *Handler) dispatchJSON(w http.ResponseWriter, r *http.Request) {
 	case "ListQueueTags":
 		h.jsonListQueueTags(w, body)
 	default:
-		writeJSONError(w, 400, "InvalidAction", "The action "+action+" is not valid for this endpoint")
+		log.Printf("[sqs] unhandled JSON action (returning empty OK): %s", action)
+		writeJSON(w, 200, map[string]any{})
 	}
 }
 

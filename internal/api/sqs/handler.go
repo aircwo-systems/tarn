@@ -2,13 +2,14 @@ package sqs
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 
-	"github.com/google/uuid"
 	sqssvc "github.com/aircwo-systems/tarn/internal/sqs"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	"github.com/google/uuid"
 )
 
 const xmlNS = "http://queue.amazonaws.com/doc/2012-11-05/"
@@ -76,7 +77,8 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 	case "ListQueueTags":
 		h.listQueueTags(w, r)
 	default:
-		writeXMLError(w, 400, "InvalidAction", "The action "+action+" is not valid for this endpoint")
+		log.Printf("[sqs] unhandled action (returning empty OK): %s", action)
+		emptyOK(w, action)
 	}
 }
 
@@ -638,6 +640,12 @@ func writeXML(w http.ResponseWriter, status int, body string) {
 	w.WriteHeader(status)
 	_, _ = fmt.Fprint(w, `<?xml version="1.0"?>`)
 	_, _ = fmt.Fprint(w, body)
+}
+
+func emptyOK(w http.ResponseWriter, action string) {
+	body := fmt.Sprintf(`<%sResponse xmlns="%s"><%sResult/><ResponseMetadata><RequestId>%s</RequestId></ResponseMetadata></%sResponse>`,
+		action, xmlNS, action, uuid.New().String(), action)
+	writeXML(w, http.StatusOK, body)
 }
 
 func writeXMLError(w http.ResponseWriter, status int, code, message string) {

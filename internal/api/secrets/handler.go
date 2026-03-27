@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -62,7 +63,8 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 	case "UntagResource":
 		h.untagResource(w, r)
 	default:
-		writeError(w, 400, "InvalidAction", "Unsupported action: "+target)
+		log.Printf("[secretsmanager] unhandled action (returning empty OK): %s", target)
+		writeJSON(w, 200, map[string]any{})
 	}
 }
 

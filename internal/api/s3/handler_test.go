@@ -287,3 +287,47 @@ func TestGetBucketPolicyNoPolicy(t *testing.T) {
 		t.Fatalf("expected NoSuchBucketPolicy error, got: %s", rec.Body.String())
 	}
 }
+
+func TestBucketSubresourceTerraformStubs(t *testing.T) {
+	h := newTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodPut, "/_s3/tf-bucket", nil)
+	rec := httptest.NewRecorder()
+	h.Dispatch(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	tests := []struct {
+		name       string
+		url        string
+		wantStatus int
+		wantBody   string
+	}{
+		{name: "versioning", url: "/_s3/tf-bucket?versioning", wantStatus: http.StatusOK, wantBody: "VersioningConfiguration"},
+		{name: "encryption", url: "/_s3/tf-bucket?encryption", wantStatus: http.StatusNotFound, wantBody: "ServerSideEncryptionConfigurationNotFoundError"},
+		{name: "cors", url: "/_s3/tf-bucket?cors", wantStatus: http.StatusNotFound, wantBody: "NoSuchCORSConfiguration"},
+		{name: "logging", url: "/_s3/tf-bucket?logging", wantStatus: http.StatusOK, wantBody: "BucketLoggingStatus"},
+		{name: "acl", url: "/_s3/tf-bucket?acl", wantStatus: http.StatusOK, wantBody: "AccessControlPolicy"},
+		{name: "replication", url: "/_s3/tf-bucket?replication", wantStatus: http.StatusNotFound, wantBody: "ReplicationConfigurationNotFoundError"},
+		{name: "accelerate", url: "/_s3/tf-bucket?accelerate", wantStatus: http.StatusOK, wantBody: "<Status>Suspended</Status>"},
+		{name: "request-payment", url: "/_s3/tf-bucket?request-payment", wantStatus: http.StatusOK, wantBody: "<Payer>BucketOwner</Payer>"},
+		{name: "object-lock", url: "/_s3/tf-bucket?object-lock", wantStatus: http.StatusNotFound, wantBody: "ObjectLockConfigurationNotFoundError"},
+		{name: "tagging", url: "/_s3/tf-bucket?tagging", wantStatus: http.StatusNotFound, wantBody: "NoSuchTagSet"},
+		{name: "lifecycle", url: "/_s3/tf-bucket?lifecycle", wantStatus: http.StatusNotFound, wantBody: "NoSuchLifecycleConfiguration"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
+			rec := httptest.NewRecorder()
+			h.Dispatch(rec, req)
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d, body: %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), tc.wantBody) {
+				t.Fatalf("body missing %q: %s", tc.wantBody, rec.Body.String())
+			}
+		})
+	}
+}
