@@ -10,7 +10,7 @@ Known limitations:
 - S3: Path-style only; virtual-hosted style is not supported
 - SNS and SQS cross-account resources are not supported
 
-See the [roadmap](https://github.com/aircwo-systems/tarn/issues) for planned features.
+Learn more about what we want to build with Tarn in the [project roadmap](https://github.com/aircwo-systems/tarn/blob/develop-docs/ROADMAP.md).
 :::
 
 ## Quick Start
