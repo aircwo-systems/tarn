@@ -97,6 +97,50 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 				h.getBucketLocation(w, r, bucket)
 				return
 			}
+			if r.URL.Query().Has("versioning") {
+				h.getBucketVersioning(w, r, bucket)
+				return
+			}
+			if r.URL.Query().Has("encryption") {
+				h.getBucketEncryption(w, r, bucket)
+				return
+			}
+			if r.URL.Query().Has("cors") {
+				h.getBucketCORS(w, r, bucket)
+				return
+			}
+			if r.URL.Query().Has("logging") {
+				h.getBucketLogging(w, r, bucket)
+				return
+			}
+			if r.URL.Query().Has("acl") {
+				h.getBucketACL(w, r, bucket)
+				return
+			}
+			if r.URL.Query().Has("replication") {
+				h.getBucketReplication(w, r, bucket)
+				return
+			}
+			if r.URL.Query().Has("accelerate") {
+				h.getBucketAccelerate(w, r, bucket)
+				return
+			}
+			if r.URL.Query().Has("request-payment") {
+				h.getBucketRequestPayment(w, r, bucket)
+				return
+			}
+			if r.URL.Query().Has("object-lock") {
+				h.getBucketObjectLock(w, r, bucket)
+				return
+			}
+			if r.URL.Query().Has("tagging") {
+				h.getBucketTagging(w, r, bucket)
+				return
+			}
+			if r.URL.Query().Has("lifecycle") {
+				h.getBucketLifecycle(w, r, bucket)
+				return
+			}
 			h.listObjectsV2(w, r, bucket)
 			return
 		case http.MethodPost:
@@ -247,6 +291,136 @@ func (h *Handler) getBucketLocation(w http.ResponseWriter, _ *http.Request, buck
 		Location string   `xml:",chardata"`
 	}
 	writeXML(w, http.StatusOK, locationResponse{Xmlns: s3Namespace, Location: "us-east-1"})
+}
+
+func (h *Handler) getBucketVersioning(w http.ResponseWriter, _ *http.Request, bucket string) {
+	if err := h.svc.HeadBucket(bucket); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+		return
+	}
+	type versioningResponse struct {
+		XMLName xml.Name `xml:"VersioningConfiguration"`
+		Xmlns   string   `xml:"xmlns,attr"`
+	}
+	writeXML(w, http.StatusOK, versioningResponse{Xmlns: s3Namespace})
+}
+
+func (h *Handler) getBucketEncryption(w http.ResponseWriter, _ *http.Request, bucket string) {
+	if err := h.svc.HeadBucket(bucket); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+		return
+	}
+	writeS3Error(w, http.StatusNotFound, "ServerSideEncryptionConfigurationNotFoundError", "The server side encryption configuration was not found")
+}
+
+func (h *Handler) getBucketCORS(w http.ResponseWriter, _ *http.Request, bucket string) {
+	if err := h.svc.HeadBucket(bucket); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+		return
+	}
+	writeS3Error(w, http.StatusNotFound, "NoSuchCORSConfiguration", "The CORS configuration does not exist")
+}
+
+func (h *Handler) getBucketLogging(w http.ResponseWriter, _ *http.Request, bucket string) {
+	if err := h.svc.HeadBucket(bucket); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+		return
+	}
+	type loggingResponse struct {
+		XMLName xml.Name `xml:"BucketLoggingStatus"`
+		Xmlns   string   `xml:"xmlns,attr"`
+	}
+	writeXML(w, http.StatusOK, loggingResponse{Xmlns: s3Namespace})
+}
+
+func (h *Handler) getBucketACL(w http.ResponseWriter, _ *http.Request, bucket string) {
+	if err := h.svc.HeadBucket(bucket); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+		return
+	}
+	type grant struct {
+		Grantee struct {
+			XmlnsXSI string `xml:"xmlns:xsi,attr"`
+			Type     string `xml:"xsi:type,attr"`
+			ID       string `xml:"ID"`
+		} `xml:"Grantee"`
+		Permission string `xml:"Permission"`
+	}
+	type aclResponse struct {
+		XMLName           xml.Name `xml:"AccessControlPolicy"`
+		Xmlns             string   `xml:"xmlns,attr"`
+		Owner             xmlOwner `xml:"Owner"`
+		AccessControlList []grant  `xml:"AccessControlList>Grant"`
+	}
+
+	g := grant{Permission: "FULL_CONTROL"}
+	g.Grantee.XmlnsXSI = "http://www.w3.org/2001/XMLSchema-instance"
+	g.Grantee.Type = "CanonicalUser"
+	g.Grantee.ID = defaultOwner().ID
+
+	writeXML(w, http.StatusOK, aclResponse{
+		Xmlns:             s3Namespace,
+		Owner:             defaultOwner(),
+		AccessControlList: []grant{g},
+	})
+}
+
+func (h *Handler) getBucketReplication(w http.ResponseWriter, _ *http.Request, bucket string) {
+	if err := h.svc.HeadBucket(bucket); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+		return
+	}
+	writeS3Error(w, http.StatusNotFound, "ReplicationConfigurationNotFoundError", "The replication configuration was not found")
+}
+
+func (h *Handler) getBucketAccelerate(w http.ResponseWriter, _ *http.Request, bucket string) {
+	if err := h.svc.HeadBucket(bucket); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+		return
+	}
+	type accelerateResponse struct {
+		XMLName xml.Name `xml:"AccelerateConfiguration"`
+		Xmlns   string   `xml:"xmlns,attr"`
+		Status  string   `xml:"Status"`
+	}
+	writeXML(w, http.StatusOK, accelerateResponse{Xmlns: s3Namespace, Status: "Suspended"})
+}
+
+func (h *Handler) getBucketRequestPayment(w http.ResponseWriter, _ *http.Request, bucket string) {
+	if err := h.svc.HeadBucket(bucket); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+		return
+	}
+	type requestPaymentResponse struct {
+		XMLName xml.Name `xml:"RequestPaymentConfiguration"`
+		Xmlns   string   `xml:"xmlns,attr"`
+		Payer   string   `xml:"Payer"`
+	}
+	writeXML(w, http.StatusOK, requestPaymentResponse{Xmlns: s3Namespace, Payer: "BucketOwner"})
+}
+
+func (h *Handler) getBucketObjectLock(w http.ResponseWriter, _ *http.Request, bucket string) {
+	if err := h.svc.HeadBucket(bucket); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+		return
+	}
+	writeS3Error(w, http.StatusNotFound, "ObjectLockConfigurationNotFoundError", "Object Lock configuration does not exist for this bucket")
+}
+
+func (h *Handler) getBucketTagging(w http.ResponseWriter, _ *http.Request, bucket string) {
+	if err := h.svc.HeadBucket(bucket); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+		return
+	}
+	writeS3Error(w, http.StatusNotFound, "NoSuchTagSet", "The TagSet does not exist")
+}
+
+func (h *Handler) getBucketLifecycle(w http.ResponseWriter, _ *http.Request, bucket string) {
+	if err := h.svc.HeadBucket(bucket); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+		return
+	}
+	writeS3Error(w, http.StatusNotFound, "NoSuchLifecycleConfiguration", "The lifecycle configuration does not exist")
 }
 
 func (h *Handler) getBucketPolicy(w http.ResponseWriter, _ *http.Request, bucket string) {

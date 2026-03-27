@@ -3,6 +3,7 @@ package eventbridge
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 
@@ -63,7 +64,8 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 	case "UntagResource":
 		h.untagResource(w, body)
 	default:
-		writeError(w, http.StatusBadRequest, "ValidationException", "Unsupported EventBridge action: "+action)
+		log.Printf("[eventbridge] unhandled action (returning empty OK): %s", action)
+		writeJSON(w, http.StatusOK, map[string]any{})
 	}
 }
 

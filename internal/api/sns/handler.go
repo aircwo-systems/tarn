@@ -3,13 +3,14 @@ package sns
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sort"
 	"strings"
 
-	"github.com/google/uuid"
 	snssvc "github.com/aircwo-systems/tarn/internal/sns"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	"github.com/google/uuid"
 )
 
 const xmlNS = "http://sns.amazonaws.com/doc/2010-03-31/"
@@ -36,6 +37,11 @@ var supportedActions = map[string]struct{}{
 func IsSNSAction(action string) bool {
 	_, ok := supportedActions[strings.TrimSpace(action)]
 	return ok
+}
+
+// IsSNSRequest reports whether the request is an SNS query-protocol call.
+func IsSNSRequest(r *http.Request) bool {
+	return r.FormValue("Version") == "2010-03-31"
 }
 
 // Handler implements HTTP handlers for SNS query API.
@@ -92,8 +98,15 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 	case "ListTagsForResource":
 		h.listTagsForResource(w, r)
 	default:
-		writeError(w, http.StatusBadRequest, "InvalidAction", "The action "+action+" is not valid for this endpoint")
+		log.Printf("[sns] unhandled action (returning empty OK): %s", action)
+		emptyOK(w, action)
 	}
+}
+
+func emptyOK(w http.ResponseWriter, action string) {
+	body := fmt.Sprintf(`<%sResponse xmlns="%s"><%sResult/><ResponseMetadata><RequestId>%s</RequestId></ResponseMetadata></%sResponse>`,
+		action, xmlNS, action, requestID(), action)
+	writeXML(w, http.StatusOK, body)
 }
 
 func (h *Handler) createTopic(w http.ResponseWriter, r *http.Request) {

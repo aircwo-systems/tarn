@@ -192,3 +192,14 @@ func TestResourceTagsLifecycle(t *testing.T) {
 		t.Fatalf("expected remaining tag env, got %+v", listAfterBody.Tags[0])
 	}
 }
+
+func TestUnknownActionReturnsEmptyOK(t *testing.T) {
+	h := newTestHandler(t)
+	rec := invoke(t, h, "UnknownAction", map[string]any{})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Body.String() != "{}\n" {
+		t.Fatalf("expected empty json object response, got: %q", rec.Body.String())
+	}
+}

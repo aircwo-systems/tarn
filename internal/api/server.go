@@ -345,7 +345,7 @@ func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := r.ParseForm(); err == nil {
-		if snshandler.IsSNSAction(r.FormValue("Action")) {
+		if snshandler.IsSNSRequest(r) || snshandler.IsSNSAction(r.FormValue("Action")) {
 			s.sns.Dispatch(w, r)
 			return
 		}
@@ -431,7 +431,7 @@ func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request)
 		return false
 	}
 
-	if err := r.ParseForm(); err == nil && snshandler.IsSNSAction(r.FormValue("Action")) {
+	if err := r.ParseForm(); err == nil && (snshandler.IsSNSRequest(r) || snshandler.IsSNSAction(r.FormValue("Action"))) {
 		s.sns.Dispatch(w, r)
 		return true
 	}

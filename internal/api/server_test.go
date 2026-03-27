@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/aircwo-systems/tarn/internal/apigateway"
@@ -22,6 +23,38 @@ import (
 	"github.com/aircwo-systems/tarn/internal/sqs"
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
+
+func newTestHTTPHandler(t *testing.T) http.Handler {
+	t.Helper()
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+
+	store := lambda.NewStore(cfg)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init lambda store: %v", err)
+	}
+	lambdaSvc := lambda.NewService(cfg, store, nil, nil, nil)
+	gatewaySvc := apigateway.NewService(cfg, lambdaSvc, nil)
+	gatewayV1Svc := apigatewayv1.NewService(cfg, lambdaSvc, nil)
+	logsSvc := logs.NewService(cfg)
+	sqsSvc := sqs.NewService(cfg)
+	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
+	secretsSvc := secrets.NewService(cfg)
+	s3Svc := s3store.NewService(cfg)
+	infraSvc := infrastructure.NewService("", false)
+	esmStore := eventsource.NewStore(cfg)
+	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil)
+	ebStore := eventbridge.NewStore(cfg)
+	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
+	if err := ebSvc.Init(); err != nil {
+		t.Fatalf("init eventbridge service: %v", err)
+	}
+
+	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
+	mux := http.NewServeMux()
+	s.registerRoutes(mux)
+	return s.withLogging(mux)
+}
 
 func TestNewServerRegistersRoutes(t *testing.T) {
 	cfg := config.Default()
@@ -309,5 +342,45 @@ func TestEventBridgeProtocolDispatchSupportsTarnEventsPath(t *testing.T) {
 	}
 	if describeResp.State != types.EventBridgeRuleStateDisabled {
 		t.Fatalf("expected disabled state, got %q", describeResp.State)
+	}
+}
+
+func TestSNSProtocolDispatchRoutesUnknownActionByVersionOnRoot(t *testing.T) {
+	handler := newTestHTTPHandler(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("Action=ConfirmSubscription&Version=2010-03-31"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "<ConfirmSubscriptionResponse") {
+		t.Fatalf("expected sns response body, got: %s", body)
+	}
+	if !strings.Contains(body, `http://sns.amazonaws.com/doc/2010-03-31/`) {
+		t.Fatalf("expected sns namespace, got: %s", body)
+	}
+}
+
+func TestSNSProtocolDispatchRoutesUnknownActionByVersionOnNonRootPath(t *testing.T) {
+	handler := newTestHTTPHandler(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/custom-endpoint", strings.NewReader("Action=ConfirmSubscription&Version=2010-03-31"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "<ConfirmSubscriptionResponse") {
+		t.Fatalf("expected sns response body, got: %s", body)
+	}
+	if !strings.Contains(body, `http://sns.amazonaws.com/doc/2010-03-31/`) {
+		t.Fatalf("expected sns namespace, got: %s", body)
 	}
 }
