@@ -1,23 +1,39 @@
 # Tarn Docs
 
-Concise docs for service usage, protocols, and examples.
+Documentation site built with [VitePress](https://vitepress.dev/).
 
-## Service Guides
+## Structure
 
-- `/Users/arcwo/projects_26/Tarn/docs/api-gateway.md`
-- `/Users/arcwo/projects_26/Tarn/docs/lambda.md`
-- `/Users/arcwo/projects_26/Tarn/docs/s3.md`
-- `/Users/arcwo/projects_26/Tarn/docs/sqs.md`
-- `/Users/arcwo/projects_26/Tarn/docs/secrets-manager.md`
-- `/Users/arcwo/projects_26/Tarn/docs/lambda-extensions.md`
-- `/Users/arcwo/projects_26/Tarn/docs/runtimes.md`
+```
+docs/
+├── index.md                    # Landing page
+├── guide/
+│   ├── getting-started.md      # Quick start
+│   ├── installation.md         # Install methods
+│   ├── configuration.md        # Flags and env vars
+│   ├── terraform.md            # Terraform provider setup
+│   ├── development.md          # Building from source
+│   └── contributing.md         # Contribution guide
+├── services/
+│   ├── index.md                # Services overview
+│   ├── lambda.md               # Lambda
+│   ├── api-gateway.md          # API Gateway v1/v2
+│   ├── s3.md                   # S3
+│   ├── sqs.md                  # SQS
+│   ├── sns.md                  # SNS
+│   ├── secrets-manager.md      # Secrets Manager
+│   ├── eventbridge.md          # EventBridge
+│   └── iam.md                  # IAM stubs
+└── reference/
+    └── api-coverage.md         # API coverage matrix
+```
 
-## Examples
+## Development
 
-- `examples/apigateway-lambda`
-- `examples/feature-r10`
-- `examples/terraform/develop-mvp-content-pipeline`
-- `examples/terraform/develop-mvp-media-redis-pipeline`
-- `examples/terraform/eventbridge-scheduled-lambda`
-- `examples/sqs-lambda`
-- `examples/secrets-cache-lambda`
+```bash
+cd docs
+bun install
+bun run docs:dev
+```
+
+Then open `http://localhost:5173`.
