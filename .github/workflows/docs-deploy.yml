@@ -1,0 +1,69 @@
+name: Deploy Docs
+
+on:
+  push:
+    branches:
+      - develop-mvp
+      - main
+    tags:
+      - 'v*'
+    paths:
+      - 'docs/**'
+      - '.github/workflows/docs-deploy.yml'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        working-directory: docs
+        run: bun install
+
+      - name: Resolve docs version
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "DOCS_VERSION=${{ github.ref_name }}" >> "$GITHUB_ENV"
+          else
+            echo "DOCS_VERSION=$(git describe --tags --abbrev=0)" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build docs
+        working-directory: docs
+        run: bun run docs:build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: 'docs/.vitepress/dist'
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
