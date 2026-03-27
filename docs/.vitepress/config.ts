@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process'
+import { execFileSync, execSync } from 'node:child_process'
 import { defineConfig } from 'vitepress'
 
 function getDocsVersion() {
@@ -18,6 +18,23 @@ function getDocsVersion() {
     } catch {
       return 'dev'
     }
+  }
+}
+
+function getPageLastUpdated(filePath: string) {
+  try {
+    const value = execFileSync('git', ['log', '-1', '--format=%ct', '--', filePath], {
+      encoding: 'utf8'
+    }).trim()
+
+    if (!value) {
+      return undefined
+    }
+
+    const seconds = Number.parseInt(value, 10)
+    return Number.isNaN(seconds) ? undefined : seconds * 1000
+  } catch {
+    return undefined
   }
 }
 
@@ -107,6 +124,18 @@ export default defineConfig({
     theme: {
       dark: 'github-dark',
       light: 'github-light'
+    }
+  },
+
+  transformPageData(pageData) {
+    const lastUpdated = getPageLastUpdated(pageData.filePath)
+
+    if (!lastUpdated) {
+      return
+    }
+
+    return {
+      lastUpdated
     }
   }
 })
