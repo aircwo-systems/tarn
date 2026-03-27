@@ -43,9 +43,10 @@ export default defineConfig({
   description: 'Local AWS cloud emulator for development and testing',
   lang: 'en-US',
   lastUpdated: true,
+  base: '/tarn/',
 
   head: [
-    ['link', { rel: 'icon', href: '/favicon.svg' }],
+    ['link', { rel: 'icon', href: '/tarn/favicon.svg' }],
   ],
 
   themeConfig: {
