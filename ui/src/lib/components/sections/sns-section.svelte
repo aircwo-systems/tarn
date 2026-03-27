@@ -5,7 +5,11 @@
   import ArnCell from "$lib/components/common/arn-cell.svelte";
   import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
   import ResourceTable from "$lib/components/common/resource-table.svelte";
-  import { getDashboard, getDashboardFilters, matchesTagFilter } from "$lib/state.svelte";
+  import {
+    getDashboard,
+    getDashboardFilters,
+    matchesTagFilter,
+  } from "$lib/state.svelte";
   import { formatUnixSeconds } from "$lib/utils";
 
   const dashboard = getDashboard();
@@ -84,20 +88,33 @@
     empty={subscriptions.length === 0}
     emptyMessage="No subscriptions configured yet."
     emptyIcon={BellIcon}
-    columns={["Subscription", "Topic", "Protocol", "Endpoint", "Delivery", "Filter"]}
+    columns={[
+      "Subscription",
+      "Topic",
+      "Protocol",
+      "Endpoint",
+      "Delivery",
+      "Filter",
+    ]}
   >
     {#each subscriptions as sub}
       <TableRow>
-        <TableCell class="font-mono text-xs text-muted-foreground">
+        <TableCell
+          class="max-w-56 font-mono text-xs text-muted-foreground break-all"
+        >
           {sub.subscriptionArn}
         </TableCell>
         <TableCell>
           <ArnCell name={sub.topicName} arn={sub.topicArn} />
         </TableCell>
         <TableCell>
-          <Badge variant={protocolBadgeVariant(sub.protocol)}>{sub.protocol}</Badge>
+          <Badge variant={protocolBadgeVariant(sub.protocol)}
+            >{sub.protocol}</Badge
+          >
         </TableCell>
-        <TableCell class="font-mono text-xs text-muted-foreground">
+        <TableCell
+          class="max-w-56 font-mono text-xs text-muted-foreground break-all"
+        >
           {sub.endpoint}
         </TableCell>
         <TableCell>
