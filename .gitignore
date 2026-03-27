@@ -4,10 +4,20 @@
 /ui/build/
 /openstack
 /.cache/
+*/node_modules/
+docs/.vitepress/dist/
+docs/.vitepress/cache/
 
 # enable later
-/docs/
 /examples/*
+!/examples/terraform/
+/examples/terraform/*
+!/examples/terraform/production-compat-stubs/
+!/examples/terraform/production-compat-stubs/**
+!/examples/terraform/eventbridge-sns-sqs-filter-s3/
+!/examples/terraform/eventbridge-sns-sqs-filter-s3/**
+!/examples/terraform/content-moderation-pipeline/
+!/examples/terraform/content-moderation-pipeline/**
 
 # Go
 *.exe
