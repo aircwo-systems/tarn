@@ -359,6 +359,13 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.traceStore != nil {
+		correlationID := tracesvc.CorrelationIDFromHeaders(r.Header)
+		if correlationID == "" {
+			correlationID = tracesvc.CorrelationIDFromPayload(payload)
+		}
+		if correlationID == "" {
+			correlationID = tracesvc.NewCorrelationID()
+		}
 		status := 200
 		spanStatus := "ok"
 		if err != nil {
@@ -368,11 +375,12 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 			spanStatus = "error"
 		}
 		h.traceStore.Add(&tracesvc.Trace{
-			ID:         uuid.NewString()[:8],
-			StartedAt:  start,
-			DurationMs: durationMs,
-			Status:     status,
-			Spans:      append([]tracesvc.Span{{Kind: "lambda", Name: name, DurationMs: durationMs, Status: spanStatus}}, subSpans...),
+			ID:            uuid.NewString()[:8],
+			CorrelationID: correlationID,
+			StartedAt:     start,
+			DurationMs:    durationMs,
+			Status:        status,
+			Spans:         append([]tracesvc.Span{{Kind: "lambda", Name: name, DurationMs: durationMs, Status: spanStatus}}, subSpans...),
 		})
 	}
 
