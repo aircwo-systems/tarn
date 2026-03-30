@@ -7,22 +7,7 @@
 node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
-
-# enable later
-!/examples/*
-!/examples/terraform/*
-!/examples/terraform/eventbridge-sns-sqs-filter-s3/
-!/examples/terraform/procurement-control-tower/
-!/examples/terraform/
-/examples/terraform/*
-!/examples/terraform/production-compat-stubs/
-!/examples/terraform/production-compat-stubs/**
-!/examples/terraform/eventbridge-sns-sqs-filter-s3/
-!/examples/terraform/eventbridge-sns-sqs-filter-s3/**
-!/examples/terraform/content-moderation-pipeline/
-!/examples/terraform/content-moderation-pipeline/**
-!/examples/terraform/procurement-control-tower/
-!/examples/terraform/procurement-control-tower/**
+/examples/
 /compatibility-test/node
 
 # Go
@@ -62,6 +47,7 @@ vendor/
 /ui/.vite/
 /examples/**/node_modules/
 /examples/**/bun.lock
+*.html
 
 # Terraform
 **/.terraform/
