@@ -49,12 +49,26 @@ func (s *Service) validateBucketName(name string) error {
 	return nil
 }
 
-// CreateBucket creates a new bucket.
+// CreateBucket creates a new bucket in the default region.
 func (s *Service) CreateBucket(name string) (*types.Bucket, error) {
+	return s.CreateBucketInRegion(name, "")
+}
+
+// CreateBucketInRegion creates a new bucket in the specified region.
+// If region is empty, the server's configured region is used.
+func (s *Service) CreateBucketInRegion(name, region string) (*types.Bucket, error) {
 	if err := s.validateBucketName(name); err != nil {
 		return nil, err
 	}
-	return s.store.CreateBucket(name, s.cfg.Region)
+	if region == "" {
+		region = s.cfg.Region
+	}
+	return s.store.CreateBucket(name, region)
+}
+
+// GetBucketRegion returns the region stored for a bucket.
+func (s *Service) GetBucketRegion(name string) (string, error) {
+	return s.store.GetBucketRegion(name)
 }
 
 // HeadBucket checks if a bucket exists.

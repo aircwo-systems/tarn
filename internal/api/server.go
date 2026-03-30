@@ -123,6 +123,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /_s3/{rest...}", s.s3.Dispatch)
 	mux.HandleFunc("HEAD /_s3/{rest...}", s.s3.Dispatch)
 	mux.HandleFunc("DELETE /_s3/{rest...}", s.s3.Dispatch)
+	// S3 ListBuckets: GET / (exact root path)
+	mux.HandleFunc("GET /{$}", s.s3.Dispatch)
 	// Compatibility surface for AWS SDK clients using path-style S3 URLs.
 	// Bucket-level operations: /{bucket}
 	mux.HandleFunc("GET /{bucket}", s.s3.Dispatch)
@@ -252,11 +254,18 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// /functions/foo/configuration does not match the {name} pattern first.
 	mux.HandleFunc("GET /2015-03-31/functions/{name}/configuration", s.lambda.GetFunctionConfiguration)
 	mux.HandleFunc("GET /2015-03-31/functions/{name}/versions", s.lambda.ListVersionsByFunction)
+	mux.HandleFunc("POST /2015-03-31/functions/{name}/versions", s.lambda.PublishVersion)
 	mux.HandleFunc("GET /2015-03-31/functions/{name}", s.lambda.GetFunction)
 	mux.HandleFunc("DELETE /2015-03-31/functions/{name}", s.lambda.DeleteFunction)
 	mux.HandleFunc("PUT /2015-03-31/functions/{name}/code", s.lambda.UpdateFunctionCode)
 	mux.HandleFunc("PUT /2015-03-31/functions/{name}/configuration", s.lambda.UpdateFunctionConfiguration)
 	mux.HandleFunc("POST /2015-03-31/functions/{name}/invocations", s.lambda.Invoke)
+	// Aliases
+	mux.HandleFunc("POST /2015-03-31/functions/{name}/aliases", s.lambda.CreateAlias)
+	mux.HandleFunc("GET /2015-03-31/functions/{name}/aliases/{aliasName}", s.lambda.GetAlias)
+	mux.HandleFunc("GET /2015-03-31/functions/{name}/aliases", s.lambda.ListAliases)
+	mux.HandleFunc("PUT /2015-03-31/functions/{name}/aliases/{aliasName}", s.lambda.UpdateAlias)
+	mux.HandleFunc("DELETE /2015-03-31/functions/{name}/aliases/{aliasName}", s.lambda.DeleteAlias)
 
 	// Tags
 	mux.HandleFunc("GET /2015-03-31/functions/{name}/tags", s.lambda.ListTags)

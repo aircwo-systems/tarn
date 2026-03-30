@@ -4,12 +4,15 @@
 /ui/build/
 /openstack
 /.cache/
-*/node_modules/
+node_modules/
 docs/.vitepress/dist/
 docs/.vitepress/cache/
 
 # enable later
-/examples/*
+!/examples/*
+!/examples/terraform/*
+!/examples/terraform/eventbridge-sns-sqs-filter-s3/
+!/examples/terraform/procurement-control-tower/
 !/examples/terraform/
 /examples/terraform/*
 !/examples/terraform/production-compat-stubs/
@@ -18,6 +21,9 @@ docs/.vitepress/cache/
 !/examples/terraform/eventbridge-sns-sqs-filter-s3/**
 !/examples/terraform/content-moderation-pipeline/
 !/examples/terraform/content-moderation-pipeline/**
+!/examples/terraform/procurement-control-tower/
+!/examples/terraform/procurement-control-tower/**
+/compatibility-test/node
 
 # Go
 *.exe
