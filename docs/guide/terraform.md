@@ -69,15 +69,6 @@ IAM does not require an endpoint override — Tarn auto-stubs IAM actions via pr
 
 ## Examples
 
-Terraform examples are available in `examples/terraform/`. This library is still a work in progress, and more complete examples will be added over time:
+Terraform examples are no longer distributed from this repository. They are being moved into a separate examples repository so the core Tarn codebase can stay focused on runtime and compatibility work.
 
-| Example | Services |
-|---|---|
-| `sns-sqs-lambda-trace/` | SNS fanout to SQS with Lambda worker |
-| `apigw-sqs-fanout-secrets-s3-dlq/` | API Gateway, SQS, S3, Secrets Manager |
-| `lambda-s3/` | Lambda with S3 code deployment |
-| `events-lambda/` | EventBridge scheduled rule invoking Lambda |
-| `apigw-sqs/` | API Gateway v2 with SQS integration |
-| `sqs-dlq/` | SQS dead-letter queue configuration |
-
-See the [project roadmap](https://github.com/aircwo-systems/tarn/blob/develop-docs/ROADMAP.md) for planned Terraform compatibility work, SDK testing coverage, and future example expansion.
+See the [project roadmap](https://github.com/aircwo-systems/tarn/blob/develop-docs/ROADMAP.md) for planned Terraform compatibility work and SDK testing coverage.
