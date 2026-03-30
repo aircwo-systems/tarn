@@ -1,30 +1,38 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    ArrowSquareDownIcon,
-    ArrowSquareLeftIcon,
-    ArrowSquareRightIcon,
-    ArrowSquareUpIcon,
+    MagnifyingGlassMinusIcon,
+    MagnifyingGlassPlusIcon,
+    SquaresFourIcon,
   } from "phosphor-svelte";
   import { Canvas, type CanvasResizeEvent } from "svelte-canvas";
-  import Badge from "$lib/components/ui/badge/badge.svelte";
   import Button from "$lib/components/ui/button/button.svelte";
+  import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
   import type { RequestTrace } from "$lib/types";
-  import type { ConnectionNode } from "../types";
   import {
-    clampInfraNodePosition,
+    getTopologyNodeConfigTab,
+    getTopologyNodeSupportedSizes,
+    getTopologyNodeViews,
+  } from "../registry";
+  import type { ConnectionNode, NodeSide, NodeSize, NodeView } from "../types";
+  import {
     clampViewportTransform,
     CONNECTION_CANVAS,
     computeViewportTransform,
     findNodeAt,
     hoverFocusState,
+    resolveSnappedNodePosition,
     viewportToCanvasPoint,
     type InfraNodePosition,
+    type NodeOverride,
     type TopologyGraphModel,
     type ViewportTransform,
   } from "../topology-connection-model";
+  // Alias — all node kinds use the same position shape
+  type NodePosition = InfraNodePosition;
   import TopologyCanvasBackgroundLayer from "./TopologyCanvasBackgroundLayer.svelte";
   import TopologyCanvasEdgeLayer from "./TopologyCanvasEdgeLayer.svelte";
+  import TopologyCanvasMiniMap from "./TopologyCanvasMiniMap.svelte";
   import TopologyCanvasNodeLayer from "./TopologyCanvasNodeLayer.svelte";
   import {
     readTopologyCanvasPalette,
@@ -46,10 +54,14 @@
     onGatewayClick = (_id: string) => {},
     onNodeHover = (_payload: TopologyNodeHoverPayload) => {},
     onNodeLeave = () => {},
-    onInfraNodePositionChange = (
+    onNodePositionChange = (
       _id: string,
-      _position: InfraNodePosition,
+      _kind: ConnectionNode["kind"],
+      _position: NodePosition,
     ) => {},
+    onNodeOverrideChange = (_id: string, _override: NodeOverride) => {},
+    onAutoOrganize = () => {},
+    onNavigate = (_tab: string) => {},
   }: {
     model: TopologyGraphModel;
     selectedTrace?: RequestTrace | null;
@@ -59,10 +71,14 @@
     onGatewayClick?: (id: string) => void;
     onNodeHover?: (payload: TopologyNodeHoverPayload) => void;
     onNodeLeave?: () => void;
-    onInfraNodePositionChange?: (
+    onNodePositionChange?: (
       id: string,
-      position: InfraNodePosition,
+      kind: ConnectionNode["kind"],
+      position: NodePosition,
     ) => void;
+    onNodeOverrideChange?: (id: string, override: NodeOverride) => void;
+    onAutoOrganize?: () => void;
+    onNavigate?: (tab: string) => void;
   } = $props();
 
   type PointerInteraction =
@@ -71,10 +87,12 @@
         kind: "infra";
         pointerId: number;
         nodeId: string;
+        nodeKind: ConnectionNode["kind"];
         startClientX: number;
         startClientY: number;
         originX: number;
         originY: number;
+        latestPosition: NodePosition;
         dragging: boolean;
       }
     | {
@@ -88,7 +106,12 @@
       };
 
   const DRAG_THRESHOLD_PX = 6;
+  const DRAG_SETTLE_DELAY_MS = 2200;
   const KEYBOARD_PAN_STEP = 96;
+  const ZOOM_STEP = 1.14;
+  const TRACKPAD_ZOOM_SENSITIVITY = 0.0025;
+  const PLACEMENT_CONFIRMATION_FLASHES = 3;
+  const PLACEMENT_CONFIRMATION_DURATION_MS = 1320;
 
   let viewportWidth = $state<number>(CONNECTION_CANVAS.width);
   let viewportHeight = $state<number>(CONNECTION_CANVAS.height);
@@ -100,9 +123,46 @@
   let canvasContainer = $state<HTMLDivElement | null>(null);
   let pointerInteraction = $state<PointerInteraction>({ kind: "idle" });
   let appliedViewportResetToken = $state(0);
+  let placementConfirmation = $state<{
+    nodeId: string;
+    nodeKind: ConnectionNode["kind"];
+    startedAt: number;
+    flashes: number;
+    durationMs: number;
+  } | null>(null);
 
   let redraw = $state<() => void>(() => {});
   let palette = $state<TopologyCanvasPalette>(readTopologyCanvasPalette());
+  let dragSettleTimer: ReturnType<typeof window.setTimeout> | null = null;
+  let placementConfirmationTimer: ReturnType<typeof window.setTimeout> | null =
+    null;
+  // Store only the clicked node's kind+id; derive the live node from the current
+  // model so the context menu always reflects post-rebuild state and never
+  // triggers spurious onValueChange callbacks from stale prop values.
+  // Both kind AND id are required because EventBridge node IDs can equal
+  // function node IDs (both use the Lambda name), so kind is needed to
+  // disambiguate the lookup and to namespace the override key.
+  let contextMenuNodeId = $state<string | null>(null);
+  let contextMenuNodeKind = $state<string | null>(null);
+  const contextMenuNode = $derived(
+    contextMenuNodeId && contextMenuNodeKind
+      ? findNodeByKindId(model, contextMenuNodeKind, contextMenuNodeId)
+      : null,
+  );
+  const contextMenuViews = $derived(
+    contextMenuNode
+      ? getTopologyNodeViews(
+          contextMenuNode.kind,
+          contextMenuNode.size ?? "small",
+        )
+      : [],
+  );
+  const contextMenuConfigTab = $derived(
+    contextMenuNode ? getTopologyNodeConfigTab(contextMenuNode.kind) : null,
+  );
+  const contextMenuSupportedSizes = $derived(
+    contextMenuNode ? getTopologyNodeSupportedSizes(contextMenuNode.kind) : [],
+  );
 
   const baselineViewport = $derived(
     computeViewportTransform(viewportWidth, viewportHeight, {
@@ -110,12 +170,27 @@
     }),
   );
   const hoverFocus = $derived(hoverFocusState(model, hoveredNodeId));
-  const shouldAnimate = $derived(
-    !!selectedTrace || model.traces.edgeActivity.size > 0,
+  const activeDragNode = $derived(
+    pointerInteraction.kind === "infra" && pointerInteraction.dragging
+      ? {
+          nodeId: pointerInteraction.nodeId,
+          nodeKind: pointerInteraction.nodeKind,
+        }
+      : null,
   );
+  const shouldAnimate = $derived(
+    !!selectedTrace ||
+      model.traces.edgeActivity.size > 0 ||
+      !!placementConfirmation ||
+      !!activeDragNode,
+  );
+  const minZoomScale = $derived(baselineViewport.scale * 0.78);
+  const maxZoomScale = $derived(baselineViewport.scale * 2.2);
+  const canZoomOut = $derived(viewportTransform.scale > minZoomScale + 0.001);
+  const canZoomIn = $derived(viewportTransform.scale < maxZoomScale - 0.001);
   const hoveredNode = $derived(findNodeById(model, hoveredNodeId));
   const overlayCursor = $derived(
-    hoveredNode?.kind === "gateway" ? "pointer" : "default",
+    canvasExpanded && hoveredNode ? "grab" : "default",
   );
 
   onMount(() => {
@@ -149,6 +224,8 @@
     window.addEventListener("keydown", handleWindowKeyDown);
 
     return () => {
+      clearDragSettleTimer();
+      clearPlacementConfirmation();
       observer.disconnect();
       window.removeEventListener("keydown", handleWindowKeyDown);
     };
@@ -167,21 +244,24 @@
   function handlePointerDown(event: PointerEvent) {
     if (!canvasContainer) return;
     if (event.button !== 0) return;
+    clearPlacementConfirmation();
 
     const point = canvasPointFromPointer(event);
     const matched = point ? findNodeAt(model, point.x, point.y) : null;
 
-    if (canvasExpanded && matched?.kind === "infra") {
+    if (canvasExpanded && matched) {
       canvasContainer.setPointerCapture?.(event.pointerId);
       handleCanvasNodeLeave();
       pointerInteraction = {
         kind: "infra",
         pointerId: event.pointerId,
         nodeId: matched.id,
+        nodeKind: matched.kind,
         startClientX: event.clientX,
         startClientY: event.clientY,
         originX: matched.x,
         originY: matched.y,
+        latestPosition: { x: matched.x, y: matched.y },
         dragging: false,
       };
       event.preventDefault();
@@ -204,26 +284,51 @@
   function handlePointerMove(event: PointerEvent) {
     if (pointerInteraction.kind === "infra") {
       if (event.pointerId !== pointerInteraction.pointerId) return;
-      const dragStarted = dragMovedEnough(pointerInteraction, event);
+      const activeInteraction = pointerInteraction;
+      const dragStarted = dragMovedEnough(activeInteraction, event);
       if (!dragStarted) return;
 
-      pointerInteraction = { ...pointerInteraction, dragging: true };
-      const nextPosition = clampInfraNodePosition(
-        pointerInteraction.originX +
-          (event.clientX - pointerInteraction.startClientX) /
+      const nextPosition = resolveSnappedNodePosition(
+        model,
+        {
+          id: activeInteraction.nodeId,
+          kind: activeInteraction.nodeKind,
+        },
+        activeInteraction.originX +
+          (event.clientX - activeInteraction.startClientX) /
             viewportTransform.scale,
-        pointerInteraction.originY +
-          (event.clientY - pointerInteraction.startClientY) /
+        activeInteraction.originY +
+          (event.clientY - activeInteraction.startClientY) /
             viewportTransform.scale,
       );
-      onInfraNodePositionChange(pointerInteraction.nodeId, nextPosition);
+      const positionChanged =
+        nextPosition.x !== activeInteraction.latestPosition.x ||
+        nextPosition.y !== activeInteraction.latestPosition.y;
+      pointerInteraction = {
+        ...activeInteraction,
+        dragging: activeInteraction.dragging || positionChanged,
+        latestPosition: positionChanged
+          ? nextPosition
+          : activeInteraction.latestPosition,
+      };
+      if (positionChanged) {
+        onNodePositionChange(
+          activeInteraction.nodeId,
+          activeInteraction.nodeKind,
+          nextPosition,
+        );
+        scheduleDragSettle();
+      }
       handleCanvasNodeLeave();
       return;
     }
 
     if (pointerInteraction.kind === "press") {
       if (event.pointerId !== pointerInteraction.pointerId) return;
-      if (!pointerInteraction.moved && dragMovedEnough(pointerInteraction, event)) {
+      if (
+        !pointerInteraction.moved &&
+        dragMovedEnough(pointerInteraction, event)
+      ) {
         pointerInteraction = { ...pointerInteraction, moved: true };
       }
       if (!pointerInteraction.moved) {
@@ -242,6 +347,13 @@
     if (event.pointerId !== pointerInteraction.pointerId) return;
 
     const finishedInteraction = pointerInteraction;
+    clearDragSettleTimer();
+
+    if (finishedInteraction.kind === "infra") {
+      finalizeDraggedInteraction(finishedInteraction);
+      return;
+    }
+
     releasePointer(event.pointerId);
     pointerInteraction = { kind: "idle" };
 
@@ -253,11 +365,11 @@
     ) {
       onGatewayClick(finishedInteraction.targetNodeId);
     }
-
     updateHover(event);
   }
 
   function handlePointerCancel(event: PointerEvent) {
+    clearDragSettleTimer();
     if (
       pointerInteraction.kind !== "idle" &&
       event.pointerId === pointerInteraction.pointerId
@@ -271,6 +383,30 @@
   function handlePointerLeave() {
     if (pointerInteraction.kind !== "idle") return;
     handleCanvasNodeLeave();
+  }
+
+  function handleContextMenu(e: MouseEvent) {
+    const rect = canvasContainer?.getBoundingClientRect();
+    if (!rect) return;
+    const point = viewportToCanvasPoint(
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+      viewportTransform,
+    );
+    const inBounds =
+      point.x >= 0 &&
+      point.y >= 0 &&
+      point.x <= CONNECTION_CANVAS.width &&
+      point.y <= CONNECTION_CANVAS.height;
+    const matched = inBounds ? findNodeAt(model, point.x, point.y) : null;
+    if (!matched) {
+      e.preventDefault();
+      contextMenuNodeId = null;
+      contextMenuNodeKind = null;
+      return;
+    }
+    contextMenuNodeId = matched.id;
+    contextMenuNodeKind = matched.kind;
   }
 
   function handleKeyDown(event: KeyboardEvent) {
@@ -306,14 +442,84 @@
     handleCanvasNodeLeave();
   }
 
-  function handlePanControlPointerDown(
-    event: PointerEvent,
-    deltaX: number,
-    deltaY: number,
-  ) {
+  function zoomViewportBy(factor: number) {
+    const currentScale = viewportTransform.scale;
+    const nextScale = Math.min(
+      maxZoomScale,
+      Math.max(minZoomScale, currentScale * factor),
+    );
+    if (Math.abs(nextScale - currentScale) < 0.001) return;
+
+    viewportDirty = true;
+    const centerCanvasX = (viewportWidth / 2 - viewportTransform.offsetX) / currentScale;
+    const centerCanvasY = (viewportHeight / 2 - viewportTransform.offsetY) / currentScale;
+    viewportTransform = clampViewportTransform(viewportWidth, viewportHeight, {
+      scale: nextScale,
+      offsetX: viewportWidth / 2 - centerCanvasX * nextScale,
+      offsetY: viewportHeight / 2 - centerCanvasY * nextScale,
+    });
+    handleCanvasNodeLeave();
+  }
+
+  function handleZoomControlPointerDown(event: PointerEvent, factor: number) {
     event.preventDefault();
     event.stopPropagation();
-    panViewportBy(deltaX, deltaY);
+    zoomViewportBy(factor);
+  }
+
+  function handleOrganizePointerDown(event: PointerEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    onAutoOrganize();
+  }
+
+  function handleWheel(event: WheelEvent) {
+    if (!canvasExpanded || !panEnabled) return;
+
+    const target = event.target;
+    if (
+      target instanceof HTMLElement &&
+      (target.isContentEditable ||
+        target.tagName === "INPUT" ||
+        target.tagName === "TEXTAREA" ||
+        target.tagName === "SELECT")
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (event.ctrlKey || event.metaKey) {
+      zoomViewportBy(Math.exp(-event.deltaY * TRACKPAD_ZOOM_SENSITIVITY));
+      return;
+    }
+
+    panViewportBy(-event.deltaX, -event.deltaY);
+  }
+
+  function focusViewportAt(canvasX: number, canvasY: number) {
+    viewportDirty = true;
+    viewportTransform = clampViewportTransform(viewportWidth, viewportHeight, {
+      scale: viewportTransform.scale,
+      offsetX: viewportWidth / 2 - canvasX * viewportTransform.scale,
+      offsetY: viewportHeight / 2 - canvasY * viewportTransform.scale,
+    });
+    handleCanvasNodeLeave();
+  }
+
+  function navigateToConfigTab(tab: string) {
+    onNavigate(tab);
+    if (typeof window === "undefined") return;
+
+    if (window.location.pathname !== "/") {
+      window.location.assign(`/#${tab}`);
+      return;
+    }
+
+    if (window.location.hash !== `#${tab}`) {
+      window.location.hash = tab;
+    }
   }
 
   function canvasPointFromPointer(event: PointerEvent) {
@@ -372,6 +578,77 @@
     canvasContainer.releasePointerCapture(pointerId);
   }
 
+  function scheduleDragSettle() {
+    if (typeof window === "undefined") return;
+    clearDragSettleTimer();
+    dragSettleTimer = window.setTimeout(() => {
+      if (pointerInteraction.kind !== "infra" || !pointerInteraction.dragging) {
+        return;
+      }
+      finalizeDraggedInteraction(pointerInteraction);
+    }, DRAG_SETTLE_DELAY_MS);
+  }
+
+  function clearDragSettleTimer() {
+    if (dragSettleTimer === null || typeof window === "undefined") return;
+    window.clearTimeout(dragSettleTimer);
+    dragSettleTimer = null;
+  }
+
+  function finalizeDraggedInteraction(
+    interaction: Extract<PointerInteraction, { kind: "infra" }>,
+  ) {
+    clearDragSettleTimer();
+    releasePointer(interaction.pointerId);
+    pointerInteraction = { kind: "idle" };
+    if (interaction.dragging) {
+      onNodePositionChange(
+        interaction.nodeId,
+        interaction.nodeKind,
+        interaction.latestPosition,
+      );
+      triggerPlacementConfirmation(interaction.nodeId, interaction.nodeKind);
+    } else if (interaction.nodeKind === "gateway") {
+      onGatewayClick(interaction.nodeId);
+    }
+    handleCanvasNodeLeave();
+  }
+
+  function triggerPlacementConfirmation(
+    nodeId: string,
+    nodeKind: ConnectionNode["kind"],
+  ) {
+    clearPlacementConfirmation();
+    const startedAt =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+    placementConfirmation = {
+      nodeId,
+      nodeKind,
+      startedAt,
+      flashes: PLACEMENT_CONFIRMATION_FLASHES,
+      durationMs: PLACEMENT_CONFIRMATION_DURATION_MS,
+    };
+    redraw?.();
+
+    if (typeof window === "undefined") return;
+    placementConfirmationTimer = window.setTimeout(() => {
+      placementConfirmation = null;
+      placementConfirmationTimer = null;
+      redraw?.();
+    }, PLACEMENT_CONFIRMATION_DURATION_MS);
+  }
+
+  function clearPlacementConfirmation() {
+    if (placementConfirmationTimer !== null && typeof window !== "undefined") {
+      window.clearTimeout(placementConfirmationTimer);
+      placementConfirmationTimer = null;
+    }
+    if (placementConfirmation) {
+      placementConfirmation = null;
+      redraw?.();
+    }
+  }
+
   function findNodeById(
     graph: TopologyGraphModel,
     nodeId: string | null,
@@ -391,6 +668,28 @@
     ];
 
     return nodes.find((node) => node.id === nodeId) ?? null;
+  }
+
+  function findNodeByKindId(
+    graph: TopologyGraphModel,
+    kind: string,
+    nodeId: string,
+  ): ConnectionNode | null {
+    const nodes: ConnectionNode[] = [
+      ...graph.nodes.gateways,
+      ...graph.nodes.eventbridges,
+      ...graph.nodes.topics,
+      ...graph.nodes.queues,
+      ...graph.nodes.functions,
+      ...(graph.nodes.cacheExtension ? [graph.nodes.cacheExtension] : []),
+      ...graph.nodes.secrets,
+      ...graph.nodes.buckets,
+      ...graph.nodes.infra,
+    ];
+
+    return (
+      nodes.find((node) => node.kind === kind && node.id === nodeId) ?? null
+    );
   }
 
   $effect(() => {
@@ -422,100 +721,69 @@
       viewportDirty = false;
     }
   });
-
 </script>
 
 <div
   bind:this={canvasContainer}
-  class={`relative w-full overflow-hidden border border-border/70 bg-card/30 shadow-inner ${
-    canvasExpanded
-      ? "h-screen min-h-[100svh] rounded-xl"
-      : "h-full min-h-0 rounded-lg"
+  class={`relative h-full min-h-0 w-full overflow-hidden border border-border/70 bg-card/30 shadow-inner ${
+    canvasExpanded ? "rounded-xl" : "rounded-lg"
   }`}
+  onwheel={handleWheel}
 >
   {#if canvasExpanded}
-    <div
-      class="pointer-events-none absolute left-3 top-3 z-20 max-w-[calc(100%-1.5rem)] rounded-xl border border-border/80 bg-background/80 px-3 py-2 shadow-xl backdrop-blur-md"
-    >
-      <div class="flex flex-wrap items-center gap-2">
-        <Badge variant={panEnabled ? "default" : "secondary"}>
-          {panEnabled ? "Explore mode" : "Layout mode"}
-        </Badge>
-        {#if model.nodes.infra.length > 0}
-          <Badge variant="outline">
-            {panEnabled ? "Use arrow keys or the D-pad" : "Drag infra to pin layout"}
-          </Badge>
-        {/if}
-      </div>
-      <p class="mt-1 text-[11px] text-muted-foreground">
-        {#if panEnabled}
-          Use the arrow keys or the bottom-right controls to move around the topology.
-        {:else}
-          Infra nodes can be repositioned and their coordinates persist across refreshes.
-        {/if}
-      </p>
-    </div>
-
     {#if panEnabled}
       <div
-        class="absolute bottom-3 right-3 z-20 flex flex-col items-center gap-1 rounded-2xl border border-border/80 bg-background/85 p-2 shadow-xl backdrop-blur-md"
+        class="absolute bottom-3 left-3 z-20 flex flex-col gap-1"
       >
-        <div class="flex items-center justify-center">
+        <div class="flex flex-col gap-1">
           <Button
             variant="secondary"
             size="icon"
-            class="h-9 w-9 rounded-xl"
-            aria-label="Pan canvas up"
-            title="Pan up"
-            onclick={() => panViewportBy(0, KEYBOARD_PAN_STEP)}
-            onpointerdown={(event: PointerEvent) =>
-              handlePanControlPointerDown(event, 0, KEYBOARD_PAN_STEP)}
+            class="h-9 w-9 rounded-xl shadow-lg"
+            aria-label="Organise canvas layout"
+            title="Organise canvas layout"
+            onclick={onAutoOrganize}
+            onpointerdown={handleOrganizePointerDown}
           >
-            <ArrowSquareUpIcon size={18} />
+            <SquaresFourIcon size={18} />
+          </Button>
+          <Button
+            variant="secondary"
+            size="icon"
+            class="h-9 w-9 rounded-xl shadow-lg"
+            aria-label="Zoom in"
+            title="Zoom in"
+            disabled={!canZoomIn}
+            onclick={() => zoomViewportBy(ZOOM_STEP)}
+            onpointerdown={(event: PointerEvent) =>
+              handleZoomControlPointerDown(event, ZOOM_STEP)}
+          >
+            <MagnifyingGlassPlusIcon size={18} />
+          </Button>
+          <Button
+            variant="secondary"
+            size="icon"
+            class="h-9 w-9 rounded-xl shadow-lg"
+            aria-label="Zoom out"
+            title="Zoom out"
+            disabled={!canZoomOut}
+            onclick={() => zoomViewportBy(1 / ZOOM_STEP)}
+            onpointerdown={(event: PointerEvent) =>
+              handleZoomControlPointerDown(event, 1 / ZOOM_STEP)}
+          >
+            <MagnifyingGlassMinusIcon size={18} />
           </Button>
         </div>
-        <div class="flex items-center gap-1">
-          <Button
-            variant="secondary"
-            size="icon"
-            class="h-9 w-9 rounded-xl"
-            aria-label="Pan canvas left"
-            title="Pan left"
-            onclick={() => panViewportBy(KEYBOARD_PAN_STEP, 0)}
-            onpointerdown={(event: PointerEvent) =>
-              handlePanControlPointerDown(event, KEYBOARD_PAN_STEP, 0)}
-          >
-            <ArrowSquareLeftIcon size={18} />
-          </Button>
-          <Button
-            variant="secondary"
-            size="icon"
-            class="h-9 w-9 rounded-xl"
-            aria-label="Pan canvas down"
-            title="Pan down"
-            onclick={() => panViewportBy(0, -KEYBOARD_PAN_STEP)}
-            onpointerdown={(event: PointerEvent) =>
-              handlePanControlPointerDown(event, 0, -KEYBOARD_PAN_STEP)}
-          >
-            <ArrowSquareDownIcon size={18} />
-          </Button>
-          <Button
-            variant="secondary"
-            size="icon"
-            class="h-9 w-9 rounded-xl"
-            aria-label="Pan canvas right"
-            title="Pan right"
-            onclick={() => panViewportBy(-KEYBOARD_PAN_STEP, 0)}
-            onpointerdown={(event: PointerEvent) =>
-              handlePanControlPointerDown(event, -KEYBOARD_PAN_STEP, 0)}
-          >
-            <ArrowSquareRightIcon size={18} />
-          </Button>
-        </div>
-        <span class="text-[10px] font-mono uppercase tracking-wide text-muted-foreground">
-          arrows / keys
-        </span>
       </div>
+
+      <TopologyCanvasMiniMap
+        {model}
+        {palette}
+        {viewportTransform}
+        {viewportWidth}
+        {viewportHeight}
+        onFocusCanvas={focusViewportAt}
+      />
     {/if}
   {/if}
 
@@ -526,11 +794,7 @@
     autoplay={shouldAnimate}
     onresize={handleResize}
   >
-    <TopologyCanvasBackgroundLayer
-      {model}
-      {palette}
-      {viewportTransform}
-    />
+    <TopologyCanvasBackgroundLayer {model} {palette} {viewportTransform} />
     <TopologyCanvasEdgeLayer
       {model}
       {hoverFocus}
@@ -544,19 +808,158 @@
       {palette}
       {viewportTransform}
       {hoveredNodeId}
+      {activeDragNode}
+      {placementConfirmation}
     />
   </Canvas>
 
-  <div
-    class="absolute inset-0 z-10"
-    class:touch-none={canvasExpanded}
-    role="presentation"
-    aria-hidden="true"
-    style={`cursor: ${overlayCursor};`}
-    onpointerdown={handlePointerDown}
-    onpointermove={handlePointerMove}
-    onpointerup={handlePointerUp}
-    onpointercancel={handlePointerCancel}
-    onpointerleave={handlePointerLeave}
-  ></div>
+  {#if canvasExpanded}
+    <ContextMenu.Root>
+      <ContextMenu.Trigger
+        class="absolute inset-0 z-10 touch-none block"
+        role="presentation"
+        aria-hidden="true"
+        style={`cursor: ${overlayCursor};`}
+        onpointerdown={handlePointerDown}
+        onpointermove={handlePointerMove}
+        onpointerup={handlePointerUp}
+        onpointercancel={handlePointerCancel}
+        onpointerleave={handlePointerLeave}
+        oncontextmenu={handleContextMenu}
+      />
+      <ContextMenu.Content>
+        {#if contextMenuNode}
+          {@const overrideKey = `${contextMenuNode.kind}:${contextMenuNode.id}`}
+          {@const inputVal = contextMenuNode.inputSide ?? "left"}
+          {@const outputVal = contextMenuNode.outputSide ?? "right"}
+          {@const sizeVal = contextMenuNode.size ?? "small"}
+          {@const viewVal = contextMenuNode.view ?? "standard"}
+
+          <ContextMenu.Label
+            class="text-[10px] font-mono uppercase tracking-wide text-muted-foreground/60 px-1.5 pb-0.5"
+          >
+            {contextMenuNode.label}
+          </ContextMenu.Label>
+          <ContextMenu.Separator />
+
+          <ContextMenu.Sub>
+            <ContextMenu.SubTrigger>Input port</ContextMenu.SubTrigger>
+            <ContextMenu.SubContent>
+              <ContextMenu.RadioGroup
+                value={inputVal}
+                onValueChange={(v) =>
+                  onNodeOverrideChange(overrideKey, {
+                    inputSide: v as NodeSide,
+                  })}
+              >
+                <ContextMenu.RadioItem value="left"
+                  >← Left</ContextMenu.RadioItem
+                >
+                <ContextMenu.RadioItem value="right"
+                  >→ Right</ContextMenu.RadioItem
+                >
+                <ContextMenu.RadioItem value="top">↑ Top</ContextMenu.RadioItem>
+                <ContextMenu.RadioItem value="bottom"
+                  >↓ Bottom</ContextMenu.RadioItem
+                >
+              </ContextMenu.RadioGroup>
+            </ContextMenu.SubContent>
+          </ContextMenu.Sub>
+
+          <ContextMenu.Sub>
+            <ContextMenu.SubTrigger>Output port</ContextMenu.SubTrigger>
+            <ContextMenu.SubContent>
+              <ContextMenu.RadioGroup
+                value={outputVal}
+                onValueChange={(v) =>
+                  onNodeOverrideChange(overrideKey, {
+                    outputSide: v as NodeSide,
+                  })}
+              >
+                <ContextMenu.RadioItem value="left"
+                  >← Left</ContextMenu.RadioItem
+                >
+                <ContextMenu.RadioItem value="right"
+                  >→ Right</ContextMenu.RadioItem
+                >
+                <ContextMenu.RadioItem value="top">↑ Top</ContextMenu.RadioItem>
+                <ContextMenu.RadioItem value="bottom"
+                  >↓ Bottom</ContextMenu.RadioItem
+                >
+              </ContextMenu.RadioGroup>
+            </ContextMenu.SubContent>
+          </ContextMenu.Sub>
+
+          <ContextMenu.Separator />
+
+          <ContextMenu.Sub>
+            <ContextMenu.SubTrigger>Size</ContextMenu.SubTrigger>
+            <ContextMenu.SubContent>
+              <ContextMenu.RadioGroup
+                value={sizeVal}
+                onValueChange={(v) =>
+                  onNodeOverrideChange(overrideKey, { size: v as NodeSize })}
+              >
+                <ContextMenu.RadioItem
+                  value="small"
+                  disabled={!contextMenuSupportedSizes.includes("small")}
+                  >Small</ContextMenu.RadioItem
+                >
+                <ContextMenu.RadioItem
+                  value="medium"
+                  disabled={!contextMenuSupportedSizes.includes("medium")}
+                  >Medium</ContextMenu.RadioItem
+                >
+                <ContextMenu.RadioItem
+                  value="large"
+                  disabled={!contextMenuSupportedSizes.includes("large")}
+                  >Large</ContextMenu.RadioItem
+                >
+              </ContextMenu.RadioGroup>
+            </ContextMenu.SubContent>
+          </ContextMenu.Sub>
+
+          {#if contextMenuViews.length > 1}
+            <ContextMenu.Separator />
+
+            <ContextMenu.Sub>
+              <ContextMenu.SubTrigger>View</ContextMenu.SubTrigger>
+              <ContextMenu.SubContent>
+                <ContextMenu.RadioGroup
+                  value={viewVal}
+                  onValueChange={(v) =>
+                    onNodeOverrideChange(overrideKey, { view: v as NodeView })}
+                >
+                  {#each contextMenuViews as view}
+                    <ContextMenu.RadioItem value={view.id}
+                      >{view.label}</ContextMenu.RadioItem
+                    >
+                  {/each}
+                </ContextMenu.RadioGroup>
+              </ContextMenu.SubContent>
+            </ContextMenu.Sub>
+          {/if}
+
+          {#if contextMenuConfigTab}
+            <ContextMenu.Separator />
+            <ContextMenu.Item onSelect={() => navigateToConfigTab(contextMenuConfigTab)}>
+              View config
+            </ContextMenu.Item>
+          {/if}
+        {/if}
+      </ContextMenu.Content>
+    </ContextMenu.Root>
+  {:else}
+    <div
+      class="absolute inset-0 z-10"
+      role="presentation"
+      aria-hidden="true"
+      style={`cursor: ${overlayCursor};`}
+      onpointerdown={handlePointerDown}
+      onpointermove={handlePointerMove}
+      onpointerup={handlePointerUp}
+      onpointercancel={handlePointerCancel}
+      onpointerleave={handlePointerLeave}
+    ></div>
+  {/if}
 </div>

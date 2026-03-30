@@ -1,5 +1,6 @@
 import type {
   BucketSummary,
+  EventBridgeRuleSummary,
   EventSourceMappingSummary,
   FilterCriteria,
   FunctionSummary,
@@ -11,24 +12,41 @@ import type {
   RequestTrace,
   SecretSummary,
 } from "$lib/types";
-import type { ConnectionNode } from "./types";
+import { resolveTopologyNodeSize, resolveTopologyNodeView } from "./registry";
+import type { ConnectionNode, NodeSide, NodeSize, NodeView } from "./types";
+export type { NodeSide, NodeSize } from "./types";
+
+/** Per-node appearance overrides saved to localStorage. */
+export type NodeOverride = {
+  inputSide?: NodeSide;
+  outputSide?: NodeSide;
+  size?: NodeSize;
+  view?: NodeView;
+};
 
 export const CONNECTION_CANVAS = {
-  width: 1520,
-  height: 1020,
-  nodeHalfWidth: 104,
+  width: 3400,
+  height: 1800,
+  nodeHalfWidth: 96,
   nodeHalfHeight: 32,
   cacheHalfWidth: 98,
   cacheHalfHeight: 34,
   infraHalfWidth: 108,
-  colGateway: 170,
-  colEventBridge: 300,
-  colTopic: 390,
-  colQueue: 560,
-  colFunction: 760,
-  colSecret: 1120,
-  colBucket: 1290,
-  colInfra: 760,
+  colGateway: 600,
+  colEventBridge: 960,
+  colTopic: 1320,
+  colQueue: 1680,
+  colFunction: 2040,
+  colSecret: 2400,
+  colBucket: 2760,
+  colInfra: 2040,
+} as const;
+
+export const TOPOLOGY_GRID_STEP = 30;
+export const TOPOLOGY_MIN_NODE_GAP = TOPOLOGY_GRID_STEP * 2;
+const TOPOLOGY_VIEWPORT_REFERENCE = {
+  width: 2200,
+  height: 1000,
 } as const;
 
 const TRACE_WINDOW_MS = 60_000;
@@ -78,6 +96,8 @@ export interface InfraEdge extends LaneEdge {
 
 export interface TopologyGraphModel {
   hasData: boolean;
+  eventBridgeRuleById: Map<string, EventBridgeRuleSummary>;
+  functionById: Map<string, FunctionSummary>;
   infraById: Map<string, InfraProbe>;
   nodes: {
     gateways: ConnectionNode[];
@@ -145,9 +165,11 @@ export interface BuildTopologyGraphInput {
   buckets: BucketSummary[];
   secrets: SecretSummary[];
   infra: InfraProbe[];
-  infraNodePositions?: Record<string, InfraNodePosition>;
+  allNodePositions?: Record<string, InfraNodePosition>;
+  allNodeOverrides?: Record<string, NodeOverride>;
   infraConnections: InfraConnection[];
   eventSourceMappings: EventSourceMappingSummary[];
+  eventBridgeRules?: EventBridgeRuleSummary[];
   infraOrderIds: string[];
   recentTraces: RequestTrace[];
   now?: number;
@@ -162,19 +184,21 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     buckets,
     secrets,
     infra,
-    infraNodePositions = {},
+    allNodePositions = {},
+    allNodeOverrides = {},
     infraConnections,
     eventSourceMappings,
+    eventBridgeRules = [],
     infraOrderIds,
     recentTraces,
     now = Date.now(),
   } = input;
 
-  const connGateways = gateways.slice(0, 3).map(
+  const connGateways = gateways.map(
     (gw, i): ConnectionNode => ({
       id: gw.apiId,
       x: CONNECTION_CANVAS.colGateway,
-      y: 230 + i * 154,
+      y: distributedColumnY(i, gateways.length, 170, 790),
       label: trimLabel(gw.name, 13),
       sub: `${gw.routes} routes`,
       kind: "gateway",
@@ -187,78 +211,107 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     const key = connection.sourceFunction;
     eventBridgeTargetCounts.set(key, (eventBridgeTargetCounts.get(key) ?? 0) + 1);
   }
-  const connEventBridges = [...eventBridgeTargetCounts.entries()].slice(0, 4).map(
+  for (const rule of eventBridgeRules) {
+    if (!eventBridgeTargetCounts.has(rule.name)) {
+      eventBridgeTargetCounts.set(rule.name, rule.targets?.length ?? 0);
+    }
+  }
+  const connEventBridges = [...eventBridgeTargetCounts.entries()].map(
     ([ruleName, targetCount], i): ConnectionNode => ({
       id: ruleName,
       x: CONNECTION_CANVAS.colEventBridge,
-      y: 170 + i * 104,
+      y: distributedColumnY(i, eventBridgeTargetCounts.size, 140, 770),
       label: trimLabel(ruleName, 13),
       sub: `${targetCount} target${targetCount === 1 ? "" : "s"}`,
       kind: "eventbridge",
     }),
   );
 
-  const connTopics = topics.slice(0, 3).map(
+  const connTopics = topics.map(
     (t, i): ConnectionNode => ({
       id: t.name,
       x: CONNECTION_CANVAS.colTopic,
-      y: 220 + i * 112,
+      y: distributedColumnY(i, topics.length, 140, 740),
       label: trimLabel(t.name, 13),
       sub: `${t.subscriptions} sub`,
       kind: "topic",
     }),
   );
 
-  const connQueues = queues.slice(0, 4).map(
+  const connQueues = queues.map(
     (q, i): ConnectionNode => ({
       id: q.name,
       x: CONNECTION_CANVAS.colQueue,
-      y: 240 + connTopics.length * 112 + i * 112,
+      y: distributedColumnY(i, queues.length, 150, 855),
       label: trimLabel(q.name, 13),
       sub: `${q.approxVisible + q.approxInFlight + q.approxDelayed} msg`,
       kind: "queue",
     }),
   );
 
-  const connFunctions = functions.slice(0, 4).map(
+  const connFunctions = functions.map(
     (fn, i): ConnectionNode => ({
       id: fn.name,
       x: CONNECTION_CANVAS.colFunction,
-      y: 260 + i * 146,
+      y: distributedColumnY(i, functions.length, 170, 915),
       label: trimLabel(fn.name, 13),
       sub: fn.runtime,
       kind: "function",
     }),
   );
 
-  const connBuckets = buckets.slice(0, 4).map(
+  const connBuckets = buckets.map(
     (b, i): ConnectionNode => ({
       id: b.name,
       x: CONNECTION_CANVAS.colBucket,
-      y: 540 + i * 88,
+      y: distributedColumnY(i, buckets.length, 120, 1080),
       label: trimLabel(b.name, 13),
       sub: `${b.objects} obj`,
       kind: "bucket",
+      bucket: b,
     }),
   );
 
-  const connSecrets = secrets.slice(0, 3).map(
+  const connSecrets = secrets.map(
     (s, i): ConnectionNode => ({
       id: s.name,
       x: CONNECTION_CANVAS.colSecret,
-      y: 280 + i * 164,
+      y: distributedColumnY(i, secrets.length, 190, 985),
       label: trimLabel(s.name, 13),
       sub: `v${s.versionId.slice(0, 6)}`,
       kind: "secret",
     }),
   );
 
-  const connInfraNodes = buildInfraNodes(infra, infraOrderIds, infraNodePositions);
-  const infraLane = buildInfraLane(connInfraNodes);
-  const infraRoute = {
-    x: infraLane.x + infraLane.width / 2,
-    y: infraLane.y - 26,
-  };
+  const mainGroups = [
+    connGateways, connEventBridges, connTopics, connQueues,
+    connFunctions, connBuckets, connSecrets,
+  ];
+
+  // Apply size/side overrides BEFORE collision resolution so the force-field
+  // uses each node's actual rendered dimensions. Each override is scoped to
+  // the individual node by ID — connected nodes are never affected.
+  for (const group of mainGroups) {
+    for (const node of group) {
+      applyNodeOverride(node, allNodeOverrides[`${node.kind}:${node.id}`]);
+    }
+  }
+
+  applyForceFieldCollisions(mainGroups);
+
+  // Apply dragged positions AFTER collision so user-pinned nodes stay put.
+  for (const group of mainGroups) {
+    for (const node of group) {
+      const pos = getPersistedNodePosition(allNodePositions, node);
+      if (!pos) continue;
+      const nextPosition = resolveNodeSpacing(node, pos, mainGroups.flat());
+      node.x = nextPosition.x;
+      node.y = nextPosition.y;
+    }
+  }
+
+  const connInfraNodes = buildInfraNodes(infra, infraOrderIds, allNodePositions);
+  for (const node of connInfraNodes) applyNodeOverride(node, allNodeOverrides[`${node.kind}:${node.id}`]);
 
   const connCacheExtension: ConnectionNode | null =
     connSecrets.length > 0
@@ -271,6 +324,35 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
           kind: "extension",
         }
       : null;
+  if (connCacheExtension) applyNodeOverride(connCacheExtension, allNodeOverrides[`${connCacheExtension.kind}:${connCacheExtension.id}`]);
+  if (connCacheExtension) {
+    const pos = getPersistedNodePosition(allNodePositions, connCacheExtension);
+    const nextPosition = clampNodePosition(
+      connCacheExtension,
+      pos?.x ?? connCacheExtension.x,
+      pos?.y ?? connCacheExtension.y,
+    );
+    connCacheExtension.x = nextPosition.x;
+    connCacheExtension.y = nextPosition.y;
+  }
+
+  applyForceFieldCollisions(
+    [
+      ...mainGroups,
+      ...(connCacheExtension ? [[connCacheExtension]] : []),
+      connInfraNodes,
+    ],
+    TOPOLOGY_MIN_NODE_GAP,
+    12,
+    "both",
+    new Set(mainGroups.flat().map((node) => graphNodeKey(node))),
+  );
+
+  const infraLane = buildInfraLane(connInfraNodes);
+  const infraRoute = {
+    x: infraLane.x + infraLane.width / 2,
+    y: infraLane.y - 26,
+  };
 
   const gatewayIdByName = new Map(gateways.map((gw) => [gw.name, gw.apiId]));
   const queueByName = new Map(queues.map((q) => [q.name, q]));
@@ -298,7 +380,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     (edge) => `${edge.from.id}→${edge.to.id}`,
   ).map((edge) => ({
     ...edge,
-    path: laneAwarePath(edge.from, edge.to, edge.lane, edge.laneCount),
+    path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
   }));
 
   const apigwToFunction = withLanes(
@@ -316,23 +398,42 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     (edge) => `${edge.from.id}→${edge.to.id}`,
   ).map((edge) => ({
     ...edge,
-    path: laneAwarePath(edge.from, edge.to, edge.lane, edge.laneCount),
+    path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
   }));
 
-  const eventbridgeToFunction = withLanes(
-    infraConnections.flatMap((c) => {
-      if (c.targetKind !== "eventbridge-lambda") return [];
-      const from = connEventBridges.find((n) => n.id === c.sourceFunction);
-      const fnName = c.targetId || c.targetName;
+  const seenEbEdges = new Set<string>();
+  const ebEdgeCandidates: { from: ConnectionNode; to: ConnectionNode; activity?: EdgeActivity }[] = [];
+  for (const c of infraConnections) {
+    if (c.targetKind !== "eventbridge-lambda") continue;
+    const from = connEventBridges.find((n) => n.id === c.sourceFunction);
+    const fnName = c.targetId || c.targetName;
+    const to = connFunctions.find((n) => n.id === fnName);
+    if (!from || !to) continue;
+    const key = `${from.id}→${to.id}`;
+    if (seenEbEdges.has(key)) continue;
+    seenEbEdges.add(key);
+    const activity = traceEdgeActivity.get(`eventbridge::${from.id}→${to.id}`);
+    ebEdgeCandidates.push({ from, to, activity });
+  }
+  for (const rule of eventBridgeRules) {
+    const from = connEventBridges.find((n) => n.id === rule.name);
+    if (!from) continue;
+    for (const target of rule.targets ?? []) {
+      const fnName = lambdaNameFromArn(target.arn);
       const to = connFunctions.find((n) => n.id === fnName);
-      if (!from || !to) return [];
-      const activity = traceEdgeActivity.get(`eventbridge::${from.id}→${to.id}`);
-      return [{ from, to, activity }];
-    }),
+      if (!to) continue;
+      const key = `${from.id}→${to.id}`;
+      if (seenEbEdges.has(key)) continue;
+      seenEbEdges.add(key);
+      ebEdgeCandidates.push({ from, to, activity: undefined });
+    }
+  }
+  const eventbridgeToFunction = withLanes(
+    ebEdgeCandidates,
     (edge) => `${edge.from.id}→${edge.to.id}`,
   ).map((edge) => ({
     ...edge,
-    path: laneAwarePath(edge.from, edge.to, edge.lane, edge.laneCount),
+    path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
   }));
 
   const snsToQueue = withLanes(
@@ -348,7 +449,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     (edge) => `${edge.from.id}→${edge.to.id}`,
   ).map((edge) => ({
     ...edge,
-    path: laneAwarePath(edge.from, edge.to, edge.lane, edge.laneCount),
+    path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
   }));
 
   const snsToFunction = withLanes(
@@ -364,7 +465,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     (edge) => `${edge.from.id}→${edge.to.id}`,
   ).map((edge) => ({
     ...edge,
-    path: laneAwarePath(edge.from, edge.to, edge.lane, edge.laneCount),
+    path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
   }));
 
   const queueToFunctionPairs: {
@@ -413,7 +514,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     (edge) => `${edge.from.id}→${edge.to.id}`,
   ).map((edge) => ({
     ...edge,
-    path: laneAwarePath(edge.from, edge.to, edge.lane, edge.laneCount),
+    path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
   }));
 
   const queueToDlq = infraConnections.flatMap((c) => {
@@ -433,20 +534,44 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     ];
   });
 
+  const seenBucketFnEdges = new Set<string>();
+  const bucketFnCandidates: Array<{ from: ConnectionNode; to: ConnectionNode }> = [];
+
+  for (const c of infraConnections) {
+    if (c.targetKind !== "s3-lambda") continue;
+    const from = connBuckets.find((n) => n.id === c.sourceFunction);
+    const fnName = c.targetId || c.targetName;
+    const to = connFunctions.find((n) => n.id === fnName);
+    if (!from || !to) continue;
+    const key = `${from.id}→${to.id}`;
+    if (seenBucketFnEdges.has(key)) continue;
+    seenBucketFnEdges.add(key);
+    bucketFnCandidates.push({ from, to });
+  }
+
+  for (const trace of recentTraces) {
+    const s3Span = trace.spans.find((span) => span.kind === "s3");
+    const lambdaSpan = trace.spans.find((span) => span.kind === "lambda");
+    if (!s3Span || !lambdaSpan) continue;
+
+    const bucketName = bucketNameFromTraceSpanName(s3Span.name);
+    const from = connBuckets.find((n) => n.id === bucketName);
+    const to = connFunctions.find((n) => n.id === lambdaSpan.name);
+    if (!from || !to) continue;
+
+    const key = `${from.id}→${to.id}`;
+    if (seenBucketFnEdges.has(key)) continue;
+    seenBucketFnEdges.add(key);
+    bucketFnCandidates.push({ from, to });
+  }
+
   const bucketToFunction = withLanes(
-    infraConnections.flatMap((c) => {
-      if (c.targetKind !== "s3-lambda") return [];
-      const from = connBuckets.find((n) => n.id === c.sourceFunction);
-      const fnName = c.targetId || c.targetName;
-      const to = connFunctions.find((n) => n.id === fnName);
-      if (!from || !to) return [];
-      return [{ from, to }];
-    }),
+    bucketFnCandidates,
     (edge) => `${edge.from.id}→${edge.to.id}`,
   ).map((edge) => ({
     ...edge,
     id: `${edge.from.id}→${edge.to.id}`,
-    path: laneAwarePath(edge.from, edge.to, edge.lane, edge.laneCount),
+    path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
   }));
 
   const awsServiceKinds = [
@@ -473,7 +598,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
   ).map((edge) => ({
     ...edge,
     id: `${edge.from.id}→${edge.to.id}`,
-    path: infraLadderPath(edge.from, edge.to, edge.lane, edge.laneCount, infraRoute),
+    path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
   }));
 
   const functionToCache = connCacheExtension
@@ -489,14 +614,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       ).map((edge) => ({
         ...edge,
         id: `${edge.from.id}→cache`,
-        path: laneAwarePath(
-          edge.from,
-          edge.to,
-          edge.lane,
-          edge.laneCount,
-          CONNECTION_CANVAS.nodeHalfWidth,
-          CONNECTION_CANVAS.cacheHalfWidth,
-        ),
+        path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
       }))
     : [];
 
@@ -518,14 +636,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       ).map((edge) => ({
         ...edge,
         id: `cache→${edge.to.id}`,
-        path: laneAwarePath(
-          edge.from,
-          edge.to,
-          edge.lane,
-          edge.laneCount,
-          CONNECTION_CANVAS.cacheHalfWidth,
-          CONNECTION_CANVAS.nodeHalfWidth,
-        ),
+        path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
       }))
     : [];
 
@@ -539,6 +650,8 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       buckets.length > 0 ||
       secrets.length > 0 ||
       infra.length > 0,
+    eventBridgeRuleById: new Map(eventBridgeRules.map((rule) => [rule.name, rule])),
+    functionById: new Map(functions.map((fn) => [fn.name, fn])),
     infraById: new Map(
       [...infraByNodeId.entries()].filter((entry): entry is [string, InfraProbe] => !!entry[1]),
     ),
@@ -670,17 +783,29 @@ export function nodeBounds(node: ConnectionNode): {
   top: number;
   bottom: number;
 } {
-  const halfWidth =
-    node.kind === "infra"
-      ? CONNECTION_CANVAS.infraHalfWidth
-      : node.kind === "extension"
-        ? CONNECTION_CANVAS.cacheHalfWidth
-        : CONNECTION_CANVAS.nodeHalfWidth;
+  const baseHW =
+    node.kind === "infra" ? CONNECTION_CANVAS.infraHalfWidth :
+    node.kind === "extension" ? CONNECTION_CANVAS.cacheHalfWidth :
+    CONNECTION_CANVAS.nodeHalfWidth;
+  const baseHH =
+    node.kind === "extension" ? CONNECTION_CANVAS.cacheHalfHeight :
+    CONNECTION_CANVAS.nodeHalfHeight;
 
-  const halfHeight =
-    node.kind === "extension"
-      ? CONNECTION_CANVAS.cacheHalfHeight
-      : CONNECTION_CANVAS.nodeHalfHeight;
+  let halfWidth: number;
+  let halfHeight: number;
+  switch (node.size) {
+    case "medium":
+      halfWidth = baseHW;
+      halfHeight = baseHW; // square: height equals width
+      break;
+    case "large":
+      halfWidth = baseHW * 2;
+      halfHeight = baseHW * 2; // 2× medium
+      break;
+    default:
+      halfWidth = baseHW;
+      halfHeight = baseHH;
+  }
 
   return {
     left: node.x - halfWidth,
@@ -688,6 +813,13 @@ export function nodeBounds(node: ConnectionNode): {
     top: node.y - halfHeight,
     bottom: node.y + halfHeight,
   };
+}
+
+function applyNodeOverride(node: ConnectionNode, override: NodeOverride | undefined): void {
+  if (override?.inputSide) node.inputSide = override.inputSide;
+  if (override?.outputSide) node.outputSide = override.outputSide;
+  node.size = resolveTopologyNodeSize(node.kind, override?.size ?? node.size);
+  node.view = resolveTopologyNodeView(node.kind, override?.view, node.size ?? "small");
 }
 
 export function findNodeAt(model: TopologyGraphModel, x: number, y: number): ConnectionNode | null {
@@ -727,14 +859,20 @@ export function computeViewportTransform(
     safeWidth / (CONNECTION_CANVAS.width + paddingX * 2),
     safeHeight / (CONNECTION_CANVAS.height + paddingY * 2),
   );
+  const referenceFitScale = Math.min(
+    safeWidth / (TOPOLOGY_VIEWPORT_REFERENCE.width + paddingX * 2),
+    safeHeight / (TOPOLOGY_VIEWPORT_REFERENCE.height + paddingY * 2),
+  );
   const zoomFactor = options.expanded
     ? safeWidth < 640
-      ? 1.04
+      ? 1.12
       : safeWidth < 1024
-        ? 1.1
-        : 1.18
-    : 1;
-  const scale = fitScale * zoomFactor;
+        ? 1.18
+        : 1.26
+    : safeWidth < 900
+      ? 1.02
+      : 1.08;
+  const scale = Math.max(fitScale, referenceFitScale) * zoomFactor;
 
   return {
     scale,
@@ -782,6 +920,22 @@ export function clampInfraNodePosition(x: number, y: number): InfraNodePosition 
     ),
     y: clamp(y, 120, CONNECTION_CANVAS.height - CONNECTION_CANVAS.nodeHalfHeight - 24),
   };
+}
+
+export function resolveSnappedNodePosition(
+  model: TopologyGraphModel,
+  nodeKey: { id: string; kind: ConnectionNode["kind"] },
+  x: number,
+  y: number,
+): InfraNodePosition {
+  const node = findGraphNode(model, nodeKey);
+  if (!node) return clampInfraNodePosition(x, y);
+
+  return resolveNodeSpacing(
+    node,
+    { x, y },
+    allGraphNodes(model),
+  );
 }
 
 export function hoverFocusState(
@@ -869,8 +1023,201 @@ function walkHoverFlow(
   }
 }
 
+function nodeHalfWidth(node: ConnectionNode): number {
+  const base =
+    node.kind === "extension" ? CONNECTION_CANVAS.cacheHalfWidth :
+    node.kind === "infra" ? CONNECTION_CANVAS.infraHalfWidth :
+    CONNECTION_CANVAS.nodeHalfWidth;
+  if (node.size === "large") return base * 2;
+  return base; // small and medium both use base width
+}
+
+function nodeHalfHeight(node: ConnectionNode): number {
+  const baseHW =
+    node.kind === "extension" ? CONNECTION_CANVAS.cacheHalfWidth :
+    node.kind === "infra" ? CONNECTION_CANVAS.infraHalfWidth :
+    CONNECTION_CANVAS.nodeHalfWidth;
+  const baseHH =
+    node.kind === "extension" ? CONNECTION_CANVAS.cacheHalfHeight :
+    CONNECTION_CANVAS.nodeHalfHeight;
+  switch (node.size) {
+    case "medium": return baseHW;
+    case "large":  return baseHW * 2;
+    default:       return baseHH;
+  }
+}
+
+/**
+ * Iteratively push overlapping nodes apart along the Y axis.
+ * X positions (columns) are intentional layout and are not modified.
+ * Runs on all nodes across all supplied column groups so cross-column
+ * proximity (e.g. EventBridge ↔ Topic) is also resolved.
+ */
+function applyForceFieldCollisions(
+  nodeGroups: ConnectionNode[][],
+  padding = TOPOLOGY_MIN_NODE_GAP,
+  iterations = 8,
+  axis: "y" | "both" = "y",
+  lockedNodeKeys: ReadonlySet<string> = new Set(),
+): void {
+  const all = nodeGroups.flat();
+  if (all.length <= 1) return;
+
+  for (let iter = 0; iter < iterations; iter++) {
+    let moved = false;
+    for (let i = 0; i < all.length; i++) {
+      for (let j = i + 1; j < all.length; j++) {
+        const a = all[i];
+        const b = all[j];
+        const lockA = lockedNodeKeys.has(graphNodeKey(a));
+        const lockB = lockedNodeKeys.has(graphNodeKey(b));
+        if (lockA && lockB) continue;
+
+        const requiredX = nodeHalfWidth(a) + nodeHalfWidth(b) + padding;
+        const requiredY = nodeHalfHeight(a) + nodeHalfHeight(b) + padding;
+        const deltaX = b.x - a.x;
+        const deltaY = b.y - a.y;
+        const overlapX = requiredX - Math.abs(deltaX);
+        const overlapY = requiredY - Math.abs(deltaY);
+
+        if (overlapX <= 0 || overlapY <= 0) continue;
+
+        const pushAxis = axis === "y" ? "y" : overlapX < overlapY ? "x" : "y";
+
+        if (pushAxis === "x") {
+          const direction =
+            deltaX === 0 ? (b.x >= CONNECTION_CANVAS.width / 2 ? 1 : -1) : Math.sign(deltaX);
+          const totalPush = overlapX + 1;
+          if (lockA) {
+            const nextB = clampNodePosition(b, b.x + direction * totalPush, b.y);
+            b.x = nextB.x;
+            b.y = nextB.y;
+          } else if (lockB) {
+            const nextA = clampNodePosition(a, a.x - direction * totalPush, a.y);
+            a.x = nextA.x;
+            a.y = nextA.y;
+          } else {
+            const push = totalPush / 2;
+            const nextA = clampNodePosition(a, a.x - direction * push, a.y);
+            const nextB = clampNodePosition(b, b.x + direction * push, b.y);
+            a.x = nextA.x;
+            a.y = nextA.y;
+            b.x = nextB.x;
+            b.y = nextB.y;
+          }
+        } else {
+          const direction = deltaY === 0 ? (b.y >= a.y ? 1 : -1) : Math.sign(deltaY);
+          const totalPush = overlapY + 1;
+          if (lockA) {
+            const nextB = clampNodePosition(b, b.x, b.y + direction * totalPush);
+            b.x = nextB.x;
+            b.y = nextB.y;
+          } else if (lockB) {
+            const nextA = clampNodePosition(a, a.x, a.y - direction * totalPush);
+            a.x = nextA.x;
+            a.y = nextA.y;
+          } else {
+            const push = totalPush / 2;
+            const nextA = clampNodePosition(a, a.x, a.y - direction * push);
+            const nextB = clampNodePosition(b, b.x, b.y + direction * push);
+            a.x = nextA.x;
+            a.y = nextA.y;
+            b.x = nextB.x;
+            b.y = nextB.y;
+          }
+        }
+        moved = true;
+      }
+    }
+    if (!moved) break;
+  }
+}
+
+function resolveNodeSpacing(
+  node: ConnectionNode,
+  desiredPosition: InfraNodePosition,
+  nodes: ConnectionNode[],
+  minGap = TOPOLOGY_MIN_NODE_GAP,
+): InfraNodePosition {
+  let candidate = clampNodePosition(node, desiredPosition.x, desiredPosition.y);
+  const others = nodes.filter((other) => other !== node);
+  if (others.length === 0) return candidate;
+
+  for (let iteration = 0; iteration < others.length * 3; iteration += 1) {
+    let moved = false;
+
+    for (const other of others) {
+      const requiredX = nodeHalfWidth(node) + nodeHalfWidth(other) + minGap;
+      const requiredY = nodeHalfHeight(node) + nodeHalfHeight(other) + minGap;
+      const deltaX = candidate.x - other.x;
+      const deltaY = candidate.y - other.y;
+      const overlapX = requiredX - Math.abs(deltaX);
+      const overlapY = requiredY - Math.abs(deltaY);
+
+      if (overlapX <= 0 || overlapY <= 0) continue;
+
+      if (overlapX < overlapY) {
+        const direction =
+          deltaX === 0
+            ? candidate.x >= CONNECTION_CANVAS.width / 2
+              ? 1
+              : -1
+            : Math.sign(deltaX);
+        candidate = clampNodePosition(
+          node,
+          candidate.x + direction * (overlapX + 1),
+          candidate.y,
+        );
+      } else {
+        const direction =
+          deltaY === 0 ? (candidate.y >= other.y ? 1 : -1) : Math.sign(deltaY);
+        candidate = clampNodePosition(
+          node,
+          candidate.x,
+          candidate.y + direction * (overlapY + 1),
+        );
+      }
+
+      moved = true;
+    }
+
+    if (!moved) break;
+  }
+
+  return candidate;
+}
+
+function lambdaNameFromArn(arn: string): string {
+  const parts = arn.split(":");
+  return parts[parts.length - 1];
+}
+
+function bucketNameFromTraceSpanName(name: string): string {
+  const slashIndex = name.indexOf("/");
+  return slashIndex === -1 ? name : name.slice(0, slashIndex);
+}
+
 function trimLabel(label: string, max = 14): string {
   return label.length <= max ? label : `${label.slice(0, max - 1)}…`;
+}
+
+function distributedColumnY(
+  index: number,
+  total: number,
+  gap: number,
+  centerY: number,
+): number {
+  if (total <= 1) return centerY;
+
+  const totalSpan = gap * (total - 1);
+  const topBound = CONNECTION_CANVAS.nodeHalfHeight + 80;
+  const bottomBound = CONNECTION_CANVAS.height - CONNECTION_CANVAS.nodeHalfHeight - 120;
+  const start = clamp(
+    centerY - totalSpan / 2,
+    topBound,
+    Math.max(topBound, bottomBound - totalSpan),
+  );
+  return start + index * gap;
 }
 
 function infraNodeId(probe: InfraProbe): string {
@@ -880,9 +1227,9 @@ function infraNodeId(probe: InfraProbe): string {
 function buildInfraNodes(
   infra: InfraProbe[],
   infraOrderIds: string[],
-  infraNodePositions: Record<string, InfraNodePosition>,
+  allNodePositions: Record<string, InfraNodePosition>,
 ): ConnectionNode[] {
-  const visible = infra.slice(0, 4).map((probe) => ({ id: infraNodeId(probe), probe }));
+  const visible = infra.map((probe) => ({ id: infraNodeId(probe), probe }));
   if (visible.length === 0) return [];
 
   const byId = new Map(visible.map((entry) => [entry.id, entry.probe]));
@@ -891,18 +1238,30 @@ function buildInfraNodes(
     ...visible.map((entry) => entry.id).filter((id) => !infraOrderIds.includes(id)),
   ];
 
-  const laneY = CONNECTION_CANVAS.height - 96;
+  const laneBottomY = CONNECTION_CANVAS.height - 240;
   const horizontalMinX = 320;
   const horizontalMaxX = CONNECTION_CANVAS.width - 220;
-  const count = orderedIds.length;
-  const step = count > 1 ? (horizontalMaxX - horizontalMinX) / (count - 1) : 0;
+  const availableWidth = horizontalMaxX - horizontalMinX;
+  const minCenterGap = CONNECTION_CANVAS.infraHalfWidth * 2 + TOPOLOGY_MIN_NODE_GAP;
+  const maxColumns = Math.max(1, Math.floor(availableWidth / minCenterGap) + 1);
+  const columns = Math.min(maxColumns, orderedIds.length);
+  const rowGap = CONNECTION_CANVAS.nodeHalfHeight * 2 + TOPOLOGY_MIN_NODE_GAP + 26;
+  const totalRows = Math.max(1, Math.ceil(orderedIds.length / columns));
 
-  return orderedIds.map((id, i): ConnectionNode => {
+  const nodes = orderedIds.map((id, i): ConnectionNode => {
     const probe = byId.get(id)!;
+    const rowIndex = Math.floor(i / columns);
+    const columnIndex = i % columns;
+    const rowIds = orderedIds.slice(rowIndex * columns, rowIndex * columns + columns);
+    const rowCount = rowIds.length;
+    const rowStep = rowCount > 1 ? availableWidth / (rowCount - 1) : 0;
     const fallbackX =
-      count === 1 ? (horizontalMinX + horizontalMaxX) / 2 : horizontalMinX + i * step;
-    const fallbackY = laneY;
-    const persistedPosition = infraNodePositions[id];
+      rowCount === 1
+        ? (horizontalMinX + horizontalMaxX) / 2
+        : horizontalMinX + columnIndex * rowStep;
+    const fallbackY = laneBottomY - (totalRows - 1 - rowIndex) * rowGap;
+    const persistedPosition =
+      allNodePositions[`infra:${id}`] ?? allNodePositions[id];
     const position = persistedPosition
       ? clampInfraNodePosition(persistedPosition.x, persistedPosition.y)
       : { x: fallbackX, y: fallbackY };
@@ -921,6 +1280,16 @@ function buildInfraNodes(
       status: probe.status,
     };
   });
+
+  for (const node of nodes) {
+    const persistedPosition = getPersistedNodePosition(allNodePositions, node);
+    if (!persistedPosition) continue;
+    const nextPosition = resolveNodeSpacing(node, persistedPosition, nodes);
+    node.x = nextPosition.x;
+    node.y = nextPosition.y;
+  }
+
+  return nodes;
 }
 
 function clampOffsetAxis(
@@ -942,6 +1311,61 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+function clampNodePosition(
+  node: ConnectionNode,
+  x: number,
+  y: number,
+): InfraNodePosition {
+  return {
+    x: clamp(
+      x,
+      nodeHalfWidth(node) + 24,
+      CONNECTION_CANVAS.width - nodeHalfWidth(node) - 24,
+    ),
+    y: clamp(
+      y,
+      nodeHalfHeight(node) + 24,
+      CONNECTION_CANVAS.height - nodeHalfHeight(node) - 24,
+    ),
+  };
+}
+
+function allGraphNodes(model: TopologyGraphModel): ConnectionNode[] {
+  return [
+    ...model.nodes.gateways,
+    ...model.nodes.eventbridges,
+    ...model.nodes.topics,
+    ...model.nodes.queues,
+    ...model.nodes.functions,
+    ...model.nodes.buckets,
+    ...model.nodes.secrets,
+    ...model.nodes.infra,
+    ...(model.nodes.cacheExtension ? [model.nodes.cacheExtension] : []),
+  ];
+}
+
+function graphNodeKey(node: { id: string; kind: ConnectionNode["kind"] }): string {
+  return `${node.kind}:${node.id}`;
+}
+
+function getPersistedNodePosition(
+  allNodePositions: Record<string, InfraNodePosition>,
+  node: { id: string; kind: ConnectionNode["kind"] },
+): InfraNodePosition | undefined {
+  return allNodePositions[graphNodeKey(node)] ?? allNodePositions[node.id];
+}
+
+function findGraphNode(
+  model: TopologyGraphModel,
+  nodeKey: { id: string; kind: ConnectionNode["kind"] },
+): ConnectionNode | null {
+  return (
+    allGraphNodes(model).find(
+      (node) => node.id === nodeKey.id && node.kind === nodeKey.kind,
+    ) ?? null
+  );
+}
+
 function buildInfraLane(infraNodes: ConnectionNode[]): {
   x: number;
   y: number;
@@ -953,9 +1377,9 @@ function buildInfraLane(infraNodes: ConnectionNode[]): {
   const padBottom = 24;
 
   if (infraNodes.length === 0) {
-    return {
-      x: 260,
-      y: CONNECTION_CANVAS.height - 170,
+      return {
+        x: 260,
+      y: CONNECTION_CANVAS.height - 320,
       width: CONNECTION_CANVAS.width - 520,
       height: 92,
     };
@@ -997,6 +1421,88 @@ function cacheExtensionX(): number {
   return Math.max(minX, Math.min(maxX, targetX));
 }
 
+/**
+ * Returns the canvas coordinates of a node's input or output connector port.
+ * When both ports share the same side they are offset ±14px from centre so
+ * they sit as two distinct dots rather than overlapping.
+ */
+export function portPos(
+  node: ConnectionNode,
+  role: "input" | "output",
+): { x: number; y: number } {
+  const bounds = nodeBounds(node);
+  const inputSide: NodeSide = node.inputSide ?? "left";
+  const outputSide: NodeSide = node.outputSide ?? "right";
+  const side = role === "input" ? inputSide : outputSide;
+  const shared = inputSide === outputSide;
+
+  // When both ports share a side the input sits "before" the output.
+  // On horizontal sides that means shifted left/right; on vertical sides up/down.
+  const offset = shared ? 14 : 0;
+  const sign = role === "input" ? -1 : 1;
+
+  switch (side) {
+    case "left":
+      return { x: bounds.left,   y: node.y + (shared ? sign * offset : 0) };
+    case "right":
+      return { x: bounds.right,  y: node.y + (shared ? sign * offset : 0) };
+    case "top":
+      return { x: node.x + (shared ? sign * offset : 0), y: bounds.top    };
+    case "bottom":
+      return { x: node.x + (shared ? sign * offset : 0), y: bounds.bottom };
+  }
+}
+
+/** Unit vector pointing outward from each side. */
+function sideDir(side: NodeSide): { x: number; y: number } {
+  switch (side) {
+    case "right":  return { x: 1,  y: 0  };
+    case "left":   return { x: -1, y: 0  };
+    case "top":    return { x: 0,  y: -1 };
+    case "bottom": return { x: 0,  y: 1  };
+  }
+}
+
+/**
+ * Generates an SVG cubic bezier connecting the output port of `from` to the
+ * input port of `to`, respecting each node's configured port sides.
+ * Lanes offset parallel edges perpendicular to the primary flow direction.
+ */
+function portConnectPath(
+  from: ConnectionNode,
+  to: ConnectionNode,
+  lane: number,
+  laneCount: number,
+): string {
+  const start = portPos(from, "output");
+  const end   = portPos(to,   "input");
+
+  const outSide: NodeSide = from.outputSide ?? "right";
+  const inSide:  NodeSide = to.inputSide    ?? "left";
+  const outDir = sideDir(outSide);
+  const inDir  = sideDir(inSide);
+
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const dist = Math.sqrt(dx * dx + dy * dy);
+  const tension = Math.min(Math.max(dist * 0.42, 40), 180);
+
+  // Lane offset is applied perpendicular to the output direction
+  const laneOff = laneCount > 1 ? (lane - (laneCount - 1) / 2) * 14 : 0;
+  // Perpendicular to outDir: rotate 90°
+  const perpX = -outDir.y;
+  const perpY =  outDir.x;
+
+  const c1x = start.x + outDir.x * tension + perpX * laneOff;
+  const c1y = start.y + outDir.y * tension + perpY * laneOff;
+  const c2x = end.x   + inDir.x  * tension + perpX * laneOff;
+  const c2y = end.y   + inDir.y  * tension + perpY * laneOff;
+
+  return `M ${start.x} ${start.y} C ${c1x} ${c1y}, ${c2x} ${c2y}, ${end.x} ${end.y}`;
+}
+
+// Keep laneAwarePath as a thin wrapper for the DLQ arc path which needs
+// explicit half-width overrides not expressible through port sides.
 function laneAwarePath(
   from: ConnectionNode,
   to: ConnectionNode,
@@ -1112,6 +1618,7 @@ function buildTraceEdgeActivity(
     const topicSpan = trace.spans.find((span) => span.kind === "topic");
     const queueSpan = trace.spans.find((span) => span.kind === "queue");
     const dlqSpan = trace.spans.find((span) => span.kind === "dlq");
+    const s3Span = trace.spans.find((span) => span.kind === "s3");
     const hasCacheFlow = trace.spans.some(
       (span) =>
         span.kind === "cache_extension" ||
@@ -1134,6 +1641,8 @@ function buildTraceEdgeActivity(
       key = `dlq::${queueSpan.name}→${dlqSpan.name}`;
     } else if (queueSpan && lambdaSpan) {
       key = `queue::${queueSpan.name}→${lambdaSpan.name}`;
+    } else if (s3Span && lambdaSpan) {
+      key = `s3::${bucketNameFromTraceSpanName(s3Span.name)}→${lambdaSpan.name}`;
     }
 
     if (key) {

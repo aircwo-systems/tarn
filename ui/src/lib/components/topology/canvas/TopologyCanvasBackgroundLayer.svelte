@@ -39,8 +39,8 @@
     context.translate(viewportTransform.offsetX, viewportTransform.offsetY);
     context.scale(viewportTransform.scale, viewportTransform.scale);
 
-    context.fillStyle = palette.isDark ? palette.foreground : palette.border;
-    context.globalAlpha = palette.isDark ? 0.14 : 0.28;
+    context.fillStyle = palette.foreground;
+    context.globalAlpha = palette.isDark ? 0.14 : 0.45;
     for (let x = startX; x <= endX; x += GRID_STEP) {
       for (let y = startY; y <= endY; y += GRID_STEP) {
         context.beginPath();
@@ -50,41 +50,12 @@
     }
     context.globalAlpha = 1;
 
-    context.fillStyle = palette.isDark ? palette.mutedForeground : palette.foreground;
-    context.font = `11px ${MONO_FONT}`;
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-
-    if (model.hasData) {
-      context.fillText("API Gateway", CONNECTION_CANVAS.colGateway, 96);
-      if (model.nodes.eventbridges.length > 0) {
-        context.fillText("EventBridge", CONNECTION_CANVAS.colEventBridge, 96);
-      }
-      if (model.nodes.topics.length > 0) {
-        context.fillText("SNS", CONNECTION_CANVAS.colTopic, 96);
-      }
-      context.fillText("SQS", CONNECTION_CANVAS.colQueue, 96);
-      context.fillText("Lambda", CONNECTION_CANVAS.colFunction, 96);
-
-      if (model.nodes.secrets.length > 0 && model.nodes.cacheExtension) {
-        context.fillText("Cache Ext", model.nodes.cacheExtension.x, 96);
-        context.fillText("Secrets", CONNECTION_CANVAS.colSecret, 96);
-      }
-
-      if (model.nodes.buckets.length > 0) {
-        context.fillText("S3", CONNECTION_CANVAS.colBucket, 96);
-      }
-
-      if (model.nodes.infra.length > 0) {
-        context.fillText(
-          "Infra",
-          model.infraLane.x + model.infraLane.width / 2,
-          model.infraLane.y - 18,
-        );
-      }
-    } else {
+    if (!model.hasData) {
       context.fillStyle = palette.isDark ? palette.mutedForeground : palette.foreground;
+      context.globalAlpha = 0.5;
       context.font = `11px ${MONO_FONT}`;
+      context.textAlign = "center";
+      context.textBaseline = "middle";
       context.fillText(
         "No architecture data",
         CONNECTION_CANVAS.width / 2,

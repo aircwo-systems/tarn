@@ -29,6 +29,21 @@
 
   --color-amber: #f59e0b;
   --color-amber-muted: rgba(245, 158, 11, 0.15);
+  --topology-gateway: #facc15;
+  --topology-external-postgresql: #38bdf8;
+  --topology-external-mysql: #2dd4bf;
+  --topology-external-redis: #f97316;
+  --topology-external-http: #a78bfa;
+  --topology-external-mongodb: #34d399;
+  --topology-external-docker: #60a5fa;
+  --topology-external-default: #94a3b8;
+  --topology-infra-postgresql: var(--topology-external-postgresql);
+  --topology-infra-mysql: var(--topology-external-mysql);
+  --topology-infra-redis: var(--topology-external-redis);
+  --topology-infra-http: var(--topology-external-http);
+  --topology-infra-mongodb: var(--topology-external-mongodb);
+  --topology-infra-docker: var(--topology-external-docker);
+  --topology-infra-default: var(--topology-external-default);
 
   --color-red: #fb7185;
   --color-red-muted: rgba(251, 113, 133, 0.15);
@@ -105,6 +120,21 @@
   --color-blue-muted: rgba(29, 78, 216, 0.1);
   --color-amber: #b45309;
   --color-amber-muted: rgba(180, 83, 9, 0.1);
+  --topology-gateway: #a16207;
+  --topology-external-postgresql: #0369a1;
+  --topology-external-mysql: #0f766e;
+  --topology-external-redis: #c2410c;
+  --topology-external-http: #7c3aed;
+  --topology-external-mongodb: #15803d;
+  --topology-external-docker: #2563eb;
+  --topology-external-default: #64748b;
+  --topology-infra-postgresql: var(--topology-external-postgresql);
+  --topology-infra-mysql: var(--topology-external-mysql);
+  --topology-infra-redis: var(--topology-external-redis);
+  --topology-infra-http: var(--topology-external-http);
+  --topology-infra-mongodb: var(--topology-external-mongodb);
+  --topology-infra-docker: var(--topology-external-docker);
+  --topology-infra-default: var(--topology-external-default);
 
   --color-background: #f8fafb;
   --color-foreground: #0f1720;
@@ -288,12 +318,18 @@ body {
   &:where([data-open]:not([data-open="false"])) {
     @slot;
   }
+	&:where([data-state="open"]), &:where([data-open]:not([data-open="false"])) {
+		@slot;
+  }
 }
 
 @custom-variant data-closed {
   &:where([data-state="closed"]),
   &:where([data-closed]:not([data-closed="false"])) {
     @slot;
+  }
+	&:where([data-state="closed"]), &:where([data-closed]:not([data-closed="false"])) {
+		@slot;
   }
 }
 
@@ -302,12 +338,18 @@ body {
   &:where([data-checked]:not([data-checked="false"])) {
     @slot;
   }
+	&:where([data-state="checked"]), &:where([data-checked]:not([data-checked="false"])) {
+		@slot;
+  }
 }
 
 @custom-variant data-unchecked {
   &:where([data-state="unchecked"]),
   &:where([data-unchecked]:not([data-unchecked="false"])) {
     @slot;
+  }
+	&:where([data-state="unchecked"]), &:where([data-unchecked]:not([data-unchecked="false"])) {
+		@slot;
   }
 }
 
@@ -322,12 +364,18 @@ body {
   &:where([data-disabled]:not([data-disabled="false"])) {
     @slot;
   }
+	&:where([data-disabled="true"]), &:where([data-disabled]:not([data-disabled="false"])) {
+		@slot;
+  }
 }
 
 @custom-variant data-active {
   &:where([data-state="active"]),
   &:where([data-active]:not([data-active="false"])) {
     @slot;
+  }
+	&:where([data-state="active"]), &:where([data-active]:not([data-active="false"])) {
+		@slot;
   }
 }
 
@@ -344,10 +392,10 @@ body {
 }
 
 @utility no-scrollbar {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+	-ms-overflow-style: none;
+	scrollbar-width: none;
 
   &::-webkit-scrollbar {
-    display: none;
+  	display: none;
   }
 }
