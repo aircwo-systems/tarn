@@ -150,6 +150,18 @@ func (s *Store) HeadBucket(name string) error {
 	return nil
 }
 
+// GetBucketRegion returns the region stored for a bucket.
+func (s *Store) GetBucketRegion(name string) (string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	bs, exists := s.buckets[name]
+	if !exists {
+		return "", fmt.Errorf("NoSuchBucket")
+	}
+	return bs.meta.Region, nil
+}
+
 // DeleteBucket removes a bucket (must be empty).
 func (s *Store) DeleteBucket(name string) error {
 	s.mu.Lock()

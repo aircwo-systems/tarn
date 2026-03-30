@@ -206,7 +206,8 @@ func startServer(cfg *config.Config) error {
 
 	// Initialize request trace store and sub-span collector. Attach both to gateway
 	// and ESM before starting pollers so boot-time invocations are fully traced.
-	traceStore := trace.NewStore()
+	traceStore := trace.OpenStore(cfg.DataDir)
+	defer traceStore.Close()
 	collector := trace.NewCollector()
 	gatewaySvc.SetTraceStore(traceStore)
 	gatewaySvc.SetCollector(collector)

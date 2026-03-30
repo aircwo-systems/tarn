@@ -137,10 +137,18 @@ type eventBridgeRuleSummary struct {
 }
 
 type s3BucketSummary struct {
-	Name        string    `json:"name"`
-	Objects     int       `json:"objects"`
-	TotalSize   int64     `json:"totalSize"`
-	CreatedDate time.Time `json:"createdDate"`
+	Name           string                  `json:"name"`
+	Objects        int                     `json:"objects"`
+	TotalSize      int64                   `json:"totalSize"`
+	CreatedDate    time.Time               `json:"createdDate"`
+	PreviewObjects []s3BucketObjectPreview `json:"previewObjects,omitempty"`
+}
+
+type s3BucketObjectPreview struct {
+	Key          string    `json:"key"`
+	Size         int64     `json:"size"`
+	LastModified time.Time `json:"lastModified"`
+	ContentType  string    `json:"contentType"`
 }
 
 type routeDetailSummary struct {
@@ -898,10 +906,11 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 
 	for _, b := range buckets {
 		resp.Buckets = append(resp.Buckets, s3BucketSummary{
-			Name:        b.Name,
-			Objects:     h.s3.ObjectCount(b.Name),
-			TotalSize:   h.s3.TotalSize(b.Name),
-			CreatedDate: b.CreationDate,
+			Name:           b.Name,
+			Objects:        h.s3.ObjectCount(b.Name),
+			TotalSize:      h.s3.TotalSize(b.Name),
+			CreatedDate:    b.CreationDate,
+			PreviewObjects: h.bucketPreviewObjects(b.Name, 12),
 		})
 	}
 	sort.Slice(resp.Buckets, func(i, j int) bool { return resp.Buckets[i].Name < resp.Buckets[j].Name })
@@ -921,6 +930,36 @@ func (h *Handler) recentTraces() []*tracesvc.Trace {
 		return nil
 	}
 	return t
+}
+
+func (h *Handler) bucketPreviewObjects(bucket string, limit int) []s3BucketObjectPreview {
+	if h.s3 == nil || limit <= 0 {
+		return nil
+	}
+
+	result, err := h.s3.ListObjects(bucket, "", "", "", 1_000_000)
+	if err != nil || result == nil || len(result.Contents) == 0 {
+		return nil
+	}
+
+	objects := append([]types.Object(nil), result.Contents...)
+	sort.Slice(objects, func(i, j int) bool {
+		return objects[i].LastModified.After(objects[j].LastModified)
+	})
+	if len(objects) > limit {
+		objects = objects[:limit]
+	}
+
+	previews := make([]s3BucketObjectPreview, 0, len(objects))
+	for _, object := range objects {
+		previews = append(previews, s3BucketObjectPreview{
+			Key:          object.Key,
+			Size:         object.Size,
+			LastModified: object.LastModified,
+			ContentType:  object.ContentType,
+		})
+	}
+	return previews
 }
 
 // SecretValue returns a single secret value by secret name.

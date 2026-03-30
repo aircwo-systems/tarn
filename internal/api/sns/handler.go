@@ -28,6 +28,7 @@ var supportedActions = map[string]struct{}{
 	"GetSubscriptionAttributes": {},
 	"SetSubscriptionAttributes": {},
 	"Publish":                   {},
+	"PublishBatch":              {},
 	"TagResource":               {},
 	"UntagResource":             {},
 	"ListTagsForResource":       {},
@@ -91,6 +92,8 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		h.setSubscriptionAttributes(w, r)
 	case "Publish":
 		h.publish(w, r)
+	case "PublishBatch":
+		h.publishBatch(w, r)
 	case "TagResource":
 		h.tagResource(w, r)
 	case "UntagResource":
@@ -334,6 +337,53 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := fmt.Sprintf(`<PublishResponse xmlns="%s"><PublishResult><MessageId>%s</MessageId></PublishResult><ResponseMetadata><RequestId>%s</RequestId></ResponseMetadata></PublishResponse>`, xmlNS, xmlEscape(out.MessageID), requestID())
+	writeXML(w, http.StatusOK, body)
+}
+
+func (h *Handler) publishBatch(w http.ResponseWriter, r *http.Request) {
+	topicArn := strings.TrimSpace(r.FormValue("TopicArn"))
+	if topicArn == "" {
+		writeError(w, http.StatusBadRequest, "InvalidParameter", "TopicArn is required")
+		return
+	}
+
+	type batchEntry struct {
+		id      string
+		message string
+	}
+	var entries []batchEntry
+	for i := 1; i <= 100; i++ {
+		id := strings.TrimSpace(r.FormValue(fmt.Sprintf("PublishBatchRequestEntries.member.%d.Id", i)))
+		if id == "" {
+			break
+		}
+		msg := r.FormValue(fmt.Sprintf("PublishBatchRequestEntries.member.%d.Message", i))
+		entries = append(entries, batchEntry{id: id, message: msg})
+	}
+
+	if len(entries) == 0 {
+		writeError(w, http.StatusBadRequest, "InvalidParameter", "At least one entry is required")
+		return
+	}
+
+	var successful strings.Builder
+	var failed strings.Builder
+	for _, entry := range entries {
+		out, err := h.svc.Publish(r.Context(), snssvc.PublishInput{
+			TopicArn: topicArn,
+			Message:  entry.message,
+		})
+		if err != nil {
+			fmt.Fprintf(&failed, `<member><Id>%s</Id><Code>InternalError</Code><Message>%s</Message><SenderFault>false</SenderFault></member>`,
+				xmlEscape(entry.id), xmlEscape(err.Error()))
+			continue
+		}
+		fmt.Fprintf(&successful, `<member><Id>%s</Id><MessageId>%s</MessageId></member>`,
+			xmlEscape(entry.id), xmlEscape(out.MessageID))
+	}
+
+	body := fmt.Sprintf(`<PublishBatchResponse xmlns="%s"><PublishBatchResult><Successful>%s</Successful><Failed>%s</Failed></PublishBatchResult><ResponseMetadata><RequestId>%s</RequestId></ResponseMetadata></PublishBatchResponse>`,
+		xmlNS, successful.String(), failed.String(), requestID())
 	writeXML(w, http.StatusOK, body)
 }
 

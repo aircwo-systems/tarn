@@ -15,8 +15,12 @@ Deploy and invoke serverless functions in Tarn.
 | UpdateFunctionCode | Supported | |
 | UpdateFunctionConfiguration | Supported | Timeout, memory, environment |
 | Invoke | Supported | Sync and async, with payloads |
-| PublishVersion | Not yet supported | |
-| CreateAlias | Not yet supported | |
+| PublishVersion | Supported | Creates a numbered version from $LATEST |
+| CreateAlias | Supported | |
+| GetAlias | Supported | |
+| ListAliases | Supported | |
+| UpdateAlias | Supported | |
+| DeleteAlias | Supported | |
 | PublishLayerVersion | Supported | For shared code |
 | GetLayerVersion | Supported | |
 | ListLayerVersions | Supported | |
