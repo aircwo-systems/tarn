@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -236,13 +237,33 @@ func (h *Handler) listBuckets(w http.ResponseWriter, _ *http.Request) {
 	writeXML(w, http.StatusOK, resp)
 }
 
-func (h *Handler) createBucket(w http.ResponseWriter, _ *http.Request, bucket string) {
-	_, err := h.svc.CreateBucket(bucket)
+func (h *Handler) createBucket(w http.ResponseWriter, r *http.Request, bucket string) {
+	// Determine the bucket region from the request body or signing headers.
+	region := ""
+	body, _ := io.ReadAll(r.Body)
+	if len(body) > 0 {
+		var cfg struct {
+			XMLName            xml.Name `xml:"CreateBucketConfiguration"`
+			LocationConstraint string   `xml:"LocationConstraint"`
+		}
+		if err := xml.Unmarshal(body, &cfg); err == nil && cfg.LocationConstraint != "" {
+			// AWS rejects explicit us-east-1 LocationConstraint.
+			if cfg.LocationConstraint == "us-east-1" {
+				writeS3Error(w, http.StatusBadRequest, "InvalidLocationConstraint", "The specified location-constraint is not valid")
+				return
+			}
+			region = cfg.LocationConstraint
+		}
+	}
+	if region == "" {
+		region = signingRegion(r)
+	}
+
+	_, err := h.svc.CreateBucketInRegion(bucket, region)
 	if err != nil {
 		msg := err.Error()
 		switch {
 		case strings.Contains(msg, "BucketAlreadyOwnedByYou"):
-			// Matches real AWS us-east-1 behaviour: re-creating a bucket you own is a no-op 200.
 			w.Header().Set("Location", "/"+bucket)
 			w.WriteHeader(http.StatusOK)
 		case strings.Contains(msg, "InvalidBucketName"):
@@ -260,6 +281,9 @@ func (h *Handler) headBucket(w http.ResponseWriter, _ *http.Request, bucket stri
 	if err := h.svc.HeadBucket(bucket); err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
+	}
+	if region, err := h.svc.GetBucketRegion(bucket); err == nil && region != "" {
+		w.Header().Set("x-amz-bucket-region", region)
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -281,7 +305,8 @@ func (h *Handler) deleteBucket(w http.ResponseWriter, _ *http.Request, bucket st
 }
 
 func (h *Handler) getBucketLocation(w http.ResponseWriter, _ *http.Request, bucket string) {
-	if err := h.svc.HeadBucket(bucket); err != nil {
+	region, err := h.svc.GetBucketRegion(bucket)
+	if err != nil {
 		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
 		return
 	}
@@ -290,7 +315,7 @@ func (h *Handler) getBucketLocation(w http.ResponseWriter, _ *http.Request, buck
 		Xmlns    string   `xml:"xmlns,attr"`
 		Location string   `xml:",chardata"`
 	}
-	writeXML(w, http.StatusOK, locationResponse{Xmlns: s3Namespace, Location: "us-east-1"})
+	writeXML(w, http.StatusOK, locationResponse{Xmlns: s3Namespace, Location: region})
 }
 
 func (h *Handler) getBucketVersioning(w http.ResponseWriter, _ *http.Request, bucket string) {
@@ -687,12 +712,15 @@ func (h *Handler) deleteObjects(w http.ResponseWriter, r *http.Request, bucket s
 }
 
 func (h *Handler) copyObject(w http.ResponseWriter, _ *http.Request, dstBucket, dstKey, copySource string) {
-	// Parse x-amz-copy-source: /bucket/key
+	// Parse x-amz-copy-source: /bucket/key (key may be URL-encoded)
 	copySource = strings.TrimPrefix(copySource, "/")
 	srcBucket, srcKey, ok := strings.Cut(copySource, "/")
 	if !ok || srcBucket == "" || srcKey == "" {
 		writeS3Error(w, http.StatusBadRequest, "InvalidArgument", "Invalid x-amz-copy-source header")
 		return
+	}
+	if decoded, err := url.PathUnescape(srcKey); err == nil {
+		srcKey = decoded
 	}
 
 	obj, err := h.svc.CopyObject(srcBucket, srcKey, dstBucket, dstKey)
@@ -1014,6 +1042,23 @@ func writeXML(w http.ResponseWriter, status int, v interface{}) {
 	w.WriteHeader(status)
 	w.Write([]byte(xml.Header))
 	xml.NewEncoder(w).Encode(v)
+}
+
+// signingRegion extracts the AWS region from the Authorization header credential scope.
+func signingRegion(r *http.Request) string {
+	auth := r.Header.Get("Authorization")
+	if idx := strings.Index(auth, "Credential="); idx >= 0 {
+		cred := auth[idx+len("Credential="):]
+		if end := strings.IndexByte(cred, ','); end >= 0 {
+			cred = cred[:end]
+		}
+		// Credential=AKID/date/region/service/aws4_request
+		parts := strings.Split(cred, "/")
+		if len(parts) >= 3 {
+			return parts[2]
+		}
+	}
+	return ""
 }
 
 func writeS3Error(w http.ResponseWriter, status int, code, message string) {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
@@ -22,6 +23,16 @@ type s3Getter interface {
 	GetObject(bucket, key string) (*types.Object, io.ReadCloser, error)
 }
 
+// aliasConfig holds an in-memory Lambda alias.
+type aliasConfig struct {
+	Name            string `json:"Name"`
+	FunctionName    string `json:"FunctionName"`
+	FunctionVersion string `json:"FunctionVersion"`
+	Description     string `json:"Description,omitempty"`
+	AliasArn        string `json:"AliasArn"`
+	RevisionId      string `json:"RevisionId"`
+}
+
 // Handler implements HTTP handlers for the Lambda API.
 type Handler struct {
 	svc        *lambdasvc.Service
@@ -30,6 +41,12 @@ type Handler struct {
 	collector  *tracesvc.Collector
 	mu         sync.Mutex
 	policies   map[string]map[string]policyStatement
+	// Version publishing: function name → next version counter
+	versionSeq map[string]int
+	// Published versions: function name → version string → config snapshot
+	versions map[string]map[string]map[string]any
+	// Aliases: function name → alias name → alias config
+	aliases map[string]map[string]*aliasConfig
 }
 
 type policyStatement struct {
@@ -43,9 +60,12 @@ type policyStatement struct {
 // NewHandler creates a new Lambda API handler.
 func NewHandler(svc *lambdasvc.Service, s3 s3Getter) *Handler {
 	return &Handler{
-		svc:      svc,
-		s3:       s3,
-		policies: make(map[string]map[string]policyStatement),
+		svc:        svc,
+		s3:         s3,
+		policies:   make(map[string]map[string]policyStatement),
+		versionSeq: make(map[string]int),
+		versions:   make(map[string]map[string]map[string]any),
+		aliases:    make(map[string]map[string]*aliasConfig),
 	}
 }
 
@@ -181,6 +201,39 @@ func (h *Handler) ListVersionsByFunction(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"Versions": []map[string]any{toFunctionConfigResponse(fn)},
 	})
+}
+
+// PublishVersion handles POST /2015-03-31/functions/{name}/versions
+func (h *Handler) PublishVersion(w http.ResponseWriter, r *http.Request) {
+	name := normalizeFunctionName(r.PathValue("name"))
+	fn, err := h.svc.GetFunction(name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
+		return
+	}
+
+	var req struct {
+		Description string `json:"Description,omitempty"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	h.mu.Lock()
+	h.versionSeq[name]++
+	ver := strconv.Itoa(h.versionSeq[name])
+
+	resp := toFunctionConfigResponse(fn)
+	resp["Version"] = ver
+	if req.Description != "" {
+		resp["Description"] = req.Description
+	}
+
+	if h.versions[name] == nil {
+		h.versions[name] = make(map[string]map[string]any)
+	}
+	h.versions[name][ver] = resp
+	h.mu.Unlock()
+
+	writeJSON(w, http.StatusCreated, resp)
 }
 
 // ListFunctions handles GET /2015-03-31/functions
@@ -358,6 +411,146 @@ func (h *Handler) PutFunctionConcurrency(w http.ResponseWriter, r *http.Request)
 
 // DeleteFunctionConcurrency handles DELETE /2017-10-31/functions/{name}/concurrency.
 func (h *Handler) DeleteFunctionConcurrency(w http.ResponseWriter, _ *http.Request) {
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// CreateAlias handles POST /2015-03-31/functions/{name}/aliases
+func (h *Handler) CreateAlias(w http.ResponseWriter, r *http.Request) {
+	name := normalizeFunctionName(r.PathValue("name"))
+	fn, err := h.svc.GetFunction(name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
+		return
+	}
+
+	var req struct {
+		Name            string `json:"Name"`
+		FunctionVersion string `json:"FunctionVersion"`
+		Description     string `json:"Description,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Invalid request body")
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Alias name is required")
+		return
+	}
+
+	h.mu.Lock()
+	if h.aliases[name] == nil {
+		h.aliases[name] = make(map[string]*aliasConfig)
+	}
+	if _, exists := h.aliases[name][req.Name]; exists {
+		h.mu.Unlock()
+		writeError(w, http.StatusConflict, "ResourceConflictException", "Alias already exists: "+req.Name)
+		return
+	}
+	alias := &aliasConfig{
+		Name:            req.Name,
+		FunctionName:    name,
+		FunctionVersion: req.FunctionVersion,
+		Description:     req.Description,
+		AliasArn:        fn.FunctionArn + ":" + req.Name,
+		RevisionId:      uuid.NewString(),
+	}
+	h.aliases[name][req.Name] = alias
+	h.mu.Unlock()
+
+	writeJSON(w, http.StatusCreated, alias)
+}
+
+// GetAlias handles GET /2015-03-31/functions/{name}/aliases/{aliasName}
+func (h *Handler) GetAlias(w http.ResponseWriter, r *http.Request) {
+	name := normalizeFunctionName(r.PathValue("name"))
+	aliasName := r.PathValue("aliasName")
+
+	if _, err := h.svc.GetFunction(name); err != nil {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
+		return
+	}
+
+	h.mu.Lock()
+	alias := h.aliases[name][aliasName]
+	h.mu.Unlock()
+
+	if alias == nil {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Alias not found: "+aliasName)
+		return
+	}
+	writeJSON(w, http.StatusOK, alias)
+}
+
+// ListAliases handles GET /2015-03-31/functions/{name}/aliases
+func (h *Handler) ListAliases(w http.ResponseWriter, r *http.Request) {
+	name := normalizeFunctionName(r.PathValue("name"))
+	if _, err := h.svc.GetFunction(name); err != nil {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
+		return
+	}
+
+	h.mu.Lock()
+	fnAliases := h.aliases[name]
+	result := make([]*aliasConfig, 0, len(fnAliases))
+	for _, a := range fnAliases {
+		result = append(result, a)
+	}
+	h.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, map[string]any{"Aliases": result})
+}
+
+// UpdateAlias handles PUT /2015-03-31/functions/{name}/aliases/{aliasName}
+func (h *Handler) UpdateAlias(w http.ResponseWriter, r *http.Request) {
+	name := normalizeFunctionName(r.PathValue("name"))
+	aliasName := r.PathValue("aliasName")
+
+	if _, err := h.svc.GetFunction(name); err != nil {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
+		return
+	}
+
+	var req struct {
+		FunctionVersion string `json:"FunctionVersion,omitempty"`
+		Description     string `json:"Description,omitempty"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&req)
+
+	h.mu.Lock()
+	alias := h.aliases[name][aliasName]
+	if alias == nil {
+		h.mu.Unlock()
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Alias not found: "+aliasName)
+		return
+	}
+	if req.FunctionVersion != "" {
+		alias.FunctionVersion = req.FunctionVersion
+	}
+	if req.Description != "" {
+		alias.Description = req.Description
+	}
+	alias.RevisionId = uuid.NewString()
+	h.mu.Unlock()
+
+	writeJSON(w, http.StatusOK, alias)
+}
+
+// DeleteAlias handles DELETE /2015-03-31/functions/{name}/aliases/{aliasName}
+func (h *Handler) DeleteAlias(w http.ResponseWriter, r *http.Request) {
+	name := normalizeFunctionName(r.PathValue("name"))
+	aliasName := r.PathValue("aliasName")
+
+	if _, err := h.svc.GetFunction(name); err != nil {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
+		return
+	}
+
+	h.mu.Lock()
+	if fnAliases, ok := h.aliases[name]; ok {
+		delete(fnAliases, aliasName)
+	}
+	h.mu.Unlock()
+
 	w.WriteHeader(http.StatusNoContent)
 }
 

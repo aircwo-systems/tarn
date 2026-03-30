@@ -26,6 +26,7 @@ Unknown SNS actions return empty success responses, so production `.tf` files wo
 | `GetSubscriptionAttributes` | Get subscription configuration | Full |
 | `SetSubscriptionAttributes` | Update subscription attributes | Full |
 | `Publish` | Publish a message to a topic | Full |
+| `PublishBatch` | Publish up to 10 messages in a single call | Full |
 | `TagResource` | Add tags to a topic | Full |
 | `UntagResource` | Remove tags from a topic | Full |
 | `ListTagsForResource` | List tags on a topic | Full |
