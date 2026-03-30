@@ -145,6 +145,11 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 	}
 
 	messageID := uuid.NewString()
+	correlationID := correlationIDFromSNSAttributes(input.MessageAttributes)
+	if correlationID == "" {
+		correlationID = messageID
+	}
+	messageAttrs := withCorrelationSNSAttributes(input.MessageAttributes, correlationID)
 	spans := make([]tracesvc.Span, 0, len(subs)+1)
 	topicStart := time.Now()
 
@@ -179,9 +184,9 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 				}
 				body = envelope
 			}
-			if _, sendErr := s.sqs.SendMessage(queueName, body, 0, nil, "", ""); sendErr != nil {
-				status = "error"
-			}
+				if _, sendErr := s.sqs.SendMessage(queueName, body, 0, snsToSQSMessageAttributes(messageAttrs), "", ""); sendErr != nil {
+					status = "error"
+				}
 
 		case "lambda":
 			if s.lambda == nil {
@@ -189,7 +194,7 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 				break
 			}
 			fnName := lambdaNameFromEndpoint(sub.Endpoint)
-			payload, payloadErr := buildLambdaEnvelope(topic.TopicArn, sub.SubscriptionArn, messageID, input)
+			payload, payloadErr := buildLambdaEnvelope(topic.TopicArn, sub.SubscriptionArn, messageID, input, correlationID)
 			if payloadErr != nil {
 				status = "error"
 				break
@@ -242,13 +247,14 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 			}
 		}
 		s.traceStore.Add(&tracesvc.Trace{
-			ID:         messageID[:8],
-			StartedAt:  topicStart,
-			DurationMs: time.Since(topicStart).Milliseconds(),
-			Status:     overallStatus,
-			Method:     "POST",
-			Path:       "/",
-			Spans:      spans,
+			ID:            messageID[:8],
+			CorrelationID: correlationID,
+			StartedAt:     topicStart,
+			DurationMs:    time.Since(topicStart).Milliseconds(),
+			Status:        overallStatus,
+			Method:        "POST",
+			Path:          "/",
+			Spans:         spans,
 		})
 	}
 
@@ -317,8 +323,10 @@ func buildSQSEnvelope(topicArn, subscriptionArn, messageID string, input Publish
 	return string(data), nil
 }
 
-func buildLambdaEnvelope(topicArn, subscriptionArn, messageID string, input PublishInput) ([]byte, error) {
+func buildLambdaEnvelope(topicArn, subscriptionArn, messageID string, input PublishInput, correlationID string) ([]byte, error) {
+	attrs := withCorrelationSNSAttributes(input.MessageAttributes, correlationID)
 	event := map[string]any{
+		"correlationId": correlationID,
 		"Records": []map[string]any{
 			{
 				"EventSource":          "aws:sns",
@@ -331,12 +339,57 @@ func buildLambdaEnvelope(topicArn, subscriptionArn, messageID string, input Publ
 					"Subject":           input.Subject,
 					"Message":           input.Message,
 					"Timestamp":         time.Now().UTC().Format(time.RFC3339Nano),
-					"MessageAttributes": mapMessageAttributes(input.MessageAttributes),
+					"MessageAttributes": mapMessageAttributes(attrs),
 				},
 			},
 		},
 	}
 	return json.Marshal(event)
+}
+
+func withCorrelationSNSAttributes(
+	attrs map[string]types.SNSMessageAttribute,
+	correlationID string,
+) map[string]types.SNSMessageAttribute {
+	out := make(map[string]types.SNSMessageAttribute, len(attrs)+1)
+	for key, value := range attrs {
+		out[key] = value
+	}
+	if correlationID != "" {
+		if _, exists := out["correlationId"]; !exists {
+			out["correlationId"] = types.SNSMessageAttribute{
+				DataType:    "String",
+				StringValue: correlationID,
+			}
+		}
+	}
+	return out
+}
+
+func correlationIDFromSNSAttributes(attrs map[string]types.SNSMessageAttribute) string {
+	for _, key := range []string{"correlationId", "CorrelationId", "x-correlation-id"} {
+		if attr, ok := attrs[key]; ok && strings.TrimSpace(attr.StringValue) != "" {
+			return strings.TrimSpace(attr.StringValue)
+		}
+	}
+	return ""
+}
+
+func snsToSQSMessageAttributes(
+	attrs map[string]types.SNSMessageAttribute,
+) map[string]*types.MessageAttribute {
+	if len(attrs) == 0 {
+		return nil
+	}
+	out := make(map[string]*types.MessageAttribute, len(attrs))
+	for key, value := range attrs {
+		out[key] = &types.MessageAttribute{
+			DataType:    value.DataType,
+			StringValue: value.StringValue,
+			BinaryValue: []byte(value.BinaryValue),
+		}
+	}
+	return out
 }
 
 func mapMessageAttributes(attrs map[string]types.SNSMessageAttribute) map[string]map[string]string {

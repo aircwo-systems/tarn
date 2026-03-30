@@ -524,7 +524,11 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 			} else if out != nil {
 				status = out.StatusCode
 			}
-			s.recordTrace(input, traceStart, status, []tracesvc.Span{
+			correlationID := tracesvc.CorrelationIDFromHeaders(input.Headers)
+			if correlationID == "" {
+				correlationID = tracesvc.NewCorrelationID()
+			}
+			s.recordTrace(input, traceStart, correlationID, status, []tracesvc.Span{
 				{Kind: "queue", Name: integration.SQSQueueName, DurationMs: time.Since(sqsStart).Milliseconds(), Status: spanStatus},
 			})
 		}
@@ -533,7 +537,12 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 		// AWS_PROXY — Lambda
 	}
 
-	eventPayload, err := buildLambdaProxyEvent(input, matched, pathParams)
+	correlationID := tracesvc.CorrelationIDFromHeaders(input.Headers)
+	if correlationID == "" {
+		correlationID = tracesvc.NewCorrelationID()
+	}
+
+	eventPayload, err := buildLambdaProxyEvent(input, matched, pathParams, correlationID)
 	if err != nil {
 		return nil, err
 	}
@@ -564,7 +573,7 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 				subSpans = tracesvc.SubSpansToSpans(s.collector.CollectWithFlush(integration.LambdaFunctionName))
 			}
 			if s.traceStore != nil {
-				s.recordTrace(input, traceStart, 500, append([]tracesvc.Span{
+				s.recordTrace(input, traceStart, correlationID, 500, append([]tracesvc.Span{
 					{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: time.Since(lambdaStart).Milliseconds(), Status: "error"},
 				}, subSpans...))
 			}
@@ -580,7 +589,7 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 	out, mapErr := mapLambdaProxyResponse(invokeOut.Payload)
 	if mapErr != nil {
 		if s.traceStore != nil {
-			s.recordTrace(input, traceStart, 500, append([]tracesvc.Span{
+			s.recordTrace(input, traceStart, correlationID, 500, append([]tracesvc.Span{
 				{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: lambdaDurationMs, Status: "error"},
 			}, subSpans...))
 		}
@@ -594,7 +603,7 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 		} else if out.StatusCode >= 400 {
 			spanStatus = "client_error"
 		}
-		s.recordTrace(input, traceStart, out.StatusCode, append([]tracesvc.Span{
+		s.recordTrace(input, traceStart, correlationID, out.StatusCode, append([]tracesvc.Span{
 			{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: lambdaDurationMs, Status: spanStatus},
 		}, subSpans...))
 	}
@@ -603,22 +612,23 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 }
 
 // recordTrace stores a completed trace in the trace store.
-func (s *Service) recordTrace(input *InvokeInput, start time.Time, status int, spans []tracesvc.Span) {
+func (s *Service) recordTrace(input *InvokeInput, start time.Time, correlationID string, status int, spans []tracesvc.Span) {
 	api, _ := s.store.GetAPI(input.APIID)
 	gwName := input.APIID
 	if api != nil {
 		gwName = api.Name
 	}
 	s.traceStore.Add(&tracesvc.Trace{
-		ID:          uuid.NewString()[:8],
-		StartedAt:   start,
-		DurationMs:  time.Since(start).Milliseconds(),
-		Status:      status,
-		Method:      strings.ToUpper(input.Method),
-		Path:        input.Path,
-		GatewayID:   input.APIID,
-		GatewayName: gwName,
-		Spans:       spans,
+		ID:            uuid.NewString()[:8],
+		CorrelationID: correlationID,
+		StartedAt:     start,
+		DurationMs:    time.Since(start).Milliseconds(),
+		Status:        status,
+		Method:        strings.ToUpper(input.Method),
+		Path:          input.Path,
+		GatewayID:     input.APIID,
+		GatewayName:   gwName,
+		Spans:         spans,
 	})
 }
 
@@ -697,7 +707,7 @@ func mapLambdaProxyResponse(payload []byte) (*InvokeOutput, error) {
 	}, nil
 }
 
-func buildLambdaProxyEvent(input *InvokeInput, route *types.APIGatewayRoute, pathParams map[string]string) ([]byte, error) {
+func buildLambdaProxyEvent(input *InvokeInput, route *types.APIGatewayRoute, pathParams map[string]string, correlationID string) ([]byte, error) {
 	query := map[string]string{}
 	for key, values := range input.Query {
 		if len(values) > 0 {
@@ -711,6 +721,11 @@ func buildLambdaProxyEvent(input *InvokeInput, route *types.APIGatewayRoute, pat
 			continue
 		}
 		headers[strings.ToLower(key)] = values[0]
+	}
+	if correlationID != "" {
+		if _, ok := headers["x-correlation-id"]; !ok {
+			headers["x-correlation-id"] = correlationID
+		}
 	}
 
 	body := ""
@@ -733,14 +748,17 @@ func buildLambdaProxyEvent(input *InvokeInput, route *types.APIGatewayRoute, pat
 		"queryStringParameters": query,
 		"isBase64Encoded":       isBase64,
 		"requestContext": map[string]any{
-			"apiId":    input.APIID,
-			"routeKey": route.RouteKey,
-			"stage":    input.Stage,
+			"apiId":         input.APIID,
+			"routeKey":      route.RouteKey,
+			"stage":         input.Stage,
+			"requestId":     correlationID,
+			"correlationId": correlationID,
 			"http": map[string]any{
 				"method": strings.ToUpper(input.Method),
 				"path":   normalizePath(input.Path),
 			},
 		},
+		"correlationId": correlationID,
 	}
 	if body != "" {
 		event["body"] = body

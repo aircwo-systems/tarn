@@ -46,6 +46,7 @@ export interface TraceSpan {
 
 export interface RequestTrace {
   id: string;
+  correlationId?: string;
   startedAt: string;
   durationMs: number;
   status: number;
@@ -285,6 +286,14 @@ export interface BucketSummary {
   objects: number;
   totalSize: number;
   createdDate: string;
+  previewObjects?: BucketObjectPreview[];
+}
+
+export interface BucketObjectPreview {
+  key: string;
+  size: number;
+  lastModified: string;
+  contentType: string;
 }
 
 export interface EventSourceMappingSummary {

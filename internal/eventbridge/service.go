@@ -628,7 +628,11 @@ func (s *Service) fireRule(ruleName string, scheduled bool, sessionMeta map[stri
 	}
 
 	started := time.Now().UTC()
-	eventPayload := buildScheduledEventPayload(rule, started, sessionMeta)
+	correlationID := tracesvc.CorrelationIDFromMap(sessionMeta)
+	if correlationID == "" {
+		correlationID = tracesvc.NewCorrelationID()
+	}
+	eventPayload := buildScheduledEventPayload(rule, started, sessionMeta, correlationID)
 
 	result := &FireResult{
 		RuleName: rule.Name,
@@ -645,6 +649,7 @@ func (s *Service) fireRule(ruleName string, scheduled bool, sessionMeta map[stri
 	for k, v := range sessionMeta {
 		eventbridgeMeta[k] = v
 	}
+	eventbridgeMeta["correlationId"] = correlationID
 	spans = append(spans, tracesvc.Span{Kind: "eventbridge", Name: rule.Name, Status: "ok", Meta: eventbridgeMeta})
 
 	for i := range rule.Targets {
@@ -748,13 +753,14 @@ func (s *Service) fireRule(ruleName string, scheduled bool, sessionMeta map[stri
 			status = 500
 		}
 		s.traceStore.Add(&tracesvc.Trace{
-			ID:         traceID,
-			StartedAt:  started,
-			DurationMs: time.Since(started).Milliseconds(),
-			Status:     status,
-			Method:     "EVENTBRIDGE",
-			Path:       "/rules/" + rule.Name,
-			Spans:      spans,
+			ID:            traceID,
+			CorrelationID: correlationID,
+			StartedAt:     started,
+			DurationMs:    time.Since(started).Milliseconds(),
+			Status:        status,
+			Method:        "EVENTBRIDGE",
+			Path:          "/rules/" + rule.Name,
+			Spans:         spans,
 		})
 	}
 
@@ -925,10 +931,19 @@ func lambdaNameFromTarget(arn string) (string, error) {
 	return tail, nil
 }
 
-func buildScheduledEventPayload(rule *types.EventBridgeRule, at time.Time, sessionMeta map[string]string) []byte {
+func buildScheduledEventPayload(rule *types.EventBridgeRule, at time.Time, sessionMeta map[string]string, correlationID string) []byte {
 	detail := map[string]any{}
 	if len(sessionMeta) > 0 {
-		detail["tarn"] = sessionMeta
+		tarnMeta := make(map[string]string, len(sessionMeta)+1)
+		for key, value := range sessionMeta {
+			tarnMeta[key] = value
+		}
+		if correlationID != "" {
+			tarnMeta["correlationId"] = correlationID
+		}
+		detail["tarn"] = tarnMeta
+	} else if correlationID != "" {
+		detail["tarn"] = map[string]string{"correlationId": correlationID}
 	}
 	ruleARN := ""
 	account := "000000000000"
@@ -948,6 +963,7 @@ func buildScheduledEventPayload(rule *types.EventBridgeRule, at time.Time, sessi
 		"region":      region,
 		"resources":   []string{ruleARN},
 		"detail":      detail,
+		"correlationId": correlationID,
 	}
 	body, _ := json.Marshal(payload)
 	return body
