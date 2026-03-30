@@ -3,7 +3,7 @@
 Get Tarn up and running on your system.
 
 ::: info Distribution Roadmap
-The current release is `v0.0.10-beta`.
+The current release is <DocsVersionCode />.
 
 Prebuilt Docker images, a Homebrew tap, and a one-line installer script are planned for future releases. For now, the primary install paths are release binaries or building Tarn from source.
 
@@ -14,29 +14,7 @@ See the [project roadmap](https://github.com/aircwo-systems/tarn/blob/develop-do
 
 Download the pre-built binary for your platform:
 
-::: code-group
-
-```bash [macOS Silicon]
-curl -L https://github.com/aircwo-systems/tarn/releases/download/v0.0.10-beta/tarn-darwin-arm64.tar.gz \
-  | tar xz
-```
-
-```bash [macOS Intel]
-curl -L https://github.com/aircwo-systems/tarn/releases/download/v0.0.10-beta/tarn-darwin-amd64.tar.gz \
-  | tar xz
-```
-
-```bash [Linux]
-curl -L https://github.com/aircwo-systems/tarn/releases/download/v0.0.10-beta/tarn-linux-amd64.tar.gz \
-  | tar xz
-```
-
-```powershell [Windows]
-Invoke-WebRequest -Uri "https://github.com/aircwo-systems/tarn/releases/download/v0.0.10-beta/tarn-windows-amd64.zip" -OutFile tarn.zip
-Expand-Archive tarn.zip -DestinationPath .
-```
-
-:::
+<ReleaseDownloadTabs />
 
 ## From Source
 
@@ -94,10 +72,11 @@ Check that Tarn is working:
 
 ```bash
 ./tarn version
-
-# Release binary output: tarn v0.0.10-beta
-# Source builds may report the repository development version instead.
 ```
+
+Release binary output: `tarn <DocsVersionCode />`
+
+Source builds may report the repository development version instead.
 
 ## Optional: Install `awslocal`
 
