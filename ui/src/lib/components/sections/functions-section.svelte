@@ -1,15 +1,32 @@
 <script lang="ts">
   import { LightningIcon } from "phosphor-svelte";
-  import { TableRow, TableCell } from "$lib/components/ui/table";
-  import Badge from "$lib/components/ui/badge/badge.svelte";
-  import ResourceTable from "$lib/components/common/resource-table.svelte";
+  import {
+    Table,
+    TableHeader,
+    TableBody,
+    TableRow,
+    TableHead,
+    TableCell,
+  } from "$lib/components/ui/table";
+  import { Skeleton } from "$lib/components/ui/skeleton";
+  import LedDot from "$lib/components/common/led-dot.svelte";
   import ArnCell from "$lib/components/common/arn-cell.svelte";
+  import EmptyState from "$lib/components/common/empty-state.svelte";
+  import SectionHeader from "./section-header.svelte";
   import {
     getDashboard,
     getDashboardFilters,
     matchesTagFilter,
   } from "$lib/state.svelte";
   import { formatBytes, formatDate } from "$lib/utils";
+
+  let {
+    sidebarCollapsed = false,
+    onToggleSidebar = () => {},
+  }: {
+    sidebarCollapsed?: boolean;
+    onToggleSidebar?: () => void;
+  } = $props();
 
   const dashboard = getDashboard();
   const filters = getDashboardFilters();
@@ -19,60 +36,131 @@
     ),
   );
 
-  function stateBadgeVariant(state: string) {
-    const s = state.toLowerCase();
-    if (s === "active") return "default" as const;
-    if (s === "pending") return "amber" as const;
-    if (s === "failed" || s === "inactive") return "destructive" as const;
-    return "outline" as const;
+  const activeFunctions = $derived(
+    functions.filter((fn) => fn.state.toLowerCase() === "active").length,
+  );
+  const runtimeCount = $derived(new Set(functions.map((fn) => fn.runtime)).size);
+  const totalMessagesProcessed = $derived(
+    functions.reduce((total, fn) => total + fn.messagesProcessed, 0),
+  );
+
+  const numberFormatter = new Intl.NumberFormat("en-GB");
+
+  function stateColor(state: string): "green" | "amber" | "red" | "gray" {
+    const normalized = state.toLowerCase();
+    if (normalized === "active") return "green";
+    if (normalized === "pending") return "amber";
+    if (normalized === "failed" || normalized === "inactive") return "red";
+    return "gray";
   }
 </script>
 
-<ResourceTable
-  title="Lambda Functions"
-  count={functions.length}
-  loading={dashboard.loading && !dashboard.data}
-  empty={functions.length === 0}
-  emptyMessage="No functions created yet."
-  emptyIcon={LightningIcon}
-  columns={[
-    "Name",
-    "Runtime",
-    "State",
-    "Messages Processed",
-    "Memory",
-    "Timeout",
-    "Code",
-    "Layers",
-    "Tags",
-    "Updated",
-  ]}
->
-  {#each functions as fn}
-    <TableRow>
-      <TableCell><ArnCell name={fn.name} arn={fn.arn} /></TableCell>
-      <TableCell><Badge variant="secondary">{fn.runtime}</Badge></TableCell>
-      <TableCell
-        ><Badge variant={stateBadgeVariant(fn.state)}>{fn.state}</Badge
-        ></TableCell
-      >
-      <TableCell class="font-mono text-muted-foreground"
-        >{fn.messagesProcessed}</TableCell
-      >
-      <TableCell class="font-mono text-muted-foreground"
-        >{fn.memoryMB} MB</TableCell
-      >
-      <TableCell class="font-mono text-muted-foreground"
-        >{fn.timeoutSec}s</TableCell
-      >
-      <TableCell class="font-mono text-muted-foreground"
-        >{formatBytes(fn.codeSize)}</TableCell
-      >
-      <TableCell class="text-muted-foreground">{fn.layers}</TableCell>
-      <TableCell class="text-muted-foreground">{fn.tagCount}</TableCell>
-      <TableCell class="text-muted-foreground/70 text-xs"
-        >{formatDate(fn.lastModified)}</TableCell
-      >
-    </TableRow>
-  {/each}
-</ResourceTable>
+<div class="flex min-h-full flex-col gap-4">
+  <SectionHeader
+    title="Lambda functions"
+    description="Runtime, state, throughput and deployment footprint in one place."
+    icon={LightningIcon}
+    {sidebarCollapsed}
+    {onToggleSidebar}
+  >
+    {#snippet stats()}
+      <span class="inline-flex items-center gap-1.5">
+        <span class="font-mono text-foreground">{functions.length}</span>
+        <span class="text-muted-foreground/70">visible</span>
+      </span>
+      <span class="inline-flex items-center gap-1.5">
+        <LedDot color="green" />
+        <span class="font-mono text-foreground">{activeFunctions}</span>
+        <span class="text-muted-foreground/70">active</span>
+      </span>
+      <span class="inline-flex items-center gap-1.5">
+        <span class="font-mono text-foreground">{runtimeCount}</span>
+        <span class="text-muted-foreground/70">runtimes</span>
+      </span>
+      <span class="inline-flex items-center gap-1.5">
+        <span class="font-mono text-foreground">
+          {numberFormatter.format(totalMessagesProcessed)}
+        </span>
+        <span class="text-muted-foreground/70">messages processed</span>
+      </span>
+    {/snippet}
+
+    {#snippet actions()}
+      {#if filters.tagFilter}
+        <span class="text-muted-foreground/50">Filter</span>
+        <span class="truncate font-mono text-foreground/85" title={filters.tagFilter}>
+          {filters.tagFilter}
+        </span>
+      {/if}
+    {/snippet}
+  </SectionHeader>
+
+  <div class="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/70 bg-background/60">
+    {#if dashboard.loading && !dashboard.data}
+      <div class="space-y-2 p-3">
+        {#each Array(6) as _, index (index)}
+          <Skeleton class="h-11 w-full" />
+        {/each}
+      </div>
+    {:else if functions.length === 0}
+      <div class="flex h-full min-h-[18rem] items-center justify-center">
+        <EmptyState
+          message="No functions created yet."
+          icon={LightningIcon}
+        />
+      </div>
+    {:else}
+      <div class="h-full overflow-auto">
+        <Table>
+          <TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur [&_th]:bg-background/95">
+            <TableRow class="hover:bg-transparent">
+              <TableHead>Name</TableHead>
+              <TableHead>Runtime</TableHead>
+              <TableHead>State</TableHead>
+              <TableHead>Messages Processed</TableHead>
+              <TableHead>Memory</TableHead>
+              <TableHead>Timeout</TableHead>
+              <TableHead>Code</TableHead>
+              <TableHead>Layers</TableHead>
+              <TableHead>Tags</TableHead>
+              <TableHead>Updated</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {#each functions as fn}
+              <TableRow>
+                <TableCell><ArnCell name={fn.name} arn={fn.arn} /></TableCell>
+                <TableCell class="font-mono text-xs text-muted-foreground">
+                  {fn.runtime}
+                </TableCell>
+                <TableCell>
+                  <span class="inline-flex items-center gap-1.5 text-xs">
+                    <LedDot color={stateColor(fn.state)} />
+                    <span class="text-muted-foreground">{fn.state}</span>
+                  </span>
+                </TableCell>
+                <TableCell class="font-mono text-muted-foreground">
+                  {numberFormatter.format(fn.messagesProcessed)}
+                </TableCell>
+                <TableCell class="font-mono text-muted-foreground">
+                  {fn.memoryMB} MB
+                </TableCell>
+                <TableCell class="font-mono text-muted-foreground">
+                  {fn.timeoutSec}s
+                </TableCell>
+                <TableCell class="font-mono text-muted-foreground">
+                  {formatBytes(fn.codeSize)}
+                </TableCell>
+                <TableCell class="text-muted-foreground">{fn.layers}</TableCell>
+                <TableCell class="text-muted-foreground">{fn.tagCount}</TableCell>
+                <TableCell class="text-xs text-muted-foreground/70">
+                  {formatDate(fn.lastModified)}
+                </TableCell>
+              </TableRow>
+            {/each}
+          </TableBody>
+        </Table>
+      </div>
+    {/if}
+  </div>
+</div>
