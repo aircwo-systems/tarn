@@ -1,16 +1,10 @@
 <script lang="ts">
-  import * as Command from "$lib/components/ui/command/index.js";
   import {
     ArrowsInSimpleIcon,
     ArrowsOutSimpleIcon,
-    CaretDownIcon,
-    CaretUpIcon,
-    CrosshairSimpleIcon,
-    HandPalmIcon,
+    CommandIcon,
   } from "phosphor-svelte";
   import GatewayDetailsPanel from "$lib/components/topology/gateway-details-panel.svelte";
-  import Badge from "$lib/components/ui/badge/badge.svelte";
-  import Button from "$lib/components/ui/button/button.svelte";
   import {
     getDashboard,
     getDashboardFilters,
@@ -18,44 +12,76 @@
     matchesTagFilter,
   } from "$lib/state.svelte";
   import type { InfraProbe } from "$lib/types";
-  import type { InfraNodePosition } from "./topology-connection-model";
+  import type {
+    InfraNodePosition,
+    NodeOverride,
+  } from "./topology-connection-model";
+  import type { NodeSide, NodeSize } from "./topology-connection-model";
+  import { resolveTopologyNodeSize, resolveTopologyNodeView } from "./registry";
+  import { normalizeTopologyExternalKind } from "./topology-canvas-theme";
   import TopologyComponentsView from "./TopologyComponentsView.svelte";
   import TopologyConnectionView from "./TopologyConnectionView.svelte";
+  import type { NodeKind } from "./types";
 
   const dashboard = getDashboard();
   const filters = getDashboardFilters();
+  const directTopologyFilter = $derived(
+    resolveDirectTopologyFilter(filters.tagFilter),
+  );
+  const tagOnlyTopologyFilterQuery = $derived(
+    extractTagOnlyTopologyFilterQuery(filters.tagFilter),
+  );
 
   const gateways = $derived(
     (dashboard.data?.gateways ?? []).filter((gw) =>
-      matchesTagFilter(gw.tags, filters.tagFilter),
+      matchesTopologyResourceFilter("gateway", filters.tagFilter, gw.tags),
     ),
   );
   const functions = $derived(
     (dashboard.data?.functions ?? []).filter((fn) =>
-      matchesTagFilter(fn.tags, filters.tagFilter),
+      matchesTopologyResourceFilter("function", filters.tagFilter, fn.tags),
     ),
   );
   const queues = $derived(
     (dashboard.data?.queues ?? []).filter((q) =>
-      matchesTagFilter(q.tags, filters.tagFilter),
+      matchesTopologyResourceFilter("queue", filters.tagFilter, q.tags),
     ),
   );
   const topics = $derived(
     (dashboard.data?.topics ?? []).filter((t) =>
-      matchesTagFilter(t.tags, filters.tagFilter),
+      matchesTopologyResourceFilter("topic", filters.tagFilter, t.tags),
     ),
   );
   const secrets = $derived(
     (dashboard.data?.secrets ?? []).filter((s) =>
-      matchesTagFilter(s.tags, filters.tagFilter),
+      matchesTopologyResourceFilter("secret", filters.tagFilter, s.tags),
     ),
   );
-  const buckets = $derived(dashboard.data?.buckets ?? []);
-  const eventSourceMappings = $derived(
-    dashboard.data?.eventSourceMappings ?? [],
+  const buckets = $derived(
+    (dashboard.data?.buckets ?? []).filter((bucket) =>
+      matchesTopologyResourceFilter("bucket", filters.tagFilter),
+    ),
   );
-  const infra = $derived(getVisibleInfra(dashboard.data?.infrastructure ?? []));
-  const infraConnections = $derived(dashboard.data?.connections ?? []);
+  const eventSourceMappings = $derived(
+    directTopologyFilter ? [] : (dashboard.data?.eventSourceMappings ?? []),
+  );
+  const eventBridgeRules = $derived(
+    directTopologyFilter?.kind && directTopologyFilter.kind !== "eventbridge"
+      ? []
+      : (dashboard.data?.eventBridgeRules ?? []).filter(
+          () =>
+            !directTopologyFilter ||
+            directTopologyFilter.kind === "eventbridge",
+        ),
+  );
+  const infra = $derived(
+    getVisibleInfra(dashboard.data?.infrastructure ?? []).filter((probe) =>
+      matchesTopologyInfraFilter(probe, filters.tagFilter),
+    ),
+  );
+  const infraConnections = $derived(
+    directTopologyFilter ? [] : (dashboard.data?.connections ?? []),
+  );
   const recentTraces = $derived(dashboard.data?.recentTraces ?? []);
 
   let {
@@ -69,39 +95,164 @@
   let viewMode = $state<"components" | "connections">("connections");
   let selectedGatewayId = $state("");
   let canvasExpanded = $state(false);
-  let panEnabled = $state(false);
   let viewportResetToken = $state(0);
-  let exploreHelpOpen = $state(false);
   let infraOrderIds = $state<string[]>([]);
   let infraOrderHydrated = $state(false);
-  let infraNodePositions = $state<Record<string, InfraNodePosition>>({});
-  let infraPositionsHydrated = $state(false);
+  let allNodePositions = $state<Record<string, InfraNodePosition>>({});
+  let allPositionsHydrated = $state(false);
+  let allNodeOverrides = $state<Record<string, NodeOverride>>({});
+  let allOverridesHydrated = $state(false);
 
   const INFRA_ORDER_STORAGE_KEY = "tarn-ui-topology-infra-order-v1";
-  const INFRA_POSITIONS_STORAGE_KEY = "tarn-ui-topology-infra-position-v1";
+  const ALL_POSITIONS_STORAGE_KEY = "tarn-ui-topology-all-positions-v1";
+  const ALL_OVERRIDES_STORAGE_KEY = "tarn-ui-topology-node-overrides-v1";
+  const TOPOLOGY_NODE_KINDS: NodeKind[] = [
+    "gateway",
+    "eventbridge",
+    "topic",
+    "queue",
+    "bucket",
+    "function",
+    "secret",
+    "extension",
+    "infra",
+  ];
 
   function infraNodeId(probe: InfraProbe): string {
     return `${probe.kind}-${probe.host}-${probe.port}`;
   }
 
-  // Infra nodes ordered for the toolbar — mirrors what TopologyConnectionView computes
-  const infraNodesForToolbar = $derived(
-    (() => {
-      const visible = infra
-        .slice(0, 4)
-        .map((probe) => ({ id: infraNodeId(probe), probe }));
-      if (visible.length === 0) return [] as { id: string; label: string }[];
-      const byId = new Map(visible.map((e) => [e.id, e.probe]));
-      const orderedIds = [
-        ...infraOrderIds.filter((id) => byId.has(id)),
-        ...visible.map((e) => e.id).filter((id) => !infraOrderIds.includes(id)),
-      ];
-      return orderedIds.map((id) => ({
-        id,
-        label: byId.get(id)!.name.slice(0, 13),
-      }));
-    })(),
-  );
+  function nodePositionStorageKey(kind: NodeKind, id: string): string {
+    return `${kind}:${id}`;
+  }
+
+  type DirectTopologyFilter = {
+    kind: NodeKind;
+    infraKind?: string;
+  } | null;
+
+  function resolveDirectTopologyFilter(query: string): DirectTopologyFilter {
+    for (const token of parseTopologyFilterTokens(query)) {
+      const normalized = token.toLowerCase();
+      switch (normalized) {
+        case "gateway":
+        case "gateways":
+        case "api":
+        case "apigateway":
+        case "api-gateway":
+        case "api gateway":
+          return { kind: "gateway" };
+        case "eventbridge":
+        case "event-bridge":
+        case "event bridge":
+        case "schedule":
+        case "schedules":
+        case "rule":
+        case "rules":
+          return { kind: "eventbridge" };
+        case "topic":
+        case "topics":
+        case "sns":
+          return { kind: "topic" };
+        case "queue":
+        case "queues":
+        case "sqs":
+          return { kind: "queue" };
+        case "lambda":
+        case "lambdas":
+        case "function":
+        case "functions":
+          return { kind: "function" };
+        case "secret":
+        case "secrets":
+          return { kind: "secret" };
+        case "bucket":
+        case "buckets":
+        case "s3":
+        case "storage":
+          return { kind: "bucket" };
+        case "extension":
+        case "extensions":
+        case "cache":
+        case "secrets cache":
+          return { kind: "extension" };
+        case "external":
+        case "externals":
+        case "infra":
+        case "infrastructure":
+          return { kind: "infra" };
+        case "postgres":
+        case "postgresql":
+          return { kind: "infra", infraKind: "postgresql" };
+        case "mysql":
+          return { kind: "infra", infraKind: "mysql" };
+        case "redis":
+          return { kind: "infra", infraKind: "redis" };
+        case "mongo":
+        case "mongodb":
+          return { kind: "infra", infraKind: "mongodb" };
+        case "docker":
+          return { kind: "infra", infraKind: "docker" };
+        case "http":
+        case "https":
+          return { kind: "infra", infraKind: "http" };
+      }
+    }
+    return null;
+  }
+
+  function parseTopologyFilterTokens(query: string): string[] {
+    return query
+      .trim()
+      .split(/\s+/)
+      .map((token) => token.trim())
+      .filter(Boolean);
+  }
+
+  function extractTagOnlyTopologyFilterQuery(query: string): string {
+    return parseTopologyFilterTokens(query)
+      .filter((token) => !resolveDirectTopologyFilter(token))
+      .join(" ");
+  }
+
+  function matchesTopologyResourceFilter(
+    kind: NodeKind,
+    query: string,
+    tags?: Record<string, string>,
+  ): boolean {
+    if (directTopologyFilter) {
+      if (directTopologyFilter.kind !== kind) {
+        return false;
+      }
+      if (!tagOnlyTopologyFilterQuery) return true;
+      return matchesTagFilter(tags, tagOnlyTopologyFilterQuery);
+    }
+    return matchesTagFilter(tags, query);
+  }
+
+  function matchesTopologyInfraFilter(
+    probe: InfraProbe,
+    query: string,
+  ): boolean {
+    if (!directTopologyFilter) return true;
+    if (directTopologyFilter.kind !== "infra") return false;
+    if (!directTopologyFilter.infraKind) return true;
+    return (
+      normalizeTopologyExternalKind(probe.kind) ===
+      directTopologyFilter.infraKind
+    );
+  }
+
+  function parseOverrideKind(overrideKey: string): NodeKind | null {
+    const separatorIndex = overrideKey.indexOf(":");
+    const maybeKind =
+      separatorIndex === -1
+        ? overrideKey
+        : overrideKey.slice(0, separatorIndex);
+    return TOPOLOGY_NODE_KINDS.includes(maybeKind as NodeKind)
+      ? (maybeKind as NodeKind)
+      : null;
+  }
 
   const resourceCount = $derived(
     gateways.length +
@@ -116,6 +267,7 @@
   const connectionCount = $derived(
     infraConnections.length + eventSourceMappings.length,
   );
+  const panEnabled = $derived(canvasExpanded && viewMode === "connections");
 
   const selectedGateway = $derived(
     gateways.find((gw) => gw.apiId === selectedGatewayId) ?? null,
@@ -131,7 +283,7 @@
   });
 
   $effect(() => {
-    const visibleIds = infra.slice(0, 4).map((probe) => infraNodeId(probe));
+    const visibleIds = infra.map((probe) => infraNodeId(probe));
 
     if (typeof window !== "undefined" && !infraOrderHydrated) {
       infraOrderHydrated = true;
@@ -172,73 +324,132 @@
   });
 
   $effect(() => {
-    if (typeof window !== "undefined" && !infraPositionsHydrated) {
-      infraPositionsHydrated = true;
+    if (typeof window !== "undefined" && !allPositionsHydrated) {
+      allPositionsHydrated = true;
       try {
-        const raw = localStorage.getItem(INFRA_POSITIONS_STORAGE_KEY);
+        const raw = localStorage.getItem(ALL_POSITIONS_STORAGE_KEY);
         if (raw) {
           const parsed = JSON.parse(raw);
           if (parsed && typeof parsed === "object") {
             const next: Record<string, InfraNodePosition> = {};
             for (const [id, position] of Object.entries(parsed)) {
-              const candidate = position as {
-                x?: unknown;
-                y?: unknown;
-              };
+              const candidate = position as { x?: unknown; y?: unknown };
               if (
                 position &&
                 typeof position === "object" &&
                 typeof candidate.x === "number" &&
                 typeof candidate.y === "number"
               ) {
-                next[id] = {
-                  x: candidate.x,
-                  y: candidate.y,
-                };
+                next[id] = { x: candidate.x, y: candidate.y };
               }
             }
-            infraNodePositions = next;
+            allNodePositions = next;
           }
         }
       } catch {
-        infraNodePositions = {};
+        allNodePositions = {};
       }
     }
   });
 
   $effect(() => {
-    if (typeof window === "undefined" || !infraPositionsHydrated) return;
+    if (typeof window === "undefined" || !allPositionsHydrated) return;
     localStorage.setItem(
-      INFRA_POSITIONS_STORAGE_KEY,
-      JSON.stringify(infraNodePositions),
+      ALL_POSITIONS_STORAGE_KEY,
+      JSON.stringify(allNodePositions),
     );
   });
 
   $effect(() => {
-    if (!canvasExpanded || viewMode !== "connections") {
-      panEnabled = false;
-      exploreHelpOpen = false;
+    if (typeof window !== "undefined" && !allOverridesHydrated) {
+      allOverridesHydrated = true;
+      try {
+        const raw = localStorage.getItem(ALL_OVERRIDES_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && typeof parsed === "object") {
+            const validSides = new Set(["top", "bottom", "left", "right"]);
+            const validSizes = new Set(["small", "medium", "large"]);
+            const next: Record<string, NodeOverride> = {};
+            for (const [id, ov] of Object.entries(parsed)) {
+              if (!ov || typeof ov !== "object") continue;
+              const candidate = ov as Record<string, unknown>;
+              const entry: NodeOverride = {};
+              const kind = parseOverrideKind(id);
+              if (validSides.has(candidate.inputSide as string))
+                entry.inputSide = candidate.inputSide as NodeSide;
+              if (validSides.has(candidate.outputSide as string))
+                entry.outputSide = candidate.outputSide as NodeSide;
+              if (kind && validSizes.has(candidate.size as string)) {
+                entry.size = resolveTopologyNodeSize(
+                  kind,
+                  candidate.size as NodeSize,
+                );
+              } else if (validSizes.has(candidate.size as string)) {
+                entry.size = candidate.size as NodeSize;
+              }
+              if (kind && typeof candidate.view === "string") {
+                entry.view = resolveTopologyNodeView(
+                  kind,
+                  candidate.view,
+                  entry.size ?? "small",
+                );
+              }
+              if (
+                entry.inputSide ||
+                entry.outputSide ||
+                entry.size ||
+                entry.view
+              )
+                next[id] = entry;
+            }
+            allNodeOverrides = next;
+          }
+        }
+      } catch {
+        allNodeOverrides = {};
+      }
     }
   });
 
-  function moveInfraNode(id: string, direction: -1 | 1) {
-    const index = infraOrderIds.indexOf(id);
-    if (index === -1) return;
-    const nextIndex = index + direction;
-    if (nextIndex < 0 || nextIndex >= infraOrderIds.length) return;
-    const next = [...infraOrderIds];
-    [next[index], next[nextIndex]] = [next[nextIndex], next[index]];
-    infraOrderIds = next;
-  }
+  $effect(() => {
+    if (typeof window === "undefined" || !allOverridesHydrated) return;
+    localStorage.setItem(
+      ALL_OVERRIDES_STORAGE_KEY,
+      JSON.stringify(allNodeOverrides),
+    );
+  });
 
   function openGateway(apiId: string) {
     selectedGatewayId = apiId;
   }
 
-  function setInfraNodePosition(id: string, position: InfraNodePosition) {
-    infraNodePositions = {
-      ...infraNodePositions,
-      [id]: position,
+  function setNodePosition(
+    id: string,
+    kind: NodeKind,
+    position: InfraNodePosition,
+  ) {
+    allNodePositions = {
+      ...allNodePositions,
+      [nodePositionStorageKey(kind, id)]: position,
+    };
+  }
+
+  function setNodeOverride(id: string, override: NodeOverride) {
+    const kind = parseOverrideKind(id);
+    const nextOverride = { ...allNodeOverrides[id], ...override };
+    if (kind) {
+      nextOverride.size = resolveTopologyNodeSize(kind, nextOverride.size);
+      nextOverride.view = resolveTopologyNodeView(
+        kind,
+        nextOverride.view,
+        nextOverride.size ?? "small",
+      );
+    }
+
+    allNodeOverrides = {
+      ...allNodeOverrides,
+      [id]: nextOverride,
     };
   }
 
@@ -246,16 +457,9 @@
     viewportResetToken += 1;
   }
 
-  function togglePanMode() {
-    if (panEnabled) {
-      panEnabled = false;
-      exploreHelpOpen = false;
-      resetCanvasViewport();
-      return;
-    }
-
-    panEnabled = true;
-    exploreHelpOpen = true;
+  function organizeCanvasLayout() {
+    allNodePositions = {};
+    resetCanvasViewport();
   }
 
   function handleShortcutKeydown(event: KeyboardEvent) {
@@ -264,12 +468,6 @@
     if (isEditableTarget(event.target)) return;
 
     const key = event.key.toLowerCase();
-    if (key === "m") {
-      event.preventDefault();
-      togglePanMode();
-      return;
-    }
-
     if (key === "c") {
       event.preventDefault();
       resetCanvasViewport();
@@ -297,210 +495,130 @@
 
 <svelte:document onkeydown={handleShortcutKeydown} />
 
-<div
-  class="h-full w-full min-w-0 overflow-hidden rounded-t-lg bg-background flex flex-col"
->
-  <!-- Toolbar -->
-  <div
-    class="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2"
-  >
-    <!-- <h3
-      class="shrink-0 text-xs font-mono uppercase tracking-wider text-muted-foreground"
-    >
-      Topology
-    </h3> -->
-
-    <Badge variant="secondary" class="shrink-0 font-mono text-[10px]">
+<div class="h-full w-full min-w-0 flex flex-col">
+  <!-- Toolbar — above the bordered canvas area, outside the card -->
+  <div class="flex shrink-0 items-center gap-2 pb-2">
+    <span class="font-mono text-[10px] text-muted-foreground/50">
       {viewMode === "components"
-        ? `${resourceCount} resources`
-        : `${connectionCount} links`}
-    </Badge>
+        ? `Explore and arrange ${resourceCount} resources of your infra below`
+        : `Explore and arrange ${connectionCount} links of your infra below`}
+    </span>
 
-    <!-- {#if viewMode === "connections" && infraNodesForToolbar.length > 1}
-      <span
-        class="shrink-0 text-[10px] font-mono uppercase tracking-wide text-muted-foreground/70"
-      >
-        Infra Order
-      </span>
-      {#each infraNodesForToolbar as node, index (node.id)}
-        <div
-          class="inline-flex shrink-0 items-center gap-1 rounded-md border border-border bg-muted px-1 py-0.5"
+    <div class="ml-auto flex items-center gap-1.5">
+      {#if canvasExpanded && viewMode === "connections"}
+        <button
+          type="button"
+          class="flex items-center gap-1 rounded px-2 py-1 font-mono text-[10px] text-muted-foreground/60 hover:bg-muted/60 hover:text-foreground transition-colors"
+          aria-label="Re-centre canvas"
+          title="Re-centre canvas (Cmd/Ctrl+C)"
+          onclick={resetCanvasViewport}
         >
+          <CommandIcon size={11} />
           <span
-            class="max-w-[8.5rem] truncate text-[10px] text-muted-foreground"
-            >{node.label}</span
+            >Re-centre <span class="text-muted-foreground/40">(cmd + c)</span
+            ></span
           >
-          <div class="inline-flex gap-0.5">
-            <Button
-              variant="outline"
-              size="icon"
-              class="h-5 w-5"
-              disabled={index === 0}
-              onclick={() => moveInfraNode(node.id, -1)}
-              aria-label={`Move ${node.label} up`}
-            >
-              <CaretUpIcon size={10} />
-            </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              class="h-5 w-5"
-              disabled={index === infraNodesForToolbar.length - 1}
-              onclick={() => moveInfraNode(node.id, 1)}
-              aria-label={`Move ${node.label} down`}
-            >
-              <CaretDownIcon size={10} />
-            </Button>
-          </div>
-        </div>
-      {/each}
-    {/if} -->
-
-    <div class="ml-auto flex flex-wrap items-center justify-end gap-2">
-      {#if canvasExpanded && viewMode === "connections"}
-        <div
-          class="inline-flex items-center gap-1 rounded-xl border border-primary/20 bg-primary/10 p-1 shadow-sm"
-        >
-          <Button
-            variant={panEnabled ? "default" : "ghost"}
-            size="sm"
-            class="h-7 gap-1.5 rounded-lg px-2 text-[11px]"
-            aria-pressed={panEnabled}
-            aria-label={panEnabled
-              ? "Disable canvas explore mode"
-              : "Enable canvas explore mode"}
-            title={panEnabled
-              ? "Disable canvas explore mode"
-              : "Enable canvas explore mode"}
-            onclick={togglePanMode}
-          >
-            <HandPalmIcon size={12} />
-            <span class="hidden sm:inline">Explore</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            class="h-7 gap-1.5 rounded-lg px-2 text-[11px]"
-            aria-label="Re-centre canvas"
-            title="Re-centre canvas"
-            onclick={resetCanvasViewport}
-          >
-            <CrosshairSimpleIcon size={12} />
-            <span class="hidden md:inline">Re-centre</span>
-          </Button>
-        </div>
+        </button>
       {/if}
 
-      {#if canvasExpanded && viewMode === "connections"}
-        <Badge variant={panEnabled ? "default" : "outline"} class="shrink-0">
-          {panEnabled ? "keys + d-pad enabled" : "drag infra to persist"}
-        </Badge>
-      {/if}
-
-      <Button
-        variant="outline"
-        size="icon"
-        class="h-7 w-7 shrink-0"
+      <button
+        type="button"
+        class="relative flex h-6 w-6 items-center justify-center rounded text-muted-foreground/60 hover:bg-muted/60 hover:text-foreground transition-colors {canvasExpanded
+          ? ''
+          : 'group'}"
         aria-label={canvasExpanded ? "Collapse canvas" : "Expand canvas"}
         title={canvasExpanded ? "Collapse canvas" : "Expand canvas"}
         onclick={() => (canvasExpanded = !canvasExpanded)}
       >
+        {#if !canvasExpanded}
+          <span
+            class="absolute inset-0 rounded animate-[expand-ping_2.5s_ease-in-out_infinite] bg-primary/10"
+          ></span>
+        {/if}
         {#if canvasExpanded}
           <ArrowsInSimpleIcon size={13} />
         {:else}
-          <ArrowsOutSimpleIcon size={13} />
+          <ArrowsOutSimpleIcon size={13} class="relative" />
         {/if}
-      </Button>
+      </button>
     </div>
   </div>
 
-  <!-- Canvas + detail panel -->
-  <div class="flex flex-col lg:flex-row flex-1 min-h-0">
-    <div class="relative min-w-0 flex-1 overflow-auto overscroll-contain">
-      {#if viewMode === "components"}
-        <TopologyComponentsView
-          {gateways}
-          {functions}
-          {queues}
-          {topics}
-          {secrets}
-          {buckets}
-          {infra}
-          {canvasExpanded}
-          // onGatewayClick={openGateway}
-          {onNavigate}
-        />
-      {:else}
-        <TopologyConnectionView
-          {gateways}
-          {functions}
-          {queues}
-          {topics}
-          {secrets}
-          {buckets}
-          {infra}
-          {infraNodePositions}
-          {eventSourceMappings}
-          {infraConnections}
-          {infraOrderIds}
-          {recentTraces}
-          {canvasExpanded}
-          {panEnabled}
-          {viewportResetToken}
-          onGatewayClick={openGateway}
-          onInfraNodePositionChange={setInfraNodePosition}
-          {onNavigate}
-        />
+  <!-- Canvas area -->
+  <div class="flex-1 min-h-0 overflow-hidden rounded-md">
+    <div class="flex flex-col lg:flex-row h-full min-h-0">
+      <div
+        class={`relative min-w-0 flex-1 ${
+          viewMode === "connections"
+            ? "overflow-hidden"
+            : "overflow-auto overscroll-contain"
+        }`}
+      >
+        {#if viewMode === "components"}
+          <TopologyComponentsView
+            {gateways}
+            {functions}
+            {queues}
+            {topics}
+            {secrets}
+            {buckets}
+            {infra}
+            {canvasExpanded}
+            // onGatewayClick={openGateway}
+            {onNavigate}
+          />
+        {:else}
+          <TopologyConnectionView
+            {gateways}
+            {functions}
+            {queues}
+            {topics}
+            {secrets}
+            {buckets}
+            {infra}
+            {allNodePositions}
+            {allNodeOverrides}
+            {eventSourceMappings}
+            {infraConnections}
+            {eventBridgeRules}
+            {infraOrderIds}
+            {recentTraces}
+            {canvasExpanded}
+            {panEnabled}
+            {viewportResetToken}
+            onGatewayClick={openGateway}
+            onNodePositionChange={setNodePosition}
+            onNodeOverrideChange={setNodeOverride}
+            onAutoOrganize={organizeCanvasLayout}
+            {onNavigate}
+          />
+        {/if}
+      </div>
+
+      {#if selectedGateway}
+        <div
+          class="w-full border-t border-border bg-muted/40 p-3 lg:w-[22rem] lg:border-l lg:border-t-0"
+        >
+          <GatewayDetailsPanel
+            gateway={selectedGateway}
+            onClose={closeGatewayPanel}
+          />
+        </div>
       {/if}
     </div>
-
-    {#if selectedGateway}
-      <div
-        class="w-full border-t border-border bg-muted/40 p-3 lg:w-[22rem] lg:border-l lg:border-t-0"
-      >
-        <GatewayDetailsPanel
-          gateway={selectedGateway}
-          onClose={closeGatewayPanel}
-        />
-      </div>
-    {/if}
   </div>
 </div>
 
-<Command.Dialog
-  bind:open={exploreHelpOpen}
-  title="Explore topology"
-  description="Keyboard controls for navigating the topology canvas"
->
-  <Command.List>
-    <Command.Group heading="Explore shortcuts">
-      <Command.Item disabled>
-        <span>Use arrow keys to move around the canvas</span>
-        <Command.Shortcut>&larr; &uarr; &darr; &rarr;</Command.Shortcut>
-      </Command.Item>
-      <Command.Item
-        onclick={() => {
-          resetCanvasViewport();
-          exploreHelpOpen = false;
-        }}
-      >
-        <span>Re-centre the canvas</span>
-        <Command.Shortcut>Cmd/Ctrl+C</Command.Shortcut>
-      </Command.Item>
-      <Command.Item disabled>
-        <span>Toggle explore mode</span>
-        <Command.Shortcut>Cmd/Ctrl+M</Command.Shortcut>
-      </Command.Item>
-    </Command.Group>
-    <Command.Separator />
-    <Command.Group heading="Infra layout">
-      <Command.Item disabled>
-        <span>Drag infra nodes to pin their position on the canvas</span>
-      </Command.Item>
-      <Command.Item onclick={() => (exploreHelpOpen = false)}>
-        <span>Continue exploring</span>
-        <Command.Shortcut>Esc</Command.Shortcut>
-      </Command.Item>
-    </Command.Group>
-  </Command.List>
-</Command.Dialog>
+<style>
+  @keyframes expand-ping {
+    0%,
+    100% {
+      opacity: 0;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 1;
+      transform: scale(1.35);
+    }
+  }
+</style>

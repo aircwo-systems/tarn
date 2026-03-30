@@ -1,7 +1,22 @@
 import { fetchOverview, pruneOldLogs } from "$lib/api";
 import type { InfraProbe, OverviewResponse } from "$lib/types";
 
-export type InfraProbeKind = "docker" | "postgresql" | "redis" | "mysql" | "mongodb";
+export type InfraProbeKind =
+  | "docker"
+  | "postgresql"
+  | "redis"
+  | "mysql"
+  | "mongodb"
+  | "http";
+
+const DEFAULT_INFRA_ENABLED_KINDS: InfraProbeKind[] = [
+  "docker",
+  "postgresql",
+  "redis",
+  "mysql",
+  "mongodb",
+  "http",
+];
 
 export interface FrontendTarget {
   id: string;
@@ -41,7 +56,7 @@ let settingsInitialized = false;
 let schemaSourceDir = $state("");
 let logRetentionMinutes = $state(DEFAULT_LOG_RETENTION_MINUTES);
 
-let infraEnabledKinds = $state<InfraProbeKind[]>(["docker"]);
+let infraEnabledKinds = $state<InfraProbeKind[]>([...DEFAULT_INFRA_ENABLED_KINDS]);
 let infraFrontendTargets = $state<FrontendTarget[]>([]);
 let infraFrontendResults = $state<InfraProbe[]>([]);
 
@@ -218,9 +233,23 @@ export function setDashboardTagFilter(next: string) {
 }
 
 export function matchesTagFilter(tags: Record<string, string> | undefined, query: string): boolean {
-  const normalized = query.trim().toLowerCase();
-  if (!normalized) return true;
+  const normalizedTokens = query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  if (normalizedTokens.length === 0) return true;
   if (!tags || Object.keys(tags).length === 0) return false;
+
+  return normalizedTokens.every((token) => matchesSingleTagFilter(tags, token));
+}
+
+function matchesSingleTagFilter(
+  tags: Record<string, string>,
+  normalized: string,
+): boolean {
+  if (!normalized) return true;
 
   const pairSeparator = normalized.includes(":") ? ":" : normalized.includes("=") ? "=" : "";
   if (pairSeparator) {
@@ -488,11 +517,12 @@ async function probeFrontendTargets() {
 }
 
 const VALID_INFRA_KINDS = new Set<InfraProbeKind>([
-  "docker",
-  "postgresql",
-  "redis",
-  "mysql",
-  "mongodb",
+	"docker",
+	"postgresql",
+	"redis",
+	"mysql",
+	"mongodb",
+	"http",
 ]);
 
 function isValidInfraKind(v: unknown): v is InfraProbeKind {

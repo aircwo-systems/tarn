@@ -7,6 +7,7 @@
     BucketSummary,
     SecretSummary,
     InfraProbe,
+    EventBridgeRuleSummary,
     EventSourceMappingSummary,
     InfraConnection,
     RequestTrace
@@ -14,9 +15,10 @@
   import type { ConnectionNode } from "./types";
   import {
     buildTopologyGraph,
-    infraKindTone,
-    type InfraNodePosition
+    type InfraNodePosition,
+    type NodeOverride,
   } from "./topology-connection-model";
+  import { infraKindCssVar } from "./topology-canvas-theme";
   import TopologyConnectionCanvas from "./canvas/TopologyConnectionCanvas.svelte";
   import TopologyNodeTooltip from "./canvas/TopologyNodeTooltip.svelte";
 
@@ -28,20 +30,25 @@
     buckets = [],
     secrets = [],
     infra = [],
-    infraNodePositions = {},
+    allNodePositions = {},
+    allNodeOverrides = {},
     eventSourceMappings = [],
     infraConnections = [],
+    eventBridgeRules = [],
     infraOrderIds = [],
     recentTraces = [],
     canvasExpanded = false,
     panEnabled = false,
     viewportResetToken = 0,
     onGatewayClick = (_id: string) => {},
-    onInfraNodePositionChange = (
+    onNodePositionChange = (
       _id: string,
+      _kind: ConnectionNode["kind"],
       _position: InfraNodePosition,
     ) => {},
-    onNavigate: _onNavigate = (_tab: string) => {},
+    onNodeOverrideChange = (_id: string, _override: NodeOverride) => {},
+    onAutoOrganize = () => {},
+    onNavigate = (_tab: string) => {},
   }: {
     gateways?: GatewaySummary[];
     functions?: FunctionSummary[];
@@ -50,19 +57,24 @@
     buckets?: BucketSummary[];
     secrets?: SecretSummary[];
     infra?: InfraProbe[];
-    infraNodePositions?: Record<string, InfraNodePosition>;
+    allNodePositions?: Record<string, InfraNodePosition>;
+    allNodeOverrides?: Record<string, NodeOverride>;
     eventSourceMappings?: EventSourceMappingSummary[];
     infraConnections?: InfraConnection[];
+    eventBridgeRules?: EventBridgeRuleSummary[];
     infraOrderIds?: string[];
     recentTraces?: RequestTrace[];
     canvasExpanded?: boolean;
     panEnabled?: boolean;
     viewportResetToken?: number;
     onGatewayClick?: (id: string) => void;
-    onInfraNodePositionChange?: (
+    onNodePositionChange?: (
       id: string,
+      kind: ConnectionNode["kind"],
       position: InfraNodePosition,
     ) => void;
+    onNodeOverrideChange?: (id: string, override: NodeOverride) => void;
+    onAutoOrganize?: () => void;
     onNavigate?: (tab: string) => void;
   } = $props();
 
@@ -75,9 +87,11 @@
       buckets,
       secrets,
       infra,
-      infraNodePositions,
+      allNodePositions,
+      allNodeOverrides,
       eventSourceMappings,
       infraConnections,
+      eventBridgeRules,
       infraOrderIds,
       recentTraces,
     }),
@@ -132,7 +146,7 @@
   function nodeColor(node: ConnectionNode): string {
     switch (node.kind) {
       case "gateway":
-        return "var(--color-chart-1)";
+        return "var(--topology-gateway)";
       case "queue":
         return "var(--color-chart-4)";
       case "eventbridge":
@@ -148,13 +162,7 @@
         return "var(--color-chart-5, var(--color-primary))";
       case "infra": {
         if (node.status !== "connected") return "var(--color-destructive)";
-        const probe = model.infraById.get(node.id);
-        const tone = infraKindTone(probe?.kind ?? "");
-        if (tone === "db") return "var(--color-chart-2)";
-        if (tone === "cache") return "var(--color-chart-4)";
-        if (tone === "service")
-          return "var(--color-chart-5, var(--color-primary))";
-        return "var(--color-primary)";
+        return infraKindCssVar(model.infraById.get(node.id)?.kind ?? "");
       }
       default:
         return "var(--color-primary)";
@@ -170,7 +178,10 @@
     {panEnabled}
     {viewportResetToken}
     {onGatewayClick}
-    {onInfraNodePositionChange}
+    {onNodePositionChange}
+    {onNodeOverrideChange}
+    {onAutoOrganize}
+    {onNavigate}
     onNodeHover={handleNodeHover}
     onNodeLeave={handleNodeLeave}
   />
