@@ -17,6 +17,7 @@
   import { Skeleton } from "$lib/components/ui/skeleton";
   import EmptyState from "$lib/components/common/empty-state.svelte";
   import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
+  import SectionHeader from "./section-header.svelte";
   import {
     fetchLogGroups,
     fetchLogEvents,
@@ -29,9 +30,13 @@
   let {
     initialGroup = "",
     initialTimestamp = "",
+    sidebarCollapsed = false,
+    onToggleSidebar = () => {},
   }: {
     initialGroup?: string;
     initialTimestamp?: string;
+    sidebarCollapsed?: boolean;
+    onToggleSidebar?: () => void;
   } = $props();
 
   // ── State ────────────────────────────────────────────────────────────
@@ -776,10 +781,14 @@
   <!-- ── Event viewer ─────────────────────────────────────────────── -->
   <div class="space-y-3">
     <!-- Header -->
-    <div
-      class="flex items-center justify-between gap-3 flex-wrap rounded-lg border border-border bg-card px-4 py-3"
+    <SectionHeader
+      title={isAllGroup ? "All log groups" : selectedGroup}
+      description={pageInfo}
+      icon={ScrollIcon}
+      {sidebarCollapsed}
+      {onToggleSidebar}
     >
-      <div class="flex items-center gap-3 min-w-0">
+      {#snippet lead()}
         <button
           type="button"
           onclick={backToGroups}
@@ -788,16 +797,10 @@
         >
           <ArrowLeftIcon size={16} />
         </button>
-        <div class="min-w-0">
-          <h2 class="text-sm font-semibold text-foreground truncate">
-            {isAllGroup ? "All Log Groups" : selectedGroup}
-          </h2>
-          <p class="text-[10px] text-muted-foreground/70 font-mono">
-            {pageInfo}
-          </p>
-        </div>
-      </div>
-      <div class="flex items-center gap-2 shrink-0">
+      {/snippet}
+
+      {#snippet actions()}
+        <div class="flex items-center gap-2 shrink-0">
         <!-- Sort toggle -->
         <button
           type="button"
@@ -864,8 +867,9 @@
           />
           Refresh
         </button>
-      </div>
-    </div>
+        </div>
+      {/snippet}
+    </SectionHeader>
 
     <!-- Filters panel -->
     {#if showFilters}
@@ -1278,37 +1282,30 @@
   <!-- ── Groups list ──────────────────────────────────────────────── -->
   <div class="space-y-3">
     <!-- Header -->
-    <div
-      class="flex items-center justify-between gap-3 rounded-lg border border-border bg-card px-4 py-3"
+    <SectionHeader
+      title="Log groups"
+      description={groupsCountLabel}
+      icon={ScrollIcon}
+      {sidebarCollapsed}
+      {onToggleSidebar}
     >
-      <div class="flex items-center gap-3">
-        <div
-          class="flex items-center justify-center h-8 w-8 rounded-md bg-accent/10"
+      {#snippet actions()}
+        <button
+          type="button"
+          onclick={loadGroups}
+          disabled={groupsLoading}
+          class="inline-flex items-center gap-1.5 rounded-md border border-primary/50 bg-primary/10 px-2.5 py-1 text-xs text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
         >
-          <ScrollIcon size={16} class="text-primary" />
-        </div>
-        <div>
-          <h2 class="text-sm font-semibold text-foreground">Log Groups</h2>
-          <p class="text-[10px] text-muted-foreground/70 font-mono">
-            {groupsCountLabel}
-          </p>
-        </div>
-      </div>
-      <button
-        type="button"
-        onclick={loadGroups}
-        disabled={groupsLoading}
-        class="inline-flex items-center gap-1.5 rounded-md border border-primary/50 bg-primary/10 px-2.5 py-1 text-xs text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
-      >
-        <ArrowsClockwiseIcon
-          size={12}
-          class={groupsLoading ? "animate-spin" : ""}
-        />
-        Refresh
-      </button>
-    </div>
+          <ArrowsClockwiseIcon
+            size={12}
+            class={groupsLoading ? "animate-spin" : ""}
+          />
+          Refresh
+        </button>
+      {/snippet}
+    </SectionHeader>
 
-    <div class="rounded-lg border border-border bg-card px-4 py-3 space-y-3">
+    <div class="space-y-3 mt-1">
       <div class="relative">
         <MagnifyingGlassIcon
           size={12}
@@ -1367,11 +1364,11 @@
       <button
         type="button"
         onclick={() => selectGroup(ALL_GROUP)}
-        class="flex items-center justify-between gap-4 rounded-lg border border-dashed border-primary/30 bg-primary/5 px-4 py-3 text-left hover:border-primary/50 hover:bg-primary/10 transition-colors group w-full"
+        class="group flex w-full items-center justify-between gap-4 rounded-lg border border-dashed border-primary/30 bg-primary/5 px-4 py-3 text-left transition-all duration-150 hover:-translate-y-px hover:border-primary/50 hover:bg-primary/10 hover:shadow-[0_8px_24px_-18px_var(--color-primary)]"
       >
         <div class="min-w-0 flex-1">
           <div class="flex items-center gap-2 mb-1">
-            <Badge variant="default" class="text-[10px]">All Services</Badge>
+            <span class="text-[10px] font-mono text-primary">All Services</span>
             <span class="text-sm font-medium text-foreground">All Logs</span>
           </div>
           <p class="text-[10px] font-mono text-muted-foreground/70">
@@ -1406,12 +1403,12 @@
             <button
               type="button"
               onclick={() => selectGroup(group.name)}
-              class="flex items-center justify-between gap-4 rounded-lg border border-border bg-card px-4 py-3 text-left hover:border-primary/40 hover:bg-muted/50 transition-colors group"
+              class="group flex items-center justify-between gap-4 rounded-lg border border-border bg-card px-4 py-3 text-left transition-all duration-150 hover:-translate-y-px hover:border-primary/30 hover:bg-muted/60 hover:shadow-[0_12px_30px_-24px_rgba(0,0,0,0.45)]"
             >
               <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2 mb-1">
-                  <Badge variant="secondary" class="text-[10px]"
-                    >{groupCategory(group.name)}</Badge
+                  <span class="text-[10px] font-mono text-muted-foreground/70"
+                    >{groupCategory(group.name)}</span
                   >
                   <span class="text-sm font-medium text-foreground truncate"
                     >{groupDisplayName(group.name)}</span

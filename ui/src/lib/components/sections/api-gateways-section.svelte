@@ -6,10 +6,10 @@
   } from "phosphor-svelte";
   import { fly } from "svelte/transition";
   import { TableRow, TableCell } from "$lib/components/ui/table";
-  import Badge from "$lib/components/ui/badge/badge.svelte";
   import ResourceTable from "$lib/components/common/resource-table.svelte";
   import ArnCell from "$lib/components/common/arn-cell.svelte";
   import GatewayDetailsPanel from "$lib/components/topology/gateway-details-panel.svelte";
+  import SectionHeader from "./section-header.svelte";
   import {
     getDashboard,
     getDashboardFilters,
@@ -17,6 +17,14 @@
     refresh,
   } from "$lib/state.svelte";
   import { buildCombinedCollection, downloadJSON } from "$lib/postman";
+
+  let {
+    sidebarCollapsed = false,
+    onToggleSidebar = () => {},
+  }: {
+    sidebarCollapsed?: boolean;
+    onToggleSidebar?: () => void;
+  } = $props();
 
   const dashboard = getDashboard();
   const filters = getDashboardFilters();
@@ -63,8 +71,26 @@
 </script>
 
 <div
-  class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_38rem] 2xl:grid-cols-[minmax(0,1fr)_44rem]"
+  class="flex min-h-full flex-col gap-4"
 >
+  <SectionHeader
+    title="API gateways"
+    description="Gateway inventory, stages, routes and integration details."
+    icon={GlobeHemisphereWestIcon}
+    {sidebarCollapsed}
+    {onToggleSidebar}
+  >
+    {#snippet stats()}
+      <span class="inline-flex items-center gap-1.5">
+        <span class="font-mono text-foreground">{gateways.length}</span>
+        <span class="text-muted-foreground/70">visible</span>
+      </span>
+    {/snippet}
+  </SectionHeader>
+
+  <div
+    class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_38rem] 2xl:grid-cols-[minmax(0,1fr)_44rem]"
+  >
   <ResourceTable
     title="API Gateways"
     count={gateways.length}
@@ -86,19 +112,8 @@
           onGatewayRowKeydown(event, gateway.apiId)}
       >
         <TableCell><ArnCell name={gateway.name} arn={gateway.arn} /></TableCell>
-        <TableCell>
-          <div class="flex items-center gap-1.5">
-            <Badge variant="secondary">{gateway.protocolType}</Badge>
-            {#if gateway.version === "v1"}
-              <Badge variant="outline" class="text-[10px] px-1 py-0 font-mono"
-                >v1</Badge
-              >
-            {:else}
-              <Badge variant="outline" class="text-[10px] px-1 py-0 font-mono"
-                >v2</Badge
-              >
-            {/if}
-          </div>
+        <TableCell class="font-mono text-xs text-muted-foreground">
+          {gateway.protocolType} <span class="text-muted-foreground/50">{gateway.version}</span>
         </TableCell>
         <TableCell class="font-mono text-xs text-muted-foreground">
           {gateway.defaultStage || "—"}
@@ -128,6 +143,7 @@
       </p>
     </section>
   {/if}
+  </div>
 </div>
 
 <!-- Combined export — slides in from right edge, rounded left only -->
