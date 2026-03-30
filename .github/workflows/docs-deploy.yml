@@ -5,11 +5,14 @@ on:
     branches:
       - develop-mvp
       - main
+    # Version tags trigger an unconditional rebuild so the docs version
+    # badge updates to the newly released tag.  The paths filter is
+    # intentionally omitted — when both paths and tags are specified
+    # GitHub ANDs them, and tag pushes carry no path diff so would never
+    # match.  VitePress builds are fast enough that occasional no-op
+    # rebuilds on branch pushes are acceptable.
     tags:
       - 'v*'
-    paths:
-      - 'docs/**'
-      - '.github/workflows/docs-deploy.yml'
 
 permissions:
   contents: read
@@ -42,7 +45,8 @@ jobs:
           if [ "${{ github.ref_type }}" = "tag" ]; then
             echo "DOCS_VERSION=${{ github.ref_name }}" >> "$GITHUB_ENV"
           else
-            echo "DOCS_VERSION=$(git describe --tags --abbrev=0)" >> "$GITHUB_ENV"
+            TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "dev")
+            echo "DOCS_VERSION=$TAG" >> "$GITHUB_ENV"
           fi
 
       - name: Build docs
