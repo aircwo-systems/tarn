@@ -15,6 +15,7 @@
     WarningIcon,
   } from "phosphor-svelte";
   import Badge from "$lib/components/ui/badge/badge.svelte";
+  import SectionHeader from "./section-header.svelte";
   import type {
     GatewaySummary,
     RouteDetail,
@@ -35,7 +36,15 @@
     sanitizeSchemaSourceDir,
   } from "$lib/state.svelte";
 
-  let { gateways }: { gateways: GatewaySummary[] } = $props();
+  let {
+    gateways,
+    sidebarCollapsed = false,
+    onToggleSidebar = () => {},
+  }: {
+    gateways: GatewaySummary[];
+    sidebarCollapsed?: boolean;
+    onToggleSidebar?: () => void;
+  } = $props();
   const uiSettings = getUISettings();
 
   // Only gateways with routeDetails can be chaos-probed
@@ -495,19 +504,26 @@
 
 <div class="space-y-4">
   <!-- Header -->
-  <div class="flex items-center justify-between gap-4">
-    <div>
-      <h2 class="text-sm font-semibold text-foreground flex items-center gap-2">
-        <LightningIcon size={14} class="text-primary" />
-        Chaos Probe
-      </h2>
-      <p class="mt-0.5 text-[11px] text-muted-foreground/70">
-        Exhaust all validation layers per route — captures every 400 and the
-        final 200 as named Postman examples.
-      </p>
-    </div>
+  <SectionHeader
+    title="Chaos probe"
+    description="Exhaust validation layers per route and capture the full example set."
+    icon={LightningIcon}
+    {sidebarCollapsed}
+    {onToggleSidebar}
+  >
+    {#snippet stats()}
+      <span class="inline-flex items-center gap-1.5">
+        <span class="font-mono text-foreground">{totalSelected}</span>
+        <span class="text-muted-foreground/70">selected</span>
+      </span>
+      <span class="inline-flex items-center gap-1.5">
+        <span class="font-mono text-foreground">{totalRouteable}</span>
+        <span class="text-muted-foreground/70">routeable</span>
+      </span>
+    {/snippet}
 
-    <div class="flex items-center gap-2 shrink-0">
+    {#snippet actions()}
+      <div class="flex items-center gap-2 shrink-0">
       {#if probing}
         <button
           type="button"
@@ -542,8 +558,9 @@
           Probe {totalSelected > 0 ? `(${totalSelected})` : ""}
         </button>
       {/if}
-    </div>
-  </div>
+      </div>
+    {/snippet}
+  </SectionHeader>
 
   <!-- Source config panel -->
   <div class="rounded-lg border border-border bg-card overflow-hidden">
@@ -730,13 +747,11 @@
               <span class="text-xs font-semibold text-foreground truncate"
                 >{gw.name}</span
               >
-              <Badge variant="secondary" class="shrink-0 text-[10px]"
-                >{gw.protocolType}</Badge
+              <span class="shrink-0 text-[10px] font-mono text-muted-foreground"
+                >{gw.protocolType}</span
               >
-              <Badge
-                variant="outline"
-                class="shrink-0 text-[10px] px-1 py-0 font-mono"
-                >{gw.version}</Badge
+              <span class="shrink-0 text-[10px] font-mono text-muted-foreground/50"
+                >{gw.version}</span
               >
               <span
                 class="hidden sm:block font-mono text-[10px] text-muted-foreground/70 truncate"

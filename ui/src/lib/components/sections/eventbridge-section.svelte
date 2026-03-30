@@ -6,10 +6,19 @@
     TrashIcon,
     BridgeIcon,
   } from "phosphor-svelte";
-  import { TableCell, TableRow } from "$lib/components/ui/table";
-  import Badge from "$lib/components/ui/badge/badge.svelte";
+  import {
+    Table,
+    TableHeader,
+    TableBody,
+    TableHead,
+    TableCell,
+    TableRow,
+  } from "$lib/components/ui/table";
+  import LedDot from "$lib/components/common/led-dot.svelte";
   import ArnCell from "$lib/components/common/arn-cell.svelte";
-  import ResourceTable from "$lib/components/common/resource-table.svelte";
+  import EmptyState from "$lib/components/common/empty-state.svelte";
+  import { Skeleton } from "$lib/components/ui/skeleton";
+  import SectionHeader from "./section-header.svelte";
   import {
     putEventBridgeRule,
     enableEventBridgeRule,
@@ -20,6 +29,14 @@
     fireEventBridgeRule,
   } from "$lib/api";
   import { getDashboard, refresh } from "$lib/state.svelte";
+
+  let {
+    sidebarCollapsed = false,
+    onToggleSidebar = () => {},
+  }: {
+    sidebarCollapsed?: boolean;
+    onToggleSidebar?: () => void;
+  } = $props();
 
   const dashboard = getDashboard();
   const functions = $derived(dashboard.data?.functions ?? []);
@@ -297,18 +314,10 @@
     selectedTargetIDs = next;
   }
 
-  function scheduleBadgeVariant(
-    scheduleExpression: string,
-  ): "default" | "secondary" {
-    return scheduleExpression.startsWith("rate(") ? "secondary" : "default";
-  }
-
-  function stateBadgeVariant(
-    state: string,
-  ): "default" | "destructive" | "secondary" {
-    if (state === "ENABLED") return "default";
-    if (state === "DISABLED") return "destructive";
-    return "secondary";
+  function stateColor(state: string): "green" | "red" | "gray" {
+    if (state === "ENABLED") return "green";
+    if (state === "DISABLED") return "red";
+    return "gray";
   }
 
   function formatTime(value?: string): string {
@@ -327,18 +336,14 @@
 </script>
 
 <div class="space-y-4">
-  <section class="rounded-lg border border-border bg-card px-4 py-3">
-    <div class="flex items-center justify-between gap-3">
-      <div>
-        <h2 class="text-sm font-semibold text-foreground">EventBridge Rules</h2>
-        <p class="text-[10px] font-mono text-muted-foreground/70">
-          Scheduled rules on the default bus, with Lambda targets.
-        </p>
-      </div>
-      <Badge variant="secondary"
-        >{rules.length} rule{rules.length === 1 ? "" : "s"}</Badge
-      >
-    </div>
+  <section>
+    <SectionHeader
+      title="EventBridge rules"
+      description={`${rules.length} rule${rules.length === 1 ? "" : "s"} · default bus`}
+      icon={BridgeIcon}
+      {sidebarCollapsed}
+      {onToggleSidebar}
+    />
 
     <div class="mt-3 grid gap-2 md:grid-cols-[12rem_minmax(0,1fr)_12rem_auto]">
       <input
@@ -387,76 +392,107 @@
   </section>
 
   <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]">
-    <ResourceTable
-      title="Rules"
-      count={rules.length}
-      loading={dashboard.loading && !dashboard.data}
-      empty={rules.length === 0}
-      emptyMessage="No EventBridge rules configured yet."
-      emptyIcon={BridgeIcon}
-      columns={["Rule", "Schedule", "State", "Targets", "Next/Last", "Actions"]}
-      onRefresh={refresh}
-    >
-      {#each rules as rule}
-        <TableRow
-          class={`cursor-pointer ${selectedRuleName === rule.name ? "bg-muted/50" : ""}`}
-          onclick={() => (selectedRuleName = rule.name)}
-        >
-          <TableCell>
-            <div class="space-y-0.5">
-              <p class="text-xs font-semibold text-foreground">{rule.name}</p>
-              <p class="font-mono text-[11px] text-muted-foreground/70">
-                {rule.arn}
-              </p>
-            </div>
-          </TableCell>
-          <TableCell>
-            <Badge variant={scheduleBadgeVariant(rule.scheduleExpression)}>
-              {rule.scheduleExpression}
-            </Badge>
-          </TableCell>
-          <TableCell>
-            <Badge variant={stateBadgeVariant(rule.state)}>{rule.state}</Badge>
-          </TableCell>
-          <TableCell class="font-mono text-xs text-muted-foreground">
-            {rule.targets?.length ?? 0}
-          </TableCell>
-          <TableCell>
-            <div class="space-y-0.5 text-[11px] text-muted-foreground/80">
-              <p>next {formatTime(rule.nextRunAt)}</p>
-              <p>last {formatTime(rule.lastRunAt)}</p>
-            </div>
-          </TableCell>
-          <TableCell>
-            <div class="flex items-center gap-1">
-              <button
-                type="button"
-                disabled={togglingRuleName === rule.name}
-                onclick={(event) => {
-                  event.stopPropagation();
-                  handleToggleRule(rule.name, rule.state === "DISABLED");
-                }}
-                class="rounded border border-border px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-muted disabled:opacity-50"
-              >
-                {rule.state === "DISABLED" ? "Enable" : "Disable"}
-              </button>
-              <button
-                type="button"
-                disabled={firingRuleName === rule.name}
-                onclick={(event) => {
-                  event.stopPropagation();
-                  handleFireRule(rule.name);
-                }}
-                class="inline-flex items-center gap-1 rounded border border-primary/50 bg-primary/10 px-2 py-1 text-[10px] text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
-              >
-                <PlayIcon size={10} />
-                Fire
-              </button>
-            </div>
-          </TableCell>
-        </TableRow>
-      {/each}
-    </ResourceTable>
+    <div class="min-h-0 overflow-hidden rounded-lg border border-border/70 bg-background/60">
+      {#if dashboard.loading && !dashboard.data}
+        <div class="space-y-2 p-3">
+          {#each Array(5) as _, index (index)}
+            <Skeleton class="h-11 w-full" />
+          {/each}
+        </div>
+      {:else if rules.length === 0}
+        <div class="flex min-h-[18rem] items-center justify-center">
+          <EmptyState
+            message="No EventBridge rules configured yet."
+            icon={BridgeIcon}
+          />
+        </div>
+      {:else}
+        <div class="h-full overflow-auto">
+          <Table>
+            <TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur [&_th]:bg-background/95">
+              <TableRow class="hover:bg-transparent">
+                <TableHead class="w-[13rem]">Rule</TableHead>
+                <TableHead>Schedule</TableHead>
+                <TableHead>State</TableHead>
+                <TableHead>Targets</TableHead>
+                <TableHead>Next/Last</TableHead>
+                <TableHead>Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {#each rules as rule}
+                <TableRow
+                  class={`cursor-pointer ${selectedRuleName === rule.name ? "bg-muted/50" : ""}`}
+                  onclick={() => (selectedRuleName = rule.name)}
+                >
+                  <TableCell class="w-[13rem] max-w-[13rem] align-top !whitespace-normal">
+                    <div class="space-y-1">
+                      <p
+                        class="line-clamp-2 break-words text-xs font-semibold leading-4 text-foreground"
+                        title={rule.name}
+                      >
+                        {rule.name}
+                      </p>
+                      <p
+                        class="truncate font-mono text-[11px] text-muted-foreground/70"
+                        title={rule.arn}
+                      >
+                        {rule.arn}
+                      </p>
+                    </div>
+                  </TableCell>
+                  <TableCell class="font-mono text-xs text-muted-foreground">
+                    {rule.scheduleExpression}
+                  </TableCell>
+                  <TableCell>
+                    <span class="inline-flex items-center gap-1.5 text-xs">
+                      <LedDot color={stateColor(rule.state)} />
+                      <span class="text-muted-foreground">{rule.state}</span>
+                    </span>
+                  </TableCell>
+                  <TableCell class="font-mono text-xs text-muted-foreground">
+                    {rule.targets?.length ?? 0}
+                  </TableCell>
+                  <TableCell>
+                    <div class="space-y-0.5 text-[11px] text-muted-foreground/80">
+                      <p>next {formatTime(rule.nextRunAt)}</p>
+                      <p>last {formatTime(rule.lastRunAt)}</p>
+                    </div>
+                  </TableCell>
+                  <TableCell>
+                    <div class="flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={togglingRuleName === rule.name}
+                        onclick={(event) => {
+                          event.stopPropagation();
+                          handleToggleRule(rule.name, rule.state === "DISABLED");
+                        }}
+                        class="rounded border border-border px-2 py-1 text-[10px] text-muted-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                      >
+                        {rule.state === "DISABLED" ? "Enable" : "Disable"}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={firingRuleName === rule.name}
+                        onclick={(event) => {
+                          event.stopPropagation();
+                          handleFireRule(rule.name);
+                        }}
+                        class="inline-flex items-center gap-1 rounded border border-primary/50 bg-primary/10 px-2 py-1 text-[10px] text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
+                      >
+                        <PlayIcon size={10} />
+                        Fire
+                      </button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              {/each}
+            </TableBody>
+          </Table>
+        </div>
+      {/if}
+    </div>
 
     {#if selectedRule}
       <section class="rounded-lg border border-border bg-card p-3 space-y-3">
@@ -592,7 +628,7 @@
                   <div class="min-w-0 flex-1 space-y-0.5">
                     <div class="flex items-center gap-2">
                       <span class="font-mono text-foreground">{target.id}</span>
-                      <Badge variant="secondary">Lambda</Badge>
+                      <span class="text-[10px] text-muted-foreground/70 font-mono">Lambda</span>
                     </div>
                     <ArnCell
                       name={lambdaNameFromTargetArn(target.arn)}
@@ -626,14 +662,6 @@
           {/if}
         </div>
 
-        <div
-          class="rounded border border-border/60 bg-muted/30 px-2 py-2 text-xs"
-        >
-          <p class="font-medium text-foreground">Last result</p>
-          <p class="mt-1 text-muted-foreground">
-            {selectedRule.lastResult || "—"}
-          </p>
-        </div>
       </section>
     {:else}
       <section

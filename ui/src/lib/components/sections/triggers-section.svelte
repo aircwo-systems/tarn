@@ -9,14 +9,23 @@
     Lightning,
   } from "phosphor-svelte";
   import { TableCell, TableRow } from "$lib/components/ui/table";
-  import Badge from "$lib/components/ui/badge/badge.svelte";
+  import LedDot from "$lib/components/common/led-dot.svelte";
   import ArnCell from "$lib/components/common/arn-cell.svelte";
   import ResourceTable from "$lib/components/common/resource-table.svelte";
+  import SectionHeader from "./section-header.svelte";
   import {
     getDashboard,
     getDashboardFilters,
     matchesTagFilter,
   } from "$lib/state.svelte";
+
+  let {
+    sidebarCollapsed = false,
+    onToggleSidebar = () => {},
+  }: {
+    sidebarCollapsed?: boolean;
+    onToggleSidebar?: () => void;
+  } = $props();
 
   type TriggerRow = {
     id: string;
@@ -230,26 +239,15 @@
   const eventBridgeCount = $derived(eventBridgeTriggers.length);
   const apiCount = $derived(apiTriggers.length);
 
-  function stateBadgeVariant(
-    state: string,
-  ): "default" | "amber" | "destructive" | "secondary" | "outline" {
+  function stateColor(state: string): "green" | "amber" | "red" | "gray" {
     const normalized = state.toLowerCase();
-    if (
-      normalized === "enabled" ||
-      normalized === "active" ||
-      normalized === "configured"
-    )
-      return "default";
-    if (
-      normalized === "creating" ||
-      normalized === "updating" ||
-      normalized === "pending"
-    )
+    if (normalized === "enabled" || normalized === "active" || normalized === "configured")
+      return "green";
+    if (normalized === "creating" || normalized === "updating" || normalized === "pending")
       return "amber";
     if (normalized.includes("fail") || normalized === "disabled")
-      return "destructive";
-    if (normalized === "unknown") return "secondary";
-    return "outline";
+      return "red";
+    return "gray";
   }
 
   function lambdaNameFromEndpoint(endpoint: string): string {
@@ -274,42 +272,34 @@
 </script>
 
 <div class="space-y-4">
-  <div class="rounded-lg border border-border bg-card px-4 py-3">
-    <div class="flex flex-wrap items-center justify-between gap-3">
-      <div>
-        <h2 class="text-sm font-semibold text-foreground">Triggers</h2>
-        <p class="text-[10px] text-muted-foreground/70 font-mono">
-          Visualizing event sources wired to functions and APIs
-        </p>
+  <SectionHeader
+    title="Triggers"
+    description="Event sources wired to functions and APIs."
+    icon={ArrowsClockwise}
+    {sidebarCollapsed}
+    {onToggleSidebar}
+  >
+    {#snippet actions()}
+      <div class="flex items-center gap-4 text-xs text-muted-foreground font-mono">
+      <span class="inline-flex items-center gap-1.5">
+        <ChatCircle size={12} class="text-amber" />
+        {sqsCount} SQS
+      </span>
+      <span class="inline-flex items-center gap-1.5">
+        <Bell size={12} class="text-primary" />
+        {snsCount} SNS
+      </span>
+      <span class="inline-flex items-center gap-1.5">
+        <BridgeIcon size={12} class="text-blue" />
+        {eventBridgeCount} EB
+      </span>
+      <span class="inline-flex items-center gap-1.5">
+        <GlobeHemisphereWest size={12} class="text-blue" />
+        {apiCount} API
+      </span>
       </div>
-      <div class="flex items-center gap-2 text-xs">
-        <span
-          class="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-muted-foreground"
-        >
-          <ChatCircle size={12} class="text-amber" />
-          SQS {sqsCount}
-        </span>
-        <span
-          class="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-muted-foreground"
-        >
-          <Bell size={12} class="text-primary" />
-          SNS {snsCount}
-        </span>
-        <span
-          class="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-muted-foreground"
-        >
-          <BridgeIcon size={12} class="text-blue" />
-          EventBridge {eventBridgeCount}
-        </span>
-        <span
-          class="inline-flex items-center gap-1 rounded-full border border-border px-2 py-1 text-muted-foreground"
-        >
-          <GlobeHemisphereWest size={12} class="text-blue" />
-          API {apiCount}
-        </span>
-      </div>
-    </div>
-  </div>
+    {/snippet}
+  </SectionHeader>
 
   <ResourceTable
     title="Trigger Mappings"
@@ -322,18 +312,8 @@
   >
     {#each triggerRows as trigger}
       <TableRow>
-        <TableCell>
-          <Badge
-            variant={trigger.type === "SQS"
-              ? "destructive"
-              : trigger.type === "SNS"
-                ? "default"
-                : trigger.type === "EVENTBRIDGE"
-                  ? "secondary"
-                  : "outline"}
-          >
-            {trigger.type}
-          </Badge>
+        <TableCell class="font-mono text-xs text-muted-foreground">
+          {trigger.type}
         </TableCell>
         <TableCell>
           <ArnCell name={trigger.sourceName} arn={trigger.sourceArn} />
@@ -356,9 +336,10 @@
           {/if}
         </TableCell>
         <TableCell>
-          <Badge variant={stateBadgeVariant(trigger.state)}
-            >{trigger.state}</Badge
-          >
+          <span class="inline-flex items-center gap-1.5 text-xs">
+            <LedDot color={stateColor(trigger.state)} />
+            <span class="text-muted-foreground">{trigger.state}</span>
+          </span>
         </TableCell>
         <TableCell>
           <div class="space-y-0.5">

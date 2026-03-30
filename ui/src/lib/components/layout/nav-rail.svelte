@@ -8,7 +8,6 @@
     HardDriveIcon,
     ScrollIcon,
     DetectiveIcon,
-    SidebarSimpleIcon,
     ArrowsClockwiseIcon,
     GearIcon,
     XIcon,
@@ -21,8 +20,6 @@
   import TarnLogo from "$lib/components/common/tarn-logo.svelte";
   import NavRailItem from "./nav-rail-item.svelte";
   import ThemeToggle from "./theme-toggle.svelte";
-  import StatusIndicator from "$lib/components/common/status-indicator.svelte";
-  import ConnectionPanel from "$lib/components/topology/connection-panel.svelte";
   import { Separator } from "$lib/components/ui/separator";
   import {
     getDashboard,
@@ -30,7 +27,6 @@
     getInfraSettings,
     setInfraEnabledKinds,
     setInfraFrontendTargets,
-    refresh,
     setLogRetentionMinutes,
     setPersistenceEnabled,
     setPollingIntervalSeconds,
@@ -45,108 +41,84 @@
   let {
     activeTab = "overview",
     onTabChange,
+    collapsed = false,
   }: {
     activeTab?: string;
     onTabChange?: (tab: string) => void;
+    collapsed?: boolean;
   } = $props();
 
   const dashboard = getDashboard();
   const uiSettings = getUISettings();
   const infraSettings = getInfraSettings();
 
-  const INFRA_KINDS: Array<{
-    id: InfraProbeKind;
-    label: string;
-    detail: string;
-  }> = [
-    { id: "docker", label: "Docker", detail: "daemon" },
-    { id: "postgresql", label: "PostgreSQL", detail: ":5432" },
-    { id: "redis", label: "Redis", detail: ":6379" },
-    { id: "mysql", label: "MySQL", detail: ":3306" },
-    { id: "mongodb", label: "MongoDB", detail: ":27017" },
+  const INFRA_KINDS: Array<{ id: InfraProbeKind; label: string; detail: string }> = [
+    { id: "docker",     label: "Docker",     detail: "daemon" },
+    { id: "postgresql", label: "PostgreSQL", detail: ":5432"  },
+    { id: "redis",      label: "Redis",      detail: ":6379"  },
+    { id: "mysql",      label: "MySQL",      detail: ":3306"  },
+    { id: "mongodb",    label: "MongoDB",    detail: ":27017" },
   ];
 
-  let collapsed = $state(false);
-  let settingsOpen = $state(false);
-  let pollingIntervalDraft = $state(uiSettings.pollingIntervalSeconds);
-  let themeModeDraft = $state<ThemeMode>(uiSettings.themeMode);
-  let persistenceDraft = $state(uiSettings.persistenceEnabled);
-  let schemaSourceDirDraft = $state(uiSettings.schemaSourceDir);
-  let logRetentionMinutesDraft = $state(uiSettings.logRetentionMinutes);
-  let infraEnabledKindsDraft = $state<InfraProbeKind[]>([]);
+  let settingsOpen              = $state(false);
+  let pollingIntervalDraft      = $state(uiSettings.pollingIntervalSeconds);
+  let themeModeDraft            = $state<ThemeMode>(uiSettings.themeMode);
+  let persistenceDraft          = $state(uiSettings.persistenceEnabled);
+  let schemaSourceDirDraft      = $state(uiSettings.schemaSourceDir);
+  let logRetentionMinutesDraft  = $state(uiSettings.logRetentionMinutes);
+  let infraEnabledKindsDraft    = $state<InfraProbeKind[]>([]);
   let infraFrontendTargetsDraft = $state<FrontendTarget[]>([]);
-  let newTargetName = $state("");
-  let newTargetPort = $state("");
-
-  if (typeof window !== "undefined") {
-    collapsed = localStorage.getItem("tarn-nav-collapsed") === "true";
-  }
-
-  function toggleCollapsed() {
-    collapsed = !collapsed;
-    localStorage.setItem("tarn-nav-collapsed", String(collapsed));
-  }
+  let newTargetName             = $state("");
+  let newTargetPort             = $state("");
 
   const tabs = [
-    { id: "overview", label: "Overview", icon: SquaresFourIcon },
-    { id: "gateways", label: "Gateways", icon: GlobeHemisphereWestIcon },
-    { id: "chaos", label: "Chaos", icon: ShieldWarningIcon },
-    { id: "functions", label: "Functions", icon: LightningIcon },
-    { id: "queues", label: "Queues", icon: ChatCircleIcon },
-    { id: "sns", label: "SNS", icon: BellIcon },
-    { id: "secrets", label: "Secrets", icon: KeyIcon },
-    { id: "triggers", label: "Triggers", icon: ArrowsClockwiseIcon },
-    { id: "eventbridge", label: "EventBridge", icon: BridgeIcon },
-    { id: "storage", label: "Storage", icon: HardDriveIcon },
-    { id: "logs", label: "Logs", icon: ScrollIcon },
-    { id: "xray", label: "Traces", icon: DetectiveIcon },
+    { id: "overview",     label: "Overview",     icon: SquaresFourIcon        },
+    { id: "gateways",     label: "Gateways",     icon: GlobeHemisphereWestIcon },
+    { id: "chaos",        label: "Chaos",        icon: ShieldWarningIcon       },
+    { id: "functions",    label: "Functions",    icon: LightningIcon           },
+    { id: "queues",       label: "Queues",        icon: ChatCircleIcon          },
+    { id: "sns",          label: "SNS",          icon: BellIcon                },
+    { id: "secrets",      label: "Secrets",      icon: KeyIcon                 },
+    { id: "triggers",     label: "Triggers",     icon: ArrowsClockwiseIcon     },
+    { id: "eventbridge",  label: "EventBridge",  icon: BridgeIcon              },
+    { id: "storage",      label: "Storage",      icon: HardDriveIcon           },
+    { id: "logs",         label: "Logs",         icon: ScrollIcon              },
+    { id: "xray",         label: "Traces",       icon: DetectiveIcon           },
   ];
 
+  const tabCounts = $derived<Record<string, number | null>>({
+    gateways:    dashboard.data?.gateways.length             ?? null,
+    functions:   dashboard.data?.functions.length            ?? null,
+    queues:      dashboard.data?.queues.length               ?? null,
+    sns:         dashboard.data?.topics.length               ?? null,
+    secrets:     dashboard.data?.secrets.length              ?? null,
+    triggers:    dashboard.data?.eventSourceMappings?.length ?? null,
+    eventbridge: dashboard.data?.eventBridgeRules?.length    ?? null,
+    storage:     dashboard.data?.buckets.length              ?? null,
+    xray:        dashboard.data?.recentTraces?.length        ?? null,
+  });
+
   const connectionStatus = $derived(
-    dashboard.error
-      ? ("error" as const)
-      : dashboard.loading
-        ? ("loading" as const)
-        : dashboard.data
-          ? ("ok" as const)
-          : ("idle" as const),
+    dashboard.error   ? ("error"   as const) :
+    dashboard.loading ? ("loading" as const) :
+    dashboard.data    ? ("ok"      as const) :
+                        ("idle"    as const),
   );
-
-  const statusText = $derived(
-    dashboard.error
-      ? dashboard.error
-      : dashboard.loading
-        ? "Connecting..."
-        : dashboard.data?.status === "running"
-          ? `Connected · ${dashboard.lastRefresh}`
-          : "Status unknown",
-  );
-
-  let refreshing = $state(false);
-  async function handleRefresh() {
-    refreshing = true;
-    await refresh();
-    refreshing = false;
-  }
 
   function openSettings() {
-    pollingIntervalDraft = uiSettings.pollingIntervalSeconds;
-    themeModeDraft = uiSettings.themeMode;
-    persistenceDraft = uiSettings.persistenceEnabled;
-    schemaSourceDirDraft = uiSettings.schemaSourceDir;
-    logRetentionMinutesDraft = uiSettings.logRetentionMinutes;
-    infraEnabledKindsDraft = [...infraSettings.enabledKinds];
-    infraFrontendTargetsDraft = infraSettings.frontendTargets.map((t) => ({
-      ...t,
-    }));
-    newTargetName = "";
-    newTargetPort = "";
-    settingsOpen = true;
+    pollingIntervalDraft      = uiSettings.pollingIntervalSeconds;
+    themeModeDraft            = uiSettings.themeMode;
+    persistenceDraft          = uiSettings.persistenceEnabled;
+    schemaSourceDirDraft      = uiSettings.schemaSourceDir;
+    logRetentionMinutesDraft  = uiSettings.logRetentionMinutes;
+    infraEnabledKindsDraft    = [...infraSettings.enabledKinds];
+    infraFrontendTargetsDraft = infraSettings.frontendTargets.map((t) => ({ ...t }));
+    newTargetName             = "";
+    newTargetPort             = "";
+    settingsOpen              = true;
   }
 
-  function closeSettings() {
-    settingsOpen = false;
-  }
+  function closeSettings() { settingsOpen = false; }
 
   function applySettings() {
     setPollingIntervalSeconds(pollingIntervalDraft);
@@ -172,9 +144,7 @@
   }
 
   function removeFrontendTarget(id: string) {
-    infraFrontendTargetsDraft = infraFrontendTargetsDraft.filter(
-      (t) => t.id !== id,
-    );
+    infraFrontendTargetsDraft = infraFrontendTargetsDraft.filter((t) => t.id !== id);
   }
 
   function handleNewTargetKeydown(event: KeyboardEvent) {
@@ -182,29 +152,25 @@
   }
 
   function handleWindowKeydown(event: KeyboardEvent) {
-    if (event.key === "Escape" && settingsOpen) {
-      settingsOpen = false;
-    }
+    if (event.key === "Escape" && settingsOpen) settingsOpen = false;
   }
 </script>
 
 <svelte:window onkeydown={handleWindowKeydown} />
 
 <aside
-  class="hidden md:flex flex-col border-r border-sidebar-border bg-sidebar h-screen sticky top-0 transition-[width] duration-200 overflow-hidden shrink-0"
-  style:width={collapsed ? "56px" : "200px"}
+  class="hidden md:flex flex-col border-r border-sidebar-border bg-background h-screen sticky top-0 transition-[width] duration-200 overflow-hidden shrink-0"
+  style:width={collapsed ? "56px" : "196px"}
 >
   <!-- Brand -->
   <div class="flex items-center gap-2.5 px-3 py-3 shrink-0">
-    <TarnLogo class="h-12 w-12 shrink-0" color="#007a5a" />
+    <TarnLogo class="h-9 w-9 shrink-0" color="#007a5a" />
     {#if !collapsed}
       <div class="min-w-0">
-        <p
-          class="text-[14px] font-mono uppercase tracking-wider text-sidebar-foreground/50"
-        >
+        <p class="font-mono text-[10px] uppercase tracking-[0.08em] text-sidebar-foreground/40">
           Tarn
         </p>
-        <p class="text-[14px] font-semibold text-sidebar-foreground truncate">
+        <p class="font-mono text-[13px] font-semibold text-sidebar-foreground truncate">
           Rack Console
         </p>
       </div>
@@ -214,98 +180,77 @@
   <Separator />
 
   <!-- Nav items -->
-  <nav
-    class="flex flex-col gap-0.5 px-1.5 py-2 flex-1"
-    aria-label="Dashboard sections"
-  >
+  <nav class="flex flex-col gap-px px-1.5 py-2 flex-1 overflow-y-auto" aria-label="Dashboard sections">
     {#each tabs as tab}
       <NavRailItem
         icon={tab.icon}
         label={tab.label}
         active={activeTab === tab.id}
+        count={tabCounts[tab.id] ?? null}
         {collapsed}
         onclick={() => onTabChange?.(tab.id)}
       />
     {/each}
   </nav>
 
-  <!-- Bottom section -->
-  <div
-    class="mt-auto flex flex-col gap-2 pb-2 shrink-0"
-    class:px-2={!collapsed}
-    class:px-1={collapsed}
-  >
-    {#if !collapsed}
-      <Separator />
-      <StatusIndicator status={connectionStatus} text={statusText} />
-
-      {#if dashboard.data}
-        <Separator />
-        <ConnectionPanel
-          region={dashboard.data.config.region}
-          accountId={dashboard.data.config.accountId}
-          endpoint={dashboard.data.config.endpoint}
-          infrastructure={dashboard.data.infrastructure ?? []}
-          connections={dashboard.data.connections ?? []}
-        />
-      {/if}
-
-      <button
-        type="button"
-        onclick={handleRefresh}
-        disabled={refreshing || dashboard.loading}
-        class="flex items-center justify-center gap-1.5 w-full h-7 rounded-md border border-primary/50 bg-primary/10 text-xs text-primary hover:bg-primary/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        <ArrowsClockwiseIcon
-          size={12}
-          class={refreshing ? "animate-spin" : ""}
-        />
-        {refreshing ? "Refreshing..." : "Refresh"}
-      </button>
-    {/if}
-
-    <Separator />
+  <!-- Footer -->
+  <div class="mt-auto shrink-0 border-t border-sidebar-border" class:px-3={!collapsed} class:px-1.5={collapsed}>
     {#if collapsed}
-      <div class="flex flex-col items-center gap-1">
-        <button
-          type="button"
-          onclick={toggleCollapsed}
-          class="flex items-center justify-center h-8 w-8 rounded-md text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
-          aria-label="Expand sidebar"
-        >
-          <SidebarSimpleIcon size={15} />
-        </button>
+      <div class="flex flex-col items-center gap-1 py-2">
         <ThemeToggle />
         <button
           type="button"
           onclick={openSettings}
-          class="flex items-center justify-center h-8 w-8 rounded-md text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+          class="flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground/60 hover:text-foreground hover:bg-muted/60 transition-colors"
           aria-label="Open UI settings"
         >
           <GearIcon size={15} />
         </button>
       </div>
     {:else}
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-1">
+      <div class="flex flex-col gap-2 py-2">
+        <div class="flex items-center gap-1.5">
+          <span
+            class="h-1.5 w-1.5 shrink-0 rounded-full"
+            class:bg-primary={connectionStatus === "ok"}
+            class:bg-amber-400={connectionStatus === "loading"}
+            class:bg-destructive={connectionStatus === "error" || connectionStatus === "idle"}
+          ></span>
+          <span class="min-w-0 truncate font-mono text-[10px] text-muted-foreground/50"
+                title={dashboard.data?.config.endpoint}>
+            {#if connectionStatus === "ok"}
+              Connected{dashboard.data?.config.region ? ` · ${dashboard.data.config.region}` : ""}
+            {:else if connectionStatus === "loading"}
+              Connecting...
+            {:else}
+              Disconnected
+            {/if}
+          </span>
+        </div>
+        {#if dashboard.data?.config.endpoint}
+          <div class="flex items-center gap-1.5 min-w-0">
+            {#if dashboard.data.config.accountId}
+              <span class="font-mono text-[10px] text-muted-foreground/30 truncate">
+                {dashboard.data.config.accountId}
+              </span>
+              <span class="font-mono text-[10px] text-muted-foreground/20 shrink-0">·</span>
+            {/if}
+            <span class="font-mono text-[10px] text-muted-foreground/30 truncate">
+              {dashboard.data.config.endpoint}
+            </span>
+          </div>
+        {/if}
+        <div class="flex items-center gap-0.5">
           <ThemeToggle />
           <button
             type="button"
             onclick={openSettings}
-            class="flex items-center justify-center h-8 w-8 rounded-md text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+            class="flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground/60 hover:text-foreground hover:bg-muted/60 transition-colors"
             aria-label="Open UI settings"
           >
             <GearIcon size={15} />
           </button>
         </div>
-        <button
-          type="button"
-          onclick={toggleCollapsed}
-          class="flex items-center justify-center h-8 w-8 rounded-md text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
-          aria-label="Collapse sidebar"
-        >
-          <SidebarSimpleIcon size={15} weight="fill" />
-        </button>
       </div>
     {/if}
   </div>
@@ -320,10 +265,7 @@
     {@const TabIcon = tab.icon}
     <button
       type="button"
-      class="flex flex-col items-center gap-0.5 py-1 px-3 text-[10px] transition-colors {activeTab ===
-      tab.id
-        ? 'text-sidebar-primary'
-        : 'text-sidebar-foreground/70'}"
+      class="flex flex-col items-center gap-0.5 py-1 px-3 text-[10px] transition-colors {activeTab === tab.id ? 'text-sidebar-primary' : 'text-sidebar-foreground/70'}"
       onclick={() => onTabChange?.(tab.id)}
       aria-current={activeTab === tab.id ? "page" : undefined}
     >
@@ -345,9 +287,7 @@
     aria-label="UI Settings"
     class="fixed z-[75] left-1/2 top-1/2 w-[min(32rem,90vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-card shadow-xl"
   >
-    <div
-      class="flex items-center justify-between border-b border-border px-4 py-3"
-    >
+    <div class="flex items-center justify-between border-b border-border px-4 py-3">
       <h2 class="text-[14px] font-semibold text-foreground">UI Settings</h2>
       <button
         type="button"
@@ -365,10 +305,9 @@
       </p>
 
       <div class="space-y-1.5">
-        <label
-          class="text-sm font-medium text-foreground"
-          for="polling-interval">Polling Interval (seconds)</label
-        >
+        <label class="text-sm font-medium text-foreground" for="polling-interval">
+          Polling Interval (seconds)
+        </label>
         <input
           id="polling-interval"
           type="number"
@@ -381,9 +320,9 @@
       </div>
 
       <div class="space-y-1.5">
-        <label class="text-sm font-medium text-foreground" for="log-retention"
-          >Log Retention (minutes)</label
-        >
+        <label class="text-sm font-medium text-foreground" for="log-retention">
+          Log Retention (minutes)
+        </label>
         <input
           id="log-retention"
           type="number"
@@ -394,15 +333,12 @@
           class="w-full rounded-md border border-border bg-muted px-2.5 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
         />
         <p class="text-[11px] leading-relaxed text-muted-foreground/70">
-          Automatically remove log events older than this. Default 15 minutes.
-          Max 1440 (24h).
+          Automatically remove log events older than this. Default 15 minutes. Max 1440 (24h).
         </p>
       </div>
 
       <div class="space-y-1.5">
-        <label class="text-sm font-medium text-foreground" for="theme-mode"
-          >Theme</label
-        >
+        <label class="text-sm font-medium text-foreground" for="theme-mode">Theme</label>
         <select
           id="theme-mode"
           bind:value={themeModeDraft}
@@ -417,33 +353,23 @@
       <div class="rounded-md border border-border bg-muted/70 p-3">
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
-            <label
-              class="text-sm font-medium text-foreground"
-              for="persistence-enabled">Persistence</label
-            >
-            <p
-              class="mt-1 text-[11px] leading-relaxed text-muted-foreground/70"
-            >
+            <label class="text-sm font-medium text-foreground" for="persistence-enabled">
+              Persistence
+            </label>
+            <p class="mt-1 text-[11px] leading-relaxed text-muted-foreground/70">
               Persist configuration over Tarn sessions. Intended to allow for
-              config to be saved and reused instead of building instance each
-              time.
+              config to be saved and reused instead of building instance each time.
             </p>
           </div>
-          <label
-            class="relative inline-flex cursor-pointer items-center self-center"
-          >
+          <label class="relative inline-flex cursor-pointer items-center self-center">
             <input
               id="persistence-enabled"
               type="checkbox"
               bind:checked={persistenceDraft}
               class="peer sr-only"
             />
-            <span
-              class="h-6 w-11 rounded-full border border-border bg-muted transition-colors peer-checked:border-primary/50 peer-checked:bg-primary/10"
-            ></span>
-            <span
-              class="pointer-events-none absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-5 dark:bg-zinc-950"
-            ></span>
+            <span class="h-6 w-11 rounded-full border border-border bg-muted transition-colors peer-checked:border-primary/50 peer-checked:bg-primary/10"></span>
+            <span class="pointer-events-none absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-5 dark:bg-zinc-950"></span>
           </label>
         </div>
         <div class="mt-2 text-[11px] font-mono text-muted-foreground/70">
@@ -452,36 +378,30 @@
       </div>
 
       <div class="space-y-1.5">
-        <label class="text-sm font-medium text-foreground" for="schema-source"
-          >Schema Source</label
-        >
+        <label class="text-sm font-medium text-foreground" for="schema-source">
+          Schema Source
+        </label>
         <input
           id="schema-source"
           type="text"
           placeholder="/path/to/lambda-repos"
           bind:value={schemaSourceDirDraft}
-          onblur={() =>
-            (schemaSourceDirDraft =
-              sanitizeSchemaSourceDir(schemaSourceDirDraft))}
+          onblur={() => (schemaSourceDirDraft = sanitizeSchemaSourceDir(schemaSourceDirDraft))}
           class="w-full rounded-md border border-border bg-muted px-2.5 py-1.5 font-mono text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
         />
         <p class="text-[11px] leading-relaxed text-muted-foreground/70">
-          Local directory used by Chaos Probe to discover <code>schemas.ts</code
-          >
+          Local directory used by Chaos Probe to discover <code>schemas.ts</code>
           and event samples. Saved in local project settings.
         </p>
       </div>
 
       <!-- Infrastructure Probes -->
       <div class="rounded-md border border-border bg-muted/70 p-3 space-y-2">
-        <p
-          class="text-sm font-semibold uppercase tracking-wide text-muted-foreground/70"
-        >
+        <p class="text-sm font-semibold uppercase tracking-wide text-muted-foreground/70">
           Infrastructure Probes
         </p>
         <p class="text-[11px] text-muted-foreground/70 leading-relaxed">
-          Show local services probed by the backend. Docker is checked by
-          default.
+          Show local services probed by the backend. Docker is checked by default.
         </p>
         <div class="space-y-1.5 pt-0.5">
           {#each INFRA_KINDS as k}
@@ -493,13 +413,8 @@
                 class="h-3.5 w-3.5 cursor-pointer rounded"
                 style="accent-color: var(--color-accent)"
               />
-              <span
-                class="text-sm text-foreground group-hover:text-foreground flex-1"
-                >{k.label}</span
-              >
-              <span class="text-[10px] font-mono text-muted-foreground/70"
-                >{k.detail}</span
-              >
+              <span class="text-sm text-foreground group-hover:text-foreground flex-1">{k.label}</span>
+              <span class="text-[10px] font-mono text-muted-foreground/70">{k.detail}</span>
             </label>
           {/each}
         </div>
@@ -507,9 +422,7 @@
 
       <!-- Frontend Services -->
       <div class="rounded-md border border-border bg-muted/70 p-3 space-y-2">
-        <p
-          class="text-sm font-semibold uppercase tracking-wide text-muted-foreground/70"
-        >
+        <p class="text-sm font-semibold uppercase tracking-wide text-muted-foreground/70">
           Frontend Services
         </p>
         <p class="text-[11px] text-muted-foreground/70 leading-relaxed">
@@ -519,13 +432,8 @@
           <ul class="space-y-1 pt-0.5">
             {#each infraFrontendTargetsDraft as target (target.id)}
               <li class="flex items-center gap-2 group">
-                <span class="text-xs text-foreground flex-1 truncate"
-                  >{target.name}</span
-                >
-                <span
-                  class="text-[10px] font-mono text-muted-foreground/70 shrink-0"
-                  >:{target.port}</span
-                >
+                <span class="text-xs text-foreground flex-1 truncate">{target.name}</span>
+                <span class="text-[10px] font-mono text-muted-foreground/70 shrink-0">:{target.port}</span>
                 <button
                   type="button"
                   onclick={() => removeFrontendTarget(target.id)}
@@ -567,29 +475,21 @@
       </div>
 
       <div class="rounded-md border border-border bg-muted/70 p-3">
-        <p
-          class="mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground/70"
-        >
+        <p class="mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground/70">
           Instance Info
         </p>
         <div class="space-y-1.5 text-sm">
           <div class="grid grid-cols-[6.5rem_1fr] gap-2">
             <span class="text-muted-foreground/70">Region</span>
-            <span class="font-mono text-foreground break-all"
-              >{dashboard.data?.config.region ?? "--"}</span
-            >
+            <span class="font-mono text-foreground break-all">{dashboard.data?.config.region ?? "--"}</span>
           </div>
           <div class="grid grid-cols-[6.5rem_1fr] gap-2">
             <span class="text-muted-foreground/70">Account</span>
-            <span class="font-mono text-foreground break-all"
-              >{dashboard.data?.config.accountId ?? "--"}</span
-            >
+            <span class="font-mono text-foreground break-all">{dashboard.data?.config.accountId ?? "--"}</span>
           </div>
           <div class="grid grid-cols-[6.5rem_1fr] gap-2">
             <span class="text-muted-foreground/70">API URL</span>
-            <span class="font-mono text-foreground break-all"
-              >{dashboard.data?.config.endpoint ?? "--"}</span
-            >
+            <span class="font-mono text-foreground break-all">{dashboard.data?.config.endpoint ?? "--"}</span>
           </div>
         </div>
         <p class="mt-2 text-[11px] text-muted-foreground/70">
@@ -598,9 +498,7 @@
       </div>
     </div>
 
-    <div
-      class="flex items-center justify-end gap-2 border-t border-border px-4 py-3"
-    >
+    <div class="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
       <button
         type="button"
         onclick={closeSettings}

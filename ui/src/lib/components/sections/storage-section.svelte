@@ -17,6 +17,7 @@
     AccordionTrigger,
     AccordionContent,
   } from "$lib/components/ui/accordion";
+  import SectionHeader from "./section-header.svelte";
 
   type BucketObject = {
     key: string;
@@ -33,6 +34,14 @@
     showRaw: boolean;
     copied: boolean;
   };
+
+  let {
+    sidebarCollapsed = false,
+    onToggleSidebar = () => {},
+  }: {
+    sidebarCollapsed?: boolean;
+    onToggleSidebar?: () => void;
+  } = $props();
 
   const dashboard = getDashboard();
   const buckets = $derived(dashboard.data?.buckets ?? []);
@@ -203,22 +212,28 @@
 </script>
 
 <div class="space-y-4">
-  <div class="flex items-center justify-between gap-4 flex-wrap rounded-lg border border-border bg-card px-4 py-3">
-    <div class="flex items-center gap-3">
-      <div class="flex items-center justify-center h-8 w-8 rounded-md bg-accent/10">
-        <HardDrive size={16} class="text-primary" />
-      </div>
-      <div>
-        <h2 class="text-sm font-semibold text-foreground">S3 Storage</h2>
-        <p class="text-[10px] text-muted-foreground/70 font-mono">
-          {buckets.length} bucket{buckets.length !== 1 ? "s" : ""}
-        </p>
-      </div>
-    </div>
-    <span class="inline-flex items-center rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground/70">
-      Path-style: /_s3/&lbrace;bucket&rbrace;/&lbrace;key&rbrace;
-    </span>
-  </div>
+  <SectionHeader
+    title="S3 storage"
+    description="Buckets, object previews and direct Tarn storage paths."
+    icon={HardDrive}
+    {sidebarCollapsed}
+    {onToggleSidebar}
+  >
+    {#snippet stats()}
+      <span class="inline-flex items-center gap-1.5">
+        <span class="font-mono text-foreground">{buckets.length}</span>
+        <span class="text-muted-foreground/70">
+          bucket{buckets.length !== 1 ? "s" : ""}
+        </span>
+      </span>
+    {/snippet}
+
+    {#snippet actions()}
+      <span class="text-[11px] text-muted-foreground/50 font-mono">
+        /_s3/&lbrace;bucket&rbrace;/&lbrace;key&rbrace;
+      </span>
+    {/snippet}
+  </SectionHeader>
 
   {#if buckets.length === 0 && !dashboard.loading}
     <div class="rounded-lg border border-border bg-card px-4 py-8 text-center">
