@@ -241,8 +241,9 @@ func startServer(cfg *config.Config) error {
 			if !matchesNotification(lc, eventName, key) {
 				continue
 			}
-			payload := buildS3EventPayload(eventName, bucket, key, size, etag, cfg.Region)
-			go func(fnName string, p []byte) {
+			correlationID := trace.NewCorrelationID()
+			payload := buildS3EventPayload(eventName, bucket, key, size, etag, cfg.Region, correlationID)
+			go func(fnName string, p []byte, corr string) {
 				collector.Begin(fnName)
 				traceStart := time.Now()
 				invokeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -261,16 +262,17 @@ func startServer(cfg *config.Config) error {
 					spanStatus = "error"
 				}
 				traceStore.Add(&trace.Trace{
-					ID:         uuid.NewString()[:8],
-					StartedAt:  traceStart,
-					DurationMs: durationMs,
-					Status:     status,
+					ID:            uuid.NewString()[:8],
+					CorrelationID: corr,
+					StartedAt:     traceStart,
+					DurationMs:    durationMs,
+					Status:        status,
 					Spans: append([]trace.Span{
 						{Kind: "s3", Name: bucket + "/" + key, DurationMs: 0, Status: "ok", Meta: map[string]string{"event": eventName}},
 						{Kind: "lambda", Name: fnName, DurationMs: durationMs, Status: spanStatus},
 					}, subSpans...),
 				})
-			}(lc.LambdaFunctionName, payload)
+			}(lc.LambdaFunctionName, payload, correlationID)
 		}
 	})
 
@@ -502,7 +504,7 @@ func matchEventPattern(pattern, eventName string) bool {
 	return p == eventName
 }
 
-func buildS3EventPayload(eventName, bucket, key string, size int64, etag, region string) []byte {
+func buildS3EventPayload(eventName, bucket, key string, size int64, etag, region, correlationID string) []byte {
 	record := map[string]any{
 		"eventVersion": "2.1",
 		"eventSource":  "aws:s3",
@@ -520,8 +522,12 @@ func buildS3EventPayload(eventName, bucket, key string, size int64, etag, region
 				"eTag": etag,
 			},
 		},
+		"correlationId": correlationID,
 	}
-	data, _ := json.Marshal(map[string]any{"Records": []any{record}})
+	data, _ := json.Marshal(map[string]any{
+		"correlationId": correlationID,
+		"Records":       []any{record},
+	})
 	return data
 }
 

@@ -3,10 +3,24 @@
   import { runEventBridgeRace } from "$lib/api";
   import { getDashboard, refresh } from "$lib/state.svelte";
   import type { RequestTrace, TraceSpan } from "$lib/types";
+  import SectionHeader from "./section-header.svelte";
+
+  let {
+    sidebarCollapsed = false,
+    onToggleSidebar = () => {},
+  }: {
+    sidebarCollapsed?: boolean;
+    onToggleSidebar?: () => void;
+  } = $props();
 
   const dashboard = getDashboard();
   const traces = $derived(dashboard.data?.recentTraces ?? []);
   const eventBridgeRules = $derived(dashboard.data?.eventBridgeRules ?? []);
+
+  interface TraceFlow extends RequestTrace {
+    rawTraces: RequestTrace[];
+    traceCount: number;
+  }
 
   let selectedTraceId = $state<string | null>(null);
   let searchQuery = $state("");
@@ -20,6 +34,8 @@
   const raceSessions = $derived(
     [...new Set(traces.map((trace) => traceRaceSession(trace)).filter(Boolean))] as string[],
   );
+
+  const traceFlows = $derived(chainTraceFlows(traces));
 
   $effect(() => {
     if (!raceRuleName && eventBridgeRules.length > 0) {
@@ -37,7 +53,7 @@
   });
 
   const filteredTraces = $derived(
-    traces.filter((trace) => {
+    traceFlows.filter((trace) => {
       if (raceSessionFilter && traceRaceSession(trace) !== raceSessionFilter) {
         return false;
       }
@@ -69,19 +85,19 @@
     filteredTraces.find((t) => t.id === effectiveId) ?? null,
   );
 
-  const errorCount = $derived(traces.filter((t) => t.status >= 500).length);
+  const errorCount = $derived(traceFlows.filter((t) => t.status >= 500).length);
   const clientErrorCount = $derived(
-    traces.filter((t) => t.status >= 400 && t.status < 500).length,
+    traceFlows.filter((t) => t.status >= 400 && t.status < 500).length,
   );
   const avgMs = $derived(
-    traces.length > 0
-      ? Math.round(traces.reduce((s, t) => s + t.durationMs, 0) / traces.length)
+    traceFlows.length > 0
+      ? Math.round(traceFlows.reduce((s, t) => s + t.durationMs, 0) / traceFlows.length)
       : 0,
   );
   const p95Ms = $derived(
-    traces.length >= 5
-      ? [...traces].sort((a, b) => a.durationMs - b.durationMs)[
-          Math.floor(traces.length * 0.95)
+    traceFlows.length >= 5
+      ? [...traceFlows].sort((a, b) => a.durationMs - b.durationMs)[
+          Math.floor(traceFlows.length * 0.95)
         ].durationMs
       : 0,
   );
@@ -182,6 +198,208 @@
     );
   }
 
+  const SUB_SPAN_KINDS = new Set([
+    "postgres",
+    "postgresql",
+    "mysql",
+    "redis",
+    "cache_extension",
+    "cache-extension",
+    "secret",
+    "secrets",
+  ]);
+
+  function normalizeTraceToken(value: string): string {
+    return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+  }
+
+  function splitTraceTokens(value: string): string[] {
+    return value
+      .split(/[^a-zA-Z0-9]+/)
+      .map((part) => normalizeTraceToken(part))
+      .filter((part) => part.length >= 3);
+  }
+
+  function traceCoreSpans(trace: RequestTrace): TraceSpan[] {
+    return trace.spans.filter((span) => !SUB_SPAN_KINDS.has(span.kind.toLowerCase()));
+  }
+
+  function traceEntrySpan(trace: RequestTrace): TraceSpan | undefined {
+    return traceCoreSpans(trace)[0] ?? trace.spans[0];
+  }
+
+  function traceTerminalSpan(trace: RequestTrace): TraceSpan | undefined {
+    const core = traceCoreSpans(trace);
+    return core[core.length - 1] ?? trace.spans[trace.spans.length - 1];
+  }
+
+  function tracePathTokens(trace: RequestTrace): string[] {
+    return splitTraceTokens(trace.path ?? "");
+  }
+
+  function traceNameTokens(trace: RequestTrace): Set<string> {
+    const tokens = new Set<string>();
+    if (trace.gatewayName) {
+      for (const token of splitTraceTokens(trace.gatewayName)) tokens.add(token);
+    }
+    for (const token of tracePathTokens(trace)) tokens.add(token);
+    for (const span of traceCoreSpans(trace)) {
+      for (const token of splitTraceTokens(span.name)) tokens.add(token);
+    }
+    return tokens;
+  }
+
+  function worstTraceStatus(a: number, b: number): number {
+    return Math.max(a, b);
+  }
+
+  function worstSpanStatus(a: TraceSpan["status"], b: TraceSpan["status"]): TraceSpan["status"] {
+    const rank = (status: string) =>
+      status === "error" ? 3 : status === "client_error" ? 2 : status === "ok" ? 1 : 0;
+    return rank(a) >= rank(b) ? a : b;
+  }
+
+  function compactTraceSpans(spans: TraceSpan[]): TraceSpan[] {
+    const compacted: TraceSpan[] = [];
+    for (const span of spans) {
+      const previous = compacted[compacted.length - 1];
+      if (previous && previous.kind === span.kind && previous.name === span.name) {
+        previous.durationMs = Math.max(previous.durationMs, span.durationMs);
+        previous.status = worstSpanStatus(previous.status, span.status);
+        if (span.meta) previous.meta = { ...(previous.meta ?? {}), ...span.meta };
+        continue;
+      }
+      compacted.push({
+        ...span,
+        meta: span.meta ? { ...span.meta } : undefined,
+      });
+    }
+    return compacted;
+  }
+
+  function toTraceFlow(trace: RequestTrace): TraceFlow {
+    return {
+      ...trace,
+      correlationId: trace.correlationId ?? trace.id,
+      spans: trace.spans.map((span) => ({
+        ...span,
+        meta: span.meta ? { ...span.meta } : undefined,
+      })),
+      rawTraces: [trace],
+      traceCount: 1,
+    };
+  }
+
+  function appendTraceFlow(flow: TraceFlow, next: RequestTrace): TraceFlow {
+    const flowStart = new Date(flow.startedAt).getTime();
+    const flowEnd = Math.max(
+      ...flow.rawTraces.map((trace) => new Date(trace.startedAt).getTime() + trace.durationMs),
+    );
+    const nextEnd = new Date(next.startedAt).getTime() + next.durationMs;
+
+    return {
+      ...flow,
+      correlationId: flow.correlationId ?? next.correlationId ?? flow.id,
+      durationMs: Math.max(flowEnd, nextEnd) - flowStart,
+      status: worstTraceStatus(flow.status, next.status),
+      spans: compactTraceSpans([...flow.spans, ...next.spans]),
+      rawTraces: [...flow.rawTraces, next],
+      traceCount: flow.traceCount + 1,
+    };
+  }
+
+  function shouldChainTrace(flow: TraceFlow, candidate: RequestTrace): boolean {
+    if (flow.correlationId && candidate.correlationId && flow.correlationId === candidate.correlationId) {
+      return true;
+    }
+
+    const candidateStart = new Date(candidate.startedAt).getTime();
+    const flowStart = new Date(flow.startedAt).getTime();
+    const flowEnd = Math.max(
+      ...flow.rawTraces.map((trace) => new Date(trace.startedAt).getTime() + trace.durationMs),
+    );
+
+    if (candidateStart < flowStart - 250 || candidateStart - flowEnd > 5000) {
+      return false;
+    }
+
+    const flowRace = traceRaceSession(flow);
+    if (flowRace && flowRace === traceRaceSession(candidate)) {
+      return true;
+    }
+
+    const flowTerminal = traceTerminalSpan(flow);
+    const candidateEntry = traceEntrySpan(candidate);
+    if (!candidateEntry) return false;
+
+    const flowTokens = traceNameTokens(flow);
+    const candidateTokens = new Set<string>([
+      ...splitTraceTokens(candidateEntry.name),
+      ...tracePathTokens(candidate),
+    ]);
+
+    if (flowTerminal) {
+      for (const token of splitTraceTokens(flowTerminal.name)) {
+        flowTokens.add(token);
+      }
+    }
+
+    const flowLambda = [...traceCoreSpans(flow)].reverse().find((span) => span.kind === "lambda");
+    const candidateLambda = traceCoreSpans(candidate).find((span) => span.kind === "lambda");
+    if (
+      flowLambda &&
+      candidateLambda &&
+      flowLambda.name === candidateLambda.name &&
+      !candidate.method &&
+      !candidate.path &&
+      !["queue", "dlq", "topic", "eventbridge", "s3"].includes(
+        candidateEntry.kind.toLowerCase(),
+      )
+    ) {
+      return true;
+    }
+
+    for (const token of candidateTokens) {
+      if (flowTokens.has(token)) return true;
+    }
+
+    return false;
+  }
+
+  function chainTraceFlows(input: RequestTrace[]): TraceFlow[] {
+    const sorted = [...input].sort(
+      (a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime(),
+    );
+    const used = new Set<string>();
+    const flows: TraceFlow[] = [];
+
+    for (const trace of sorted) {
+      if (used.has(trace.id)) continue;
+
+      let flow = toTraceFlow(trace);
+      used.add(trace.id);
+
+      let appended = true;
+      while (appended) {
+        appended = false;
+        for (const candidate of sorted) {
+          if (used.has(candidate.id)) continue;
+          if (!shouldChainTrace(flow, candidate)) continue;
+          used.add(candidate.id);
+          flow = appendTraceFlow(flow, candidate);
+          appended = true;
+          break;
+        }
+      }
+
+      flows.push(flow);
+    }
+
+    return flows.sort(
+      (a, b) => new Date(b.startedAt).getTime() - new Date(a.startedAt).getTime(),
+    );
+  }
+
   async function launchRace() {
     if (!raceRuleName) {
       raceMessage = "Pick an EventBridge rule first.";
@@ -256,17 +474,6 @@
   // it. We right-align them within the enclosing Lambda: since the Lambda cannot
   // return before the sub-span completes, the sub-span's right edge ≈ Lambda's
   // right edge. This is the best approximation without absolute start timestamps.
-  const SUB_SPAN_KINDS = new Set([
-    "postgres",
-    "postgresql",
-    "mysql",
-    "redis",
-    "cache_extension",
-    "cache-extension",
-    "secret",
-    "secrets",
-  ]);
-
   interface WaterfallRow {
     span: TraceSpan;
     offsetPct: number;
@@ -320,95 +527,89 @@
 
 <div class="space-y-4">
   <!-- Header strip -->
-  <div
-    class="flex items-center justify-between gap-4 flex-wrap rounded-lg border border-border bg-card px-4 py-3"
-  >
-    <div class="flex items-center gap-3">
-      <div
-        class="flex items-center justify-center h-8 w-8 rounded-md bg-accent/10"
-      >
-        <DetectiveIcon size={16} class="text-primary" />
-      </div>
-      <div>
-        <h2 class="text-sm font-semibold text-foreground">X-Ray Traces</h2>
-        <p class="text-[10px] font-mono text-muted-foreground/70">
-          End-to-end request flow visualiser
-        </p>
-      </div>
-    </div>
-    <div class="flex items-center gap-4 text-[11px] font-mono">
-      <span class="text-muted-foreground/70"
-        >{traces.length} trace{traces.length !== 1 ? "s" : ""}</span
-      >
-      {#if errorCount > 0}
-        <span class="text-destructive">{errorCount} 5xx</span>
-      {/if}
-      {#if clientErrorCount > 0}
-        <span class="text-amber">{clientErrorCount} 4xx</span>
-      {/if}
-      {#if traces.length > 0}
-        <span class="text-muted-foreground/70">avg {formatMs(avgMs)}</span>
-      {/if}
-      {#if p95Ms > 0}
-        <span class="text-muted-foreground/70">p95 {formatMs(p95Ms)}</span>
-      {/if}
-    </div>
+  <div class="space-y-3">
+    <SectionHeader
+      title="X-Ray traces"
+      description="End-to-end request flow visualiser."
+      icon={DetectiveIcon}
+      {sidebarCollapsed}
+      {onToggleSidebar}
+    >
+      {#snippet stats()}
+        <span class="text-muted-foreground/70"
+          >{traceFlows.length} flow{traceFlows.length !== 1 ? "s" : ""}</span
+        >
+        {#if traceFlows.length !== traces.length}
+          <span class="text-muted-foreground/55">from {traces.length} traces</span>
+        {/if}
+        {#if errorCount > 0}
+          <span class="text-destructive">{errorCount} 5xx</span>
+        {/if}
+        {#if clientErrorCount > 0}
+          <span class="text-amber">{clientErrorCount} 4xx</span>
+        {/if}
+        {#if traces.length > 0}
+          <span class="text-muted-foreground/70">avg {formatMs(avgMs)}</span>
+        {/if}
+        {#if p95Ms > 0}
+          <span class="text-muted-foreground/70">p95 {formatMs(p95Ms)}</span>
+        {/if}
+      {/snippet}
+    </SectionHeader>
 
-    <div class="w-full border-t border-border pt-2 mt-1">
-      <div class="flex flex-wrap items-center gap-2">
-        <select
-          bind:value={raceRuleName}
-          class="h-8 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary min-w-48"
-        >
-          <option value="">Select EventBridge rule</option>
-          {#each eventBridgeRules as rule (rule.name)}
-            <option value={rule.name}>{rule.name}</option>
-          {/each}
-        </select>
-        <input
-          type="number"
-          min="1"
-          max="500"
-          bind:value={raceRuns}
-          class="h-8 w-24 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
-          title="Runs"
-        />
-        <input
-          type="number"
-          min="1"
-          max="100"
-          bind:value={raceConcurrency}
-          class="h-8 w-24 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
-          title="Concurrency"
-        />
-        <button
-          type="button"
-          disabled={raceRunning || !raceRuleName}
-          onclick={launchRace}
-          class="inline-flex items-center gap-1 rounded border border-primary/50 bg-primary/10 px-2 py-1 text-xs text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
-        >
-          {raceRunning ? "Running race..." : "Run race"}
-        </button>
-        <select
-          bind:value={raceSessionFilter}
-          class="h-8 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary min-w-40"
-        >
-          <option value="">All sessions</option>
-          {#each raceSessions as session (session)}
-            <option value={session}>{session}</option>
-          {/each}
-        </select>
-      </div>
-      {#if raceMessage}
-        <p class="mt-1 text-xs text-muted-foreground">{raceMessage}</p>
-      {/if}
+    <div class="flex flex-wrap items-center gap-2">
+      <select
+        bind:value={raceRuleName}
+        class="h-8 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary min-w-48"
+      >
+        <option value="">Select EventBridge rule</option>
+        {#each eventBridgeRules as rule (rule.name)}
+          <option value={rule.name}>{rule.name}</option>
+        {/each}
+      </select>
+      <input
+        type="number"
+        min="1"
+        max="500"
+        bind:value={raceRuns}
+        class="h-8 w-24 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
+        title="Runs"
+      />
+      <input
+        type="number"
+        min="1"
+        max="100"
+        bind:value={raceConcurrency}
+        class="h-8 w-24 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
+        title="Concurrency"
+      />
+      <button
+        type="button"
+        disabled={raceRunning || !raceRuleName}
+        onclick={launchRace}
+        class="inline-flex items-center gap-1 rounded border border-primary/50 bg-primary/10 px-2 py-1 text-xs text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
+      >
+        {raceRunning ? "Running race..." : "Run race"}
+      </button>
+      <select
+        bind:value={raceSessionFilter}
+        class="h-8 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary min-w-40"
+      >
+        <option value="">All sessions</option>
+        {#each raceSessions as session (session)}
+          <option value={session}>{session}</option>
+        {/each}
+      </select>
     </div>
+    {#if raceMessage}
+      <p class="text-xs text-muted-foreground">{raceMessage}</p>
+    {/if}
   </div>
 
   {#if traces.length === 0}
     <!-- Empty state -->
     <div
-      class="rounded-lg border border-border bg-card flex flex-col items-center gap-4 px-8 py-16"
+      class="flex flex-col items-center gap-4 px-8 py-16"
     >
       <div
         class="flex items-center justify-center h-12 w-12 rounded-xl border border-border bg-muted"
@@ -473,10 +674,10 @@
       </div>
     </div>
   {:else}
-    <div class="flex gap-4 items-start">
-      <!-- ─── Trace list panel ─── -->
+    <div class="flex items-start">
+      <!-- ─── Trace list ─── -->
       <div
-        class="w-72 shrink-0 rounded-lg border border-border bg-card overflow-hidden flex flex-col"
+        class="w-72 shrink-0 border-r border-border overflow-hidden flex flex-col"
       >
         <div class="px-2.5 py-2 border-b border-border">
           <input
@@ -527,6 +728,10 @@
                   >
                   <span>·</span>
                   <span>{formatMs(trace.durationMs)}</span>
+                  {#if trace.traceCount > 1}
+                    <span>·</span>
+                    <span>{trace.traceCount} hops</span>
+                  {/if}
                   <span class="ml-auto">{timeAgo(trace.startedAt)}</span>
                 </div>
                 {#if traceRaceSession(trace)}
@@ -535,6 +740,15 @@
                       class="inline-flex items-center rounded border border-blue/30 bg-blue/10 px-1.5 py-0.5 text-[10px] font-mono text-blue"
                     >
                       race {traceRaceSession(trace)}
+                    </span>
+                  </div>
+                {/if}
+                {#if trace.traceCount > 1}
+                  <div class="pl-3.5 mt-1">
+                    <span
+                      class="inline-flex items-center rounded border border-primary/20 bg-primary/8 px-1.5 py-0.5 text-[10px] font-mono text-primary/85"
+                    >
+                      chained flow
                     </span>
                   </div>
                 {/if}
@@ -562,9 +776,9 @@
 
       <!-- ─── Trace detail panel ─── -->
       {#if selectedTrace}
-        <div class="flex-1 min-w-0 space-y-3">
-          <!-- Trace header card -->
-          <div class="rounded-lg border border-border bg-card px-4 py-3">
+        <div class="flex-1 min-w-0 space-y-5 pl-4">
+          <!-- Trace header -->
+          <div class="pb-3 border-b border-border/40">
             <div class="flex items-center gap-3 flex-wrap min-w-0">
               {#if selectedTrace.method}
                 <span
@@ -585,6 +799,13 @@
                   class="shrink-0 inline-flex items-center rounded border border-blue/30 bg-blue/10 px-2 py-0.5 text-[10px] font-mono text-blue"
                 >
                   race {traceRaceSession(selectedTrace)}
+                </span>
+              {/if}
+              {#if selectedTrace.traceCount > 1}
+                <span
+                  class="shrink-0 inline-flex items-center rounded border border-primary/20 bg-primary/8 px-2 py-0.5 text-[10px] font-mono text-primary/85"
+                >
+                  chained {selectedTrace.traceCount} traces
                 </span>
               {/if}
               <span
@@ -626,7 +847,7 @@
             )}
 
             <!-- ─── Flow diagram ─── -->
-            <div class="rounded-lg border border-border bg-card px-4 py-3">
+            <div>
               <p
                 class="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70 mb-3"
               >
@@ -791,7 +1012,7 @@
             </div>
 
             <!-- ─── Waterfall timeline ─── -->
-            <div class="rounded-lg border border-border bg-card px-4 py-3">
+            <div>
               <p
                 class="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70 mb-3"
               >
@@ -862,32 +1083,30 @@
               </div>
             </div>
 
-            <!-- ─── Span detail cards ─── -->
-            <div class="rounded-lg border border-border bg-card px-4 py-3">
+            <!-- ─── Span details ─── -->
+            <div>
               <p
                 class="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70 mb-3"
               >
                 Span Details
               </p>
-              <div class="space-y-2">
+              <div class="divide-y divide-border/50">
                 {#each selectedTrace.spans as span, i (i)}
                   {@const badge = spanBadge(span)}
                   {@const hasErr =
                     span.status === "error" || span.status === "client_error"}
                   <div
-                    class="flex items-start gap-3 rounded-md border px-3 py-2.5 {hasErr
-                      ? 'border-red/25 bg-red/5'
-                      : 'border-border/60 bg-muted/50'}"
+                    class="flex items-start gap-3 py-2.5 {hasErr
+                      ? 'bg-red/5'
+                      : ''}"
                   >
-                    <!-- Step circle -->
-                    <div
-                      class="mt-0.5 h-5 w-5 rounded-full shrink-0 flex items-center justify-center text-[10px] font-mono"
-                      style="color:{spanColor(span.kind)};background:{spanColor(
-                        span.kind,
-                      )}18;border:1px solid {spanColor(span.kind)}35"
+                    <!-- Step number -->
+                    <span
+                      class="mt-0.5 shrink-0 text-[10px] font-mono w-4 text-right"
+                      style="color:{spanColor(span.kind)}"
                     >
                       {i + 1}
-                    </div>
+                    </span>
                     <div class="flex-1 min-w-0">
                       <div class="flex items-center gap-2 flex-wrap mb-0.5">
                         <span
@@ -934,9 +1153,7 @@
               </div>
             </div>
           {:else}
-            <div
-              class="rounded-lg border border-border bg-card px-4 py-10 text-center"
-            >
+            <div class="py-10 text-center">
               <p class="text-xs text-muted-foreground/70">
                 No span data available for this trace
               </p>
@@ -944,9 +1161,7 @@
           {/if}
         </div>
       {:else if filteredTraces.length === 0 && searchQuery}
-        <div
-          class="flex-1 rounded-lg border border-border bg-card px-4 py-12 text-center"
-        >
+        <div class="flex-1 pl-4 py-12 text-center">
           <p class="text-xs text-muted-foreground/70">
             No traces match "{searchQuery}"
           </p>

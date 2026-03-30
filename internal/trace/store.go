@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +32,7 @@ type Store struct {
 // Trace records the full request lifecycle for one invocation.
 type Trace struct {
 	ID          string    `json:"id"`
+	CorrelationID string  `json:"correlationId,omitempty"`
 	StartedAt   time.Time `json:"startedAt"`
 	DurationMs  int64     `json:"durationMs"`
 	Status      int       `json:"status"`
@@ -95,6 +97,7 @@ func (s *Store) initDB() {
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS traces (
 			id          TEXT PRIMARY KEY,
+			correlation_id TEXT NOT NULL DEFAULT '',
 			started_at  TEXT    NOT NULL,
 			duration_ms INTEGER NOT NULL,
 			status      INTEGER NOT NULL,
@@ -109,6 +112,11 @@ func (s *Store) initDB() {
 	if err != nil {
 		log.Printf("[trace] failed to initialize schema: %v", err)
 	}
+
+	if _, err := s.db.Exec(`ALTER TABLE traces ADD COLUMN correlation_id TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		log.Printf("[trace] failed to ensure correlation_id column: %v", err)
+	}
 }
 
 // Add records a trace, evicting old entries beyond the retention window.
@@ -119,6 +127,9 @@ func (s *Store) Add(t *Trace) {
 	if s.db == nil || t == nil {
 		return
 	}
+	if t.CorrelationID == "" {
+		t.CorrelationID = t.ID
+	}
 
 	spansJSON, err := json.Marshal(t.Spans)
 	if err != nil {
@@ -126,9 +137,10 @@ func (s *Store) Add(t *Trace) {
 	}
 
 	_, err = s.db.Exec(`
-		INSERT OR REPLACE INTO traces (id, started_at, duration_ms, status, method, path, gateway_id, gateway_name, spans_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		INSERT OR REPLACE INTO traces (id, correlation_id, started_at, duration_ms, status, method, path, gateway_id, gateway_name, spans_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID,
+		t.CorrelationID,
 		t.StartedAt.Format(time.RFC3339Nano),
 		t.DurationMs,
 		t.Status,
@@ -153,7 +165,7 @@ func (s *Store) Recent(n int) []*Trace {
 	}
 
 	rows, err := s.db.Query(`
-		SELECT id, started_at, duration_ms, status, method, path, gateway_id, gateway_name, spans_json
+		SELECT id, correlation_id, started_at, duration_ms, status, method, path, gateway_id, gateway_name, spans_json
 		FROM traces
 		ORDER BY started_at DESC
 		LIMIT ?`, n)
@@ -167,12 +179,18 @@ func (s *Store) Recent(n int) []*Trace {
 	for rows.Next() {
 		var (
 			t         Trace
+			correlationID string
 			startedAt string
 			spansJSON string
 		)
-		if err := rows.Scan(&t.ID, &startedAt, &t.DurationMs, &t.Status, &t.Method, &t.Path, &t.GatewayID, &t.GatewayName, &spansJSON); err != nil {
+		if err := rows.Scan(&t.ID, &correlationID, &startedAt, &t.DurationMs, &t.Status, &t.Method, &t.Path, &t.GatewayID, &t.GatewayName, &spansJSON); err != nil {
 			log.Printf("[trace] failed to scan trace row: %v", err)
 			continue
+		}
+		if strings.TrimSpace(correlationID) != "" {
+			t.CorrelationID = correlationID
+		} else {
+			t.CorrelationID = t.ID
 		}
 		if parsed, err := time.Parse(time.RFC3339Nano, startedAt); err == nil {
 			t.StartedAt = parsed

@@ -226,7 +226,7 @@ func (p *poller) poll() {
 		}
 		log.Printf("[eventsource] %s: invoke error: %v", p.mapping.UUID, err)
 		p.updateResult(fmt.Sprintf("ERROR: %v", err))
-		p.recordTrace(pollStart, functionName, sqsDurationMs, lambdaDurationMs, len(msgs), len(msgs), subSpans)
+		p.recordTrace(pollStart, functionName, msgs, sqsDurationMs, lambdaDurationMs, len(msgs), len(msgs), subSpans)
 		return
 	}
 	p.notFoundStreak = 0
@@ -264,14 +264,14 @@ func (p *poller) poll() {
 		errMsg := lambdaErrorMessage(output.Payload)
 		log.Printf("[eventsource] %s: %d/%d message(s) failed (%s)", p.mapping.UUID, failCount, len(msgs), errMsg)
 		p.updateResult(fmt.Sprintf("ERROR: %d/%d messages failed", failCount, len(msgs)))
-		p.recordTrace(pollStart, functionName, sqsDurationMs, lambdaDurationMs, len(msgs), failCount, subSpans)
+		p.recordTrace(pollStart, functionName, msgs, sqsDurationMs, lambdaDurationMs, len(msgs), failCount, subSpans)
 	} else {
 		p.updateResult("OK")
-		p.recordTrace(pollStart, functionName, sqsDurationMs, lambdaDurationMs, len(msgs), 0, subSpans)
+		p.recordTrace(pollStart, functionName, msgs, sqsDurationMs, lambdaDurationMs, len(msgs), 0, subSpans)
 	}
 }
 
-func (p *poller) recordTrace(start time.Time, functionName string, sqsDurationMs, lambdaDurationMs int64, msgCount, failCount int, subSpans []tracesvc.Span) {
+func (p *poller) recordTrace(start time.Time, functionName string, msgs []*types.SQSMessage, sqsDurationMs, lambdaDurationMs int64, msgCount, failCount int, subSpans []tracesvc.Span) {
 	if p.traceStore == nil {
 		return
 	}
@@ -297,13 +297,32 @@ func (p *poller) recordTrace(start time.Time, functionName string, sqsDurationMs
 			Status:     lambdaStatus,
 		},
 	}
+	correlationID := tracesvc.NewCorrelationID()
+	if value := correlationIDFromSQSMessageAttributes(msgs); value != "" {
+		correlationID = value
+	}
 	p.traceStore.Add(&tracesvc.Trace{
-		ID:         uuid.NewString()[:8],
-		StartedAt:  start,
-		DurationMs: time.Since(start).Milliseconds(),
-		Status:     status,
-		Spans:      append(spans, subSpans...),
+		ID:            uuid.NewString()[:8],
+		CorrelationID: correlationID,
+		StartedAt:     start,
+		DurationMs:    time.Since(start).Milliseconds(),
+		Status:        status,
+		Spans:         append(spans, subSpans...),
 	})
+}
+
+func correlationIDFromSQSMessageAttributes(msgs []*types.SQSMessage) string {
+	for _, msg := range msgs {
+		if msg == nil || len(msg.MessageAttributes) == 0 {
+			continue
+		}
+		for _, key := range []string{"correlationId", "CorrelationId", "x-correlation-id"} {
+			if attr, ok := msg.MessageAttributes[key]; ok && attr != nil && strings.TrimSpace(attr.StringValue) != "" {
+				return strings.TrimSpace(attr.StringValue)
+			}
+		}
+	}
+	return ""
 }
 
 func (p *poller) recordDLQTrace(start time.Time, srcQueue, dlqName string) {
