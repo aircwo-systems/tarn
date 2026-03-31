@@ -41,7 +41,7 @@ func (s *Service) ClearLogGroup(name string) error {
 }
 
 // GetAllLogEvents returns filtered events across all log groups.
-func (s *Service) GetAllLogEvents(filter *LogFilter) ([]LogEvent, int) {
+func (s *Service) GetAllLogEvents(filter *LogFilter) ([]LogEvent, int, bool) {
 	return s.store.GetAllLogEvents(filter)
 }
 
@@ -56,7 +56,7 @@ func (s *Service) PutLogEvents(groupName, streamName string, events []LogEvent) 
 }
 
 // GetLogEvents returns filtered events from a log group.
-func (s *Service) GetLogEvents(groupName string, filter *LogFilter) ([]LogEvent, int) {
+func (s *Service) GetLogEvents(groupName string, filter *LogFilter) ([]LogEvent, int, bool) {
 	return s.store.GetLogEvents(groupName, filter)
 }
 
