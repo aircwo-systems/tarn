@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CaretDownIcon } from "phosphor-svelte";
+  import { CaretDownIcon, CheckIcon, CopySimpleIcon } from "phosphor-svelte";
 
   let {
     raw,
@@ -29,6 +29,7 @@
 
   let formattedExpanded = $state(true);
   let rawExpanded = $state(false);
+  let copiedFormatted = $state(false);
 
   const hasFormatted = $derived(
     !!((formattedHtml && formattedHtml.trim()) || (formatted && formatted.trim())),
@@ -41,7 +42,23 @@
     formattedHtml;
     formattedExpanded = formattedOpenByDefault;
     rawExpanded = rawOpenByDefault;
+    copiedFormatted = false;
   });
+
+  async function copyFormatted() {
+    const content = formatted ?? "";
+    if (!content.trim()) return;
+
+    try {
+      await navigator.clipboard.writeText(content);
+      copiedFormatted = true;
+      setTimeout(() => {
+        copiedFormatted = false;
+      }, 1400);
+    } catch (error) {
+      console.error("Failed to copy formatted content", error);
+    }
+  }
 </script>
 
 {#if hasFormatted}
@@ -61,16 +78,39 @@
       />
     </button>
     {#if formattedExpanded}
-      {#if formattedHtml}
-        <div
-          class={`border-t border-border bg-[var(--code-bg)] px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${formattedContentClass} ${formattedMaxHeightClass}`}
-          >{@html formattedHtml}</div
+      <div class="group relative border-t border-border">
+        <button
+          type="button"
+          class="absolute right-2 top-2 z-10 inline-flex h-8 items-center gap-1.5 rounded-md border border-border/80 bg-background/90 px-2 text-[11px] text-muted-foreground opacity-0 shadow-sm backdrop-blur-sm transition-all duration-200 hover:bg-background-subtle hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
+          onclick={() => void copyFormatted()}
+          title={copiedFormatted ? "Copied" : "Copy formatted"}
+          aria-label={copiedFormatted ? "Copied formatted content" : "Copy formatted content"}
         >
-      {:else}
-        <pre
-          class={`border-t border-border bg-[var(--code-bg)] px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${formattedContentClass} ${formattedMaxHeightClass}`}>{formatted}</pre
-        >
-      {/if}
+          <span class="relative flex h-3.5 w-3.5 items-center justify-center">
+            <span
+              class={`absolute transition-all duration-200 ${copiedFormatted ? "scale-75 opacity-0" : "scale-100 opacity-100"}`}
+            >
+              <CopySimpleIcon size={13} />
+            </span>
+            <span
+              class={`absolute transition-all duration-200 ${copiedFormatted ? "scale-100 opacity-100" : "scale-75 opacity-0"}`}
+            >
+              <CheckIcon size={13} />
+            </span>
+          </span>
+          <span>{copiedFormatted ? "Copied" : "Copy"}</span>
+        </button>
+        {#if formattedHtml}
+          <div
+            class={`bg-[var(--code-bg)] px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${formattedContentClass} ${formattedMaxHeightClass}`}
+            >{@html formattedHtml}</div
+          >
+        {:else}
+          <pre
+            class={`bg-[var(--code-bg)] px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${formattedContentClass} ${formattedMaxHeightClass}`}>{formatted}</pre
+          >
+        {/if}
+      </div>
     {/if}
   </div>
 {/if}
