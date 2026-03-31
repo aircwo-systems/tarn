@@ -9,14 +9,16 @@ const (
 	EventBridgeRuleStateDisabled = "DISABLED"
 )
 
-// EventBridgeRule models a scheduled EventBridge rule.
-// This implementation is currently scoped to scheduled rules on the default bus.
+// EventBridgeRule models an EventBridge rule.
+// Rules may have a ScheduleExpression (scheduled rules) or an EventPattern
+// (event-matching rules), but not both.
 type EventBridgeRule struct {
 	Name               string              `json:"Name"`
 	Arn                string              `json:"Arn"`
 	EventBusName       string              `json:"EventBusName"`
 	Description        string              `json:"Description,omitempty"`
 	ScheduleExpression string              `json:"ScheduleExpression,omitempty"`
+	EventPattern       string              `json:"EventPattern,omitempty"`
 	State              string              `json:"State"`
 	Tags               map[string]string   `json:"Tags,omitempty"`
 	RoleArn            string              `json:"RoleArn,omitempty"`
@@ -45,4 +47,22 @@ type EventBridgeTarget struct {
 type InputTransformer struct {
 	InputPathsMap map[string]string `json:"InputPathsMap,omitempty"`
 	InputTemplate string            `json:"InputTemplate,omitempty"`
+}
+
+// PutEventsEntry is one event in a PutEvents request.
+type PutEventsEntry struct {
+	Source       string   `json:"Source"`
+	DetailType   string   `json:"DetailType"`
+	Detail       string   `json:"Detail"`
+	EventBusName string   `json:"EventBusName,omitempty"`
+	Resources    []string `json:"Resources,omitempty"`
+	Time         string   `json:"Time,omitempty"`
+	TraceHeader  string   `json:"TraceHeader,omitempty"`
+}
+
+// PutEventsResultEntry is one result from a PutEvents response.
+type PutEventsResultEntry struct {
+	EventId      string `json:"EventId,omitempty"`
+	ErrorCode    string `json:"ErrorCode,omitempty"`
+	ErrorMessage string `json:"ErrorMessage,omitempty"`
 }
