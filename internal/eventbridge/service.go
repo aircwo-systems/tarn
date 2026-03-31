@@ -170,7 +170,7 @@ func (s *Service) executeDueRules(now time.Time) {
 	}
 }
 
-func (s *Service) PutRule(name, scheduleExpression, state, description, eventBusName string) (*types.EventBridgeRule, error) {
+func (s *Service) PutRule(name, scheduleExpression, eventPattern, state, description, eventBusName string) (*types.EventBridgeRule, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, validationError("Parameter Name is required")
@@ -179,11 +179,25 @@ func (s *Service) PutRule(name, scheduleExpression, state, description, eventBus
 		return nil, validationError("Parameter Name is too long")
 	}
 
-	if strings.TrimSpace(scheduleExpression) == "" {
-		return nil, validationError("Parameter ScheduleExpression is required for scheduled rules")
+	hasSchedule := strings.TrimSpace(scheduleExpression) != ""
+	hasPattern := strings.TrimSpace(eventPattern) != ""
+
+	if !hasSchedule && !hasPattern {
+		return nil, validationError("Either ScheduleExpression or EventPattern is required")
 	}
-	if err := validateScheduleExpression(scheduleExpression); err != nil {
-		return nil, validationError("Parameter ScheduleExpression is not valid: %v", err)
+	if hasSchedule && hasPattern {
+		return nil, validationError("ScheduleExpression and EventPattern are mutually exclusive")
+	}
+
+	if hasSchedule {
+		if err := validateScheduleExpression(scheduleExpression); err != nil {
+			return nil, validationError("Parameter ScheduleExpression is not valid: %v", err)
+		}
+	}
+	if hasPattern {
+		if err := ValidateEventPattern(eventPattern); err != nil {
+			return nil, validationError("Parameter EventPattern is not valid: %v", err)
+		}
 	}
 
 	bus, err := normalizeEventBusName(eventBusName)
@@ -217,23 +231,32 @@ func (s *Service) PutRule(name, scheduleExpression, state, description, eventBus
 	rule.Name = name
 	rule.EventBusName = bus
 	rule.Description = description
-	rule.ScheduleExpression = scheduleExpression
 	rule.State = normalizedState
 	rule.Arn = ruleARN(s.cfg, name)
 	rule.LastModifiedAt = now
 
-	if rule.ScheduleAnchor.IsZero() || !strings.EqualFold(prevExpr, scheduleExpression) {
-		rule.ScheduleAnchor = now
-	}
+	if hasSchedule {
+		rule.ScheduleExpression = scheduleExpression
+		rule.EventPattern = ""
 
-	if normalizedState == types.EventBridgeRuleStateEnabled {
-		next, nextErr := computeNextRun(rule.ScheduleExpression, rule.ScheduleAnchor, now)
-		if nextErr != nil {
-			return nil, validationError("Parameter ScheduleExpression is not valid: %v", nextErr)
+		if rule.ScheduleAnchor.IsZero() || !strings.EqualFold(prevExpr, scheduleExpression) {
+			rule.ScheduleAnchor = now
 		}
-		rule.NextRunAt = &next
+
+		if normalizedState == types.EventBridgeRuleStateEnabled {
+			next, nextErr := computeNextRun(rule.ScheduleExpression, rule.ScheduleAnchor, now)
+			if nextErr != nil {
+				return nil, validationError("Parameter ScheduleExpression is not valid: %v", nextErr)
+			}
+			rule.NextRunAt = &next
+		} else {
+			rule.NextRunAt = nil
+		}
 	} else {
+		rule.EventPattern = eventPattern
+		rule.ScheduleExpression = ""
 		rule.NextRunAt = nil
+		rule.ScheduleAnchor = time.Time{}
 	}
 
 	if err := s.store.SaveRule(rule); err != nil {
@@ -617,6 +640,210 @@ func (s *Service) UntagResource(resourceARN string, tagKeys []string) error {
 	return nil
 }
 
+// PutEvents accepts a batch of events, matches them against event-pattern rules,
+// and dispatches to matching targets. Returns one result entry per input event.
+func (s *Service) PutEvents(entries []types.PutEventsEntry) ([]types.PutEventsResultEntry, int, error) {
+	if len(entries) == 0 {
+		return nil, 0, validationError("Parameter Entries must contain at least one entry")
+	}
+	if len(entries) > 10 {
+		return nil, 0, validationError("Parameter Entries cannot exceed 10 entries")
+	}
+
+	rules := s.store.ListRules()
+	results := make([]types.PutEventsResultEntry, len(entries))
+	failedCount := 0
+
+	for i, entry := range entries {
+		eventID := uuid.NewString()
+
+		if strings.TrimSpace(entry.Source) == "" || strings.TrimSpace(entry.DetailType) == "" {
+			results[i] = types.PutEventsResultEntry{
+				ErrorCode:    "ValidationException",
+				ErrorMessage: "Source and DetailType are required",
+			}
+			failedCount++
+			continue
+		}
+
+		// Build the full event envelope
+		now := time.Now().UTC()
+		eventTime := now.Format(time.RFC3339)
+		if strings.TrimSpace(entry.Time) != "" {
+			eventTime = entry.Time
+		}
+
+		var detailObj any
+		if strings.TrimSpace(entry.Detail) != "" {
+			if err := json.Unmarshal([]byte(entry.Detail), &detailObj); err != nil {
+				results[i] = types.PutEventsResultEntry{
+					ErrorCode:    "ValidationException",
+					ErrorMessage: "Detail must be valid JSON",
+				}
+				failedCount++
+				continue
+			}
+		} else {
+			detailObj = map[string]any{}
+		}
+
+		resources := entry.Resources
+		if resources == nil {
+			resources = []string{}
+		}
+
+		event := map[string]any{
+			"version":     "0",
+			"id":          eventID,
+			"detail-type": entry.DetailType,
+			"source":      entry.Source,
+			"account":     s.cfg.AccountID,
+			"time":        eventTime,
+			"region":      s.cfg.Region,
+			"resources":   resources,
+			"detail":      detailObj,
+		}
+
+		eventJSON, _ := json.Marshal(event)
+
+		// Match against all event-pattern rules and dispatch
+		s.dispatchEvent(rules, eventJSON, event)
+
+		results[i] = types.PutEventsResultEntry{EventId: eventID}
+	}
+
+	return results, failedCount, nil
+}
+
+// dispatchEvent matches one event against all enabled event-pattern rules
+// and invokes targets for each matching rule.
+func (s *Service) dispatchEvent(rules []*types.EventBridgeRule, eventJSON []byte, event map[string]any) {
+	for _, rule := range rules {
+		if strings.ToUpper(rule.State) != types.EventBridgeRuleStateEnabled {
+			continue
+		}
+		if strings.TrimSpace(rule.EventPattern) == "" {
+			continue
+		}
+
+		matched, err := MatchEventPattern([]byte(rule.EventPattern), eventJSON)
+		if err != nil || !matched {
+			continue
+		}
+
+		// Fire targets for this matched rule
+		s.fireTargets(rule, eventJSON)
+	}
+}
+
+// fireTargets invokes all targets on a rule with the given event payload.
+func (s *Service) fireTargets(rule *types.EventBridgeRule, eventPayload []byte) {
+	if len(rule.Targets) == 0 {
+		return
+	}
+
+	started := time.Now().UTC()
+	correlationID := tracesvc.NewCorrelationID()
+
+	spans := make([]tracesvc.Span, 0, len(rule.Targets)+1)
+	spans = append(spans, tracesvc.Span{
+		Kind:   "eventbridge",
+		Name:   rule.Name,
+		Status: "ok",
+		Meta: map[string]string{
+			"rule":          rule.Name,
+			"ruleArn":       rule.Arn,
+			"trigger":       "event-pattern",
+			"correlationId": correlationID,
+		},
+	})
+
+	failed := 0
+	for i := range rule.Targets {
+		target := &rule.Targets[i]
+		functionName, fnErr := lambdaNameFromTarget(target.Arn)
+		if fnErr != nil {
+			target.LastResult = "ERROR: invalid target ARN"
+			failed++
+			continue
+		}
+
+		payload, payloadErr := buildTargetPayload(eventPayload, target)
+		if payloadErr != nil {
+			target.LastResult = "ERROR: " + payloadErr.Error()
+			failed++
+			continue
+		}
+
+		if s.lambda == nil {
+			target.LastResult = "ERROR: lambda service unavailable"
+			failed++
+			continue
+		}
+
+		invokeStart := time.Now()
+		if s.collector != nil {
+			s.collector.Begin(functionName)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), defaultRuleFireTimeout)
+		invokeOut, invokeErr := s.lambda.Invoke(ctx, &types.InvokeInput{
+			FunctionName:   functionName,
+			Payload:        payload,
+			InvocationType: manualInvocationTypeEvent,
+		})
+		cancel()
+		duration := time.Since(invokeStart).Milliseconds()
+
+		now := time.Now().UTC()
+		target.LastInvokedAt = &now
+		spanStatus := "ok"
+		if invokeErr != nil || (invokeOut != nil && invokeOut.FunctionError != "") {
+			detail := "invoke failed"
+			if invokeErr != nil {
+				detail = invokeErr.Error()
+			} else if invokeOut != nil && invokeOut.FunctionError != "" {
+				detail = invokeOut.FunctionError
+			}
+			target.LastResult = "ERROR: " + detail
+			failed++
+			spanStatus = "error"
+		} else {
+			target.LastResult = "OK"
+		}
+		spans = append(spans, tracesvc.Span{Kind: "lambda", Name: functionName, DurationMs: duration, Status: spanStatus, Meta: map[string]string{"targetId": target.ID}})
+		if s.collector != nil {
+			spans = append(spans, tracesvc.SubSpansToSpans(s.collector.CollectWithFlush(functionName))...)
+		}
+	}
+
+	rule.LastRunAt = &started
+	if failed > 0 {
+		rule.LastResult = fmt.Sprintf("ERROR: %d/%d targets failed", failed, len(rule.Targets))
+		spans[0].Status = "error"
+	} else {
+		rule.LastResult = "OK"
+	}
+	_ = s.store.SaveRule(rule)
+
+	if s.traceStore != nil {
+		traceID := uuid.NewString()[:8]
+		status := 200
+		if failed > 0 {
+			status = 500
+		}
+		s.traceStore.Add(&tracesvc.Trace{
+			ID:            traceID,
+			CorrelationID: correlationID,
+			StartedAt:     started,
+			DurationMs:    time.Since(started).Milliseconds(),
+			Status:        status,
+			Method:        "EVENTBRIDGE",
+			Path:          "/events/" + rule.Name,
+			Spans:         spans,
+		})
+	}
+}
+
 func (s *Service) FireRuleNow(ruleName string, sessionMeta map[string]string) (*FireResult, error) {
 	return s.fireRule(ruleName, false, sessionMeta)
 }
@@ -844,7 +1071,7 @@ func normalizeEventBusName(eventBusName string) (string, error) {
 	if strings.HasSuffix(n, types.EventBridgeDefaultBusARNSuffix) {
 		return defaultEventBusName, nil
 	}
-	return "", validationError("Only the default event bus is supported for scheduled rules")
+	return "", validationError("Only the default event bus is supported")
 }
 
 func (s *Service) ruleByResourceARN(resourceARN string) (*types.EventBridgeRule, error) {

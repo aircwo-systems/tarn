@@ -63,6 +63,8 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		h.tagResource(w, body)
 	case "UntagResource":
 		h.untagResource(w, body)
+	case "PutEvents":
+		h.putEvents(w, body)
 	default:
 		log.Printf("[eventbridge] unhandled action (returning empty OK): %s", action)
 		writeJSON(w, http.StatusOK, map[string]any{})
@@ -73,21 +75,17 @@ func (h *Handler) putRule(w http.ResponseWriter, body []byte) {
 	var req struct {
 		Name               string `json:"Name"`
 		ScheduleExpression string `json:"ScheduleExpression"`
+		EventPattern       string `json:"EventPattern"`
 		State              string `json:"State"`
 		Description        string `json:"Description"`
 		EventBusName       string `json:"EventBusName"`
-		EventPattern       string `json:"EventPattern"`
 	}
 	if err := decodeJSON(body, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
-	if strings.TrimSpace(req.EventPattern) != "" {
-		writeError(w, http.StatusBadRequest, "ValidationException", "Only scheduled rules are supported in this phase")
-		return
-	}
 
-	rule, err := h.svc.PutRule(req.Name, req.ScheduleExpression, req.State, req.Description, req.EventBusName)
+	rule, err := h.svc.PutRule(req.Name, req.ScheduleExpression, req.EventPattern, req.State, req.Description, req.EventBusName)
 	if err != nil {
 		writeSvcError(w, err)
 		return
@@ -366,16 +364,41 @@ func (h *Handler) untagResource(w http.ResponseWriter, body []byte) {
 	writeJSON(w, http.StatusOK, map[string]any{})
 }
 
+func (h *Handler) putEvents(w http.ResponseWriter, body []byte) {
+	var req struct {
+		Entries []types.PutEventsEntry `json:"Entries"`
+	}
+	if err := decodeJSON(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+
+	results, failedCount, err := h.svc.PutEvents(req.Entries)
+	if err != nil {
+		writeSvcError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"FailedEntryCount": failedCount,
+		"Entries":          results,
+	})
+}
+
 func toRuleShape(rule *types.EventBridgeRule) map[string]any {
 	if rule == nil {
 		return map[string]any{}
 	}
 	shape := map[string]any{
-		"Name":               rule.Name,
-		"Arn":                rule.Arn,
-		"State":              rule.State,
-		"ScheduleExpression": rule.ScheduleExpression,
-		"EventBusName":       "default",
+		"Name":         rule.Name,
+		"Arn":          rule.Arn,
+		"State":        rule.State,
+		"EventBusName": "default",
+	}
+	if strings.TrimSpace(rule.ScheduleExpression) != "" {
+		shape["ScheduleExpression"] = rule.ScheduleExpression
+	}
+	if strings.TrimSpace(rule.EventPattern) != "" {
+		shape["EventPattern"] = rule.EventPattern
 	}
 	if strings.TrimSpace(rule.Description) != "" {
 		shape["Description"] = rule.Description
