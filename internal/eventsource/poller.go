@@ -238,6 +238,19 @@ func (p *poller) poll() {
 		log.Printf("[eventsource] %s: invoke error: %v", p.mapping.UUID, err)
 		p.updateResult(fmt.Sprintf("ERROR: %v", err))
 		p.recordTrace(pollStart, functionName, msgs, sqsDurationMs, lambdaDurationMs, len(msgs), len(msgs), subSpans)
+
+		// Check DLQ for all messages — ReceiveMessage already incremented their
+		// receive count, so without this check messages bypass maxReceiveCount
+		// and retry indefinitely (the background reaper races with the poller).
+		for _, msg := range msgs {
+			moved, dlqName, dlqErr := p.sqs.MoveToDLQIfExceeded(p.mapping.QueueName, msg)
+			if dlqErr != nil {
+				log.Printf("[eventsource] %s: DLQ check error for message %s: %v", p.mapping.UUID, msg.MessageId, dlqErr)
+			} else if moved {
+				log.Printf("[eventsource] %s: message %s moved to DLQ after %d attempt(s)", p.mapping.UUID, msg.MessageId, msg.ApproximateReceiveCount)
+				p.recordDLQTrace(pollStart, p.mapping.QueueName, dlqName)
+			}
+		}
 		return
 	}
 	p.notFoundStreak = 0
