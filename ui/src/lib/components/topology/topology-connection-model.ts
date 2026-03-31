@@ -1,5 +1,6 @@
 import type {
   BucketSummary,
+  DynamoDBTableSummary,
   EventBridgeRuleSummary,
   EventSourceMappingSummary,
   FilterCriteria,
@@ -36,10 +37,11 @@ export const CONNECTION_CANVAS = {
   colEventBridge: 960,
   colTopic: 1320,
   colQueue: 1680,
-  colFunction: 2040,
-  colSecret: 2400,
-  colBucket: 2760,
-  colInfra: 2040,
+  colDynamodb: 3000,
+  colFunction: 2400,
+  colSecret: 2760,
+  colBucket: 3120,
+  colInfra: 2400,
 } as const;
 
 export const TOPOLOGY_GRID_STEP = 30;
@@ -98,12 +100,14 @@ export interface TopologyGraphModel {
   hasData: boolean;
   eventBridgeRuleById: Map<string, EventBridgeRuleSummary>;
   functionById: Map<string, FunctionSummary>;
+  dynamodbById: Map<string, DynamoDBTableSummary>;
   infraById: Map<string, InfraProbe>;
   nodes: {
     gateways: ConnectionNode[];
     eventbridges: ConnectionNode[];
     topics: ConnectionNode[];
     queues: ConnectionNode[];
+    dynamodbs: ConnectionNode[];
     functions: ConnectionNode[];
     buckets: ConnectionNode[];
     secrets: ConnectionNode[];
@@ -117,8 +121,10 @@ export interface TopologyGraphModel {
     snsToQueue: SnsEdge[];
     snsToFunction: SnsEdge[];
     queueToFunction: QueueFnEdge[];
+    dynamodbToFunction: QueueFnEdge[];
     queueToDlq: DlqEdge[];
     bucketToFunction: LaneEdge[];
+    functionToDynamodb: Array<LaneEdge & { activity?: EdgeActivity }>;
     functionToCache: Array<LaneEdge & { activity?: EdgeActivity }>;
     cacheToSecret: Array<LaneEdge & { activity?: EdgeActivity }>;
     functionToInfra: InfraEdge[];
@@ -161,6 +167,7 @@ export interface BuildTopologyGraphInput {
   gateways: GatewaySummary[];
   functions: FunctionSummary[];
   queues: QueueSummary[];
+  dynamodbTables: DynamoDBTableSummary[];
   topics: TopicSummary[];
   buckets: BucketSummary[];
   secrets: SecretSummary[];
@@ -180,6 +187,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     gateways,
     functions,
     queues,
+    dynamodbTables,
     topics,
     buckets,
     secrets,
@@ -249,6 +257,19 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     }),
   );
 
+  const connDynamodbs = dynamodbTables.map(
+    (table, i): ConnectionNode => ({
+      id: table.name,
+      x: CONNECTION_CANVAS.colDynamodb,
+      y: distributedColumnY(i, dynamodbTables.length, 170, 900),
+      label: trimLabel(table.name, 13),
+      sub: table.streamEnabled
+        ? `${table.itemCount} item · stream`
+        : `${table.itemCount} item`,
+      kind: "dynamodb",
+    }),
+  );
+
   const connFunctions = functions.map(
     (fn, i): ConnectionNode => ({
       id: fn.name,
@@ -285,7 +306,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
 
   const mainGroups = [
     connGateways, connEventBridges, connTopics, connQueues,
-    connFunctions, connBuckets, connSecrets,
+    connFunctions, connSecrets, connDynamodbs, connBuckets,
   ];
 
   // Apply size/side overrides BEFORE collision resolution so the force-field
@@ -517,6 +538,56 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
   }));
 
+  const dynamodbMappingPairs: {
+    tableId: string;
+    fnId: string;
+    filterCriteria?: FilterCriteria;
+  }[] = [];
+  const hasDynamoPair = (tableId: string, fnId: string) =>
+    dynamodbMappingPairs.some((pair) => pair.tableId === tableId && pair.fnId === fnId);
+
+  for (const mapping of eventSourceMappings) {
+    if ((mapping.sourceType ?? "").toLowerCase() !== "dynamodb-stream") continue;
+    const tableId = mapping.sourceName || mapping.queueName;
+    if (!tableId || hasDynamoPair(tableId, mapping.functionName)) continue;
+    dynamodbMappingPairs.push({
+      tableId,
+      fnId: mapping.functionName,
+      filterCriteria: mapping.filterCriteria,
+    });
+  }
+
+  for (const c of infraConnections) {
+    if (c.targetKind !== "dynamodb-stream-lambda") continue;
+    const fnId = c.targetId || c.targetName;
+    if (!c.sourceFunction || hasDynamoPair(c.sourceFunction, fnId)) continue;
+    dynamodbMappingPairs.push({
+      tableId: c.sourceFunction,
+      fnId,
+      filterCriteria: c.filterCriteria,
+    });
+  }
+
+  const dynamodbToFunction = withLanes(
+    dynamodbMappingPairs.flatMap(({ tableId, fnId, filterCriteria }) => {
+      const from = connDynamodbs.find((node) => node.id === tableId);
+      const to = connFunctions.find((node) => node.id === fnId);
+      if (!from || !to) return [];
+      return [
+        {
+          from,
+          to,
+          filterLabel: filterLabel(filterCriteria),
+          activity: undefined,
+        },
+      ];
+    }),
+    (edge) => `${edge.from.id}→${edge.to.id}`,
+  ).map((edge) => ({
+    ...edge,
+    path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
+  }));
+
   const queueToDlq = infraConnections.flatMap((c) => {
     if (c.targetKind !== "queue-dlq") return [];
     const from = connQueues.find((n) => n.id === c.sourceFunction);
@@ -581,8 +652,25 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     "sns-lambda",
     "s3-lambda",
     "sqs-lambda",
+    "dynamodb-stream-lambda",
     "queue-dlq",
   ];
+
+  const functionToDynamodb = withLanes(
+    infraConnections.flatMap((c) => {
+      if (c.targetKind !== "dynamodb-table") return [];
+      const from = connFunctions.find((n) => n.id === c.sourceFunction);
+      const tableName = c.targetId || c.targetName;
+      const to = connDynamodbs.find((n) => n.id === tableName);
+      if (!from || !to) return [];
+      return [{ from, to, activity: fnActivity(traceEdgeActivity, from.id) }];
+    }),
+    (edge) => `${edge.from.id}→${edge.to.id}`,
+  ).map((edge) => ({
+    ...edge,
+    id: `${edge.from.id}→${edge.to.id}`,
+    path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
+  }));
 
   const functionToInfra = withLanes(
     infraConnections.flatMap((c) => {
@@ -647,11 +735,13 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       topics.length > 0 ||
       functions.length > 0 ||
       queues.length > 0 ||
+      dynamodbTables.length > 0 ||
       buckets.length > 0 ||
       secrets.length > 0 ||
       infra.length > 0,
     eventBridgeRuleById: new Map(eventBridgeRules.map((rule) => [rule.name, rule])),
     functionById: new Map(functions.map((fn) => [fn.name, fn])),
+    dynamodbById: new Map(dynamodbTables.map((table) => [table.name, table])),
     infraById: new Map(
       [...infraByNodeId.entries()].filter((entry): entry is [string, InfraProbe] => !!entry[1]),
     ),
@@ -660,6 +750,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       eventbridges: connEventBridges,
       topics: connTopics,
       queues: connQueues,
+      dynamodbs: connDynamodbs,
       functions: connFunctions,
       buckets: connBuckets,
       secrets: connSecrets,
@@ -673,8 +764,10 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       snsToQueue,
       snsToFunction,
       queueToFunction,
+      dynamodbToFunction,
       queueToDlq,
       bucketToFunction,
+      functionToDynamodb,
       functionToCache,
       cacheToSecret,
       functionToInfra,
@@ -735,6 +828,9 @@ export function selectedTraceNodes(
   const eventBridgeSpan = trace.spans.find((span) => span.kind === "eventbridge");
   const topicSpan = trace.spans.find((span) => span.kind === "topic");
   const queueSpan = trace.spans.find((span) => span.kind === "queue");
+  const dynamodbSpan = trace.spans.find(
+    (span) => span.kind === "dynamodb" || span.kind === "ddb",
+  );
   const dlqSpan = trace.spans.find((span) => span.kind === "dlq");
   const cacheSpan = trace.spans.find(
     (span) => span.kind === "cache_extension" || span.kind === "cache-extension",
@@ -756,6 +852,9 @@ export function selectedTraceNodes(
   const matchedQueue = queueSpan
     ? model.nodes.queues.find((node) => node.id === queueSpan.name)
     : undefined;
+  const matchedDynamodb = dynamodbSpan
+    ? model.nodes.dynamodbs.find((node) => node.id === dynamodbSpan.name)
+    : undefined;
   const matchedDlq = dlqSpan
     ? model.nodes.queues.find((node) => node.id === dlqSpan.name)
     : undefined;
@@ -771,6 +870,7 @@ export function selectedTraceNodes(
     matchedFunction,
     matchedTopic,
     matchedQueue,
+    matchedDynamodb,
     matchedDlq,
     matchedCache,
     matchedSecret,
@@ -828,6 +928,7 @@ export function findNodeAt(model: TopologyGraphModel, x: number, y: number): Con
     ...model.nodes.secrets,
     ...(model.nodes.cacheExtension ? [model.nodes.cacheExtension] : []),
     ...model.nodes.functions,
+    ...model.nodes.dynamodbs,
     ...model.nodes.eventbridges,
     ...model.nodes.topics,
     ...model.nodes.queues,
@@ -960,8 +1061,10 @@ export function hoverFocusState(
     ...model.edges.snsToQueue,
     ...model.edges.snsToFunction,
     ...model.edges.queueToFunction,
+    ...model.edges.dynamodbToFunction,
     ...model.edges.queueToDlq,
     ...model.edges.bucketToFunction,
+    ...model.edges.functionToDynamodb,
     ...model.edges.functionToCache,
     ...model.edges.cacheToSecret,
     ...model.edges.functionToInfra,
@@ -1336,6 +1439,7 @@ function allGraphNodes(model: TopologyGraphModel): ConnectionNode[] {
     ...model.nodes.eventbridges,
     ...model.nodes.topics,
     ...model.nodes.queues,
+    ...model.nodes.dynamodbs,
     ...model.nodes.functions,
     ...model.nodes.buckets,
     ...model.nodes.secrets,

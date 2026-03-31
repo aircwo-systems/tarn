@@ -30,6 +30,7 @@
   --color-amber: #f59e0b;
   --color-amber-muted: rgba(245, 158, 11, 0.15);
   --topology-gateway: #facc15;
+  --topology-dynamodb: #ec4899;
   --topology-external-postgresql: #38bdf8;
   --topology-external-mysql: #2dd4bf;
   --topology-external-redis: #f97316;
@@ -121,6 +122,7 @@
   --color-amber: #b45309;
   --color-amber-muted: rgba(180, 83, 9, 0.1);
   --topology-gateway: #a16207;
+  --topology-dynamodb: #be185d;
   --topology-external-postgresql: #0369a1;
   --topology-external-mysql: #0f766e;
   --topology-external-redis: #c2410c;

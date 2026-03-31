@@ -7,6 +7,7 @@
     ChatCircle,
     GlobeHemisphereWest,
     Lightning,
+    StackIcon,
   } from "phosphor-svelte";
   import { TableCell, TableRow } from "$lib/components/ui/table";
   import LedDot from "$lib/components/common/led-dot.svelte";
@@ -29,7 +30,7 @@
 
   type TriggerRow = {
     id: string;
-    type: "SQS" | "SNS" | "API" | "EVENTBRIDGE";
+    type: "SQS" | "SNS" | "API" | "EVENTBRIDGE" | "DYNAMODB";
     sourceName: string;
     sourceArn: string;
     targetName: string;
@@ -87,13 +88,17 @@
       }
       return (
         functionsByName.has(mapping.functionName) ||
-        queuesByName.has(mapping.queueName)
+        queuesByName.has(mapping.queueName) ||
+        (mapping.sourceType === "dynamodb-stream" &&
+          (mapping.sourceName ?? "").length > 0)
       );
     }),
   );
 
   const sqsTriggers = $derived<TriggerRow[]>(
-    filteredMappings.map((mapping) => {
+    filteredMappings
+      .filter((mapping) => (mapping.sourceType ?? "sqs") !== "dynamodb-stream")
+      .map((mapping) => {
       const queue = queuesByName.get(mapping.queueName);
       const fn = functionsByName.get(mapping.functionName);
       return {
@@ -107,7 +112,27 @@
         detail: `Batch ×${mapping.batchSize}`,
         lastResult: mapping.lastResult,
       };
-    }),
+      }),
+  );
+
+  const dynamodbTriggers = $derived<TriggerRow[]>(
+    filteredMappings
+      .filter((mapping) => (mapping.sourceType ?? "") === "dynamodb-stream")
+      .map((mapping) => {
+        const fn = functionsByName.get(mapping.functionName);
+        const sourceName = mapping.sourceName || mapping.queueName || mapping.eventSourceArn || "--";
+        return {
+          id: `dynamodb-${mapping.uuid}`,
+          type: "DYNAMODB",
+          sourceName,
+          sourceArn: mapping.eventSourceArn ?? sourceName,
+          targetName: mapping.functionName,
+          targetArn: fn?.arn ?? mapping.functionName,
+          state: mapping.state,
+          detail: `Stream mapping · Batch ×${mapping.batchSize}`,
+          lastResult: mapping.lastResult,
+        };
+      }),
   );
 
   const filteredSubscriptions = $derived(
@@ -230,12 +255,14 @@
 
   const triggerRows = $derived<TriggerRow[]>([
     ...sqsTriggers,
+    ...dynamodbTriggers,
     ...snsTriggers,
     ...eventBridgeTriggers,
     ...apiTriggers,
   ]);
   const sqsCount = $derived(sqsTriggers.length);
   const snsCount = $derived(snsTriggers.length);
+  const dynamodbCount = $derived(dynamodbTriggers.length);
   const eventBridgeCount = $derived(eventBridgeTriggers.length);
   const apiCount = $derived(apiTriggers.length);
 
@@ -288,6 +315,10 @@
       <span class="inline-flex items-center gap-1.5">
         <Bell size={12} class="text-primary" />
         {snsCount} SNS
+      </span>
+      <span class="inline-flex items-center gap-1.5">
+        <StackIcon size={12} class="text-[var(--topology-dynamodb)]" />
+        {dynamodbCount} DDB
       </span>
       <span class="inline-flex items-center gap-1.5">
         <BridgeIcon size={12} class="text-blue" />

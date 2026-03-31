@@ -17,6 +17,8 @@ export interface OverviewResponse {
     subscriptions: number;
     secrets: number;
     buckets: number;
+    dynamodbTables?: number;
+    dynamodbStreams?: number;
     logGroups: number;
     eventSourceMappings: number;
     eventBridgeRules: number;
@@ -28,6 +30,8 @@ export interface OverviewResponse {
   subscriptions: SubscriptionSummary[];
   secrets: SecretSummary[];
   buckets: BucketSummary[];
+  dynamodbTables?: DynamoDBTableSummary[];
+  dynamodbStreams?: DynamoDBStreamSummary[];
   eventSourceMappings: EventSourceMappingSummary[];
   eventBridgeRules?: EventBridgeRuleSummary[];
   infrastructure: InfraProbe[];
@@ -296,7 +300,36 @@ export interface BucketObjectPreview {
   contentType: string;
 }
 
+export interface DynamoDBTableSummary {
+  name: string;
+  arn: string;
+  status: string;
+  createdDate: string;
+  billingMode?: string;
+  itemCount: number;
+  keySchema: string;
+  localIndexes: number;
+  globalIndexes: number;
+  streamEnabled: boolean;
+  streamArn?: string;
+  streamViewType?: string;
+  latestStreamLabel?: string;
+}
+
+export interface DynamoDBStreamSummary {
+  tableName: string;
+  streamArn: string;
+  streamLabel: string;
+  streamStatus: string;
+  streamViewType: string;
+  createdDate: string;
+  shardCount: number;
+}
+
 export interface EventSourceMappingSummary {
+  eventSourceArn?: string;
+  sourceType?: string;
+  sourceName?: string;
   uuid: string;
   queueName: string;
   functionName: string;

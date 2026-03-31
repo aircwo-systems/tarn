@@ -208,6 +208,33 @@
       }
     }
 
+    for (const edge of model.edges.dynamodbToFunction) {
+      const isFocused = isEdgeFocused(edge.id);
+      const isErr = !!edge.activity?.hasError;
+      drawPath(context, edge.path, {
+        stroke: isErr
+          ? palette.destructive
+          : makeEdgeGradient(context, edge.from, edge.to, kindColor("dynamodb", palette), kindColor("function", palette)),
+        width: activityWidth(edge.activity, 1.35),
+        opacity: focusOpacity(activityOpacity(edge.activity, 0.72), isFocused, palette),
+        dash: edge.activity ? [6, 3] : [5, 4],
+        animateDash: !!edge.activity,
+        time,
+      });
+
+      if (edge.filterLabel) {
+        const mid = midpoint(edge.from, edge.to);
+        context.save();
+        context.fillStyle = kindColor("dynamodb", palette);
+        context.globalAlpha = focusOpacity(0.68, isFocused, palette);
+        context.font = `6.5px ${MONO_FONT}`;
+        context.textAlign = "center";
+        context.textBaseline = "middle";
+        context.fillText(`⊘ ${edge.filterLabel}`, mid.x, mid.y - 6);
+        context.restore();
+      }
+    }
+
     for (const edge of model.edges.queueToDlq) {
       const isFocused = isEdgeFocused(edge.id);
       drawPath(context, edge.path, {
@@ -241,6 +268,20 @@
         width: 1.35,
         opacity: focusOpacity(0.68, isEdgeFocused(edge.id), palette),
         dash: [4, 3],
+      });
+    }
+
+    for (const edge of model.edges.functionToDynamodb) {
+      const isErr = !!edge.activity?.hasError;
+      drawPath(context, edge.path, {
+        stroke: isErr
+          ? palette.destructive
+          : makeEdgeGradient(context, edge.from, edge.to, kindColor("function", palette), kindColor("dynamodb", palette)),
+        width: activityWidth(edge.activity, 1.1),
+        opacity: focusOpacity(activityOpacity(edge.activity, 0.5), isEdgeFocused(edge.id), palette),
+        dash: edge.activity ? [6, 3] : [4, 4],
+        animateDash: !!edge.activity,
+        time,
       });
     }
 

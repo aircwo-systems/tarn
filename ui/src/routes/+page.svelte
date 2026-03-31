@@ -15,6 +15,7 @@
     DetectiveIcon,
     SidebarSimpleIcon,
     GearIcon,
+    DatabaseIcon,
   } from "phosphor-svelte";
   import { onMount } from "svelte";
 
@@ -29,6 +30,7 @@
   import SecretsSection from "$lib/components/sections/secrets-section.svelte";
   import TriggersSection from "$lib/components/sections/triggers-section.svelte";
   import EventBridgeSection from "$lib/components/sections/eventbridge-section.svelte";
+  import DynamoDBSection from "$lib/components/sections/dynamodb-section.svelte";
   import StorageSection from "$lib/components/sections/storage-section.svelte";
   import LogsSection from "$lib/components/sections/logs-section.svelte";
   import XraySection from "$lib/components/sections/xray-section.svelte";
@@ -68,7 +70,7 @@
   const infraSettings = getInfraSettings();
 
   // ── Routing ─────────────────────────────────────────────────────
-  const validTabs = ["overview","gateways","chaos","functions","queues","sns","secrets","triggers","eventbridge","storage","logs","xray"];
+  const validTabs = ["overview","gateways","chaos","functions","queues","dynamodb","sns","secrets","triggers","eventbridge","storage","logs","xray"];
   let activeTab = $state("overview");
   let logsInitialGroup = $state("");
   let logsInitialTimestamp = $state("");
@@ -204,6 +206,7 @@
           | "eventbridge"
           | "topic"
           | "queue"
+          | "dynamodb"
           | "function"
           | "secret"
           | "bucket"
@@ -235,6 +238,11 @@
   const countTopics = $derived(
     (dashboard.data?.topics ?? []).filter((t) =>
       matchesPrototypeResourceFilter("topic", t.tags),
+    ).length,
+  );
+  const countDynamoTables = $derived(
+    (dashboard.data?.dynamodbTables ?? []).filter(() =>
+      matchesPrototypeResourceFilter("dynamodb"),
     ).length,
   );
   const countSecrets = $derived(
@@ -339,6 +347,14 @@
         case "queues":
         case "sqs":
           return { kind: "queue" };
+        case "dynamodb":
+        case "dynamo":
+        case "ddb":
+        case "table":
+        case "tables":
+        case "stream":
+        case "streams":
+          return { kind: "dynamodb" };
         case "lambda":
         case "lambdas":
         case "function":
@@ -393,6 +409,7 @@
       | "eventbridge"
       | "topic"
       | "queue"
+      | "dynamodb"
       | "function"
       | "secret"
       | "bucket",
@@ -650,6 +667,7 @@
           count: countFunctions,
         },
         { id: "queues", label: "Queues", icon: ChatCircleIcon, count: countQueues },
+        { id: "dynamodb", label: "DynamoDB", icon: DatabaseIcon, count: countDynamoTables },
         { id: "sns", label: "SNS", icon: BellIcon, count: countTopics },
         { id: "secrets", label: "Secrets", icon: KeyIcon, count: countSecrets },
         {
@@ -1210,6 +1228,11 @@
       />
     {:else if activeTab === "queues"}
       <QueuesSection
+        {sidebarCollapsed}
+        onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
+      />
+    {:else if activeTab === "dynamodb"}
+      <DynamoDBSection
         {sidebarCollapsed}
         onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
       />
