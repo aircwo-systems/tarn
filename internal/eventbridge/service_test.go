@@ -373,7 +373,7 @@ func TestPutEventsValidation(t *testing.T) {
 	}
 
 	// Invalid detail JSON
-	results, failedCount, err = svc.PutEvents([]types.PutEventsEntry{{
+	_, failedCount, err = svc.PutEvents([]types.PutEventsEntry{{
 		Source:     "test",
 		DetailType: "Test",
 		Detail:     `not-json`,
