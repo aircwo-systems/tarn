@@ -2,18 +2,27 @@
   import {
     ArrowsClockwise,
     Bell,
-    Bridge,
     BridgeIcon,
     ChatCircle,
     GlobeHemisphereWest,
     Lightning,
     StackIcon,
+    XIcon,
   } from "phosphor-svelte";
-  import { TableCell, TableRow } from "$lib/components/ui/table";
+  import {
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
+  } from "$lib/components/ui/table";
+  import { Skeleton } from "$lib/components/ui/skeleton";
   import LedDot from "$lib/components/common/led-dot.svelte";
   import ArnCell from "$lib/components/common/arn-cell.svelte";
-  import ResourceTable from "$lib/components/common/resource-table.svelte";
+  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
   import SectionHeader from "./section-header.svelte";
+  import { formatJSONForViewer } from "$lib/json-format";
   import {
     getDashboard,
     getDashboardFilters,
@@ -37,6 +46,8 @@
     targetArn: string;
     state: string;
     detail: string;
+    detailLabel: string;
+    detailFields: Array<{ label: string; value: string }>;
     lastResult?: string;
   };
 
@@ -110,6 +121,15 @@
         targetArn: fn?.arn ?? mapping.functionName,
         state: mapping.state,
         detail: `Batch ×${mapping.batchSize}`,
+        detailLabel: "sqs",
+        detailFields: [
+          { label: "Source", value: mapping.queueName },
+          { label: "Target", value: mapping.functionName },
+          { label: "State", value: mapping.state },
+          { label: "Batch Size", value: String(mapping.batchSize) },
+          { label: "Mapping UUID", value: mapping.uuid },
+          { label: "Source ARN", value: mapping.eventSourceArn ?? queue?.arn ?? queue?.url ?? "" },
+        ],
         lastResult: mapping.lastResult,
       };
       }),
@@ -130,6 +150,15 @@
           targetArn: fn?.arn ?? mapping.functionName,
           state: mapping.state,
           detail: `Stream mapping · Batch ×${mapping.batchSize}`,
+          detailLabel: "stream",
+          detailFields: [
+            { label: "Source", value: sourceName },
+            { label: "Target", value: mapping.functionName },
+            { label: "State", value: mapping.state },
+            { label: "Batch Size", value: String(mapping.batchSize) },
+            { label: "Mapping UUID", value: mapping.uuid },
+            { label: "Stream ARN", value: mapping.eventSourceArn ?? "" },
+          ],
           lastResult: mapping.lastResult,
         };
       }),
@@ -174,6 +203,15 @@
         detail: `${subscription.protocol.toUpperCase()} subscription${
           subscription.filterPolicy ? ` · filter` : ""
         }`,
+        detailLabel: "sns",
+        detailFields: [
+          { label: "Topic", value: subscription.topicName },
+          { label: "Protocol", value: subscription.protocol.toUpperCase() },
+          { label: "Endpoint", value: subscription.endpoint },
+          { label: "Raw Delivery", value: subscription.rawMessageDelivery ? "true" : "false" },
+          { label: "Filter Scope", value: subscription.filterPolicyScope ?? "" },
+          { label: "Subscription ARN", value: subscription.subscriptionArn },
+        ],
         lastResult: subscription.filterPolicy,
       };
     }),
@@ -204,6 +242,14 @@
               targetArn: fn?.arn ?? targetName,
               state: "Configured",
               detail: `Integration AWS_PROXY · Stage ${gateway.defaultStage}`,
+              detailLabel: "api",
+              detailFields: [
+                { label: "Gateway", value: gateway.name },
+                { label: "Target", value: targetName },
+                { label: "Integration", value: "AWS_PROXY" },
+                { label: "Stage", value: gateway.defaultStage },
+                { label: "Endpoint", value: gateway.apiEndpoint || gateway.invokeUrl || gateway.arn },
+              ],
             },
           ];
         }
@@ -220,6 +266,14 @@
             targetArn: queue?.arn ?? queue?.url ?? targetName,
             state: "Configured",
             detail: `Integration AWS(SQS) · Stage ${gateway.defaultStage}`,
+            detailLabel: "api",
+            detailFields: [
+              { label: "Gateway", value: gateway.name },
+              { label: "Target", value: targetName },
+              { label: "Integration", value: "AWS(SQS)" },
+              { label: "Stage", value: gateway.defaultStage },
+              { label: "Endpoint", value: gateway.apiEndpoint || gateway.invokeUrl || gateway.arn },
+            ],
           },
         ];
       }),
@@ -247,6 +301,15 @@
           targetArn: fn?.arn ?? target.arn,
           state: rule.state,
           detail: `${rule.scheduleExpression} · target ${target.id}`,
+          detailLabel: "rule",
+          detailFields: [
+            { label: "Rule", value: rule.name },
+            { label: "Target", value: targetName },
+            { label: "State", value: rule.state },
+            { label: "Schedule", value: rule.scheduleExpression },
+            { label: "Target ID", value: target.id },
+            { label: "Rule ARN", value: rule.arn },
+          ],
           lastResult: target.lastResult ?? rule.lastResult,
         };
       });
@@ -265,6 +328,20 @@
   const dynamodbCount = $derived(dynamodbTriggers.length);
   const eventBridgeCount = $derived(eventBridgeTriggers.length);
   const apiCount = $derived(apiTriggers.length);
+  let selectedTriggerID = $state<string | null>(null);
+
+  $effect(() => {
+    if (selectedTriggerID && !triggerRows.some((trigger) => trigger.id === selectedTriggerID)) {
+      selectedTriggerID = null;
+    }
+  });
+
+  const selectedTrigger = $derived(
+    triggerRows.find((trigger) => trigger.id === selectedTriggerID) ?? null,
+  );
+  const selectedTriggerPayload = $derived(
+    selectedTrigger?.lastResult ? formatJSONForViewer(selectedTrigger.lastResult) : null,
+  );
 
   function stateColor(state: string): "green" | "amber" | "red" | "gray" {
     const normalized = state.toLowerCase();
@@ -295,6 +372,10 @@
       return endpoint.slice(slash + 1);
     }
     return endpoint;
+  }
+
+  function selectTrigger(id: string) {
+    selectedTriggerID = selectedTriggerID === id ? null : id;
   }
 </script>
 
@@ -332,57 +413,196 @@
     {/snippet}
   </SectionHeader>
 
-  <ResourceTable
-    title="Trigger Mappings"
-    count={triggerRows.length}
-    loading={dashboard.loading && !dashboard.data}
-    empty={triggerRows.length === 0}
-    emptyMessage="No triggers configured yet."
-    emptyIcon={ArrowsClockwise}
-    columns={["Type", "Source", "Target", "State", "Details"]}
-  >
-    {#each triggerRows as trigger}
-      <TableRow>
-        <TableCell class="font-mono text-xs text-muted-foreground">
-          {trigger.type}
-        </TableCell>
-        <TableCell>
-          <ArnCell name={trigger.sourceName} arn={trigger.sourceArn} />
-        </TableCell>
-        <TableCell>
-          {#if trigger.type === "SQS" || trigger.type === "SNS" || trigger.type === "EVENTBRIDGE"}
-            <div class="flex items-start gap-2">
-              <Lightning size={13} class="mt-[2px] text-primary" />
-              <ArnCell name={trigger.targetName} arn={trigger.targetArn} />
-            </div>
-          {:else}
-            <div class="space-y-0.5 max-w-[22rem]">
-              <p class="text-xs font-medium text-foreground">
-                {trigger.targetName}
-              </p>
-              <p class="font-mono text-[11px] text-muted-foreground/70">
-                {trigger.targetArn}
-              </p>
-            </div>
-          {/if}
-        </TableCell>
-        <TableCell>
-          <span class="inline-flex items-center gap-1.5 text-xs">
-            <LedDot color={stateColor(trigger.state)} />
-            <span class="text-muted-foreground">{trigger.state}</span>
-          </span>
-        </TableCell>
-        <TableCell>
-          <div class="space-y-0.5">
-            <p class="text-xs text-muted-foreground">{trigger.detail}</p>
-            {#if trigger.lastResult}
-              <p class="font-mono text-[11px] text-muted-foreground/70">
-                {trigger.lastResult}
-              </p>
-            {/if}
+  <div class="overflow-hidden rounded-lg border border-border/70 bg-background/50">
+    <div class="relative min-h-0">
+      <div class="min-h-0">
+        <div class="flex items-center justify-between border-b border-border/70 px-4 py-3">
+          <div>
+            <h3 class="text-sm font-semibold text-foreground">Trigger Mappings</h3>
+            <p class="mt-1 text-[11px] text-muted-foreground/70">
+              Select a mapping row to inspect its source, target, and payload details.
+            </p>
           </div>
-        </TableCell>
-      </TableRow>
-    {/each}
-  </ResourceTable>
+          <span class="text-xs text-muted-foreground/70 font-mono">{triggerRows.length} items</span>
+        </div>
+
+        {#if dashboard.loading && !dashboard.data}
+          <div class="space-y-2 p-4">
+            {#each Array(7) as _, index (index)}
+              <Skeleton class="h-11 w-full" />
+            {/each}
+          </div>
+        {:else if triggerRows.length === 0}
+          <div class="flex min-h-[18rem] items-center justify-center text-sm text-muted-foreground/70">
+            No triggers configured yet.
+          </div>
+        {:else}
+          <div class="overflow-auto">
+            <Table>
+              <TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur [&_th]:bg-background/95">
+                <TableRow class="hover:bg-transparent">
+                  <TableHead>Type</TableHead>
+                  <TableHead>Source</TableHead>
+                  <TableHead>Target</TableHead>
+                  <TableHead>State</TableHead>
+                  <TableHead>Details</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {#each triggerRows as trigger}
+                  <TableRow
+                    class={`cursor-pointer ${trigger.id === selectedTriggerID ? "bg-muted/50" : ""}`}
+                    role="button"
+                    tabindex={0}
+                    onclick={() => selectTrigger(trigger.id)}
+                    onkeydown={(event: KeyboardEvent) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        selectTrigger(trigger.id);
+                      }
+                    }}
+                  >
+                    <TableCell class="font-mono text-xs text-muted-foreground">
+                      {trigger.type}
+                    </TableCell>
+                    <TableCell>
+                      <ArnCell name={trigger.sourceName} arn={trigger.sourceArn} />
+                    </TableCell>
+                    <TableCell>
+                      {#if trigger.type === "SQS" || trigger.type === "SNS" || trigger.type === "EVENTBRIDGE"}
+                        <div class="flex items-start gap-2">
+                          <Lightning size={13} class="mt-[2px] text-primary" />
+                          <ArnCell name={trigger.targetName} arn={trigger.targetArn} />
+                        </div>
+                      {:else}
+                        <div class="space-y-0.5 max-w-[22rem]">
+                          <p class="text-xs font-medium text-foreground">
+                            {trigger.targetName}
+                          </p>
+                          <p class="font-mono text-[11px] text-muted-foreground/70">
+                            {trigger.targetArn}
+                          </p>
+                        </div>
+                      {/if}
+                    </TableCell>
+                    <TableCell>
+                      <span class="inline-flex items-center gap-1.5 text-xs">
+                        <LedDot color={stateColor(trigger.state)} />
+                        <span class="text-muted-foreground">{trigger.state}</span>
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <div class="space-y-1">
+                        <p class="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/60">
+                          {trigger.detailLabel}
+                        </p>
+                        <p class="text-xs text-muted-foreground">{trigger.detail}</p>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                {/each}
+              </TableBody>
+            </Table>
+          </div>
+        {/if}
+      </div>
+
+      <div
+        class="absolute inset-y-0 right-0 z-10 overflow-hidden border-l border-border bg-card shadow-xl transition-[width,opacity] duration-200 ease-out {selectedTrigger ? 'opacity-100' : 'pointer-events-none opacity-0'}"
+        style="width: {selectedTrigger ? '420px' : '0px'}"
+      >
+        {#if selectedTrigger}
+          <div class="flex h-full min-w-[420px] flex-col">
+            <div class="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5 shrink-0 bg-card">
+              <div class="min-w-0">
+                <p class="truncate font-mono text-sm text-foreground">
+                  {selectedTrigger.sourceName} → {selectedTrigger.targetName}
+                </p>
+                <p class="mt-1 text-[11px] text-muted-foreground/70">
+                  {selectedTrigger.type} mapping
+                </p>
+              </div>
+              <button
+                type="button"
+                onclick={() => (selectedTriggerID = null)}
+                class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground shrink-0"
+                aria-label="Close detail panel"
+              >
+                <XIcon size={14} />
+              </button>
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-4 space-y-4">
+              <div>
+                <p class="mb-2 text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Summary</p>
+                <div class="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
+                  <div>
+                    <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Type</p>
+                    <p class="mt-1 font-mono text-foreground">{selectedTrigger.type}</p>
+                  </div>
+                  <div>
+                    <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">State</p>
+                    <p class="mt-1 font-mono text-foreground">{selectedTrigger.state}</p>
+                  </div>
+                  <div class="col-span-2">
+                    <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Source ARN</p>
+                    <p class="mt-1 break-all font-mono text-foreground">{selectedTrigger.sourceArn}</p>
+                  </div>
+                  <div class="col-span-2">
+                    <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Target ARN</p>
+                    <p class="mt-1 break-all font-mono text-foreground">{selectedTrigger.targetArn}</p>
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <p class="mb-2 text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Mapping Details</p>
+                <div class="rounded-md border border-border overflow-hidden divide-y divide-border/60">
+                  {#each selectedTrigger.detailFields as field (field.label)}
+                    <div class="flex items-start gap-4 px-3 py-2">
+                      <span class="w-24 shrink-0 pt-px text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                        {field.label}
+                      </span>
+                      <span class="break-all font-mono text-[12px] leading-snug text-muted-foreground">
+                        {field.value}
+                      </span>
+                    </div>
+                  {/each}
+                </div>
+              </div>
+
+              <div>
+                <p class="mb-2 text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Payload</p>
+                {#if selectedTrigger.lastResult}
+                  {#if selectedTriggerPayload}
+                    <FormattedMessageViewer
+                      raw={selectedTrigger.lastResult}
+                      formatted={selectedTriggerPayload.formatted}
+                      formattedHtml={selectedTriggerPayload.formattedHtml}
+                      formattedLabel="Formatted"
+                      rawLabel="Raw"
+                      formattedOpenByDefault={true}
+                      rawOpenByDefault={false}
+                      formattedContentClass="text-[11px] text-foreground"
+                      rawContentClass="text-[11px] text-muted-foreground"
+                      formattedMaxHeightClass="max-h-[24rem]"
+                      rawMaxHeightClass="max-h-[20rem]"
+                    />
+                  {:else}
+                    <pre
+                      class="max-h-[24rem] overflow-y-auto rounded-md border border-border bg-[var(--code-bg)] px-3 py-3 font-mono text-[11px] text-muted-foreground whitespace-pre-wrap break-all"
+                    >{selectedTrigger.lastResult}</pre>
+                  {/if}
+                {:else}
+                  <p class="text-xs text-muted-foreground/70">
+                    No payload or result details were captured for this trigger.
+                  </p>
+                {/if}
+              </div>
+            </div>
+          </div>
+        {/if}
+      </div>
+    </div>
+  </div>
 </div>
