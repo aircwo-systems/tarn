@@ -169,9 +169,10 @@ MessageBody=$util.toJson($payload)`
 func TestInvokeAWSIntegration_UsesTemplateFallbackAndForwardsFIFOFields(t *testing.T) {
 	t.Run("template fallback forwards group and dedup", func(t *testing.T) {
 		var gotQueue, gotBody, gotGroup, gotDedup string
+		var gotAttrs map[string]*types.MessageAttribute
 		svc := &Service{
-			sqsSend: func(queueName, body, groupId, dedupId string) (string, string, error) {
-				gotQueue, gotBody, gotGroup, gotDedup = queueName, body, groupId, dedupId
+			sqsSend: func(queueName, body string, attrs map[string]*types.MessageAttribute, groupId, dedupId string) (string, string, error) {
+				gotQueue, gotBody, gotGroup, gotDedup, gotAttrs = queueName, body, groupId, dedupId, attrs
 				return "m-1", "md5-1", nil
 			},
 		}
@@ -213,13 +214,18 @@ Action=SendMessage&MessageGroupId=$util.urlEncode($aggregateId)&MessageDeduplica
 		if gotDedup != "dedup-42" {
 			t.Fatalf("dedupId = %q, want %q", gotDedup, "dedup-42")
 		}
+		if gotAttrs["correlationId"] == nil || gotAttrs["correlationId"].StringValue == "" {
+			t.Fatalf("correlation attribute missing: %+v", gotAttrs)
+		}
 	})
 
 	t.Run("missing message body falls back to raw request body", func(t *testing.T) {
 		var gotBody string
+		var gotAttrs map[string]*types.MessageAttribute
 		svc := &Service{
-			sqsSend: func(queueName, body, groupId, dedupId string) (string, string, error) {
+			sqsSend: func(queueName, body string, attrs map[string]*types.MessageAttribute, groupId, dedupId string) (string, string, error) {
 				gotBody = body
+				gotAttrs = attrs
 				return "m-2", "md5-2", nil
 			},
 		}
@@ -240,6 +246,9 @@ Action=SendMessage&MessageGroupId=$util.urlEncode($aggregateId)&MessageDeduplica
 		}
 		if gotBody != `{"fallback":true}` {
 			t.Fatalf("body = %q, want %q", gotBody, `{"fallback":true}`)
+		}
+		if gotAttrs["correlationId"] == nil || gotAttrs["correlationId"].StringValue == "" {
+			t.Fatalf("correlation attribute missing: %+v", gotAttrs)
 		}
 	})
 }

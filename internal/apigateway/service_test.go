@@ -324,9 +324,10 @@ func TestInvokeSQSIntegration_MapsFIFORequestParameters(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var gotQueue, gotBody, gotGroup, gotDedup string
+			var gotAttrs map[string]*types.MessageAttribute
 			svc := &Service{
-				sqsSend: func(queueName, body, groupID, dedupID string) (string, string, error) {
-					gotQueue, gotBody, gotGroup, gotDedup = queueName, body, groupID, dedupID
+				sqsSend: func(queueName, body string, attrs map[string]*types.MessageAttribute, groupID, dedupID string) (string, string, error) {
+					gotQueue, gotBody, gotGroup, gotDedup, gotAttrs = queueName, body, groupID, dedupID, attrs
 					return "m-1", "md5-1", nil
 				},
 			}
@@ -364,6 +365,9 @@ func TestInvokeSQSIntegration_MapsFIFORequestParameters(t *testing.T) {
 			if gotDedup != tc.wantDedup {
 				t.Fatalf("dedupId = %q, want %q", gotDedup, tc.wantDedup)
 			}
+			if gotAttrs["correlationId"] == nil || gotAttrs["correlationId"].DataType != "String" || gotAttrs["correlationId"].StringValue == "" {
+				t.Fatalf("correlation attribute missing or invalid: %+v", gotAttrs)
+			}
 		})
 	}
 }
@@ -371,9 +375,10 @@ func TestInvokeSQSIntegration_MapsFIFORequestParameters(t *testing.T) {
 func TestInvokeSQSIntegration_DefaultsRemainBackwardCompatible(t *testing.T) {
 	t.Run("only MessageBody is configured", func(t *testing.T) {
 		var gotBody, gotGroup, gotDedup string
+		var gotAttrs map[string]*types.MessageAttribute
 		svc := &Service{
-			sqsSend: func(queueName, body, groupID, dedupID string) (string, string, error) {
-				gotBody, gotGroup, gotDedup = body, groupID, dedupID
+			sqsSend: func(queueName, body string, attrs map[string]*types.MessageAttribute, groupID, dedupID string) (string, string, error) {
+				gotBody, gotGroup, gotDedup, gotAttrs = body, groupID, dedupID, attrs
 				return "m-2", "md5-2", nil
 			},
 		}
@@ -402,13 +407,18 @@ func TestInvokeSQSIntegration_DefaultsRemainBackwardCompatible(t *testing.T) {
 		if gotDedup != "" {
 			t.Fatalf("dedupId = %q, want empty", gotDedup)
 		}
+		if gotAttrs["correlationId"] == nil || gotAttrs["correlationId"].StringValue == "" {
+			t.Fatalf("correlation attribute missing: %+v", gotAttrs)
+		}
 	})
 
 	t.Run("MessageBody defaults to raw body when unspecified", func(t *testing.T) {
 		var gotBody string
+		var gotAttrs map[string]*types.MessageAttribute
 		svc := &Service{
-			sqsSend: func(queueName, body, groupID, dedupID string) (string, string, error) {
+			sqsSend: func(queueName, body string, attrs map[string]*types.MessageAttribute, groupID, dedupID string) (string, string, error) {
 				gotBody = body
+				gotAttrs = attrs
 				return "m-3", "md5-3", nil
 			},
 		}
@@ -427,6 +437,9 @@ func TestInvokeSQSIntegration_DefaultsRemainBackwardCompatible(t *testing.T) {
 		}
 		if gotBody != `{"raw":true}` {
 			t.Fatalf("body = %q, want %q", gotBody, `{"raw":true}`)
+		}
+		if gotAttrs["correlationId"] == nil || gotAttrs["correlationId"].StringValue == "" {
+			t.Fatalf("correlation attribute missing: %+v", gotAttrs)
 		}
 	})
 }
