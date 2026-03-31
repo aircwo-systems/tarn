@@ -20,6 +20,7 @@ type mockSQS struct {
 	messages     []*types.SQSMessage
 	deleted      []string
 	released     []string
+	processed    map[string]int64
 	receiveErr   error
 	receiveCalls int
 }
@@ -45,6 +46,16 @@ func (m *mockSQS) DeleteMessage(queueName, receiptHandle string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.deleted = append(m.deleted, receiptHandle)
+	return nil
+}
+
+func (m *mockSQS) IncrementProcessedCount(queueName string, delta int64) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.processed == nil {
+		m.processed = make(map[string]int64)
+	}
+	m.processed[queueName] += delta
 	return nil
 }
 
@@ -170,10 +181,14 @@ func TestPollerStartStop(t *testing.T) {
 
 	sqsMock.mu.Lock()
 	delCount := len(sqsMock.deleted)
+	processedCount := sqsMock.processed["test-queue"]
 	sqsMock.mu.Unlock()
 
 	if delCount < 1 {
 		t.Fatalf("expected at least 1 deletion, got %d", delCount)
+	}
+	if processedCount < 1 {
+		t.Fatalf("expected at least 1 processed message, got %d", processedCount)
 	}
 }
 
