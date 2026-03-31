@@ -5,6 +5,7 @@ export type NodeKind =
   | "eventbridge"
   | "topic"
   | "queue"
+  | "dynamodb"
   | "bucket"
   | "function"
   | "secret"

@@ -1,5 +1,6 @@
 import type { NodeKind, NodeSize, NodeView } from "../types";
 import { bucketTopologyRegistry } from "./bucket-topology-registry";
+import { dynamodbTopologyRegistry } from "./dynamodb-topology-registry";
 import { eventbridgeTopologyRegistry } from "./eventbridge-topology-registry";
 import { extensionTopologyRegistry } from "./extension-topology-registry";
 import { functionTopologyRegistry } from "./function-topology-registry";
@@ -28,6 +29,7 @@ const topologyRegistryByKind = {
   eventbridge: eventbridgeTopologyRegistry,
   topic: topicTopologyRegistry,
   queue: queueTopologyRegistry,
+  dynamodb: dynamodbTopologyRegistry,
   bucket: bucketTopologyRegistry,
   function: functionTopologyRegistry,
   secret: secretTopologyRegistry,

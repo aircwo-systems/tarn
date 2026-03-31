@@ -6,6 +6,7 @@
     gateways = [],
     functions = [],
     queues = [],
+    dynamodbTables = [],
     topics = [],
     secrets = [],
     buckets = [],
@@ -33,7 +34,7 @@
       visible: true,
       x: e.clientX,
       y: e.clientY,
-      title: item.name || item.apiId || "Unknown Resource",
+      title: item.name || item.tableName || item.apiId || "Unknown Resource",
       detail: type,
       status: item.state || item.status || "Active",
       color,
@@ -97,6 +98,14 @@
       color: "var(--color-cyan)",
       side: 1,
       order: 3,
+    },
+    {
+      id: "dynamodb",
+      label: "DYNAMODB",
+      items: dynamodbTables,
+      color: "var(--topology-dynamodb)",
+      side: 1,
+      order: 4,
     },
   ]);
 
@@ -259,7 +268,7 @@
                   font-size={s.font}
                   class="group-hover:fill-foreground truncate"
                 >
-                  {item.name?.slice(0, 12).toUpperCase() || "UNTITLED"}
+                  {(item.name || item.tableName)?.slice(0, 12).toUpperCase() || "UNTITLED"}
                 </text>
               </g>
             {/each}
