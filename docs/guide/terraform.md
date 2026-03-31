@@ -17,6 +17,7 @@ provider "aws" {
   endpoints {
     apigateway     = "http://localhost:4566"
     apigatewayv2   = "http://localhost:4566"
+    dynamodb       = "http://localhost:4566"
     events         = "http://localhost:4566"
     lambda         = "http://localhost:4566"
     s3             = "http://localhost:4566/_s3"
@@ -44,7 +45,7 @@ S3 requires the `/_s3` path prefix. All other services use the root endpoint. Yo
 
 ## Production Compatibility
 
-Tarn includes compatibility stubs for a number of Terraform-driven control-plane actions, especially around IAM, SNS, SQS, Secrets Manager, and EventBridge. This helps production-shaped `.tf` files apply with fewer local-only changes.
+Tarn includes compatibility stubs for a number of Terraform-driven control-plane actions, especially around IAM, SNS, SQS, DynamoDB, Secrets Manager, and EventBridge. This helps production-shaped `.tf` files apply with fewer local-only changes.
 
 Check server logs for `[service] unhandled action (returning empty OK)` to see which stubs were hit during an apply.
 
@@ -57,6 +58,7 @@ Stubbed actions are compatibility shims, not full implementations. They may succ
 | Terraform Key | Service | Endpoint |
 |---|---|---|
 | `lambda` | Lambda | `http://localhost:4566` |
+| `dynamodb` | DynamoDB | `http://localhost:4566` |
 | `s3` | S3 | `http://localhost:4566/_s3` |
 | `sqs` | SQS | `http://localhost:4566` |
 | `sns` | SNS | `http://localhost:4566` |
@@ -69,6 +71,12 @@ IAM does not require an endpoint override — Tarn auto-stubs IAM actions via pr
 
 ## Examples
 
-Terraform examples are no longer distributed from this repository. They are being moved into a separate examples repository so the core Tarn codebase can stay focused on runtime and compatibility work.
+A small set of curated Terraform examples still lives in this repository under `examples/terraform/`.
+
+Useful starting points:
+
+- `examples/terraform/dynamodb-stream-lambda` — DynamoDB table with streams wired to Lambda
+- `examples/terraform/eventbridge-scheduled-lambda` — scheduled EventBridge rule targeting Lambda
+- `examples/terraform/apigw-sqs-fanout-secrets-s3-dlq` — larger multi-service integration flow
 
 See the [project roadmap](https://github.com/aircwo-systems/tarn/blob/develop-docs/ROADMAP.md) for planned Terraform compatibility work and SDK testing coverage.

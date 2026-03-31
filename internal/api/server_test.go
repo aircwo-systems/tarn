@@ -12,6 +12,7 @@ import (
 	"github.com/aircwo-systems/tarn/internal/apigateway"
 	"github.com/aircwo-systems/tarn/internal/apigatewayv1"
 	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/internal/dynamodb"
 	"github.com/aircwo-systems/tarn/internal/eventbridge"
 	"github.com/aircwo-systems/tarn/internal/eventsource"
 	"github.com/aircwo-systems/tarn/internal/infrastructure"
@@ -44,18 +45,19 @@ func newTestHTTPHandlerWithConfig(t *testing.T, cfg *config.Config) http.Handler
 	logsSvc := logs.NewService(cfg)
 	sqsSvc := sqs.NewService(cfg)
 	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
+	dynamoSvc := dynamodb.NewService(cfg)
 	secretsSvc := secrets.NewService(cfg)
 	s3Svc := s3store.NewService(cfg)
 	infraSvc := infrastructure.NewService("", false)
 	esmStore := eventsource.NewStore(cfg)
-	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil)
+	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil, nil)
 	ebStore := eventbridge.NewStore(cfg)
 	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
 	if err := ebSvc.Init(); err != nil {
 		t.Fatalf("init eventbridge service: %v", err)
 	}
 
-	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
+	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 	return s.withLogging(mux)
@@ -75,15 +77,16 @@ func TestNewServerRegistersRoutes(t *testing.T) {
 	logsSvc := logs.NewService(cfg)
 	sqsSvc := sqs.NewService(cfg)
 	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
+	dynamoSvc := dynamodb.NewService(cfg)
 	secretsSvc := secrets.NewService(cfg)
 
 	s3Svc := s3store.NewService(cfg)
 	infraSvc := infrastructure.NewService("", false)
 	esmStore := eventsource.NewStore(cfg)
-	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil)
+	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil, nil)
 	ebStore := eventbridge.NewStore(cfg)
 	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
-	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
+	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
 	if s == nil {
 		t.Fatal("NewServer returned nil")
 	}
@@ -171,18 +174,19 @@ func TestEventBridgeProtocolDispatchSupportsNonRootPath(t *testing.T) {
 	logsSvc := logs.NewService(cfg)
 	sqsSvc := sqs.NewService(cfg)
 	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
+	dynamoSvc := dynamodb.NewService(cfg)
 	secretsSvc := secrets.NewService(cfg)
 	s3Svc := s3store.NewService(cfg)
 	infraSvc := infrastructure.NewService("", false)
 	esmStore := eventsource.NewStore(cfg)
-	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil)
+	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil, nil)
 	ebStore := eventbridge.NewStore(cfg)
 	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
 	if err := ebSvc.Init(); err != nil {
 		t.Fatalf("init eventbridge service: %v", err)
 	}
 
-	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
+	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 	handler := s.withLogging(mux)
@@ -287,18 +291,19 @@ func TestEventBridgeProtocolDispatchSupportsTarnPrefixedPath(t *testing.T) {
 	logsSvc := logs.NewService(cfg)
 	sqsSvc := sqs.NewService(cfg)
 	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
+	dynamoSvc := dynamodb.NewService(cfg)
 	secretsSvc := secrets.NewService(cfg)
 	s3Svc := s3store.NewService(cfg)
 	infraSvc := infrastructure.NewService("", false)
 	esmStore := eventsource.NewStore(cfg)
-	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil)
+	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil, nil)
 	ebStore := eventbridge.NewStore(cfg)
 	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
 	if err := ebSvc.Init(); err != nil {
 		t.Fatalf("init eventbridge service: %v", err)
 	}
 
-	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
+	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 	handler := s.withLogging(mux)
@@ -338,18 +343,19 @@ func TestEventBridgeProtocolDispatchSupportsTarnEventsPath(t *testing.T) {
 	logsSvc := logs.NewService(cfg)
 	sqsSvc := sqs.NewService(cfg)
 	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
+	dynamoSvc := dynamodb.NewService(cfg)
 	secretsSvc := secrets.NewService(cfg)
 	s3Svc := s3store.NewService(cfg)
 	infraSvc := infrastructure.NewService("", false)
 	esmStore := eventsource.NewStore(cfg)
-	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil)
+	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil, nil)
 	ebStore := eventbridge.NewStore(cfg)
 	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
 	if err := ebSvc.Init(); err != nil {
 		t.Fatalf("init eventbridge service: %v", err)
 	}
 
-	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
+	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 	handler := s.withLogging(mux)

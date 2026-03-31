@@ -2,7 +2,7 @@
 
 Deploy and invoke serverless functions in Tarn.
 
-<span class="status-badge status-partial">Partial Support</span> — Core Lambda APIs, layers, and SQS event source mappings
+<span class="status-badge status-partial">Partial Support</span> — Core Lambda APIs, layers, and SQS/DynamoDB Streams event source mappings
 
 ## Supported Operations
 
@@ -24,7 +24,7 @@ Deploy and invoke serverless functions in Tarn.
 | PublishLayerVersion | Supported | For shared code |
 | GetLayerVersion | Supported | |
 | ListLayerVersions | Supported | |
-| CreateEventSourceMapping | Supported | SQS sources only |
+| CreateEventSourceMapping | Supported | SQS queues and DynamoDB Streams |
 | DeleteEventSourceMapping | Supported | |
 | ListEventSourceMappings | Supported | |
 
@@ -52,13 +52,18 @@ awslocal lambda publish-layer-version \
 ```
 
 ### Event Source Mappings
-Automatically invoke Lambda from SQS queues.
+Automatically invoke Lambda from SQS queues and DynamoDB Streams.
 
 ```bash
 awslocal lambda create-event-source-mapping \
   --event-source-arn arn:aws:sqs:us-east-1:000000000000:my-queue \
   --function-name my-processor \
   --batch-size 10
+
+awslocal lambda create-event-source-mapping \
+  --event-source-arn arn:aws:dynamodb:us-east-1:000000000000:table/my-table/stream/2026-03-30T00:00:00.000 \
+  --function-name my-stream-processor \
+  --starting-position TRIM_HORIZON
 ```
 
 ### Environment Variables & Secrets
@@ -212,6 +217,8 @@ resource "aws_lambda_event_source_mapping" "sqs" {
 }
 ```
 </div>
+
+DynamoDB stream mappings use the same `aws_lambda_event_source_mapping` resource with a DynamoDB stream ARN.
 
 ## Runtimes
 

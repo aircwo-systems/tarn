@@ -33,7 +33,7 @@ func newTestHandler(t *testing.T) *Handler {
 	if err := store.Init(); err != nil {
 		t.Fatalf("init store: %v", err)
 	}
-	svc := eventsourcesvc.NewService(cfg, store, nil, nil)
+	svc := eventsourcesvc.NewService(cfg, store, nil, nil, nil)
 	return NewHandler(svc)
 }
 
