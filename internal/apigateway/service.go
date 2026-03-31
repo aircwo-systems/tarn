@@ -13,11 +13,11 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/google/uuid"
 	"github.com/aircwo-systems/tarn/internal/config"
 	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	"github.com/google/uuid"
 )
 
 const (
@@ -29,7 +29,7 @@ const (
 )
 
 // SQSSendFunc is a function type for sending SQS messages.
-type SQSSendFunc func(queueName, body, groupID, dedupID string) (messageID, md5 string, err error)
+type SQSSendFunc func(queueName, body string, attrs map[string]*types.MessageAttribute, groupID, dedupID string) (messageID, md5 string, err error)
 
 // Service implements API Gateway HTTP API (v2) behavior.
 type Service struct {
@@ -1061,6 +1061,11 @@ func (s *Service) invokeSQSIntegration(integration *types.APIGatewayIntegration,
 		return nil, errors.New("SQS service not configured for AWS integration type")
 	}
 
+	correlationID := tracesvc.CorrelationIDFromHeaders(input.Headers)
+	if correlationID == "" {
+		correlationID = tracesvc.NewCorrelationID()
+	}
+
 	// Resolve message fields from RequestParameters expressions when provided.
 	// Defaults preserve backward compatibility for standard queues.
 	body := string(input.Body)
@@ -1076,7 +1081,18 @@ func (s *Service) invokeSQSIntegration(integration *types.APIGatewayIntegration,
 		dedupID = evaluateExpression(expr, input, pathParams)
 	}
 
-	messageID, md5, err := s.sqsSend(integration.SQSQueueName, body, groupID, dedupID)
+	messageID, md5, err := s.sqsSend(
+		integration.SQSQueueName,
+		body,
+		map[string]*types.MessageAttribute{
+			"correlationId": {
+				DataType:    "String",
+				StringValue: correlationID,
+			},
+		},
+		groupID,
+		dedupID,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("SQS send failed: %w", err)
 	}

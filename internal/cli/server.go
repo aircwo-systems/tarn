@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/aircwo-systems/tarn/internal/api"
 	"github.com/aircwo-systems/tarn/internal/apigateway"
 	"github.com/aircwo-systems/tarn/internal/apigatewayv1"
@@ -33,6 +32,7 @@ import (
 	"github.com/aircwo-systems/tarn/internal/sqs"
 	"github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	"github.com/google/uuid"
 	"github.com/spf13/cobra"
 )
 
@@ -171,8 +171,8 @@ func startServer(cfg *config.Config) error {
 	}
 
 	// Initialize API Gateway services (with shared SQS send function)
-	sqsSendFn := func(queueName, body, groupId, dedupId string) (string, string, error) {
-		msg, err := sqsSvc.SendMessage(queueName, body, 0, nil, groupId, dedupId)
+	sqsSendFn := func(queueName, body string, attrs map[string]*types.MessageAttribute, groupId, dedupId string) (string, string, error) {
+		msg, err := sqsSvc.SendMessage(queueName, body, 0, attrs, groupId, dedupId)
 		if err != nil {
 			return "", "", err
 		}
@@ -185,8 +185,8 @@ func startServer(cfg *config.Config) error {
 	}
 
 	// Initialize API Gateway v1 (REST API) service
-	sqsSendV1 := apigatewayv1.SQSSendFunc(func(queueName, body, groupId, dedupId string) (string, string, error) {
-		msg, err := sqsSvc.SendMessage(queueName, body, 0, nil, groupId, dedupId)
+	sqsSendV1 := apigatewayv1.SQSSendFunc(func(queueName, body string, attrs map[string]*types.MessageAttribute, groupId, dedupId string) (string, string, error) {
+		msg, err := sqsSvc.SendMessage(queueName, body, 0, attrs, groupId, dedupId)
 		if err != nil {
 			return "", "", err
 		}

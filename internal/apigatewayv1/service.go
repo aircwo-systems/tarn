@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/aircwo-systems/tarn/internal/config"
 	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	"github.com/google/uuid"
 )
 
 const (
@@ -26,7 +26,7 @@ const (
 
 // SQSSendFunc sends a message to an SQS queue.
 // groupId and dedupId are required for FIFO queues; pass empty strings for standard queues.
-type SQSSendFunc func(queueName, body, groupId, dedupId string) (messageID, md5 string, err error)
+type SQSSendFunc func(queueName, body string, attrs map[string]*types.MessageAttribute, groupId, dedupId string) (messageID, md5 string, err error)
 
 // PatchOp is a single JSON Patch operation (RFC 6902) as used by UpdateIntegration.
 type PatchOp struct {
@@ -579,6 +579,11 @@ func (s *Service) invokeAWSIntegration(ctx context.Context, api *types.RestAPI, 
 		return nil, errors.New("SQS service not configured")
 	}
 
+	correlationID := tracesvc.CorrelationIDFromHeaders(input.Headers)
+	if correlationID == "" {
+		correlationID = tracesvc.NewCorrelationID()
+	}
+
 	// Determine queue from integration URI
 	queueName := integ.SQSQueueName
 	if queueName == "" {
@@ -623,12 +628,19 @@ func (s *Service) invokeAWSIntegration(ctx context.Context, api *types.RestAPI, 
 	messageDedupId := getQueryParam(params, "MessageDeduplicationId")
 
 	sqsStart := time.Now()
-	messageID, md5, sendErr := s.sqsSend(queueName, messageBody, messageGroupId, messageDedupId)
+	messageID, md5, sendErr := s.sqsSend(
+		queueName,
+		messageBody,
+		map[string]*types.MessageAttribute{
+			"correlationId": {
+				DataType:    "String",
+				StringValue: correlationID,
+			},
+		},
+		messageGroupId,
+		messageDedupId,
+	)
 	if s.traceStore != nil {
-		correlationID := tracesvc.CorrelationIDFromHeaders(input.Headers)
-		if correlationID == "" {
-			correlationID = tracesvc.NewCorrelationID()
-		}
 		status, spanStatus := 200, "ok"
 		if sendErr != nil {
 			status, spanStatus = 500, "error"
