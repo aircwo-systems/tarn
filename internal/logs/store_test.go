@@ -261,6 +261,7 @@ func TestGetGroup(t *testing.T) {
 	}
 	if summary == nil {
 		t.Fatal("expected non-nil summary")
+		return
 	}
 	if summary.EventCount != 1 {
 		t.Errorf("expected 1 event, got %d", summary.EventCount)
