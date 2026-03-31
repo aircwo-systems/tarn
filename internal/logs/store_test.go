@@ -56,9 +56,12 @@ func TestPutAndGetLogEvents(t *testing.T) {
 	}
 	s.PutLogEvents("/test", "stream1", events)
 
-	result, total := s.GetLogEvents("/test", nil)
+	result, total, hasMore := s.GetLogEvents("/test", nil)
 	if total != 3 {
 		t.Fatalf("expected total 3, got %d", total)
+	}
+	if hasMore {
+		t.Fatal("expected no additional pages")
 	}
 	if len(result) != 3 {
 		t.Fatalf("expected 3 events, got %d", len(result))
@@ -83,7 +86,7 @@ func TestRingBufferOverflow(t *testing.T) {
 		})
 	}
 
-	result, total := s.GetLogEvents("/test", nil)
+	result, total, _ := s.GetLogEvents("/test", nil)
 	if total != maxEvents {
 		t.Fatalf("expected total %d (buffer full), got %d", maxEvents, total)
 	}
@@ -108,7 +111,7 @@ func TestFilterByLevel(t *testing.T) {
 		{Timestamp: now.Add(3 * time.Second), Message: "another error", Level: LevelERROR},
 	})
 
-	result, total := s.GetLogEvents("/test", &LogFilter{Level: LevelERROR})
+	result, total, _ := s.GetLogEvents("/test", &LogFilter{Level: LevelERROR})
 	if total != 2 {
 		t.Fatalf("expected 2 ERROR events, got %d", total)
 	}
@@ -130,7 +133,7 @@ func TestFilterByPattern(t *testing.T) {
 		{Timestamp: now.Add(2 * time.Second), Message: "request completed", Level: LevelINFO},
 	})
 
-	result, total := s.GetLogEvents("/test", &LogFilter{Pattern: "timeout"})
+	result, total, _ := s.GetLogEvents("/test", &LogFilter{Pattern: "timeout"})
 	if total != 1 {
 		t.Fatalf("expected 1 event matching 'timeout', got %d", total)
 	}
@@ -149,7 +152,7 @@ func TestFilterByPatternCaseInsensitive(t *testing.T) {
 		{Timestamp: now.Add(time.Second), Message: "all good", Level: LevelINFO},
 	})
 
-	result, _ := s.GetLogEvents("/test", &LogFilter{Pattern: "timeout"})
+	result, _, _ := s.GetLogEvents("/test", &LogFilter{Pattern: "timeout"})
 	if len(result) != 1 {
 		t.Fatalf("expected case-insensitive match, got %d results", len(result))
 	}
@@ -168,7 +171,7 @@ func TestFilterByTimeRange(t *testing.T) {
 
 	startTime := base.Add(30 * time.Minute)
 	endTime := base.Add(90 * time.Minute)
-	result, total := s.GetLogEvents("/test", &LogFilter{StartTime: &startTime, EndTime: &endTime})
+	result, total, _ := s.GetLogEvents("/test", &LogFilter{StartTime: &startTime, EndTime: &endTime})
 	if total != 1 {
 		t.Fatalf("expected 1 event in time range, got %d", total)
 	}
@@ -189,7 +192,7 @@ func TestFilterByStream(t *testing.T) {
 		{Timestamp: now.Add(time.Second), Message: "from b", Level: LevelINFO},
 	})
 
-	result, _ := s.GetLogEvents("/test", &LogFilter{StreamName: "stream-a"})
+	result, _, _ := s.GetLogEvents("/test", &LogFilter{StreamName: "stream-a"})
 	if len(result) != 1 {
 		t.Fatalf("expected 1 event from stream-a, got %d", len(result))
 	}
@@ -209,9 +212,12 @@ func TestPaginationOffsetAndLimit(t *testing.T) {
 		})
 	}
 
-	result, total := s.GetLogEvents("/test", &LogFilter{Offset: 3, Limit: 4})
+	result, total, hasMore := s.GetLogEvents("/test", &LogFilter{Offset: 3, Limit: 4})
 	if total != 10 {
 		t.Fatalf("expected total 10, got %d", total)
+	}
+	if !hasMore {
+		t.Fatal("expected additional pages after limited result")
 	}
 	if len(result) != 4 {
 		t.Fatalf("expected 4 events (offset=3, limit=4), got %d", len(result))
@@ -293,7 +299,7 @@ REPORT RequestId: abc-123	Duration: 50ms`
 
 	svc.IngestContainerLogs("myFunc", "2026/01/15/[abc123]", rawLogs)
 
-	events, total := svc.GetLogEvents("/aws/lambda/myFunc", nil)
+	events, total, _ := svc.GetLogEvents("/aws/lambda/myFunc", nil)
 	if total != 5 {
 		t.Fatalf("expected 5 events, got %d", total)
 	}
@@ -357,4 +363,86 @@ func testConfig() *config.Config {
 	cfg := config.Default()
 	cfg.LogsMaxEventsPerGroup = 1000
 	return cfg
+}
+func TestPaginationCursorDescendingPagesByWindow(t *testing.T) {
+	s := NewStore(500)
+	s.CreateGroup("/test")
+
+	base := time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 300; i++ {
+		s.PutLogEvents("/test", "stream1", []LogEvent{
+			{
+				Timestamp: base.Add(time.Duration(i) * time.Second),
+				Message:   fmt.Sprintf("event-%03d", i),
+				Level:     LevelINFO,
+			},
+		})
+	}
+
+	firstPage, total, hasMore := s.GetLogEvents("/test", &LogFilter{
+		Limit: 200,
+		Order: "desc",
+	})
+	if total != 300 {
+		t.Fatalf("expected total 300, got %d", total)
+	}
+	if len(firstPage) != 200 {
+		t.Fatalf("expected first page of 200, got %d", len(firstPage))
+	}
+	if !hasMore {
+		t.Fatal("expected more pages after first descending page")
+	}
+	if firstPage[0].Message != "event-299" || firstPage[199].Message != "event-100" {
+		t.Fatalf("unexpected descending first page bounds: first=%s last=%s", firstPage[0].Message, firstPage[199].Message)
+	}
+
+	cursor := firstPage[len(firstPage)-1].Timestamp
+	secondPage, _, hasMore := s.GetLogEvents("/test", &LogFilter{
+		Limit:  200,
+		Order:  "desc",
+		Cursor: &cursor,
+	})
+	if len(secondPage) != 100 {
+		t.Fatalf("expected second page of 100, got %d", len(secondPage))
+	}
+	if hasMore {
+		t.Fatal("expected no further pages after second descending page")
+	}
+	if secondPage[0].Message != "event-099" || secondPage[len(secondPage)-1].Message != "event-000" {
+		t.Fatalf("unexpected descending second page bounds: first=%s last=%s", secondPage[0].Message, secondPage[len(secondPage)-1].Message)
+	}
+}
+
+func TestGetAllLogEventsPaginationDescending(t *testing.T) {
+	s := NewStore(500)
+	s.CreateGroup("/a")
+	s.CreateGroup("/b")
+
+	base := time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 6; i++ {
+		s.PutLogEvents("/a", "stream-a", []LogEvent{{
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+			Message:   fmt.Sprintf("a-%d", i),
+			Level:     LevelINFO,
+		}})
+		s.PutLogEvents("/b", "stream-b", []LogEvent{{
+			Timestamp: base.Add(time.Duration(i+10) * time.Second),
+			Message:   fmt.Sprintf("b-%d", i),
+			Level:     LevelINFO,
+		}})
+	}
+
+	result, total, hasMore := s.GetAllLogEvents(&LogFilter{Limit: 5, Order: "desc"})
+	if total != 12 {
+		t.Fatalf("expected total 12, got %d", total)
+	}
+	if len(result) != 5 {
+		t.Fatalf("expected 5 events, got %d", len(result))
+	}
+	if !hasMore {
+		t.Fatal("expected more pages for all-log view")
+	}
+	if result[0].Message != "b-5" || result[4].Message != "b-1" {
+		t.Fatalf("unexpected descending all-log page bounds: first=%s last=%s", result[0].Message, result[4].Message)
+	}
 }
