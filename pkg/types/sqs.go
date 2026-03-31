@@ -14,6 +14,7 @@ type QueueConfig struct {
 	ContentBasedDeduplication     bool              `json:"ContentBasedDeduplication"`
 	CreatedTimestamp              int64             `json:"CreatedTimestamp"`
 	LastModifiedTimestamp         int64             `json:"LastModifiedTimestamp"`
+	ProcessedCount                int64             `json:"ProcessedCount,omitempty"`
 	Tags                          map[string]string `json:"Tags,omitempty"`
 	KmsMasterKeyId                string            `json:"KmsMasterKeyId,omitempty"`
 	KmsDataKeyReusePeriodSeconds  int               `json:"KmsDataKeyReusePeriodSeconds,omitempty"`

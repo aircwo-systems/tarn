@@ -3,11 +3,14 @@ package sqs
 import (
 	"fmt"
 	"log"
+	"strconv"
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
+
+const dlqRetryCountAttribute = "TarnRetryCount"
 
 // Service implements SQS business logic.
 type Service struct {
@@ -149,6 +152,11 @@ func (s *Service) DeleteMessage(queueName, receiptHandle string) error {
 	return s.store.DeleteMessage(queueName, receiptHandle)
 }
 
+// IncrementProcessedCount records successful queue processing by Tarn consumers.
+func (s *Service) IncrementProcessedCount(queueName string, delta int64) error {
+	return s.store.IncrementProcessedCount(queueName, delta)
+}
+
 // ChangeMessageVisibility changes the visibility timeout of a received message.
 func (s *Service) ChangeMessageVisibility(queueName, receiptHandle string, timeout int) error {
 	return s.store.ChangeMessageVisibility(queueName, receiptHandle, timeout)
@@ -176,7 +184,15 @@ func (s *Service) MoveToDLQIfExceeded(srcQueue string, msg *types.SQSMessage) (b
 	}
 
 	dlqName := queueNameFromArn(q.DeadLetterTargetArn)
-	if _, err := s.SendMessage(dlqName, msg.Body, 0, msg.MessageAttributes, "", ""); err != nil {
+	dlqAttrs := cloneMessageAttributes(msg.MessageAttributes)
+	if dlqAttrs == nil {
+		dlqAttrs = make(map[string]*types.MessageAttribute, 1)
+	}
+	dlqAttrs[dlqRetryCountAttribute] = &types.MessageAttribute{
+		DataType:    "Number",
+		StringValue: strconv.Itoa(msg.ApproximateReceiveCount),
+	}
+	if _, err := s.SendMessage(dlqName, msg.Body, 0, dlqAttrs, "", ""); err != nil {
 		return false, "", fmt.Errorf("send to DLQ %q: %w", dlqName, err)
 	}
 	if err := s.DeleteMessage(srcQueue, msg.ReceiptHandle); err != nil {
@@ -203,4 +219,24 @@ func (s *Service) UntagQueue(queueName string, tagKeys []string) error {
 // ListQueueTags returns tags for a queue.
 func (s *Service) ListQueueTags(queueName string) (map[string]string, error) {
 	return s.store.ListQueueTags(queueName)
+}
+
+func cloneMessageAttributes(src map[string]*types.MessageAttribute) map[string]*types.MessageAttribute {
+	if len(src) == 0 {
+		return nil
+	}
+
+	cloned := make(map[string]*types.MessageAttribute, len(src))
+	for key, value := range src {
+		if value == nil {
+			cloned[key] = nil
+			continue
+		}
+		attrCopy := *value
+		if value.BinaryValue != nil {
+			attrCopy.BinaryValue = append([]byte(nil), value.BinaryValue...)
+		}
+		cloned[key] = &attrCopy
+	}
+	return cloned
 }

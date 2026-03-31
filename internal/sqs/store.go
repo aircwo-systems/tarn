@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	"github.com/google/uuid"
 )
 
 // defaultStaleReceiveCount is the number of failed receive attempts after which
@@ -498,6 +498,26 @@ func (s *Store) DeleteMessage(name string, receiptHandle string) error {
 	}
 	q.mu.Unlock()
 	return fmt.Errorf("receipt handle not found")
+}
+
+// IncrementProcessedCount records successful Tarn-side consumption for a queue.
+func (s *Store) IncrementProcessedCount(name string, delta int64) error {
+	if delta <= 0 {
+		return nil
+	}
+
+	s.mu.RLock()
+	q, exists := s.queues[name]
+	s.mu.RUnlock()
+	if !exists {
+		return fmt.Errorf("queue %s not found", name)
+	}
+
+	q.mu.Lock()
+	q.config.ProcessedCount += delta
+	q.mu.Unlock()
+	s.persist()
+	return nil
 }
 
 // ChangeMessageVisibility updates the visibility timeout for a received message.

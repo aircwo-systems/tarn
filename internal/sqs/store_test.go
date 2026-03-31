@@ -419,6 +419,24 @@ func TestGetQueueAttributes(t *testing.T) {
 	}
 }
 
+func TestIncrementProcessedCount(t *testing.T) {
+	s := newTestStore()
+	if _, err := s.CreateQueue("processed-queue", nil, nil); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+	if err := s.IncrementProcessedCount("processed-queue", 1); err != nil {
+		t.Fatalf("increment processed count: %v", err)
+	}
+
+	queue, err := s.GetQueue("processed-queue")
+	if err != nil {
+		t.Fatalf("get queue: %v", err)
+	}
+	if queue.ProcessedCount != 1 {
+		t.Fatalf("processed count = %d, want 1", queue.ProcessedCount)
+	}
+}
+
 func TestMessageRetentionExpiry(t *testing.T) {
 	s := newTestStore()
 	// Create queue with 1 second retention
@@ -491,6 +509,9 @@ func TestQueueStatePersistsToDisk(t *testing.T) {
 	if queue.Tags["feature"] != "r10" {
 		t.Fatalf("queue tags = %v, want feature=r10", queue.Tags)
 	}
+	if queue.ProcessedCount != 0 {
+		t.Fatalf("processed count = %d, want 0", queue.ProcessedCount)
+	}
 
 	msgs, err := reloaded.PeekMessages("persisted-queue", 10)
 	if err != nil {
@@ -498,6 +519,41 @@ func TestQueueStatePersistsToDisk(t *testing.T) {
 	}
 	if len(msgs) != 1 || msgs[0].Body != "hello persistence" {
 		t.Fatalf("unexpected messages after reload: %+v", msgs)
+	}
+}
+
+func TestProcessedCountPersistsToDisk(t *testing.T) {
+	cfg := &config.Config{
+		Host:               "localhost",
+		Port:               4566,
+		Region:             "us-east-1",
+		AccountID:          "000000000000",
+		DataDir:            t.TempDir(),
+		PersistenceEnabled: true,
+	}
+
+	store := NewStore(cfg)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	if _, err := store.CreateQueue("processed-persisted-queue", nil, nil); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+	if err := store.IncrementProcessedCount("processed-persisted-queue", 1); err != nil {
+		t.Fatalf("increment processed count: %v", err)
+	}
+
+	reloaded := NewStore(cfg)
+	if err := reloaded.Init(); err != nil {
+		t.Fatalf("reload store: %v", err)
+	}
+
+	queue, err := reloaded.GetQueue("processed-persisted-queue")
+	if err != nil {
+		t.Fatalf("get queue: %v", err)
+	}
+	if queue.ProcessedCount != 1 {
+		t.Fatalf("processed count = %d, want 1", queue.ProcessedCount)
 	}
 }
 

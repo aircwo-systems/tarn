@@ -25,6 +25,7 @@
     getDashboardFilters,
     matchesTagFilter,
   } from "$lib/state.svelte";
+  import { formatJSONForViewer } from "$lib/json-format";
   import type { QueueMessageSummary } from "$lib/types";
   import { formatUnixSeconds } from "$lib/utils";
 
@@ -52,6 +53,9 @@
   );
   const totalDelayed = $derived(
     queues.reduce((total, queue) => total + queue.approxDelayed, 0),
+  );
+  const totalProcessed = $derived(
+    queues.reduce((total, queue) => total + (queue.processedCount ?? 0), 0),
   );
   const totalStale = $derived(
     queues.reduce((total, queue) => total + (queue.approxStale ?? 0), 0),
@@ -153,14 +157,6 @@
     expandedMessages = next;
   }
 
-  function tryFormatJSON(body: string): string | null {
-    try {
-      return JSON.stringify(JSON.parse(body), null, 2);
-    } catch {
-      return null;
-    }
-  }
-
   function isLargeBody(body: string): boolean {
     return body.length > PREVIEW_LENGTH;
   }
@@ -196,6 +192,10 @@
         <span class="font-mono text-foreground">{totalDelayed}</span>
         <span class="text-muted-foreground/70">delayed</span>
       </span>
+      <span class="inline-flex items-center gap-1.5">
+        <span class="font-mono text-foreground">{totalProcessed}</span>
+        <span class="text-muted-foreground/70">processed</span>
+      </span>
       {#if totalStale > 0}
         <span class="inline-flex items-center gap-1.5 text-destructive">
           <span class="font-mono">{totalStale}</span>
@@ -227,15 +227,9 @@
               <TableRow class="hover:bg-transparent">
                 <TableHead>Queue</TableHead>
                 <TableHead>Type</TableHead>
-                <TableHead>Visible</TableHead>
-                <TableHead>In Flight</TableHead>
-                <TableHead>Delayed</TableHead>
-                <TableHead>Stale</TableHead>
-                <TableHead>Redrive</TableHead>
+                <TableHead class="w-16 text-right">Visible</TableHead>
+                <TableHead class="w-18 text-right">In Flight</TableHead>
                 <TableHead>Messages</TableHead>
-                <TableHead>Visibility</TableHead>
-                <TableHead>Long Poll</TableHead>
-                <TableHead>Created</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -253,36 +247,11 @@
                   <TableCell class={`font-mono text-xs ${queue.fifo ? "text-amber" : "text-muted-foreground"}`}>
                     {queue.fifo ? "FIFO" : "Standard"}
                   </TableCell>
-                  <TableCell class="font-mono text-muted-foreground">
+                  <TableCell class="w-16 text-right font-mono text-muted-foreground">
                     {queue.approxVisible}
                   </TableCell>
-                  <TableCell class="font-mono text-muted-foreground">
+                  <TableCell class="w-18 text-right font-mono text-muted-foreground">
                     {queue.approxInFlight}
-                  </TableCell>
-                  <TableCell class="font-mono text-muted-foreground">
-                    {queue.approxDelayed}
-                  </TableCell>
-                  <TableCell class="font-mono">
-                    {#if (queue.approxStale ?? 0) > 0}
-                      <span
-                        class="text-destructive"
-                        title="Parked by Tarn after repeated failures (no DLQ). On real AWS these would retry indefinitely."
-                      >
-                        {queue.approxStale}
-                      </span>
-                    {:else}
-                      <span class="text-muted-foreground">0</span>
-                    {/if}
-                  </TableCell>
-                  <TableCell class="text-xs">
-                    {#if queue.dlqName}
-                      <div class="flex flex-col gap-0.5">
-                        <span class="font-mono text-foreground" title="Dead-letter queue">{queue.dlqName}</span>
-                        <span class="text-muted-foreground/70">max {queue.maxReceiveCount ?? "?"} receives</span>
-                      </div>
-                    {:else}
-                      <span class="text-muted-foreground/50">—</span>
-                    {/if}
                   </TableCell>
                   <TableCell class="min-w-[18rem]">
                     {#if queue.recentMessages?.length}
@@ -321,15 +290,6 @@
                       <span class="text-xs text-muted-foreground/70">No messages</span>
                     {/if}
                   </TableCell>
-                  <TableCell class="font-mono text-muted-foreground">
-                    {queue.visibilitySec}s
-                  </TableCell>
-                  <TableCell class="font-mono text-muted-foreground">
-                    {queue.waitTimeSec}s
-                  </TableCell>
-                  <TableCell class="text-xs text-muted-foreground/70">
-                    {formatUnixSeconds(queue.createdTimestamp)}
-                  </TableCell>
                 </TableRow>
               {/each}
             </TableBody>
@@ -359,29 +319,66 @@
       </div>
 
       {#if !selectedQueue}
-        <div class="flex h-full min-h-[18rem] items-center justify-center">
+        <div class="flex min-h-[18rem] flex-1 items-center justify-center px-6 py-8 text-center">
           <EmptyState
             message="Select a queue row to inspect pending messages."
             icon={ChatCircleIcon}
           />
         </div>
       {:else}
-        <div class="border-b border-border px-3 py-2 text-xs text-muted-foreground/70">
-          <p class="truncate font-mono text-foreground">{selectedQueue.name}</p>
-          <p class="mt-1">
-            {selectedQueue.approxVisible} visible, {selectedQueue.approxInFlight} in
-            flight, {selectedQueue.approxDelayed} delayed{#if (selectedQueue.approxStale ?? 0) > 0},
-              <span class="text-destructive">{selectedQueue.approxStale} stale</span>
-            {/if}
-          </p>
-          {#if selectedQueue.dlqName}
-            <p class="mt-1">
-              DLQ <span class="font-mono text-foreground">{selectedQueue.dlqName}</span>
-              · max <span class="font-mono text-foreground">{selectedQueue.maxReceiveCount ?? "?"}</span> receives
-            </p>
-          {:else}
-            <p class="mt-1 text-muted-foreground/50">No redrive policy</p>
-          {/if}
+        <div class="border-b border-border px-4 py-4">
+          <p class="text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Selected Queue</p>
+          <div class="mt-2 space-y-3">
+            <div>
+              <p class="truncate font-mono text-sm text-foreground">{selectedQueue.name}</p>
+              <p class="mt-1 text-xs text-muted-foreground/72">
+                {selectedQueue.approxVisible} visible, {selectedQueue.approxInFlight} in flight,
+                {selectedQueue.approxDelayed} delayed, {selectedQueue.processedCount ?? 0} processed{#if (selectedQueue.approxStale ?? 0) > 0},
+                  <span class="text-destructive">{selectedQueue.approxStale} stale</span>
+                {/if}
+              </p>
+            </div>
+
+            <div class="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
+              <div>
+                <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Delayed</p>
+                <p class="mt-1 font-mono text-foreground">{selectedQueue.approxDelayed}</p>
+              </div>
+              <div>
+                <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Processed</p>
+                <p class="mt-1 font-mono text-foreground">{selectedQueue.processedCount ?? 0}</p>
+              </div>
+              <div>
+                <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Stale</p>
+                <p class={`mt-1 font-mono ${(selectedQueue.approxStale ?? 0) > 0 ? "text-destructive" : "text-foreground"}`}>
+                  {selectedQueue.approxStale ?? 0}
+                </p>
+              </div>
+              <div>
+                <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Visibility</p>
+                <p class="mt-1 font-mono text-foreground">{selectedQueue.visibilitySec}s</p>
+              </div>
+              <div>
+                <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Long Poll</p>
+                <p class="mt-1 font-mono text-foreground">{selectedQueue.waitTimeSec}s</p>
+              </div>
+              <div>
+                <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Created</p>
+                <p class="mt-1 font-mono text-foreground">{formatUnixSeconds(selectedQueue.createdTimestamp)}</p>
+              </div>
+              <div>
+                <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Redrive</p>
+                {#if selectedQueue.dlqName}
+                  <p class="mt-1 font-mono text-foreground">{selectedQueue.dlqName}</p>
+                  <p class="mt-1 text-[11px] text-muted-foreground/70">
+                    max {selectedQueue.maxReceiveCount ?? "?"} receives
+                  </p>
+                {:else}
+                  <p class="mt-1 text-muted-foreground/50">None</p>
+                {/if}
+              </div>
+            </div>
+          </div>
         </div>
 
         {#if selectedError}
@@ -401,7 +398,7 @@
             {#each selectedMessages as message}
               {@const expanded = expandedMessages.has(message.id)}
               {@const large = isLargeBody(message.body ?? "")}
-              {@const formatted = tryFormatJSON(message.body ?? "")}
+              {@const formatted = formatJSONForViewer(message.body ?? "")}
               {@const canExpand = large || formatted !== null}
               <div class="rounded-md border border-border bg-background-subtle/70 p-2">
                 <div class="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground/70">
@@ -412,6 +409,9 @@
                   {#if message.receiveCount > 0}
                     <span class="font-mono">receives: {message.receiveCount}</span>
                   {/if}
+                  {#if (message.retryCount ?? 0) > 0}
+                    <span class="font-mono">retried: {message.retryCount}</span>
+                  {/if}
                   {#if large}
                     <span>{(message.body ?? "").length} chars</span>
                   {/if}
@@ -420,7 +420,8 @@
                 {#if expanded && formatted}
                   <FormattedMessageViewer
                     raw={message.body || "(empty)"}
-                    formatted={formatted}
+                    formatted={formatted.formatted}
+                    formattedHtml={formatted.formattedHtml}
                     formattedContentClass="text-[11px] text-muted-foreground"
                     rawContentClass="text-[11px] text-muted-foreground"
                     formattedMaxHeightClass="max-h-96"

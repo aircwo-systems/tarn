@@ -257,6 +257,7 @@ type queueSummary struct {
 	ApproxInFlight   int               `json:"approxInFlight"`
 	ApproxDelayed    int               `json:"approxDelayed"`
 	ApproxStale      int               `json:"approxStale"`
+	ProcessedCount   int64             `json:"processedCount"`
 	CreatedTimestamp int64             `json:"createdTimestamp"`
 	DLQName          string            `json:"dlqName,omitempty"`
 	MaxReceiveCount  int               `json:"maxReceiveCount,omitempty"`
@@ -292,6 +293,7 @@ type queueMessage struct {
 	State        string `json:"state"`
 	SentAt       int64  `json:"sentAt"`
 	ReceiveCount int    `json:"receiveCount"`
+	RetryCount   int    `json:"retryCount,omitempty"`
 }
 
 type secretSummary struct {
@@ -820,6 +822,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			FIFO:             q.FifoQueue,
 			VisibilitySec:    q.VisibilityTimeout,
 			WaitTimeSec:      q.ReceiveMessageWaitTimeSeconds,
+			ProcessedCount:   q.ProcessedCount,
 			CreatedTimestamp: q.CreatedTimestamp,
 			DLQName:          dlqName,
 			MaxReceiveCount:  q.MaxReceiveCount,
@@ -874,6 +877,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 					State:        state,
 					SentAt:       msg.SentTimestamp,
 					ReceiveCount: msg.ApproximateReceiveCount,
+					RetryCount:   parseDLQRetryCount(msg.MessageAttributes),
 				})
 			}
 		}
@@ -1233,6 +1237,7 @@ func (h *Handler) QueueMessages(w http.ResponseWriter, r *http.Request) {
 			State:        state,
 			SentAt:       msg.SentTimestamp,
 			ReceiveCount: msg.ApproximateReceiveCount,
+			RetryCount:   parseDLQRetryCount(msg.MessageAttributes),
 		})
 	}
 
@@ -1242,6 +1247,21 @@ func (h *Handler) QueueMessages(w http.ResponseWriter, r *http.Request) {
 		"queue":    name,
 		"messages": result,
 	})
+}
+
+func parseDLQRetryCount(attrs map[string]*types.MessageAttribute) int {
+	if len(attrs) == 0 {
+		return 0
+	}
+	attr := attrs["TarnRetryCount"]
+	if attr == nil {
+		return 0
+	}
+	value, err := strconv.Atoi(strings.TrimSpace(attr.StringValue))
+	if err != nil || value < 0 {
+		return 0
+	}
+	return value
 }
 
 // LogGroups returns all log group summaries.

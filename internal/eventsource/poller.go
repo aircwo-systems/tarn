@@ -76,6 +76,7 @@ func parseBatchItemFailures(output *types.InvokeOutput, msgs []*types.SQSMessage
 type SQSInterface interface {
 	ReceiveMessage(queueName string, maxCount, visTimeout, waitTimeSec int) ([]*types.SQSMessage, error)
 	DeleteMessage(queueName, receiptHandle string) error
+	IncrementProcessedCount(queueName string, delta int64) error
 	// ChangeMessageVisibility updates the visibility timeout of an in-flight message.
 	// Setting timeout=0 makes the message immediately visible to other consumers.
 	ChangeMessageVisibility(queueName, receiptHandle string, timeout int) error
@@ -265,10 +266,13 @@ func (p *poller) poll() {
 	failed := parseBatchItemFailures(output, msgs)
 
 	failCount := 0
+	successCount := int64(0)
 	for _, msg := range msgs {
 		if !failed[msg.MessageId] {
 			if err := p.sqs.DeleteMessage(p.mapping.QueueName, msg.ReceiptHandle); err != nil {
 				log.Printf("[eventsource] %s: delete message error: %v", p.mapping.UUID, err)
+			} else {
+				successCount++
 			}
 			continue
 		}
@@ -282,6 +286,12 @@ func (p *poller) poll() {
 			p.recordDLQTrace(pollStart, p.mapping.QueueName, dlqName)
 		}
 		failCount++
+	}
+
+	if successCount > 0 {
+		if err := p.sqs.IncrementProcessedCount(p.mapping.QueueName, successCount); err != nil {
+			log.Printf("[eventsource] %s: increment processed count error: %v", p.mapping.UUID, err)
+		}
 	}
 
 	if failCount > 0 {
