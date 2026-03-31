@@ -63,12 +63,12 @@
     {#if formattedExpanded}
       {#if formattedHtml}
         <div
-          class={`border-t border-border bg-background-base px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${formattedContentClass} ${formattedMaxHeightClass}`}
+          class={`border-t border-border bg-[var(--code-bg)] px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${formattedContentClass} ${formattedMaxHeightClass}`}
           >{@html formattedHtml}</div
         >
       {:else}
         <pre
-          class={`border-t border-border bg-background-base px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${formattedContentClass} ${formattedMaxHeightClass}`}>{formatted}</pre
+          class={`border-t border-border bg-[var(--code-bg)] px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${formattedContentClass} ${formattedMaxHeightClass}`}>{formatted}</pre
         >
       {/if}
     {/if}
@@ -92,7 +92,7 @@
   </button>
   {#if rawExpanded}
     <pre
-      class={`border-t border-border bg-background-base px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${rawContentClass} ${rawMaxHeightClass}`}>{raw}</pre
+      class={`border-t border-border bg-[var(--code-bg)] px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${rawContentClass} ${rawMaxHeightClass}`}>{raw}</pre
     >
   {/if}
 </div>

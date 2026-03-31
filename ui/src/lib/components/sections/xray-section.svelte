@@ -1020,7 +1020,7 @@
               </p>
               <div class="space-y-1.5">
                 {#each rows as { span, offsetPct, widthPct, nested }, i (i)}
-                  <div class="flex items-center gap-2.5 {nested ? 'pl-4' : ''}">
+                  <div class="flex items-center gap-3 {nested ? 'pl-4' : ''}">
                     <!-- Step / nesting indicator -->
                     {#if nested}
                       <span
@@ -1034,19 +1034,25 @@
                       >
                     {/if}
                     <!-- Kind badge -->
-                    <span
-                      class="w-[4.5rem] text-right shrink-0 text-[10px] font-mono px-1.5 py-0.5 rounded"
-                      style="color:{spanColor(span.kind)};background:{spanColor(
-                        span.kind,
-                      )}18;border:1px solid {spanColor(span.kind)}30"
-                    >
-                      {spanKindLabel(span.kind)}
-                    </span>
+                    <div class="w-[6.75rem] shrink-0">
+                      <span
+                        class="block whitespace-nowrap text-right text-[10px] font-mono px-1.5 py-0.5 rounded"
+                        title={spanKindLabel(span.kind)}
+                        style="color:{spanColor(span.kind)};background:{spanColor(
+                          span.kind,
+                        )}18;border:1px solid {spanColor(span.kind)}30"
+                      >
+                        {spanKindLabel(span.kind)}
+                      </span>
+                    </div>
                     <!-- Name -->
-                    <span
-                      class="w-28 text-[11px] font-mono text-muted-foreground truncate shrink-0"
-                      >{span.name}</span
-                    >
+                    <div class="w-40 shrink-0 min-w-0">
+                      <span
+                        class="block overflow-hidden text-ellipsis whitespace-nowrap text-[11px] font-mono text-muted-foreground"
+                        title={span.name}
+                        >{span.name}</span
+                      >
+                    </div>
                     <!-- Bar track -->
                     <div
                       class="flex-1 {nested

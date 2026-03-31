@@ -363,7 +363,7 @@
 
   function looksLikeJSON(str: string): boolean {
     const t = str.trim();
-    return t.startsWith("{") || t.startsWith("[");
+    return t.startsWith("{") || t.startsWith("[") || t.startsWith('\\{') || t.startsWith('\\"');
   }
 
   function isComplexMessage(msg: string): boolean {
@@ -402,12 +402,45 @@
     return result.trim();
   }
 
+  /** Recursively unescape JSON string values that are themselves JSON. */
+  function deepUnescapeJSON(val: unknown): unknown {
+    if (typeof val === "string") {
+      const t = val.trim();
+      if (t.startsWith("{") || t.startsWith("[")) {
+        try {
+          return deepUnescapeJSON(JSON.parse(t));
+        } catch {
+          return val;
+        }
+      }
+      return val;
+    }
+    if (Array.isArray(val)) return val.map(deepUnescapeJSON);
+    if (val && typeof val === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(val)) out[k] = deepUnescapeJSON(v);
+      return out;
+    }
+    return val;
+  }
+
   function computeFormattedMessage(content: string): string | null {
-    // JSON first
+    // JSON first — with recursive unescape of stringified nested JSON
     try {
-      return JSON.stringify(JSON.parse(content), null, 2);
+      const parsed = JSON.parse(content);
+      return JSON.stringify(deepUnescapeJSON(parsed), null, 2);
     } catch {
       /* not JSON */
+    }
+    // Try unescaping backslash-quoted JSON (common in log output: {\"key\":\"value\"})
+    if (content.includes('\\"')) {
+      const cleaned = content.replace(/\\"/g, '"');
+      try {
+        const parsed = JSON.parse(cleaned);
+        return JSON.stringify(deepUnescapeJSON(parsed), null, 2);
+      } catch {
+        /* still not JSON */
+      }
     }
     // Java toString
     if (hasJavaToString(content)) {
@@ -425,9 +458,21 @@
     if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
       try {
         const parsed = JSON.parse(trimmed);
-        return { isJSON: true, formatted: JSON.stringify(parsed, null, 2) };
+        const unescaped = deepUnescapeJSON(parsed);
+        return { isJSON: true, formatted: JSON.stringify(unescaped, null, 2) };
       } catch {
         /* not JSON */
+      }
+    }
+    // Try unescaping backslash-quoted JSON
+    if (trimmed.includes('\\"')) {
+      const cleaned = trimmed.replace(/\\"/g, '"');
+      try {
+        const parsed = JSON.parse(cleaned);
+        const unescaped = deepUnescapeJSON(parsed);
+        return { isJSON: true, formatted: JSON.stringify(unescaped, null, 2) };
+      } catch {
+        /* still not JSON */
       }
     }
     return { isJSON: false, formatted: msg };
@@ -1137,7 +1182,7 @@
                         ? panelDisplayMessage
                         : panelFormattedMessage}
                       formattedHtml={panelHighlightedHtml}
-                      formattedContentClass="log-highlight text-[12px] text-foreground"
+                      formattedContentClass="text-[12px] text-foreground"
                       rawContentClass="text-[11px] text-muted-foreground"
                       formattedMaxHeightClass="max-h-[55vh]"
                       rawMaxHeightClass="max-h-[40vh]"
@@ -1146,16 +1191,16 @@
                     {@const jsonResult = tryFormatInlineJSON(ev.message)}
                     {#if jsonResult.isJSON}
                       <pre
-                        class="rounded-md border border-border bg-background-base px-3 py-3 text-[12px] font-mono text-foreground leading-relaxed whitespace-pre-wrap break-all log-highlight max-h-[55vh] overflow-y-auto">{@html highlightJSON(
+                        class="rounded-md border border-border bg-[var(--code-bg)] px-3 py-3 text-[12px] font-mono text-foreground leading-relaxed whitespace-pre-wrap break-all max-h-[55vh] overflow-y-auto">{@html highlightJSON(
                           jsonResult.formatted,
                         )}</pre>
                     {:else}
                       <pre
-                        class="rounded-md border border-border bg-background-base px-3 py-3 text-[13px] font-mono text-foreground leading-relaxed whitespace-pre-wrap break-all">{ev.message}</pre>
+                        class="rounded-md border border-border bg-[var(--code-bg)] px-3 py-3 text-[13px] font-mono text-foreground leading-relaxed whitespace-pre-wrap break-all">{ev.message}</pre>
                     {/if}
                   {:else}
                     <pre
-                      class="rounded-md border border-border bg-background-base px-3 py-3 text-[13px] font-mono text-foreground leading-relaxed whitespace-pre-wrap break-all">{ev.message}</pre>
+                      class="rounded-md border border-border bg-[var(--code-bg)] px-3 py-3 text-[13px] font-mono text-foreground leading-relaxed whitespace-pre-wrap break-all">{ev.message}</pre>
                   {/if}
                 </div>
 
@@ -1452,27 +1497,3 @@
   </div>
 {/if}
 
-<style>
-  /* Light mode (default) */
-  .log-highlight {
-    --lh-key: #1e5a78;
-    --lh-cls: #1a6a56;
-    --lh-null: rgba(0, 0, 0, 0.32);
-    --lh-bool: #1a4e7a;
-    --lh-num: #5a3a7a;
-    --lh-str: rgba(0, 0, 0, 0.58);
-    --lh-str-json: #2e5a2a;
-    --lh-punct: rgba(0, 0, 0, 0.22);
-  }
-  /* Dark mode */
-  :global(.dark) .log-highlight {
-    --lh-key: #7aa8c0;
-    --lh-cls: #7fb5a4;
-    --lh-null: rgba(255, 255, 255, 0.22);
-    --lh-bool: #8aa6c4;
-    --lh-num: #a899bb;
-    --lh-str: rgba(255, 255, 255, 0.62);
-    --lh-str-json: #9baa96;
-    --lh-punct: rgba(255, 255, 255, 0.18);
-  }
-</style>
