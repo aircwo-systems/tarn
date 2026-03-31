@@ -231,6 +231,7 @@
                 <TableHead>In Flight</TableHead>
                 <TableHead>Delayed</TableHead>
                 <TableHead>Stale</TableHead>
+                <TableHead>Redrive</TableHead>
                 <TableHead>Messages</TableHead>
                 <TableHead>Visibility</TableHead>
                 <TableHead>Long Poll</TableHead>
@@ -271,6 +272,16 @@
                       </span>
                     {:else}
                       <span class="text-muted-foreground">0</span>
+                    {/if}
+                  </TableCell>
+                  <TableCell class="text-xs">
+                    {#if queue.dlqName}
+                      <div class="flex flex-col gap-0.5">
+                        <span class="font-mono text-foreground" title="Dead-letter queue">{queue.dlqName}</span>
+                        <span class="text-muted-foreground/70">max {queue.maxReceiveCount ?? "?"} receives</span>
+                      </div>
+                    {:else}
+                      <span class="text-muted-foreground/50">—</span>
                     {/if}
                   </TableCell>
                   <TableCell class="min-w-[18rem]">
@@ -363,6 +374,14 @@
               <span class="text-destructive">{selectedQueue.approxStale} stale</span>
             {/if}
           </p>
+          {#if selectedQueue.dlqName}
+            <p class="mt-1">
+              DLQ <span class="font-mono text-foreground">{selectedQueue.dlqName}</span>
+              · max <span class="font-mono text-foreground">{selectedQueue.maxReceiveCount ?? "?"}</span> receives
+            </p>
+          {:else}
+            <p class="mt-1 text-muted-foreground/50">No redrive policy</p>
+          {/if}
         </div>
 
         {#if selectedError}

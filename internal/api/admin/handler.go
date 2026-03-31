@@ -259,6 +259,7 @@ type queueSummary struct {
 	ApproxStale      int               `json:"approxStale"`
 	CreatedTimestamp int64             `json:"createdTimestamp"`
 	DLQName          string            `json:"dlqName,omitempty"`
+	MaxReceiveCount  int               `json:"maxReceiveCount,omitempty"`
 	Tags             map[string]string `json:"tags,omitempty"`
 	TagCount         int               `json:"tagCount"`
 	RecentMessages   []queueMessage    `json:"recentMessages,omitempty"`
@@ -821,6 +822,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			WaitTimeSec:      q.ReceiveMessageWaitTimeSeconds,
 			CreatedTimestamp: q.CreatedTimestamp,
 			DLQName:          dlqName,
+			MaxReceiveCount:  q.MaxReceiveCount,
 			Tags:             cloneStringMap(q.Tags),
 			TagCount:         len(q.Tags),
 		}
@@ -1298,6 +1300,9 @@ func (h *Handler) LogEvents(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("stream"); v != "" {
 		filter.StreamName = v
 	}
+	if v := q.Get("order"); v != "" {
+		filter.Order = strings.ToLower(v)
+	}
 	if v := q.Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			filter.Limit = n
@@ -1314,21 +1319,13 @@ func (h *Handler) LogEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	events, total := h.logs.GetLogEvents(name, filter)
+	events, total, hasMore := h.logs.GetLogEvents(name, filter)
 	if events == nil {
 		events = []logssvc.LogEvent{}
 	}
 
-	// Support ?order=desc to return newest-first
-	order := strings.ToLower(q.Get("order"))
-	if order == "desc" {
-		for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
-			events[i], events[j] = events[j], events[i]
-		}
-	}
-
 	var nextCursor string
-	if len(events) > 0 {
+	if hasMore && len(events) > 0 {
 		last := events[len(events)-1]
 		nextCursor = last.Timestamp.Format(time.RFC3339Nano)
 	}
@@ -1374,6 +1371,9 @@ func (h *Handler) AllLogEvents(w http.ResponseWriter, r *http.Request) {
 	if v := q.Get("stream"); v != "" {
 		filter.StreamName = v
 	}
+	if v := q.Get("order"); v != "" {
+		filter.Order = strings.ToLower(v)
+	}
 	if v := q.Get("limit"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n > 0 {
 			filter.Limit = n
@@ -1385,20 +1385,13 @@ func (h *Handler) AllLogEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	events, total := h.logs.GetAllLogEvents(filter)
+	events, total, hasMore := h.logs.GetAllLogEvents(filter)
 	if events == nil {
 		events = []logssvc.LogEvent{}
 	}
 
-	order := strings.ToLower(q.Get("order"))
-	if order == "desc" {
-		for i, j := 0, len(events)-1; i < j; i, j = i+1, j-1 {
-			events[i], events[j] = events[j], events[i]
-		}
-	}
-
 	var nextCursor string
-	if len(events) > 0 {
+	if hasMore && len(events) > 0 {
 		last := events[len(events)-1]
 		nextCursor = last.Timestamp.Format(time.RFC3339Nano)
 	}
