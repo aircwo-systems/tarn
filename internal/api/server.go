@@ -50,6 +50,7 @@ type Server struct {
 	eventbridge *eventbridgehandler.Handler
 	admin       *adminhandler.Handler
 	iam         *iamhandler.Handler
+	ui          http.Handler
 	logsSvc     *logssvc.Service
 	collector   *tracesvc.Collector
 }
@@ -123,8 +124,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /_s3/{rest...}", s.s3.Dispatch)
 	mux.HandleFunc("HEAD /_s3/{rest...}", s.s3.Dispatch)
 	mux.HandleFunc("DELETE /_s3/{rest...}", s.s3.Dispatch)
-	// S3 ListBuckets: GET / (exact root path)
-	mux.HandleFunc("GET /{$}", s.s3.Dispatch)
+	// Root GET is shared between S3 ListBuckets and the optional dashboard UI.
+	// Browser-like requests should render the UI; AWS-style requests should
+	// continue to hit the S3 XML ListBuckets compatibility surface.
+	mux.HandleFunc("GET /{$}", s.getRootDispatch)
 	// Compatibility surface for AWS SDK clients using path-style S3 URLs.
 	// Bucket-level operations: /{bucket}
 	mux.HandleFunc("GET /{bucket}", s.s3.Dispatch)
@@ -332,6 +335,14 @@ func (s *Server) postAccountDispatch(w http.ResponseWriter, r *http.Request) {
 	s.sqs.Dispatch(w, r)
 }
 
+func (s *Server) getRootDispatch(w http.ResponseWriter, r *http.Request) {
+	if s.ui != nil && wantsHTML(r) {
+		s.ui.ServeHTTP(w, r)
+		return
+	}
+	s.s3.Dispatch(w, r)
+}
+
 // postRootDispatch routes POST / between Secrets Manager, IAM, SNS, and SQS.
 // Secrets Manager uses X-Amz-Target; IAM uses Version=2010-05-08; SNS/SQS use Action.
 func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
@@ -405,6 +416,11 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 			s.logsSvc.LogAPIRequest(r.Method, r.URL.Path, wrapped.status, duration)
 		}
 	})
+}
+
+func wantsHTML(r *http.Request) bool {
+	accept := strings.ToLower(strings.TrimSpace(r.Header.Get("Accept")))
+	return strings.Contains(accept, "text/html")
 }
 
 // dispatchProtocolRequest routes AWS protocol requests based on headers/query

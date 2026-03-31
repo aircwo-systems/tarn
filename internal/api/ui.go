@@ -31,7 +31,9 @@ func (s *Server) registerUIRoutes(mux *http.ServeMux) {
 	}
 
 	handler := newUIHandler(strippedFS)
+	s.ui = handler
 	mux.Handle("/", handler)
+	mux.Handle("GET /favicon.svg", handler)
 	// Explicitly register the SvelteKit asset prefix so it takes priority over
 	// the S3 wildcard route GET /{bucket}/{key...}, which would otherwise match
 	// /_app/immutable/... and return 404 (no bucket named "_app").
