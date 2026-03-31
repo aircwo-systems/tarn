@@ -1,6 +1,6 @@
 # API Coverage
 
-Tarn implements **170+ AWS API actions** across 10 services, with service-specific compatibility fallbacks to keep Terraform and SDK workflows moving when optional APIs are probed.
+Tarn implements **180+ AWS API actions** across 11 services, with service-specific compatibility fallbacks to keep Terraform and SDK workflows moving when optional APIs are probed.
 
 ## Coverage Matrix
 
@@ -10,6 +10,7 @@ Tarn implements **170+ AWS API actions** across 10 services, with service-specif
 | **SQS** | Query + JSON | 16 | `sqs` |
 | **Lambda** | REST/JSON | 30 | `lambda` |
 | **S3** | REST/XML | 30+ | `s3` |
+| **DynamoDB** | JSON | 15 | `dynamodb` |
 | **Secrets Manager** | JSON-RPC | 10 | `secretsmanager` |
 | **EventBridge** | JSON | 13 | `events` |
 | **API Gateway v2** | REST/JSON | 18 | `apigatewayv2` |
@@ -27,6 +28,7 @@ When Tarn receives an API action it doesn't explicitly implement, the fallback d
 |----------|--------------|
 | Query/XML (SNS, SQS, IAM) | `200 OK` with `<{Action}Response><{Action}Result/></...>` |
 | JSON-RPC (EventBridge, Secrets) | `200 OK` with `{}` |
+| JSON (DynamoDB, DynamoDB Streams) | `200 OK` with `{}` |
 | JSON Wire (SQS v2) | `200 OK` with `{}` |
 | REST/JSON (Lambda sub-resources) | `404` with `ResourceNotFoundException` |
 | REST/XML (S3) | Specific error codes per sub-resource (e.g. `NoSuchCORSConfiguration`) |
@@ -55,7 +57,7 @@ Terraform's S3 provider probes many bucket sub-resources during every plan/apply
 
 All services share a single endpoint (`localhost:4566`). Requests are routed by:
 
-1. **`X-Amz-Target` header** — EventBridge (`AWSEvents.*`), SQS JSON (`AmazonSQS.*`), Secrets Manager (`secretsmanager.*`)
+1. **`X-Amz-Target` header** — EventBridge (`AWSEvents.*`), SQS JSON (`AmazonSQS.*`), Secrets Manager (`secretsmanager.*`), DynamoDB (`DynamoDB_20120810.*`), DynamoDB Streams (`DynamoDBStreams_20120810.*`)
 2. **`Version` form parameter** — IAM (`2010-05-08`), SNS (`2010-03-31`)
 3. **URL path** — Lambda (`/2015-03-31/functions/`), S3 (`/_s3/`), API Gateway (`/v2/apis/`, `/restapis/`)
 4. **Fallback** — SQS query protocol (default for `POST /`)

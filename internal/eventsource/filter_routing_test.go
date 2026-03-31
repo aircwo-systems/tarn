@@ -67,7 +67,7 @@ func TestFilteredPollersRouteType2Message(t *testing.T) {
 	if err := store.Init(); err != nil {
 		t.Fatalf("esm store init: %v", err)
 	}
-	svc := NewService(cfg, store, lambda, sqs)
+	svc := NewService(cfg, store, lambda, sqs, nil)
 	if err := svc.Init(); err != nil {
 		t.Fatalf("esm svc init: %v", err)
 	}

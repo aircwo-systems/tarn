@@ -12,6 +12,7 @@ import (
 	adminhandler "github.com/aircwo-systems/tarn/internal/api/admin"
 	apigatewayhandler "github.com/aircwo-systems/tarn/internal/api/apigateway"
 	apigatewayv1handler "github.com/aircwo-systems/tarn/internal/api/apigatewayv1"
+	dynamodbhandler "github.com/aircwo-systems/tarn/internal/api/dynamodb"
 	eventbridgehandler "github.com/aircwo-systems/tarn/internal/api/eventbridge"
 	eventsourcehandler "github.com/aircwo-systems/tarn/internal/api/eventsource"
 	iamhandler "github.com/aircwo-systems/tarn/internal/api/iam"
@@ -23,6 +24,7 @@ import (
 	apigatewaysvc "github.com/aircwo-systems/tarn/internal/apigateway"
 	apigatewayv1svc "github.com/aircwo-systems/tarn/internal/apigatewayv1"
 	"github.com/aircwo-systems/tarn/internal/config"
+	dynamodbsvc "github.com/aircwo-systems/tarn/internal/dynamodb"
 	eventbridgesvc "github.com/aircwo-systems/tarn/internal/eventbridge"
 	eventsourcesvc "github.com/aircwo-systems/tarn/internal/eventsource"
 	infrasvc "github.com/aircwo-systems/tarn/internal/infrastructure"
@@ -45,6 +47,7 @@ type Server struct {
 	s3          *s3handler.Handler
 	sqs         *sqshandler.Handler
 	sns         *snshandler.Handler
+	dynamodb    *dynamodbhandler.Handler
 	secrets     *secretshandler.Handler
 	eventsource *eventsourcehandler.Handler
 	eventbridge *eventbridgehandler.Handler
@@ -56,7 +59,7 @@ type Server struct {
 }
 
 // NewServer creates a new API server.
-func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, gatewayV1Svc *apigatewayv1svc.Service, lambdaSvc *lambdasvc.Service, logsSvc *logssvc.Service, sqsSvc *sqssvc.Service, snsSvc *snssvc.Service, secretsSvc *secretssvc.Service, infraSvc *infrasvc.Service, s3Svc *s3svc.Service, esmSvc *eventsourcesvc.Service, eventbridgeSvc *eventbridgesvc.Service, traceStore *tracesvc.Store, collector *tracesvc.Collector) *Server {
+func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, gatewayV1Svc *apigatewayv1svc.Service, lambdaSvc *lambdasvc.Service, logsSvc *logssvc.Service, sqsSvc *sqssvc.Service, snsSvc *snssvc.Service, dynamodbSvc *dynamodbsvc.Service, secretsSvc *secretssvc.Service, infraSvc *infrasvc.Service, s3Svc *s3svc.Service, esmSvc *eventsourcesvc.Service, eventbridgeSvc *eventbridgesvc.Service, traceStore *tracesvc.Store, collector *tracesvc.Collector) *Server {
 	lambdaHandler := lambdahandler.NewHandler(lambdaSvc, s3Svc)
 	lambdaHandler.SetTraceStore(traceStore)
 	lambdaHandler.SetCollector(collector)
@@ -72,10 +75,11 @@ func NewServer(cfg *config.Config, gatewaySvc *apigatewaysvc.Service, gatewayV1S
 		s3:          s3handler.NewHandler(s3Svc),
 		sqs:         sqshandler.NewHandler(sqsSvc),
 		sns:         snshandler.NewHandler(snsSvc),
+		dynamodb:    dynamodbhandler.NewHandler(dynamodbSvc),
 		secrets:     secretsHandler,
 		eventsource: eventsourcehandler.NewHandler(esmSvc),
 		eventbridge: eventbridgehandler.NewHandler(eventbridgeSvc),
-		admin:       adminhandler.NewHandler(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, eventbridgeSvc, traceStore),
+		admin:       adminhandler.NewHandler(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamodbSvc, secretsSvc, infraSvc, s3Svc, esmSvc, eventbridgeSvc, traceStore),
 		iam:         iamhandler.NewHandler(cfg.AccountID),
 		logsSvc:     logsSvc,
 		collector:   collector,
@@ -350,6 +354,10 @@ func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
 		s.secrets.Dispatch(w, r)
 		return
 	}
+	if dynamodbhandler.IsDynamoDBRequest(r) {
+		s.dynamodb.Dispatch(w, r)
+		return
+	}
 	// EventBridge JSON protocol uses X-Amz-Target: AWSEvents.*
 	if strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AWSEvents.") {
 		s.eventbridge.Dispatch(w, r)
@@ -397,7 +405,7 @@ func (s *Server) telemetryDBHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","sns","secretsmanager","eventsource","eventbridge"]}`)
+	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","sns","dynamodb","secretsmanager","eventsource","eventbridge"]}`)
 }
 
 func (s *Server) withLogging(next http.Handler) http.Handler {
@@ -411,7 +419,12 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 			next.ServeHTTP(wrapped, r)
 		}
 		duration := time.Since(start)
-		log.Printf("%s %s %d %s", r.Method, r.URL.Path, wrapped.status, duration)
+		target := strings.TrimSpace(r.Header.Get("X-Amz-Target"))
+		if target != "" {
+			log.Printf("%s %s %d %s target=%s", r.Method, r.URL.Path, wrapped.status, duration, target)
+		} else {
+			log.Printf("%s %s %d %s", r.Method, r.URL.Path, wrapped.status, duration)
+		}
 		if s.logsSvc != nil && !strings.HasPrefix(r.URL.Path, "/_tarn/") {
 			s.logsSvc.LogAPIRequest(r.Method, r.URL.Path, wrapped.status, duration)
 		}
@@ -432,6 +445,10 @@ func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request)
 
 	if secretshandler.IsSecretsManagerRequest(r) {
 		s.secrets.Dispatch(w, r)
+		return true
+	}
+	if dynamodbhandler.IsDynamoDBRequest(r) {
+		s.dynamodb.Dispatch(w, r)
 		return true
 	}
 

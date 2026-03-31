@@ -17,6 +17,7 @@ import (
 	apigatewayv1svc "github.com/aircwo-systems/tarn/internal/apigatewayv1"
 	"github.com/aircwo-systems/tarn/internal/collection"
 	"github.com/aircwo-systems/tarn/internal/config"
+	dynamodbsvc "github.com/aircwo-systems/tarn/internal/dynamodb"
 	eventbridgesvc "github.com/aircwo-systems/tarn/internal/eventbridge"
 	eventsourcesvc "github.com/aircwo-systems/tarn/internal/eventsource"
 	infrasvc "github.com/aircwo-systems/tarn/internal/infrastructure"
@@ -40,6 +41,7 @@ type Handler struct {
 	s3          *s3svc.Service
 	sqs         *sqssvc.Service
 	sns         *snssvc.Service
+	dynamodb    *dynamodbsvc.Service
 	secrets     *secretssvc.Service
 	infra       *infrasvc.Service
 	esm         *eventsourcesvc.Service
@@ -47,7 +49,7 @@ type Handler struct {
 	traceStore  *tracesvc.Store
 }
 
-func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apigatewayv1svc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, sns *snssvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, eventbridge *eventbridgesvc.Service, traceStore *tracesvc.Store) *Handler {
+func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apigatewayv1svc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, sns *snssvc.Service, dynamodb *dynamodbsvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, eventbridge *eventbridgesvc.Service, traceStore *tracesvc.Store) *Handler {
 	return &Handler{
 		cfg:         cfg,
 		apigw:       apigw,
@@ -57,6 +59,7 @@ func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apiga
 		s3:          s3,
 		sqs:         sqs,
 		sns:         sns,
+		dynamodb:    dynamodb,
 		secrets:     secrets,
 		infra:       infra,
 		esm:         esm,
@@ -78,6 +81,8 @@ type overviewResponse struct {
 	Subscriptions       []subscriptionSummary    `json:"subscriptions"`
 	Secrets             []secretSummary          `json:"secrets"`
 	Buckets             []s3BucketSummary        `json:"buckets"`
+	DynamoDBTables      []dynamodbTableSummary   `json:"dynamodbTables,omitempty"`
+	DynamoDBStreams     []dynamodbStreamSummary  `json:"dynamodbStreams,omitempty"`
 	EventSourceMappings []esmSummary             `json:"eventSourceMappings"`
 	EventBridgeRules    []eventBridgeRuleSummary `json:"eventBridgeRules,omitempty"`
 	Infrastructure      []infrasvc.ProbeResult   `json:"infrastructure"`
@@ -102,12 +107,17 @@ type overviewCounts struct {
 	Subscriptions       int `json:"subscriptions"`
 	Secrets             int `json:"secrets"`
 	Buckets             int `json:"buckets"`
+	DynamoDBTables      int `json:"dynamodbTables"`
+	DynamoDBStreams     int `json:"dynamodbStreams"`
 	LogGroups           int `json:"logGroups"`
 	EventSourceMappings int `json:"eventSourceMappings"`
 	EventBridgeRules    int `json:"eventBridgeRules"`
 }
 
 type esmSummary struct {
+	EventSourceArn string                `json:"eventSourceArn"`
+	SourceType     string                `json:"sourceType,omitempty"`
+	SourceName     string                `json:"sourceName,omitempty"`
 	UUID           string                `json:"uuid"`
 	QueueName      string                `json:"queueName"`
 	FunctionName   string                `json:"functionName"`
@@ -149,6 +159,32 @@ type s3BucketObjectPreview struct {
 	Size         int64     `json:"size"`
 	LastModified time.Time `json:"lastModified"`
 	ContentType  string    `json:"contentType"`
+}
+
+type dynamodbTableSummary struct {
+	Name              string    `json:"name"`
+	Arn               string    `json:"arn"`
+	Status            string    `json:"status"`
+	CreatedDate       time.Time `json:"createdDate"`
+	BillingMode       string    `json:"billingMode,omitempty"`
+	ItemCount         int64     `json:"itemCount"`
+	KeySchema         string    `json:"keySchema"`
+	LocalIndexes      int       `json:"localIndexes"`
+	GlobalIndexes     int       `json:"globalIndexes"`
+	StreamEnabled     bool      `json:"streamEnabled"`
+	StreamArn         string    `json:"streamArn,omitempty"`
+	StreamViewType    string    `json:"streamViewType,omitempty"`
+	LatestStreamLabel string    `json:"latestStreamLabel,omitempty"`
+}
+
+type dynamodbStreamSummary struct {
+	TableName    string    `json:"tableName"`
+	StreamArn    string    `json:"streamArn"`
+	StreamLabel  string    `json:"streamLabel"`
+	StreamStatus string    `json:"streamStatus"`
+	StreamView   string    `json:"streamViewType"`
+	CreatedDate  time.Time `json:"createdDate"`
+	ShardCount   int       `json:"shardCount"`
 }
 
 type routeDetailSummary struct {
@@ -369,6 +405,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	if h.infra != nil {
 		infraResults = h.infra.Results()
 	}
+	dynamoTables, dynamoStreams, dynamoRawTables, dynamoWarnings := h.listDynamoOverview()
 
 	var esmMappings []*types.EventSourceMapping
 	if h.esm != nil {
@@ -382,7 +419,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	resp := overviewResponse{
 		Status:    "running",
 		Timestamp: time.Now().UTC(),
-		Services:  []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "sns", "secretsmanager", "eventsource", "eventbridge"},
+		Services:  []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "sns", "dynamodb", "secretsmanager", "eventsource", "eventbridge"},
 		Config: overviewConfig{
 			Region:    h.cfg.Region,
 			AccountID: h.cfg.AccountID,
@@ -398,6 +435,8 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			Subscriptions:       len(subscriptions),
 			Secrets:             len(secrets),
 			Buckets:             len(buckets),
+			DynamoDBTables:      len(dynamoTables),
+			DynamoDBStreams:     len(dynamoStreams),
 			LogGroups:           len(logGroups),
 			EventSourceMappings: len(esmMappings),
 			EventBridgeRules:    len(eventBridgeRules),
@@ -409,16 +448,25 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		Subscriptions:       make([]subscriptionSummary, 0, len(subscriptions)),
 		Secrets:             make([]secretSummary, 0, len(secrets)),
 		Buckets:             make([]s3BucketSummary, 0, len(buckets)),
+		DynamoDBTables:      dynamoTables,
+		DynamoDBStreams:     dynamoStreams,
 		EventSourceMappings: make([]esmSummary, 0, len(esmMappings)),
 		EventBridgeRules:    make([]eventBridgeRuleSummary, 0, len(eventBridgeRules)),
 		Infrastructure:      infraResults,
 		Connections:         inferInfraConnections(functions, infraResults),
 		RecentTraces:        h.recentTraces(),
+		Warnings:            dynamoWarnings,
 	}
+	resp.Connections = append(resp.Connections, inferDynamoTableConnections(functions, dynamoRawTables)...)
 
 	// Event source mappings
 	for _, m := range esmMappings {
+		sourceType := normalizeEventSourceType(m)
+		sourceName := eventSourceDisplayName(m)
 		resp.EventSourceMappings = append(resp.EventSourceMappings, esmSummary{
+			EventSourceArn: m.EventSourceArn,
+			SourceType:     sourceType,
+			SourceName:     sourceName,
 			UUID:           m.UUID,
 			QueueName:      m.QueueName,
 			FunctionName:   m.FunctionName,
@@ -428,12 +476,17 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			FilterCriteria: m.FilterCriteria,
 		})
 
-		// Add SQS→Lambda connection
+		targetKind := "sqs-lambda"
+		sourceFunction := m.QueueName
+		if sourceType == "dynamodb-stream" {
+			targetKind = "dynamodb-stream-lambda"
+			sourceFunction = sourceName
+		}
 		resp.Connections = append(resp.Connections, infraConnection{
-			SourceFunction: m.QueueName,
+			SourceFunction: sourceFunction,
 			TargetID:       m.FunctionName,
 			TargetName:     m.FunctionName,
-			TargetKind:     "sqs-lambda",
+			TargetKind:     targetKind,
 			Evidence:       "esm",
 			Source:         m.UUID,
 			FilterCriteria: m.FilterCriteria,
@@ -918,6 +971,131 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (h *Handler) listDynamoOverview() ([]dynamodbTableSummary, []dynamodbStreamSummary, []*types.DynamoDBTable, []string) {
+	if h.dynamodb == nil {
+		return nil, nil, nil, nil
+	}
+
+	names, _, err := h.dynamodb.ListTables(500, "")
+	if err != nil {
+		return nil, nil, nil, []string{"dynamodb tables unavailable"}
+	}
+
+	tables := make([]dynamodbTableSummary, 0, len(names))
+	streams := make([]dynamodbStreamSummary, 0, len(names))
+	rawTables := make([]*types.DynamoDBTable, 0, len(names))
+	warnings := make([]string, 0)
+
+	for _, name := range names {
+		table, describeErr := h.dynamodb.DescribeTable(name)
+		if describeErr != nil {
+			warnings = append(warnings, "dynamodb table unavailable for "+name)
+			continue
+		}
+		rawTables = append(rawTables, table)
+		billingMode := ""
+		if table.BillingModeSummary != nil {
+			billingMode = table.BillingModeSummary.BillingMode
+		}
+		tables = append(tables, dynamodbTableSummary{
+			Name:              table.TableName,
+			Arn:               table.TableArn,
+			Status:            table.TableStatus,
+			CreatedDate:       dynamoCreationTime(table.CreationDateTime),
+			BillingMode:       billingMode,
+			ItemCount:         table.ItemCount,
+			KeySchema:         formatDynamoKeySchema(table.KeySchema),
+			LocalIndexes:      len(table.LocalSecondaryIndexes),
+			GlobalIndexes:     len(table.GlobalSecondaryIndexes),
+			StreamEnabled:     table.StreamSpecification != nil && table.StreamSpecification.StreamEnabled,
+			StreamArn:         table.LatestStreamArn,
+			StreamViewType:    dynamoStreamViewType(table),
+			LatestStreamLabel: table.LatestStreamLabel,
+		})
+		if table.LatestStreamArn != "" {
+			streams = append(streams, dynamodbStreamSummary{
+				TableName:    table.TableName,
+				StreamArn:    table.LatestStreamArn,
+				StreamLabel:  table.LatestStreamLabel,
+				StreamStatus: "ENABLED",
+				StreamView:   dynamoStreamViewType(table),
+				CreatedDate:  dynamoCreationTime(table.CreationDateTime),
+				ShardCount:   1,
+			})
+		}
+	}
+
+	sort.Slice(tables, func(i, j int) bool { return tables[i].Name < tables[j].Name })
+	sort.Slice(streams, func(i, j int) bool {
+		if streams[i].TableName == streams[j].TableName {
+			return streams[i].StreamArn < streams[j].StreamArn
+		}
+		return streams[i].TableName < streams[j].TableName
+	})
+
+	return tables, streams, rawTables, warnings
+}
+
+func dynamoStreamViewType(table *types.DynamoDBTable) string {
+	if table.StreamSpecification == nil {
+		return ""
+	}
+	return table.StreamSpecification.StreamViewType
+}
+
+func dynamoCreationTime(value float64) time.Time {
+	secs := int64(value)
+	nanos := int64((value - float64(secs)) * float64(time.Second))
+	return time.Unix(secs, nanos).UTC()
+}
+
+func formatDynamoKeySchema(schema []types.DynamoDBKeySchemaElement) string {
+	parts := make([]string, 0, len(schema))
+	for _, element := range schema {
+		role := strings.ToUpper(strings.TrimSpace(element.KeyType))
+		switch role {
+		case "HASH":
+			role = "PK"
+		case "RANGE":
+			role = "SK"
+		}
+		if element.AttributeName == "" {
+			continue
+		}
+		parts = append(parts, element.AttributeName+" ("+role+")")
+	}
+	if len(parts) == 0 {
+		return "--"
+	}
+	return strings.Join(parts, " · ")
+}
+
+func normalizeEventSourceType(mapping *types.EventSourceMapping) string {
+	if mapping == nil {
+		return ""
+	}
+	if normalized := strings.ToLower(strings.TrimSpace(mapping.SourceType)); normalized != "" {
+		return normalized
+	}
+	if strings.HasPrefix(mapping.EventSourceArn, "arn:aws:dynamodb:") {
+		return "dynamodb-stream"
+	}
+	return "sqs"
+}
+
+func eventSourceDisplayName(mapping *types.EventSourceMapping) string {
+	if mapping == nil {
+		return ""
+	}
+	if value := strings.TrimSpace(mapping.SourceName); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(mapping.QueueName); value != "" {
+		return value
+	}
+	return strings.TrimSpace(mapping.EventSourceArn)
 }
 
 // recentTraces returns the last 50 traces from the store, or nil if none.
@@ -1643,6 +1821,105 @@ func inferInfraConnections(functions []*types.FunctionConfig, probes []infrasvc.
 	})
 
 	return connections
+}
+
+func inferDynamoTableConnections(functions []*types.FunctionConfig, tables []*types.DynamoDBTable) []infraConnection {
+	if len(functions) == 0 || len(tables) == 0 {
+		return nil
+	}
+
+	byName := make(map[string]*types.DynamoDBTable, len(tables))
+	byARN := make(map[string]*types.DynamoDBTable, len(tables))
+	for _, table := range tables {
+		if table == nil || table.TableName == "" {
+			continue
+		}
+		byName[strings.ToLower(strings.TrimSpace(table.TableName))] = table
+		if table.TableArn != "" {
+			byARN[strings.ToLower(strings.TrimSpace(table.TableArn))] = table
+		}
+		if table.LatestStreamArn != "" {
+			byARN[strings.ToLower(strings.TrimSpace(table.LatestStreamArn))] = table
+		}
+	}
+
+	connections := make([]infraConnection, 0)
+	seen := make(map[string]struct{})
+
+	for _, fn := range functions {
+		for key, value := range fn.Environment {
+			if !looksLikeDynamoEnvKey(strings.ToUpper(strings.TrimSpace(key))) {
+				continue
+			}
+			table := matchDynamoTableReference(strings.TrimSpace(value), byName, byARN)
+			if table == nil {
+				continue
+			}
+			dedupeKey := fn.FunctionName + "|" + table.TableName + "|" + key
+			if _, exists := seen[dedupeKey]; exists {
+				continue
+			}
+			seen[dedupeKey] = struct{}{}
+			connections = append(connections, infraConnection{
+				SourceFunction: fn.FunctionName,
+				TargetID:       table.TableName,
+				TargetName:     table.TableName,
+				TargetKind:     "dynamodb-table",
+				Evidence:       "env",
+				Source:         key,
+			})
+		}
+	}
+
+	sort.Slice(connections, func(i, j int) bool {
+		if connections[i].SourceFunction == connections[j].SourceFunction {
+			return connections[i].TargetName < connections[j].TargetName
+		}
+		return connections[i].SourceFunction < connections[j].SourceFunction
+	})
+
+	return connections
+}
+
+func looksLikeDynamoEnvKey(key string) bool {
+	return strings.Contains(key, "DYNAMO") ||
+		strings.Contains(key, "DDB") ||
+		strings.Contains(key, "TABLE")
+}
+
+func matchDynamoTableReference(
+	value string,
+	byName map[string]*types.DynamoDBTable,
+	byARN map[string]*types.DynamoDBTable,
+) *types.DynamoDBTable {
+	if value == "" {
+		return nil
+	}
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	if table := byARN[normalized]; table != nil {
+		return table
+	}
+	if table := byName[normalized]; table != nil {
+		return table
+	}
+	if strings.HasPrefix(normalized, "arn:aws:dynamodb:") {
+		if tableName := dynamoTableNameFromArn(value); tableName != "" {
+			return byName[strings.ToLower(tableName)]
+		}
+	}
+	return nil
+}
+
+func dynamoTableNameFromArn(value string) string {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) < 6 {
+		return ""
+	}
+	resourceParts := strings.Split(parts[5], "/")
+	if len(resourceParts) >= 2 && resourceParts[0] == "table" {
+		return resourceParts[1]
+	}
+	return ""
 }
 
 func inferEnvConnectionHints(env map[string]string) []connectionHint {

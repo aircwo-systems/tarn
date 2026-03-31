@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/internal/dynamodb"
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
@@ -152,7 +153,7 @@ func TestPollerStartStop(t *testing.T) {
 	}
 	lambdaMock := &mockLambda{}
 
-	p := newPoller(mapping, sqsMock, lambdaMock, store, nil, nil)
+	p := newPoller(mapping, sqsMock, nil, lambdaMock, store, nil, nil)
 	p.start()
 
 	// Give the poller time to tick at least once
@@ -205,7 +206,7 @@ func TestPollerNormalizesFunctionARN(t *testing.T) {
 	}
 	lambdaMock := &mockLambda{}
 
-	p := newPoller(mapping, sqsMock, lambdaMock, store, nil, nil)
+	p := newPoller(mapping, sqsMock, nil, lambdaMock, store, nil, nil)
 	p.start()
 
 	time.Sleep(1500 * time.Millisecond)
@@ -245,7 +246,7 @@ func TestPollerPausesOnMissingQueue(t *testing.T) {
 	sqsMock := &mockSQS{receiveErr: errors.New("queue orders not found")}
 	lambdaMock := &mockLambda{}
 
-	p := newPoller(mapping, sqsMock, lambdaMock, store, nil, nil)
+	p := newPoller(mapping, sqsMock, nil, lambdaMock, store, nil, nil)
 	p.poll()
 
 	// Mapping must stay enabled — poller records the error but keeps running.
@@ -288,7 +289,7 @@ func TestPollerDisablesAfterConsecutiveNotFound(t *testing.T) {
 	sqsMock := &mockSQS{receiveErr: errors.New("queue orders not found")}
 	lambdaMock := &mockLambda{}
 
-	p := newPoller(mapping, sqsMock, lambdaMock, store, nil, nil)
+	p := newPoller(mapping, sqsMock, nil, lambdaMock, store, nil, nil)
 	for i := 0; i < maxConsecutiveNotFoundRetries; i++ {
 		p.poll()
 	}
@@ -343,7 +344,7 @@ func TestPollerReleasesFilteredOutMessages(t *testing.T) {
 	}
 	lambdaMock := &mockLambda{}
 
-	p := newPoller(mapping, sqsMock, lambdaMock, store, nil, nil)
+	p := newPoller(mapping, sqsMock, nil, lambdaMock, store, nil, nil)
 	p.poll()
 
 	lambdaMock.mu.Lock()
@@ -390,7 +391,7 @@ func TestPollerPausesOnMissingFunction(t *testing.T) {
 	}
 	lambdaMock := &mockLambda{invokeErr: errors.New("function order-logger not found")}
 
-	p := newPoller(mapping, sqsMock, lambdaMock, store, nil, nil)
+	p := newPoller(mapping, sqsMock, nil, lambdaMock, store, nil, nil)
 	p.poll()
 
 	// Mapping must stay enabled so the poller restarts on next boot.
@@ -431,7 +432,7 @@ func TestPollerRetriesAfterMissingQueue(t *testing.T) {
 	sqsMock := &mockSQS{receiveErr: errors.New("queue orders not found")}
 	lambdaMock := &mockLambda{}
 
-	p := newPoller(mapping, sqsMock, lambdaMock, store, nil, nil)
+	p := newPoller(mapping, sqsMock, nil, lambdaMock, store, nil, nil)
 	p.start()
 
 	// Wait for at least one failing poll.
@@ -501,7 +502,7 @@ func TestServiceRestartStartsPollers(t *testing.T) {
 	}
 	lambdaMock := &mockLambda{}
 
-	svc := NewService(cfg, store2, lambdaMock, sqsMock)
+	svc := NewService(cfg, store2, lambdaMock, sqsMock, nil)
 	svc.Start()
 
 	// Give pollers time to process.
@@ -526,5 +527,88 @@ func TestServiceRestartStartsPollers(t *testing.T) {
 	lambdaMock.mu.Unlock()
 	if invCount < 1 {
 		t.Fatalf("expected at least 1 lambda invocation after restart, got %d", invCount)
+	}
+}
+
+func TestDynamoStreamPollerInvokesLambdaAndAdvancesCheckpoint(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.PersistenceEnabled = false
+
+	dynamo := dynamodb.NewService(cfg)
+	if err := dynamo.Init(); err != nil {
+		t.Fatalf("dynamo init: %v", err)
+	}
+	table, err := dynamo.CreateTable(&types.DynamoDBTable{
+		TableName: "orders",
+		AttributeDefinitions: []types.DynamoDBAttributeDefinition{
+			{AttributeName: "pk", AttributeType: "S"},
+			{AttributeName: "sk", AttributeType: "S"},
+		},
+		KeySchema: []types.DynamoDBKeySchemaElement{
+			{AttributeName: "pk", KeyType: "HASH"},
+			{AttributeName: "sk", KeyType: "RANGE"},
+		},
+		StreamSpecification: &types.DynamoDBStreamSpecification{
+			StreamEnabled:  true,
+			StreamViewType: "NEW_AND_OLD_IMAGES",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	if _, err := dynamo.PutItem("orders", map[string]any{
+		"pk": map[string]any{"S": "acct#1"},
+		"sk": map[string]any{"S": "order#1"},
+	}, "", nil, nil, "NONE"); err != nil {
+		t.Fatalf("put item: %v", err)
+	}
+
+	store := NewStore(cfg)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init eventsource store: %v", err)
+	}
+	lambdaMock := &mockLambda{}
+	svc := NewService(cfg, store, lambdaMock, nil, dynamo)
+	mapping, err := svc.CreateMapping(
+		table.LatestStreamArn,
+		"arn:aws:lambda:us-east-1:000000000000:function:stream-handler",
+		"stream-handler",
+		10,
+		0,
+		true,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("create mapping: %v", err)
+	}
+
+	time.Sleep(1500 * time.Millisecond)
+	svc.Stop()
+
+	lambdaMock.mu.Lock()
+	invocations := append([][]byte(nil), lambdaMock.invocations...)
+	lambdaMock.mu.Unlock()
+	if len(invocations) == 0 {
+		t.Fatal("expected at least one lambda invocation")
+	}
+
+	var payload struct {
+		Records []map[string]any `json:"Records"`
+	}
+	if err := json.Unmarshal(invocations[0], &payload); err != nil {
+		t.Fatalf("decode invocation payload: %v", err)
+	}
+	if len(payload.Records) == 0 {
+		t.Fatal("expected at least one stream record in payload")
+	}
+
+	reloaded, err := store.Get(mapping.UUID)
+	if err != nil {
+		t.Fatalf("reload mapping: %v", err)
+	}
+	if reloaded.LastStreamSequence == "" {
+		t.Fatal("expected LastStreamSequence to advance")
 	}
 }

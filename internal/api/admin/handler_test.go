@@ -15,6 +15,7 @@ import (
 	apigatewaysvc "github.com/aircwo-systems/tarn/internal/apigateway"
 	apigatewayv1svc "github.com/aircwo-systems/tarn/internal/apigatewayv1"
 	"github.com/aircwo-systems/tarn/internal/config"
+	dynamodbsvc "github.com/aircwo-systems/tarn/internal/dynamodb"
 	eventbridgesvc "github.com/aircwo-systems/tarn/internal/eventbridge"
 	eventsourcesvc "github.com/aircwo-systems/tarn/internal/eventsource"
 	infrasvc "github.com/aircwo-systems/tarn/internal/infrastructure"
@@ -260,6 +261,60 @@ func TestOverviewIncludesResourceTags(t *testing.T) {
 	}
 }
 
+func TestOverviewIncludesDynamoDBTablesAndStreams(t *testing.T) {
+	h := newTestHandler(t)
+
+	if _, err := h.dynamodb.CreateTable(&types.DynamoDBTable{
+		TableName: "orders",
+		AttributeDefinitions: []types.DynamoDBAttributeDefinition{
+			{AttributeName: "pk", AttributeType: "S"},
+		},
+		KeySchema: []types.DynamoDBKeySchemaElement{
+			{AttributeName: "pk", KeyType: "HASH"},
+		},
+		StreamSpecification: &types.DynamoDBStreamSpecification{
+			StreamEnabled:  true,
+			StreamViewType: "NEW_IMAGE",
+		},
+	}); err != nil {
+		t.Fatalf("create dynamodb table: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
+	rec := httptest.NewRecorder()
+
+	h.Overview(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var payload struct {
+		Counts struct {
+			DynamoDBTables  int `json:"dynamodbTables"`
+			DynamoDBStreams int `json:"dynamodbStreams"`
+		} `json:"counts"`
+		DynamoDBTables  []dynamodbTableSummary  `json:"dynamodbTables"`
+		DynamoDBStreams []dynamodbStreamSummary `json:"dynamodbStreams"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if payload.Counts.DynamoDBTables != 1 {
+		t.Fatalf("dynamodb tables count = %d, want 1", payload.Counts.DynamoDBTables)
+	}
+	if payload.Counts.DynamoDBStreams != 1 {
+		t.Fatalf("dynamodb streams count = %d, want 1", payload.Counts.DynamoDBStreams)
+	}
+	if len(payload.DynamoDBTables) != 1 || payload.DynamoDBTables[0].Name != "orders" {
+		t.Fatalf("unexpected dynamodb tables: %+v", payload.DynamoDBTables)
+	}
+	if len(payload.DynamoDBStreams) != 1 || payload.DynamoDBStreams[0].TableName != "orders" {
+		t.Fatalf("unexpected dynamodb streams: %+v", payload.DynamoDBStreams)
+	}
+}
+
 func TestOverviewInfersInfraConnectionsFromEnvironment(t *testing.T) {
 	h := newTestHandler(t)
 
@@ -456,11 +511,15 @@ func newTestHandler(t *testing.T) *Handler {
 	s3 := s3svc.NewService(cfg)
 	sqs := sqssvc.NewService(cfg)
 	sns := snssvc.NewService(cfg, sqs, lambda)
+	dynamodb := dynamodbsvc.NewService(cfg)
+	if err := dynamodb.Init(); err != nil {
+		t.Fatalf("init dynamodb: %v", err)
+	}
 	secrets := secretssvc.NewService(cfg)
 	infra := infrasvc.NewService("", false)
 	esmStore := eventsourcesvc.NewStore(cfg)
-	esm := eventsourcesvc.NewService(cfg, esmStore, nil, nil)
+	esm := eventsourcesvc.NewService(cfg, esmStore, nil, nil, nil)
 	eventbridgeStore := eventbridgesvc.NewStore(cfg)
 	eventbridge := eventbridgesvc.NewService(cfg, eventbridgeStore, lambda)
-	return NewHandler(cfg, apigw, apigwv1, lambda, logs, sqs, sns, secrets, infra, s3, esm, eventbridge, nil)
+	return NewHandler(cfg, apigw, apigwv1, lambda, logs, sqs, sns, dynamodb, secrets, infra, s3, esm, eventbridge, nil)
 }

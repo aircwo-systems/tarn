@@ -6,12 +6,13 @@ Tarn emulates the following AWS services for local development and testing.
 
 | Service | Status | Details |
 |---------|--------|---------|
-| **Lambda** | <span class="status-badge status-partial">Partial</span> | Core Lambda APIs, layers, and SQS event source mappings |
+| **Lambda** | <span class="status-badge status-partial">Partial</span> | Core Lambda APIs, layers, and SQS/DynamoDB Streams event source mappings |
 | **API Gateway v2** | <span class="status-badge status-partial">Partial</span> | HTTP APIs with Lambda and SQS integrations |
 | **API Gateway v1** | <span class="status-badge status-partial">Partial</span> | REST APIs with Lambda proxy and SQS integrations |
 | **S3** | <span class="status-badge status-partial">Partial</span> | Path-style operations, multipart upload, Lambda notifications |
 | **SQS** | <span class="status-badge status-full">Full</span> | Queues, event source mappings, DLQ |
 | **SNS** | <span class="status-badge status-full">Full</span> | Topics, subscriptions, fanout to SQS/Lambda |
+| **DynamoDB** | <span class="status-badge status-partial">Partial</span> | Core table APIs, Query/Scan, secondary indexes, Streams |
 | **Secrets Manager** | <span class="status-badge status-full">Full</span> | CRUD, tagging, compatibility policy reads, Lambda extension |
 | **EventBridge** | <span class="status-badge status-partial">Partial</span> | Scheduled rules with Lambda targets only |
 
@@ -56,6 +57,12 @@ Pick a service below to get started:
   <h3>SNS</h3>
   <p>Pub/sub messaging. Fanout to SQS and Lambda.</p>
   <small>Fully Supported</small>
+</a>
+
+<a href="/services/dynamodb" class="service-card">
+  <h3>DynamoDB</h3>
+  <p>Tables, indexes, item CRUD, Query/Scan, and Streams.</p>
+  <small>Partial Support</small>
 </a>
 
 <a href="/services/secrets-manager" class="service-card">

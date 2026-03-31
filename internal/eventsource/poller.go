@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	"github.com/google/uuid"
 )
 
 // lambdaErrorMessage extracts the errorMessage field from a Lambda error payload.
@@ -88,6 +88,11 @@ type SQSInterface interface {
 	MoveToDLQIfExceeded(srcQueue string, msg *types.SQSMessage) (bool, string, error)
 }
 
+// StreamInterface abstracts DynamoDB Streams operations needed by the poller.
+type StreamInterface interface {
+	StreamBatch(streamArn, lastSequence string, limit int) ([]*types.StreamRecord, string, error)
+}
+
 // LambdaInterface abstracts Lambda operations needed by the poller.
 type LambdaInterface interface {
 	Invoke(ctx context.Context, input *types.InvokeInput) (*types.InvokeOutput, error)
@@ -96,6 +101,7 @@ type LambdaInterface interface {
 type poller struct {
 	mapping        *types.EventSourceMapping
 	sqs            SQSInterface
+	streams        StreamInterface
 	lambda         LambdaInterface
 	store          *Store
 	traceStore     *tracesvc.Store
@@ -107,10 +113,11 @@ type poller struct {
 
 const maxConsecutiveNotFoundRetries = 5
 
-func newPoller(mapping *types.EventSourceMapping, sqsSvc SQSInterface, lambdaSvc LambdaInterface, store *Store, traceStore *tracesvc.Store, collector *tracesvc.Collector) *poller {
+func newPoller(mapping *types.EventSourceMapping, sqsSvc SQSInterface, streamsSvc StreamInterface, lambdaSvc LambdaInterface, store *Store, traceStore *tracesvc.Store, collector *tracesvc.Collector) *poller {
 	return &poller{
 		mapping:    mapping,
 		sqs:        sqsSvc,
+		streams:    streamsSvc,
 		lambda:     lambdaSvc,
 		store:      store,
 		traceStore: traceStore,
@@ -149,6 +156,10 @@ func (p *poller) run() {
 }
 
 func (p *poller) poll() {
+	if normalizeSourceType(p.mapping) == "dynamodb-stream" {
+		p.pollDynamoStream()
+		return
+	}
 	pollStart := time.Now()
 
 	msgs, err := p.sqs.ReceiveMessage(p.mapping.QueueName, p.mapping.BatchSize, 30, 1)
@@ -271,6 +282,68 @@ func (p *poller) poll() {
 	}
 }
 
+func (p *poller) pollDynamoStream() {
+	pollStart := time.Now()
+	records, nextSeq, err := p.streams.StreamBatch(p.mapping.EventSourceArn, p.mapping.LastStreamSequence, p.mapping.BatchSize)
+	if err != nil {
+		if isNotFoundError(err) {
+			p.disableWithError(err)
+			return
+		}
+		log.Printf("[eventsource] %s: stream batch error: %v", p.mapping.UUID, err)
+		p.updateResult(fmt.Sprintf("ERROR: %v", err))
+		return
+	}
+	p.notFoundStreak = 0
+	if len(records) == 0 {
+		return
+	}
+
+	payload := buildDynamoDBEventPayload(records)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	functionName := normalizeLambdaFunctionName(p.mapping.FunctionName)
+	if p.collector != nil {
+		p.collector.Begin(functionName)
+	}
+	streamDurationMs := time.Since(pollStart).Milliseconds()
+	lambdaStart := time.Now()
+	output, err := p.lambda.Invoke(ctx, &types.InvokeInput{
+		FunctionName:   functionName,
+		Payload:        payload,
+		InvocationType: "RequestResponse",
+	})
+	lambdaDurationMs := time.Since(lambdaStart).Milliseconds()
+
+	var subSpans []tracesvc.Span
+	if p.collector != nil {
+		subSpans = tracesvc.SubSpansToSpans(p.collector.CollectWithFlush(functionName))
+	}
+
+	if err != nil || output == nil || output.FunctionError != "" || lambdaReturnedError(output) {
+		if err != nil && isNotFoundError(err) {
+			p.disableWithError(err)
+			return
+		}
+		msg := "stream invoke failed"
+		if err != nil {
+			msg = err.Error()
+		} else if output != nil && len(output.Payload) > 0 {
+			msg = lambdaErrorMessage(output.Payload)
+		}
+		log.Printf("[eventsource] %s: %s", p.mapping.UUID, msg)
+		p.updateResult("ERROR: " + msg)
+		p.recordStreamTrace(pollStart, functionName, len(records), streamDurationMs, lambdaDurationMs, true, subSpans)
+		return
+	}
+
+	p.mapping.LastStreamSequence = nextSeq
+	_ = p.store.Save(p.mapping)
+	p.updateResult("OK")
+	p.recordStreamTrace(pollStart, functionName, len(records), streamDurationMs, lambdaDurationMs, false, subSpans)
+}
+
 func (p *poller) recordTrace(start time.Time, functionName string, msgs []*types.SQSMessage, sqsDurationMs, lambdaDurationMs int64, msgCount, failCount int, subSpans []tracesvc.Span) {
 	if p.traceStore == nil {
 		return
@@ -383,6 +456,16 @@ func isNotFoundError(err error) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(err.Error()), "not found")
+}
+
+func lambdaReturnedError(output *types.InvokeOutput) bool {
+	if output == nil || len(output.Payload) == 0 {
+		return false
+	}
+	var payload struct {
+		ErrorType string `json:"errorType"`
+	}
+	return json.Unmarshal(output.Payload, &payload) == nil && payload.ErrorType != ""
 }
 
 // matchesAnyFilter returns true if the message matches at least one filter in the criteria.
@@ -571,4 +654,44 @@ func buildSQSEventPayload(msgs []*types.SQSMessage, eventSourceArn, queueName st
 	}
 	data, _ := json.Marshal(map[string]any{"Records": records})
 	return data
+}
+
+func buildDynamoDBEventPayload(records []*types.StreamRecord) []byte {
+	payload := map[string]any{"Records": records}
+	data, _ := json.Marshal(payload)
+	return data
+}
+
+func (p *poller) recordStreamTrace(start time.Time, functionName string, recordCount int, streamDurationMs, lambdaDurationMs int64, failed bool, subSpans []tracesvc.Span) {
+	if p.traceStore == nil {
+		return
+	}
+	status := 200
+	streamStatus := "ok"
+	lambdaStatus := "ok"
+	if failed {
+		status = 500
+		lambdaStatus = "error"
+	}
+	p.traceStore.Add(&tracesvc.Trace{
+		ID:         uuid.NewString()[:8],
+		StartedAt:  start,
+		DurationMs: time.Since(start).Milliseconds(),
+		Status:     status,
+		Spans: append([]tracesvc.Span{
+			{
+				Kind:       "dynamodb",
+				Name:       p.mapping.SourceName,
+				DurationMs: streamDurationMs,
+				Status:     streamStatus,
+				Meta:       map[string]string{"recordCount": fmt.Sprintf("%d", recordCount)},
+			},
+			{
+				Kind:       "lambda",
+				Name:       functionName,
+				DurationMs: lambdaDurationMs,
+				Status:     lambdaStatus,
+			},
+		}, subSpans...),
+	})
 }

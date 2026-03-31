@@ -22,12 +22,15 @@ type EventSourceMapping struct {
 	EventSourceArn                 string          `json:"EventSourceArn"`
 	FunctionArn                    string          `json:"FunctionArn"`
 	FunctionName                   string          `json:"FunctionName"`
+	SourceType                     string          `json:"SourceType,omitempty"`
+	SourceName                     string          `json:"SourceName,omitempty"`
 	QueueName                      string          `json:"QueueName"`
 	BatchSize                      int             `json:"BatchSize"`
 	MaximumBatchingWindowInSeconds int             `json:"MaximumBatchingWindowInSeconds"`
 	Enabled                        bool            `json:"Enabled"`
 	State                          string          `json:"State"`
 	LastProcessingResult           string          `json:"LastProcessingResult,omitempty"`
+	LastStreamSequence             string          `json:"LastStreamSequence,omitempty"`
 	LastModified                   time.Time       `json:"LastModified"`
 	FilterCriteria                 *FilterCriteria `json:"FilterCriteria,omitempty"`
 }
