@@ -14,9 +14,11 @@
   } from "$lib/components/ui/table";
   import { Skeleton } from "$lib/components/ui/skeleton";
   import EmptyState from "$lib/components/common/empty-state.svelte";
+  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
   import SectionHeader from "./section-header.svelte";
   import ArnCell from "$lib/components/common/arn-cell.svelte";
   import { fetchSecretValue } from "$lib/api";
+  import { formatJSONForViewer } from "$lib/json-format";
   import {
     getDashboard,
     getDashboardFilters,
@@ -103,6 +105,14 @@
     }
     return value || "(empty)";
   }
+
+  function secretFormattedValue(
+    name: string,
+  ): { formatted: string; formattedHtml: string } | null {
+    const valueType = secretValueTypes[name] ?? "string";
+    if (valueType !== "string") return null;
+    return formatJSONForViewer(secretValues[name] ?? "");
+  }
 </script>
 
 <div class="flex min-h-full flex-col gap-4">
@@ -166,16 +176,41 @@
                 <TableCell class="text-xs text-muted-foreground">
                   {secret.description || "--"}
                 </TableCell>
-                <TableCell class="!whitespace-normal">
-                  <div class="flex w-48 items-center gap-2">
-                    <span
-                      class={`break-all font-mono text-xs ${secretErrors[secret.name] ? "text-destructive" : "text-muted-foreground/70"}`}
-                      title={secretVisible[secret.name]
-                        ? renderSecretValue(secret.name)
-                        : "Hidden"}
-                    >
-                      {renderSecretValue(secret.name)}
-                    </span>
+                <TableCell class="!whitespace-normal align-top">
+                  <div class="flex items-start gap-2">
+                    <div class="min-w-0 flex-1">
+                      {#if !secretVisible[secret.name] || secretLoading[secret.name] || secretErrors[secret.name]}
+                        <span
+                          class={`break-all font-mono text-xs ${secretErrors[secret.name] ? "text-destructive" : "text-muted-foreground/70"}`}
+                          title={secretVisible[secret.name]
+                            ? renderSecretValue(secret.name)
+                            : "Hidden"}
+                        >
+                          {renderSecretValue(secret.name)}
+                        </span>
+                      {:else if secretFormattedValue(secret.name)}
+                        <FormattedMessageViewer
+                          raw={secretValues[secret.name] ?? ""}
+                          formatted={secretFormattedValue(secret.name)?.formatted}
+                          formattedHtml={secretFormattedValue(secret.name)?.formattedHtml}
+                          formattedLabel="JSON"
+                          rawLabel="Raw Value"
+                          formattedOpenByDefault={true}
+                          rawOpenByDefault={false}
+                          formattedContentClass="text-[11px] text-muted-foreground"
+                          rawContentClass="text-[11px] text-muted-foreground"
+                          formattedMaxHeightClass="max-h-52"
+                          rawMaxHeightClass="max-h-40"
+                        />
+                      {:else}
+                        <span
+                          class="break-all font-mono text-xs text-muted-foreground/70"
+                          title={renderSecretValue(secret.name)}
+                        >
+                          {renderSecretValue(secret.name)}
+                        </span>
+                      {/if}
+                    </div>
                     <button
                       type="button"
                       class="shrink-0 rounded-md border border-border p-1 text-muted-foreground transition-colors hover:bg-background-subtle hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"

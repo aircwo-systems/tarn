@@ -8,7 +8,9 @@
     CopySimple,
     Check,
   } from "phosphor-svelte";
+  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
   import LedDot from "$lib/components/common/led-dot.svelte";
+  import { formatJSONForViewer, isJSONContentType } from "$lib/json-format";
   import { getDashboard } from "$lib/state.svelte";
   import { formatBytes } from "$lib/utils";
   import {
@@ -396,7 +398,26 @@
                         />
                       </div>
                     {:else}
-                      <pre class="text-xs font-mono text-foreground whitespace-pre-wrap break-words leading-relaxed">{preview.content}</pre>
+                      {@const formattedPreview = isJSONContentType(preview.contentType)
+                        ? formatJSONForViewer(preview.content)
+                        : formatJSONForViewer(preview.content)}
+                      {#if formattedPreview}
+                        <FormattedMessageViewer
+                          raw={preview.content}
+                          formatted={formattedPreview.formatted}
+                          formattedHtml={formattedPreview.formattedHtml}
+                          formattedLabel="JSON"
+                          rawLabel="Raw Object"
+                          formattedOpenByDefault={true}
+                          rawOpenByDefault={false}
+                          formattedContentClass="text-[11px] text-foreground"
+                          rawContentClass="text-[11px] text-muted-foreground"
+                          formattedMaxHeightClass="max-h-96"
+                          rawMaxHeightClass="max-h-72"
+                        />
+                      {:else}
+                        <pre class="text-xs font-mono text-foreground whitespace-pre-wrap break-words leading-relaxed">{preview.content}</pre>
+                      {/if}
                     {/if}
                   </div>
                 </AccordionContent>

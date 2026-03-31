@@ -25,6 +25,7 @@
     clearLogGroup,
     type FetchLogEventsParams,
   } from "$lib/api";
+  import { highlightJSON } from "$lib/json-format";
   import type { LogGroupSummary, LogEvent } from "$lib/types";
 
   let {
@@ -568,57 +569,6 @@
           );
         }
         return escapeHTML(indent) + escapeHTML(content);
-      })
-      .join("\n");
-  }
-
-  function jsonValue(raw: string): string {
-    const hasComma = raw.endsWith(",");
-    const v = hasComma ? raw.slice(0, -1) : raw;
-    const comma = hasComma ? `<span style="${H.punct}">,</span>` : "";
-    if (v === "null") return `<span style="${H.null_}">null</span>` + comma;
-    if (v === "true" || v === "false")
-      return `<span style="${H.bool}">${escapeHTML(v)}</span>` + comma;
-    if (/^-?\d+(\.\d+)?([Ee][+-]?\d+)?$/.test(v))
-      return `<span style="${H.num}">${escapeHTML(v)}</span>` + comma;
-    if (v === "{" || v === "[")
-      return `<span style="${H.punct}">${escapeHTML(v)}</span>` + comma;
-    if (v.startsWith('"') && v.endsWith('"')) {
-      const inner = v.slice(1, -1);
-      return (
-        `<span style="color:var(--lh-str-json)">"${escapeHTML(inner)}"</span>` +
-        comma
-      );
-    }
-    return escapeHTML(v) + comma;
-  }
-
-  function highlightJSON(text: string): string {
-    return text
-      .split("\n")
-      .map((line) => {
-        const m = line.match(/^(\s*)([\s\S]*)$/);
-        const indent = m?.[1] ?? "";
-        const content = m?.[2] ?? "";
-        if (!content) return escapeHTML(indent);
-        if (/^[{}\[\]],?$/.test(content)) {
-          return (
-            escapeHTML(indent) +
-            `<span style="${H.punct}">${escapeHTML(content)}</span>`
-          );
-        }
-        // "key": value
-        const kv = content.match(/^("(?:[^"\\]|\\.)*")(\s*:\s*)([\s\S]*)$/);
-        if (kv) {
-          const keyInner = kv[1].slice(1, -1);
-          return (
-            escapeHTML(indent) +
-            `<span style="${H.key}">"${escapeHTML(keyInner)}"</span>` +
-            `<span style="${H.punct}">${escapeHTML(kv[2])}</span>` +
-            jsonValue(kv[3])
-          );
-        }
-        return escapeHTML(indent) + jsonValue(content);
       })
       .join("\n");
   }

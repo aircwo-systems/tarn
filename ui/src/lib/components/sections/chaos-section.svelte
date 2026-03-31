@@ -15,7 +15,9 @@
     WarningIcon,
   } from "phosphor-svelte";
   import Badge from "$lib/components/ui/badge/badge.svelte";
+  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
   import SectionHeader from "./section-header.svelte";
+  import { formatJSONForViewer } from "$lib/json-format";
   import type {
     GatewaySummary,
     RouteDetail,
@@ -270,7 +272,6 @@
 
   // Per-example view state
   let exShowReq = $state<Set<string>>(new Set());
-  let exFormatted = $state<Set<string>>(new Set());
 
   function exKey(routeId: string, idx: number) {
     return `${routeId}:${idx}`;
@@ -281,28 +282,6 @@
     if (s.has(k)) s.delete(k);
     else s.add(k);
     exShowReq = s;
-  }
-  function toggleExFormat(routeId: string, idx: number) {
-    const k = exKey(routeId, idx);
-    const s = new Set(exFormatted);
-    if (s.has(k)) s.delete(k);
-    else s.add(k);
-    exFormatted = s;
-  }
-  function tryFormat(s: string): string {
-    try {
-      return JSON.stringify(JSON.parse(s), null, 2);
-    } catch {
-      return s;
-    }
-  }
-  function isJson(s: string): boolean {
-    try {
-      JSON.parse(s);
-      return true;
-    } catch {
-      return false;
-    }
   }
   function reqHeaderEntries(ex: { requestHeaders?: Record<string, string> }) {
     return Object.entries(ex.requestHeaders ?? {}).filter(([, v]) => v !== "");
@@ -877,12 +856,16 @@
                     {#each round.examples as ex, i (i)}
                       {@const ek = exKey(id, i)}
                       {@const showReq = exShowReq.has(ek)}
-                      {@const formatted = exFormatted.has(ek)}
                       {@const reqHeaders = reqHeaderEntries(ex)}
                       {@const hasReqBody =
                         ex.requestBody !== undefined && ex.requestBody !== null}
                       {@const hasResBody = !!ex.body}
-                      {@const canFormat = hasResBody && isJson(ex.body!)}
+                      {@const formattedReqBody = hasReqBody
+                        ? formatJSONForViewer(ex.requestBody ?? "")
+                        : null}
+                      {@const formattedResBody = hasResBody
+                        ? formatJSONForViewer(ex.body!)
+                        : null}
 
                       <div>
                         <!-- Example header row -->
@@ -912,18 +895,6 @@
                               : 'text-muted-foreground/70/60 hover:text-foreground'}"
                             title="Show request inputs">req</button
                           >
-                          {#if canFormat}
-                            <button
-                              type="button"
-                              onclick={() => toggleExFormat(id, i)}
-                              class="rounded-lg px-1.5 py-0.5 text-[9px] font-sans transition-colors shrink-0
-																{formatted
-                                ? 'bg-popover text-foreground border border-border'
-                                : 'text-muted-foreground/70/60 hover:text-foreground'}"
-                              title="Toggle JSON formatting"
-                              >&#123;&#125;</button
-                            >
-                          {/if}
                         </div>
 
                         <!-- Request detail panel -->
@@ -969,10 +940,25 @@
                                   >
                                     body sent
                                   </p>
-                                  <pre
-                                    class="font-mono text-[10px] text-muted-foreground whitespace-pre-wrap break-all leading-relaxed">{tryFormat(
-                                      ex.requestBody ?? "",
-                                    )}</pre>
+                                  {#if formattedReqBody}
+                                    <FormattedMessageViewer
+                                      raw={ex.requestBody ?? ""}
+                                      formatted={formattedReqBody.formatted}
+                                      formattedHtml={formattedReqBody.formattedHtml}
+                                      formattedLabel="JSON"
+                                      rawLabel="Raw Body"
+                                      formattedOpenByDefault={true}
+                                      rawOpenByDefault={false}
+                                      formattedContentClass="text-[10px] text-muted-foreground"
+                                      rawContentClass="text-[10px] text-muted-foreground"
+                                      formattedMaxHeightClass="max-h-52"
+                                      rawMaxHeightClass="max-h-40"
+                                    />
+                                  {:else}
+                                    <pre
+                                      class="font-mono text-[10px] text-muted-foreground whitespace-pre-wrap break-all leading-relaxed">{ex
+                                        .requestBody}</pre>
+                                  {/if}
                                 </div>
                               {/if}
                             </div>
@@ -987,10 +973,27 @@
                             >
                               response
                             </p>
-                            <pre
-                              class="font-mono text-[10px] text-muted-foreground whitespace-pre-wrap break-all leading-relaxed max-h-56 overflow-y-auto rounded">{formatted
-                                ? tryFormat(ex.body!)
-                                : truncate(ex.body!, 800)}</pre>
+                            {#if formattedResBody}
+                              <FormattedMessageViewer
+                                raw={ex.body!}
+                                formatted={formattedResBody.formatted}
+                                formattedHtml={formattedResBody.formattedHtml}
+                                formattedLabel="JSON"
+                                rawLabel="Raw Response"
+                                formattedOpenByDefault={true}
+                                rawOpenByDefault={false}
+                                formattedContentClass="text-[10px] text-muted-foreground"
+                                rawContentClass="text-[10px] text-muted-foreground"
+                                formattedMaxHeightClass="max-h-56"
+                                rawMaxHeightClass="max-h-40"
+                              />
+                            {:else}
+                              <pre
+                                class="font-mono text-[10px] text-muted-foreground whitespace-pre-wrap break-all leading-relaxed max-h-56 overflow-y-auto rounded">{truncate(
+                                  ex.body!,
+                                  800,
+                                )}</pre>
+                            {/if}
                           </div>
                         {/if}
                       </div>
