@@ -54,7 +54,7 @@
   let filterLevel = $state("");
   let filterPattern = $state("");
   let filterStream = $state("");
-  let eventsLimit = $state(100);
+  let eventsLimit = $state(200);
   let eventsCursor = $state<string | null>(null);
   let prevCursors = $state<string[]>([]);
   let showFilters = $state(false);
@@ -87,6 +87,8 @@
   $effect(() => {
     if (initialGroup) {
       selectedGroup = initialGroup;
+      eventsCursor = null;
+      prevCursors = [];
     }
   });
 
@@ -180,6 +182,8 @@
   // ── Helpers ──────────────────────────────────────────────────────────
   function selectGroup(name: string) {
     selectedGroup = name;
+    eventsCursor = null;
+    prevCursors = [];
     selectedEvent = null;
     highlightTimestamp = "";
     if (name === ALL_GROUP) {
@@ -193,6 +197,9 @@
     selectedGroup = "";
     events = [];
     eventsTotal = 0;
+    eventsCursor = null;
+    prevCursors = [];
+    nextCursor = null;
     autoRefresh = false;
     selectedEvent = null;
     highlightTimestamp = "";
@@ -202,6 +209,7 @@
   function applyFilters() {
     eventsCursor = null;
     prevCursors = [];
+    nextCursor = null;
     selectedEvent = null;
     loadEvents();
   }
@@ -212,6 +220,7 @@
     filterStream = "";
     eventsCursor = null;
     prevCursors = [];
+    nextCursor = null;
     selectedEvent = null;
     loadEvents();
   }
@@ -220,6 +229,7 @@
     sortOrder = sortOrder === "desc" ? "asc" : "desc";
     eventsCursor = null;
     prevCursors = [];
+    nextCursor = null;
     selectedEvent = null;
     loadEvents();
   }
@@ -234,6 +244,7 @@
       selectedEvent = null;
       eventsCursor = null;
       prevCursors = [];
+      nextCursor = null;
       // Refresh group list to update counts
       loadGroups();
     } catch (err) {
@@ -748,7 +759,29 @@
     return msg.slice(0, maxLen) + "...";
   }
 
-  const hasNextPage = $derived(!!nextCursor && events.length === eventsLimit);
+  const selectedGroupSummary = $derived(
+    groups.find((group) => group.name === selectedGroup) ?? null,
+  );
+  const latestKnownEventTimestamp = $derived(
+    events.length > 0
+      ? events[0].timestamp
+      : (selectedGroupSummary?.lastEvent ?? ""),
+  );
+  const selectedGroupIsActive = $derived(
+    (() => {
+      if (!latestKnownEventTimestamp) return false;
+      const ts = new Date(latestKnownEventTimestamp).getTime();
+      if (Number.isNaN(ts)) return false;
+      return Date.now() - ts < 15000;
+    })(),
+  );
+  const showLiveLoadingSkeleton = $derived(
+    autoRefresh &&
+      eventsLoading &&
+      events.length > 0 &&
+      selectedGroupIsActive,
+  );
+  const hasNextPage = $derived(!!nextCursor);
   const hasPrevPage = $derived(prevCursors.length > 0 || !!eventsCursor);
   const selectedGroupIsLambda = $derived(isLambdaGroup(selectedGroup));
   const pageInfo = $derived(
@@ -1034,9 +1067,24 @@
         style="min-height: 0; height: calc(100vh - 10rem)"
       >
         <!-- Event rows — compact view -->
-        <div
-          class="flex-1 min-w-0 overflow-y-auto font-mono text-[12px] leading-tight"
-        >
+        <div class="flex-1 min-w-0 overflow-y-auto font-mono text-[12px] leading-tight">
+          {#if showLiveLoadingSkeleton}
+            <div class="sticky top-0 z-10 border-b border-border bg-card/95 backdrop-blur px-3 py-2">
+              <div class="mb-1.5 flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground/70">
+                <ArrowsClockwiseIcon size={11} class="animate-spin" />
+                Loading latest logs
+              </div>
+              <div class="space-y-1.5">
+                {#each Array(3) as _, i (i)}
+                  <div class="flex items-center gap-2">
+                    <Skeleton class="h-3 w-24 shrink-0" />
+                    <Skeleton class="h-3 w-10 shrink-0" />
+                    <Skeleton class="h-3 w-full" />
+                  </div>
+                {/each}
+              </div>
+            </div>
+          {/if}
           {#each events as event, i (event.timestamp + "-" + i + "-" + event.streamName)}
             {@const isSelected = selectedEvent === event}
             {@const isHighlighted =
@@ -1496,4 +1544,3 @@
     {/if}
   </div>
 {/if}
-

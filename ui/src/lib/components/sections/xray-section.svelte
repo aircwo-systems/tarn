@@ -209,44 +209,8 @@
     "secrets",
   ]);
 
-  function normalizeTraceToken(value: string): string {
-    return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
-  }
-
-  function splitTraceTokens(value: string): string[] {
-    return value
-      .split(/[^a-zA-Z0-9]+/)
-      .map((part) => normalizeTraceToken(part))
-      .filter((part) => part.length >= 3);
-  }
-
   function traceCoreSpans(trace: RequestTrace): TraceSpan[] {
     return trace.spans.filter((span) => !SUB_SPAN_KINDS.has(span.kind.toLowerCase()));
-  }
-
-  function traceEntrySpan(trace: RequestTrace): TraceSpan | undefined {
-    return traceCoreSpans(trace)[0] ?? trace.spans[0];
-  }
-
-  function traceTerminalSpan(trace: RequestTrace): TraceSpan | undefined {
-    const core = traceCoreSpans(trace);
-    return core[core.length - 1] ?? trace.spans[trace.spans.length - 1];
-  }
-
-  function tracePathTokens(trace: RequestTrace): string[] {
-    return splitTraceTokens(trace.path ?? "");
-  }
-
-  function traceNameTokens(trace: RequestTrace): Set<string> {
-    const tokens = new Set<string>();
-    if (trace.gatewayName) {
-      for (const token of splitTraceTokens(trace.gatewayName)) tokens.add(token);
-    }
-    for (const token of tracePathTokens(trace)) tokens.add(token);
-    for (const span of traceCoreSpans(trace)) {
-      for (const token of splitTraceTokens(span.name)) tokens.add(token);
-    }
-    return tokens;
   }
 
   function worstTraceStatus(a: number, b: number): number {
@@ -328,39 +292,23 @@
       return true;
     }
 
-    const flowTerminal = traceTerminalSpan(flow);
-    const candidateEntry = traceEntrySpan(candidate);
-    if (!candidateEntry) return false;
-
-    const flowTokens = traceNameTokens(flow);
-    const candidateTokens = new Set<string>([
-      ...splitTraceTokens(candidateEntry.name),
-      ...tracePathTokens(candidate),
-    ]);
-
-    if (flowTerminal) {
-      for (const token of splitTraceTokens(flowTerminal.name)) {
-        flowTokens.add(token);
-      }
+    const flowTerminal = traceCoreSpans(flow).at(-1) ?? flow.spans.at(-1);
+    const candidateEntry = traceCoreSpans(candidate)[0] ?? candidate.spans[0];
+    if (!flowTerminal || !candidateEntry) {
+      return false;
     }
 
-    const flowLambda = [...traceCoreSpans(flow)].reverse().find((span) => span.kind === "lambda");
-    const candidateLambda = traceCoreSpans(candidate).find((span) => span.kind === "lambda");
+    const normalizeKind = (value: string) => value.trim().toLowerCase();
+    const flowKind = normalizeKind(flowTerminal.kind);
+    const candidateKind = normalizeKind(candidateEntry.kind);
+    const infraKinds = new Set(["queue", "dlq", "topic", "eventbridge", "s3", "dynamodb"]);
+
     if (
-      flowLambda &&
-      candidateLambda &&
-      flowLambda.name === candidateLambda.name &&
-      !candidate.method &&
-      !candidate.path &&
-      !["queue", "dlq", "topic", "eventbridge", "s3"].includes(
-        candidateEntry.kind.toLowerCase(),
-      )
+      infraKinds.has(flowKind) &&
+      flowKind === candidateKind &&
+      flowTerminal.name === candidateEntry.name
     ) {
       return true;
-    }
-
-    for (const token of candidateTokens) {
-      if (flowTokens.has(token)) return true;
     }
 
     return false;

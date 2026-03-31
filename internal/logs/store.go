@@ -60,9 +60,10 @@ type LogFilter struct {
 	Level      LogLevel
 	Pattern    string
 	StreamName string
+	Order      string
 	Limit      int
 	Offset     int        // Deprecated: use Cursor for pagination
-	Cursor     *time.Time // Return events after this timestamp (exclusive)
+	Cursor     *time.Time // Asc: after this timestamp. Desc: before this timestamp.
 }
 
 // logGroup holds events in a ring buffer.
@@ -172,18 +173,18 @@ func (s *Store) PutLogEvents(groupName, streamName string, events []LogEvent) {
 	}
 }
 
-// GetLogEvents returns filtered events from a group, ordered oldest to newest.
-func (s *Store) GetLogEvents(groupName string, filter *LogFilter) ([]LogEvent, int) {
+// GetLogEvents returns filtered events from a group in the requested order.
+func (s *Store) GetLogEvents(groupName string, filter *LogFilter) ([]LogEvent, int, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	g, exists := s.groups[groupName]
 	if !exists {
-		return nil, 0
+		return nil, 0, false
 	}
 
 	if g.count == 0 {
-		return nil, 0
+		return nil, 0, false
 	}
 
 	// Collect matching events from ring buffer (oldest first)
@@ -194,29 +195,13 @@ func (s *Store) GetLogEvents(groupName string, filter *LogFilter) ([]LogEvent, i
 		idx := (start + i) % g.maxEvents
 		evt := g.events[idx]
 
-		if filter != nil && filter.Cursor != nil && !evt.Timestamp.After(*filter.Cursor) {
-			continue // skip events before or at the cursor
-		}
 		if !matchesFilter(evt, filter) {
 			continue
 		}
 		matched = append(matched, evt)
 	}
 
-	total := len(matched)
-
-	// Offset is deprecated, but still supported for compatibility
-	if filter != nil && filter.Offset > 0 {
-		if filter.Offset >= len(matched) {
-			return nil, total
-		}
-		matched = matched[filter.Offset:]
-	}
-	if filter != nil && filter.Limit > 0 && filter.Limit < len(matched) {
-		matched = matched[:filter.Limit]
-	}
-
-	return matched, total
+	return paginateEvents(matched, filter)
 }
 
 // ListGroups returns summaries of all log groups.
@@ -331,8 +316,8 @@ func (s *Store) PruneOlderThan(cutoff time.Time) int {
 	return totalPruned
 }
 
-// GetAllLogEvents returns filtered events across ALL log groups, merged and sorted by timestamp.
-func (s *Store) GetAllLogEvents(filter *LogFilter) ([]LogEvent, int) {
+// GetAllLogEvents returns filtered events across ALL log groups in the requested order.
+func (s *Store) GetAllLogEvents(filter *LogFilter) ([]LogEvent, int, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -347,9 +332,6 @@ func (s *Store) GetAllLogEvents(filter *LogFilter) ([]LogEvent, int) {
 			idx := (start + i) % g.maxEvents
 			evt := g.events[idx]
 
-			if filter != nil && filter.Cursor != nil && !evt.Timestamp.After(*filter.Cursor) {
-				continue
-			}
 			if !matchesFilter(evt, filter) {
 				continue
 			}
@@ -365,19 +347,60 @@ func (s *Store) GetAllLogEvents(filter *LogFilter) ([]LogEvent, int) {
 		return all[i].Timestamp.Before(all[j].Timestamp)
 	})
 
-	total := len(all)
+	return paginateEvents(all, filter)
+}
+
+func paginateEvents(events []LogEvent, filter *LogFilter) ([]LogEvent, int, bool) {
+	total := len(events)
+	if total == 0 {
+		return nil, 0, false
+	}
+
+	order := "asc"
+	if filter != nil && strings.EqualFold(filter.Order, "desc") {
+		order = "desc"
+	}
+
+	paged := events
+	if filter != nil && filter.Cursor != nil {
+		cursor := *filter.Cursor
+		filtered := paged[:0]
+		for _, evt := range paged {
+			if order == "desc" {
+				if evt.Timestamp.Before(cursor) {
+					filtered = append(filtered, evt)
+				}
+				continue
+			}
+			if evt.Timestamp.After(cursor) {
+				filtered = append(filtered, evt)
+			}
+		}
+		paged = filtered
+	}
+
+	if order == "desc" {
+		reversed := make([]LogEvent, 0, len(paged))
+		for i := len(paged) - 1; i >= 0; i-- {
+			reversed = append(reversed, paged[i])
+		}
+		paged = reversed
+	}
 
 	if filter != nil && filter.Offset > 0 {
-		if filter.Offset >= len(all) {
-			return nil, total
+		if filter.Offset >= len(paged) {
+			return nil, total, false
 		}
-		all = all[filter.Offset:]
-	}
-	if filter != nil && filter.Limit > 0 && filter.Limit < len(all) {
-		all = all[:filter.Limit]
+		paged = paged[filter.Offset:]
 	}
 
-	return all, total
+	hasMore := false
+	if filter != nil && filter.Limit > 0 && filter.Limit < len(paged) {
+		hasMore = true
+		paged = paged[:filter.Limit]
+	}
+
+	return paged, total, hasMore
 }
 
 func matchesFilter(evt LogEvent, filter *LogFilter) bool {
