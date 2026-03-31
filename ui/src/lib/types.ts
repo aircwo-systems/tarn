@@ -229,6 +229,7 @@ export interface QueueSummary {
   approxStale: number;
   createdTimestamp: number;
   dlqName?: string;
+  maxReceiveCount?: number;
   tags?: Record<string, string>;
   tagCount: number;
   recentMessages?: QueueMessageSummary[];
