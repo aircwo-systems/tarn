@@ -14,7 +14,7 @@ Tarn emulates the following AWS services for local development and testing.
 | **SNS** | <span class="status-badge status-full">Full</span> | Topics, subscriptions, fanout to SQS/Lambda |
 | **DynamoDB** | <span class="status-badge status-partial">Partial</span> | Core table APIs, Query/Scan, secondary indexes, Streams |
 | **Secrets Manager** | <span class="status-badge status-full">Full</span> | CRUD, tagging, compatibility policy reads, Lambda extension |
-| **EventBridge** | <span class="status-badge status-partial">Partial</span> | Scheduled rules with Lambda targets only |
+| **EventBridge** | <span class="status-badge status-partial">Partial</span> | Scheduled rules, event-pattern rules, and `PutEvents` with Lambda targets |
 
 ## Service Guides
 
@@ -73,7 +73,7 @@ Pick a service below to get started:
 
 <a href="/services/eventbridge" class="service-card">
   <h3>EventBridge</h3>
-  <p>Scheduled rules. Rate and cron expressions with Lambda targets.</p>
+  <p>Scheduled rules and custom events. Rate/cron, event patterns, and Lambda targets.</p>
   <small>Partial Support</small>
 </a>
 
