@@ -128,6 +128,7 @@ func TestBucketNotificationConfig(t *testing.T) {
 	got := svc.GetBucketNotificationConfiguration("notif-bucket")
 	if got == nil {
 		t.Fatal("expected non-nil notification config")
+		return
 	}
 	if len(got.LambdaConfigurations) != 1 {
 		t.Fatalf("lambda configs len = %d, want 1", len(got.LambdaConfigurations))
@@ -170,6 +171,7 @@ func TestBucketNotificationConfigPersistence(t *testing.T) {
 	got := svc2.GetBucketNotificationConfiguration("persist-bucket")
 	if got == nil {
 		t.Fatal("expected notification config after reload")
+		return
 	}
 	if len(got.LambdaConfigurations) != 1 {
 		t.Fatalf("configs len = %d, want 1", len(got.LambdaConfigurations))
