@@ -28,6 +28,11 @@ func newTestHTTPHandler(t *testing.T) http.Handler {
 	t.Helper()
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
+	return newTestHTTPHandlerWithConfig(t, cfg)
+}
+
+func newTestHTTPHandlerWithConfig(t *testing.T, cfg *config.Config) http.Handler {
+	t.Helper()
 
 	store := lambda.NewStore(cfg)
 	if err := store.Init(); err != nil {
@@ -220,6 +225,51 @@ func TestEventBridgeProtocolDispatchSupportsNonRootPath(t *testing.T) {
 	}
 	if describeResp.State != types.EventBridgeRuleStateDisabled {
 		t.Fatalf("expected disabled state, got %q", describeResp.State)
+	}
+}
+
+func TestRootDispatchServesUIForBrowserRequests(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.UIEnabled = true
+
+	handler := newTestHTTPHandlerWithConfig(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("root ui status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(strings.ToLower(body), "<!doctype html>") {
+		t.Fatalf("expected html shell, got body=%q", body)
+	}
+	if contentType := rec.Header().Get("Content-Type"); !strings.Contains(contentType, "text/html") {
+		t.Fatalf("content type = %q, want text/html", contentType)
+	}
+}
+
+func TestRootDispatchKeepsS3ListBucketsForNonHTMLRequests(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.UIEnabled = true
+
+	handler := newTestHTTPHandlerWithConfig(t, cfg)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.Header.Set("Accept", "application/xml")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("root s3 status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "<ListAllMyBucketsResult") {
+		t.Fatalf("expected s3 xml response, got body=%q", body)
 	}
 }
 
