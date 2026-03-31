@@ -15,6 +15,7 @@ export interface TopologyCanvasPalette {
   chart5: string;
   blue: string;
   gateway: string;
+  dynamodb: string;
   externalPostgresql: string;
   externalMysql: string;
   externalRedis: string;
@@ -41,6 +42,7 @@ const FALLBACK_PALETTE: TopologyCanvasPalette = {
   chart5: "#60a5fa",
   blue: "#60a5fa",
   gateway: "#facc15",
+  dynamodb: "#ec4899",
   externalPostgresql: "#38bdf8",
   externalMysql: "#2dd4bf",
   externalRedis: "#f97316",
@@ -73,6 +75,7 @@ export function readTopologyCanvasPalette(): TopologyCanvasPalette {
     chart5: readVar(styles, "--color-chart-5", FALLBACK_PALETTE.chart5),
     blue: readVar(styles, "--color-blue", FALLBACK_PALETTE.blue),
     gateway: readVar(styles, "--topology-gateway", FALLBACK_PALETTE.gateway),
+    dynamodb: readVar(styles, "--topology-dynamodb", FALLBACK_PALETTE.dynamodb),
     externalPostgresql: readVar(styles, "--topology-external-postgresql", FALLBACK_PALETTE.externalPostgresql),
     externalMysql: readVar(styles, "--topology-external-mysql", FALLBACK_PALETTE.externalMysql),
     externalRedis: readVar(styles, "--topology-external-redis", FALLBACK_PALETTE.externalRedis),
@@ -95,6 +98,7 @@ function readVar(styles: CSSStyleDeclaration, name: string, fallback: string): s
 export function kindColor(kind: string, palette: TopologyCanvasPalette): string {
   switch (kind) {
     case "gateway":     return palette.gateway;
+    case "dynamodb":    return palette.dynamodb;
     case "eventbridge": return palette.blue;       // blue
     case "topic":       return "#a855f7";          // purple (hardcoded — chart vars are oklch green)
     case "queue":       return palette.warning;    // amber

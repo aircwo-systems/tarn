@@ -47,6 +47,11 @@
       matchesTopologyResourceFilter("queue", filters.tagFilter, q.tags),
     ),
   );
+  const dynamodbTables = $derived(
+    (dashboard.data?.dynamodbTables ?? []).filter(() =>
+      matchesTopologyResourceFilter("dynamodb", filters.tagFilter),
+    ),
+  );
   const topics = $derived(
     (dashboard.data?.topics ?? []).filter((t) =>
       matchesTopologyResourceFilter("topic", filters.tagFilter, t.tags),
@@ -111,6 +116,7 @@
     "eventbridge",
     "topic",
     "queue",
+    "dynamodb",
     "bucket",
     "function",
     "secret",
@@ -158,6 +164,14 @@
         case "queues":
         case "sqs":
           return { kind: "queue" };
+        case "dynamodb":
+        case "dynamo":
+        case "ddb":
+        case "table":
+        case "tables":
+        case "stream":
+        case "streams":
+          return { kind: "dynamodb" };
         case "lambda":
         case "lambdas":
         case "function":
@@ -258,6 +272,7 @@
     gateways.length +
       functions.length +
       queues.length +
+      dynamodbTables.length +
       topics.length +
       buckets.length +
       secrets.length +
@@ -559,6 +574,7 @@
             {gateways}
             {functions}
             {queues}
+            {dynamodbTables}
             {topics}
             {secrets}
             {buckets}
@@ -572,6 +588,7 @@
             {gateways}
             {functions}
             {queues}
+            {dynamodbTables}
             {topics}
             {secrets}
             {buckets}

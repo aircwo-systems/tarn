@@ -3,6 +3,7 @@
     GatewaySummary,
     FunctionSummary,
     QueueSummary,
+    DynamoDBTableSummary,
     TopicSummary,
     BucketSummary,
     SecretSummary,
@@ -26,6 +27,7 @@
     gateways = [],
     functions = [],
     queues = [],
+    dynamodbTables = [],
     topics = [],
     buckets = [],
     secrets = [],
@@ -53,6 +55,7 @@
     gateways?: GatewaySummary[];
     functions?: FunctionSummary[];
     queues?: QueueSummary[];
+    dynamodbTables?: DynamoDBTableSummary[];
     topics?: TopicSummary[];
     buckets?: BucketSummary[];
     secrets?: SecretSummary[];
@@ -83,6 +86,7 @@
       gateways,
       functions,
       queues,
+      dynamodbTables,
       topics,
       buckets,
       secrets,
@@ -149,6 +153,8 @@
         return "var(--topology-gateway)";
       case "queue":
         return "var(--color-chart-4)";
+      case "dynamodb":
+        return "var(--topology-dynamodb)";
       case "eventbridge":
         return "var(--color-chart-5, var(--color-primary))";
       case "topic":
