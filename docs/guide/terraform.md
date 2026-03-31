@@ -68,15 +68,3 @@ Stubbed actions are compatibility shims, not full implementations. They may succ
 | `apigateway` | API Gateway v1 | `http://localhost:4566` |
 
 IAM does not require an endpoint override — Tarn auto-stubs IAM actions via protocol detection (`Version=2010-05-08`).
-
-## Examples
-
-A small set of curated Terraform examples still lives in this repository under `examples/terraform/`.
-
-Useful starting points:
-
-- `examples/terraform/dynamodb-stream-lambda` — DynamoDB table with streams wired to Lambda
-- `examples/terraform/eventbridge-scheduled-lambda` — scheduled EventBridge rule targeting Lambda
-- `examples/terraform/apigw-sqs-fanout-secrets-s3-dlq` — larger multi-service integration flow
-
-See the [project roadmap](https://github.com/aircwo-systems/tarn/blob/develop-docs/ROADMAP.md) for planned Terraform compatibility work and SDK testing coverage.
