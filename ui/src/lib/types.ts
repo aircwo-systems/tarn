@@ -227,6 +227,7 @@ export interface QueueSummary {
   approxInFlight: number;
   approxDelayed: number;
   approxStale: number;
+  processedCount: number;
   createdTimestamp: number;
   dlqName?: string;
   maxReceiveCount?: number;
@@ -262,6 +263,7 @@ export interface QueueMessageSummary {
   state: "visible" | "inflight" | "delayed" | string;
   sentAt: number;
   receiveCount: number;
+  retryCount?: number;
 }
 
 export interface QueueMessagesResponse {

@@ -67,6 +67,71 @@ func TestQueueMessagesReturnsMessages(t *testing.T) {
 	}
 }
 
+func TestQueueMessagesReturnsDLQRetryCount(t *testing.T) {
+	h := newTestHandler(t)
+
+	dlq, err := h.sqs.CreateQueue("jobs-dlq", nil, nil)
+	if err != nil {
+		t.Fatalf("create dlq: %v", err)
+	}
+	redrivePolicy, err := json.Marshal(map[string]any{
+		"deadLetterTargetArn": dlq.QueueArn,
+		"maxReceiveCount":     2,
+	})
+	if err != nil {
+		t.Fatalf("marshal redrive policy: %v", err)
+	}
+	if _, err := h.sqs.CreateQueue("jobs", map[string]string{"RedrivePolicy": string(redrivePolicy)}, nil); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+	if _, err := h.sqs.SendMessage("jobs", "poison", 0, nil, "", ""); err != nil {
+		t.Fatalf("send message: %v", err)
+	}
+
+	var msg *types.SQSMessage
+	for i := 0; i < 2; i++ {
+		msgs, err := h.sqs.ReceiveMessage("jobs", 1, 0, 0)
+		if err != nil {
+			t.Fatalf("receive #%d: %v", i+1, err)
+		}
+		if len(msgs) != 1 {
+			t.Fatalf("receive #%d len = %d, want 1", i+1, len(msgs))
+		}
+		msg = msgs[0]
+	}
+
+	moved, _, err := h.sqs.MoveToDLQIfExceeded("jobs", msg)
+	if err != nil {
+		t.Fatalf("move to dlq: %v", err)
+	}
+	if !moved {
+		t.Fatalf("expected message to move to dlq")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/queues/jobs-dlq/messages?limit=10", nil)
+	req.SetPathValue("name", "jobs-dlq")
+	rec := httptest.NewRecorder()
+
+	h.QueueMessages(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var payload struct {
+		Messages []queueMessage `json:"messages"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.Messages) != 1 {
+		t.Fatalf("messages len = %d, want 1", len(payload.Messages))
+	}
+	if payload.Messages[0].RetryCount != 2 {
+		t.Fatalf("retry count = %d, want 2", payload.Messages[0].RetryCount)
+	}
+}
+
 func TestQueueMessagesInvalidLimit(t *testing.T) {
 	h := newTestHandler(t)
 
@@ -258,6 +323,38 @@ func TestOverviewIncludesResourceTags(t *testing.T) {
 	}
 	if payload.Secrets[0].Tags["feature"] != "r10" || payload.Secrets[0].TagCount != 1 {
 		t.Fatalf("unexpected secret tags: %+v", payload.Secrets[0])
+	}
+}
+
+func TestOverviewIncludesQueueProcessedCount(t *testing.T) {
+	h := newTestHandler(t)
+
+	if _, err := h.sqs.CreateQueue("jobs", nil, nil); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+	if err := h.sqs.IncrementProcessedCount("jobs", 1); err != nil {
+		t.Fatalf("increment processed count: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
+	rec := httptest.NewRecorder()
+	h.Overview(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var payload struct {
+		Queues []queueSummary `json:"queues"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.Queues) != 1 {
+		t.Fatalf("queues len = %d, want 1", len(payload.Queues))
+	}
+	if payload.Queues[0].ProcessedCount != 1 {
+		t.Fatalf("processed count = %d, want 1", payload.Queues[0].ProcessedCount)
 	}
 }
 
