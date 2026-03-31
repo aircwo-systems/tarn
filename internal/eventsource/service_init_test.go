@@ -46,7 +46,7 @@ func TestServiceInitDedupesMappings(t *testing.T) {
 		t.Fatalf("save newer: %v", err)
 	}
 
-	svc := NewService(cfg, store, nil, nil)
+	svc := NewService(cfg, store, nil, nil, nil)
 	if err := svc.Init(); err != nil {
 		t.Fatalf("service init: %v", err)
 	}

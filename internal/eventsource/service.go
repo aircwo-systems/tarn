@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/aircwo-systems/tarn/internal/config"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	"github.com/google/uuid"
 )
 
 // Service manages event source mappings and their background pollers.
@@ -19,6 +19,7 @@ type Service struct {
 	store      *Store
 	lambda     LambdaInterface
 	sqs        SQSInterface
+	streams    StreamInterface
 	traceStore *tracesvc.Store
 	collector  *tracesvc.Collector
 	mu         sync.Mutex
@@ -27,12 +28,13 @@ type Service struct {
 }
 
 // NewService creates a new event source mapping service.
-func NewService(cfg *config.Config, store *Store, lambdaSvc LambdaInterface, sqsSvc SQSInterface) *Service {
+func NewService(cfg *config.Config, store *Store, lambdaSvc LambdaInterface, sqsSvc SQSInterface, streamsSvc StreamInterface) *Service {
 	return &Service{
 		cfg:     cfg,
 		store:   store,
 		lambda:  lambdaSvc,
 		sqs:     sqsSvc,
+		streams: streamsSvc,
 		pollers: make(map[string]*poller),
 		done:    make(chan struct{}),
 	}
@@ -126,7 +128,7 @@ func (s *Service) Start() {
 		if !m.Enabled || m.State != "Enabled" {
 			continue
 		}
-		p := newPoller(m, s.sqs, s.lambda, s.store, s.traceStore, s.collector)
+		p := newPoller(m, s.sqs, s.streams, s.lambda, s.store, s.traceStore, s.collector)
 		p.start()
 		s.pollers[m.UUID] = p
 	}
@@ -147,7 +149,7 @@ func (s *Service) Stop() {
 
 // CreateMapping creates and starts a new event source mapping.
 func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string, batchSize, maxBatchingWindow int, enabled bool, filterCriteria *types.FilterCriteria) (*types.EventSourceMapping, error) {
-	queueName, err := parseQueueNameFromArn(eventSourceArn)
+	sourceType, sourceName, err := parseSourceFromArn(eventSourceArn)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +190,9 @@ func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string
 		updated := *existing
 		updated.FunctionArn = functionArn
 		updated.FunctionName = normalizedFunctionName
-		updated.QueueName = queueName
+		updated.SourceType = sourceType
+		updated.SourceName = sourceName
+		updated.QueueName = sourceName
 		updated.BatchSize = batchSize
 		updated.MaximumBatchingWindowInSeconds = maxBatchingWindow
 		updated.Enabled = enabled
@@ -206,8 +210,8 @@ func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string
 
 		// Reconcile poller state with updated mapping config.
 		s.mu.Lock()
-		if updated.Enabled && s.sqs != nil && s.lambda != nil {
-			p := newPoller(&updated, s.sqs, s.lambda, s.store, s.traceStore, s.collector)
+		if updated.Enabled && s.lambda != nil && sourceReady(&updated, s.sqs, s.streams) {
+			p := newPoller(&updated, s.sqs, s.streams, s.lambda, s.store, s.traceStore, s.collector)
 			p.start()
 			s.pollers[updated.UUID] = p
 		}
@@ -227,7 +231,9 @@ func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string
 		EventSourceArn:                 eventSourceArn,
 		FunctionArn:                    functionArn,
 		FunctionName:                   normalizedFunctionName,
-		QueueName:                      queueName,
+		SourceType:                     sourceType,
+		SourceName:                     sourceName,
+		QueueName:                      sourceName,
 		BatchSize:                      batchSize,
 		MaximumBatchingWindowInSeconds: maxBatchingWindow,
 		Enabled:                        enabled,
@@ -327,8 +333,8 @@ func (s *Service) UpdateMapping(uuid string, batchSize *int, maxBatchingWindow *
 		p.stop()
 		delete(s.pollers, uuid)
 	}
-	if mapping.Enabled && s.sqs != nil && s.lambda != nil {
-		p := newPoller(mapping, s.sqs, s.lambda, s.store, s.traceStore, s.collector)
+	if mapping.Enabled && s.lambda != nil && sourceReady(mapping, s.sqs, s.streams) {
+		p := newPoller(mapping, s.sqs, s.streams, s.lambda, s.store, s.traceStore, s.collector)
 		p.start()
 		s.pollers[uuid] = p
 	}
@@ -350,26 +356,60 @@ func (s *Service) DeleteMapping(uuid string) error {
 }
 
 func (s *Service) startPoller(mapping *types.EventSourceMapping) {
-	if s.sqs == nil || s.lambda == nil {
+	if s.lambda == nil || !sourceReady(mapping, s.sqs, s.streams) {
 		return
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	p := newPoller(mapping, s.sqs, s.lambda, s.store, s.traceStore, s.collector)
+	p := newPoller(mapping, s.sqs, s.streams, s.lambda, s.store, s.traceStore, s.collector)
 	p.start()
 	s.pollers[mapping.UUID] = p
 }
 
-// parseQueueNameFromArn extracts queue name from arn:aws:sqs:{region}:{account}:{queueName}
-func parseQueueNameFromArn(arn string) (string, error) {
-	if !strings.HasPrefix(arn, "arn:aws:sqs:") {
-		return "", fmt.Errorf("invalid SQS ARN: %s", arn)
+func parseSourceFromArn(arn string) (string, string, error) {
+	switch {
+	case strings.HasPrefix(arn, "arn:aws:sqs:"):
+		parts := strings.Split(arn, ":")
+		if len(parts) < 6 || parts[5] == "" {
+			return "", "", fmt.Errorf("invalid SQS ARN: %s", arn)
+		}
+		return "sqs", parts[5], nil
+	case strings.HasPrefix(arn, "arn:aws:dynamodb:") && strings.Contains(arn, "/stream/"):
+		parts := strings.Split(arn, ":")
+		if len(parts) < 6 || parts[5] == "" {
+			return "", "", fmt.Errorf("invalid DynamoDB stream ARN: %s", arn)
+		}
+		resource := parts[5]
+		resourceParts := strings.Split(resource, "/")
+		if len(resourceParts) < 2 || resourceParts[0] != "table" {
+			return "", "", fmt.Errorf("invalid DynamoDB stream ARN: %s", arn)
+		}
+		return "dynamodb-stream", resourceParts[1], nil
+	default:
+		return "", "", fmt.Errorf("unsupported event source ARN: %s", arn)
 	}
-	parts := strings.Split(arn, ":")
-	if len(parts) < 6 || parts[5] == "" {
-		return "", fmt.Errorf("invalid SQS ARN: %s", arn)
+}
+
+func sourceReady(mapping *types.EventSourceMapping, sqsSvc SQSInterface, streamsSvc StreamInterface) bool {
+	switch normalizeSourceType(mapping) {
+	case "dynamodb-stream":
+		return streamsSvc != nil
+	default:
+		return sqsSvc != nil
 	}
-	return parts[5], nil
+}
+
+func normalizeSourceType(mapping *types.EventSourceMapping) string {
+	if mapping == nil {
+		return "sqs"
+	}
+	if strings.TrimSpace(mapping.SourceType) != "" {
+		return strings.TrimSpace(mapping.SourceType)
+	}
+	if strings.HasPrefix(mapping.EventSourceArn, "arn:aws:dynamodb:") {
+		return "dynamodb-stream"
+	}
+	return "sqs"
 }

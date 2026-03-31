@@ -19,6 +19,7 @@ import (
 	"github.com/aircwo-systems/tarn/internal/apigateway"
 	"github.com/aircwo-systems/tarn/internal/apigatewayv1"
 	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/internal/dynamodb"
 	"github.com/aircwo-systems/tarn/internal/engine"
 	"github.com/aircwo-systems/tarn/internal/eventbridge"
 	"github.com/aircwo-systems/tarn/internal/eventsource"
@@ -158,6 +159,12 @@ func startServer(cfg *config.Config) error {
 		return fmt.Errorf("failed to initialize secrets store: %w", err)
 	}
 
+	// Initialize DynamoDB service
+	dynamoSvc := dynamodb.NewService(cfg)
+	if err := dynamoSvc.Init(); err != nil {
+		return fmt.Errorf("failed to initialize dynamodb store: %w", err)
+	}
+
 	// Initialize SNS service
 	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
 	if err := snsSvc.Init(); err != nil {
@@ -199,7 +206,7 @@ func startServer(cfg *config.Config) error {
 
 	// Initialize event source mapping service
 	esmStore := eventsource.NewStore(cfg)
-	esmSvc := eventsource.NewService(cfg, esmStore, lambdaSvc, sqsSvc)
+	esmSvc := eventsource.NewService(cfg, esmStore, lambdaSvc, sqsSvc, dynamoSvc)
 	if err := esmSvc.Init(); err != nil {
 		return fmt.Errorf("failed to initialize event source store: %w", err)
 	}
@@ -340,7 +347,7 @@ func startServer(cfg *config.Config) error {
 	}
 
 	// Create and start API server
-	server := api.NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, secretsSvc, infraSvc, s3Svc, esmSvc, eventbridgeSvc, traceStore, collector)
+	server := api.NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, eventbridgeSvc, traceStore, collector)
 
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)

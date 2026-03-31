@@ -255,6 +255,16 @@ func (c *Config) EventBridgeStatePath() string {
 	return filepath.Join(c.EventBridgeDir(), "state.json")
 }
 
+// DynamoDBDir returns the path where DynamoDB state is stored.
+func (c *Config) DynamoDBDir() string {
+	return filepath.Join(c.DataDir, "dynamodb")
+}
+
+// DynamoDBStatePath returns the state snapshot path for DynamoDB resources.
+func (c *Config) DynamoDBStatePath() string {
+	return filepath.Join(c.DynamoDBDir(), "state.json")
+}
+
 // Endpoint returns the full API endpoint URL.
 // Unspecified/wildcard bind addresses are normalised to 127.0.0.1 so that
 // generated URLs (queue URLs, API endpoints, invoke URLs) are routable.
