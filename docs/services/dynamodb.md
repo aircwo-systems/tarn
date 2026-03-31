@@ -13,12 +13,24 @@ Managed NoSQL tables with DynamoDB Streams support.
 | DescribeTable | Supported | Includes key schema, indexes, and stream metadata |
 | ListTables | Supported | |
 | UpdateTable | Supported | Stream configuration updates are applied immediately |
+| TagResource | Supported | Table tags are persisted and queryable |
+| UntagResource | Supported | |
+| ListTagsOfResource | Supported | |
 | PutItem | Supported | Conditional writes and return values |
 | GetItem | Supported | `ConsistentRead` accepted as a no-op |
 | UpdateItem | Supported | `SET`, `REMOVE`, `ADD`, `DELETE` update clauses |
 | DeleteItem | Supported | Conditional delete and return values |
 | Scan | Supported | Filters, projection, pagination, index scan |
 | Query | Supported | Table, LSI, and GSI query paths |
+| DescribeTimeToLive | Supported | Compatibility response only |
+| UpdateTimeToLive | Supported | Compatibility response only |
+| DescribeContinuousBackups | Supported | Compatibility response only |
+| UpdateContinuousBackups | Supported | Compatibility response only |
+| DescribeContributorInsights | Supported | Compatibility response only |
+| UpdateContributorInsights | Supported | Compatibility response only |
+| DescribeKinesisStreamingDestination | Supported | Compatibility response only |
+| EnableKinesisStreamingDestination | Supported | Compatibility response only |
+| DisableKinesisStreamingDestination | Supported | Compatibility response only |
 | ListStreams | Supported | One logical shard per stream |
 | DescribeStream | Supported | Stream ARN and shard metadata |
 | GetShardIterator | Supported | `TRIM_HORIZON`, `LATEST`, `AT_SEQUENCE_NUMBER`, `AFTER_SEQUENCE_NUMBER` |
@@ -126,3 +138,4 @@ provider "aws" {
 - No transactions, batch APIs, TTL, backups, restore, global tables, or PartiQL
 - Table status transitions are synchronous; throughput settings are stored but not enforced
 - `UpdateTable` support is limited to stream configuration changes
+- TTL, backups, contributor insights, and Kinesis streaming destination APIs are present for compatibility but do not emulate the full AWS feature behavior

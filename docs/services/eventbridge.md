@@ -2,21 +2,24 @@
 
 Scheduled and event-driven workflows.
 
-<span class="status-badge status-partial">Partial Support</span> — Scheduled rules only
+<span class="status-badge status-partial">Partial Support</span> — Scheduled rules, event-pattern rules, `PutEvents`, and Lambda targets
 
 ## Supported Operations
 
 | Operation | Status | Notes |
 |-----------|--------|-------|
-| PutRule | Supported | Scheduled rules (rate/cron) only |
+| PutRule | Supported | Scheduled rules or event-pattern rules |
 | DescribeRule | Supported | |
 | ListRules | Supported | |
 | DeleteRule | Supported | |
 | EnableRule | Supported | |
 | DisableRule | Supported | |
-| PutTargets | Supported | Lambda targets only |
+| PutTargets | Supported | Lambda targets only; `Input`, `InputPath`, and `InputTransformer` are supported |
 | RemoveTargets | Supported | |
 | ListTargetsByRule | Supported | |
+| ListRuleNamesByTarget | Supported | |
+| PutEvents | Supported | Matches enabled event-pattern rules on the default bus |
+| ListTagsForResource | Supported | |
 | TagResource | Supported | |
 | UntagResource | Supported | |
 
@@ -110,11 +113,49 @@ resource "aws_lambda_permission" "allow_eventbridge" {
 ```
 </div>
 
+### Custom Events with Event Patterns
+
+<div class="example-block">
+<div class="lang">JavaScript (AWS SDK)</div>
+
+```javascript
+import {
+  EventBridgeClient,
+  PutEventsCommand,
+  PutRuleCommand,
+  PutTargetsCommand,
+} from "@aws-sdk/client-eventbridge";
+
+const events = new EventBridgeClient({ endpoint: "http://127.0.0.1:4566" });
+
+await events.send(new PutRuleCommand({
+  Name: "order-created",
+  EventPattern: JSON.stringify({
+    source: ["app.orders"],
+    "detail-type": ["OrderCreated"]
+  }),
+  State: "ENABLED"
+}));
+
+await events.send(new PutTargetsCommand({
+  Rule: "order-created",
+  Targets: [{ Id: "1", Arn: "arn:aws:lambda:us-east-1:000000000000:function:process-order" }]
+}));
+
+await events.send(new PutEventsCommand({
+  Entries: [
+    {
+      Source: "app.orders",
+      DetailType: "OrderCreated",
+      Detail: JSON.stringify({ orderId: "ord_123" })
+    }
+  ]
+}));
+```
+</div>
+
 ## Known Limitations
 
-- **Event patterns not supported** — Only scheduled rules work
-- No `PutEvents` (custom events)
-- No input transformers
 - No dead letter queues
 - No SQS or SNS targets
 - Default event bus only

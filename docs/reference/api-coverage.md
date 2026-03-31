@@ -1,6 +1,6 @@
 # API Coverage
 
-Tarn implements **180+ AWS API actions** across 11 services, with service-specific compatibility fallbacks to keep Terraform and SDK workflows moving when optional APIs are probed.
+Tarn implements **200+ AWS API actions** across 11 services, with service-specific compatibility fallbacks to keep Terraform and SDK workflows moving when optional APIs are probed.
 
 ## Coverage Matrix
 
@@ -10,9 +10,9 @@ Tarn implements **180+ AWS API actions** across 11 services, with service-specif
 | **SQS** | Query + JSON | 16 | `sqs` |
 | **Lambda** | REST/JSON | 30 | `lambda` |
 | **S3** | REST/XML | 30+ | `s3` |
-| **DynamoDB** | JSON | 15 | `dynamodb` |
+| **DynamoDB** | JSON | 27 | `dynamodb` |
 | **Secrets Manager** | JSON-RPC | 10 | `secretsmanager` |
-| **EventBridge** | JSON | 13 | `events` |
+| **EventBridge** | JSON | 14 | `events` |
 | **API Gateway v2** | REST/JSON | 18 | `apigatewayv2` |
 | **API Gateway v1** | REST/JSON | 19 | `apigateway` |
 | **IAM** | Query/XML | 17 | default |
