@@ -6,9 +6,11 @@
   import SectionHeader from "./section-header.svelte";
 
   let {
+    initialTraceId = "",
     sidebarCollapsed = false,
     onToggleSidebar = () => {},
   }: {
+    initialTraceId?: string;
     sidebarCollapsed?: boolean;
     onToggleSidebar?: () => void;
   } = $props();
@@ -49,6 +51,18 @@
   $effect(() => {
     if (raceSessionFilter && !raceSessions.includes(raceSessionFilter)) {
       raceSessionFilter = "";
+    }
+  });
+
+  $effect(() => {
+    if (!initialTraceId) return;
+    const matched =
+      traceFlows.find((trace) => trace.id === initialTraceId) ??
+      traceFlows.find((trace) =>
+        trace.rawTraces.some((rawTrace) => rawTrace.id === initialTraceId),
+      );
+    if (matched) {
+      selectedTraceId = matched.id;
     }
   });
 
@@ -483,7 +497,8 @@
       {sidebarCollapsed}
       {onToggleSidebar}
     >
-      {#snippet stats()}
+      {#snippet actions()}
+        <div class="flex flex-wrap items-center gap-4 text-xs font-mono text-muted-foreground">
         <span class="text-muted-foreground/70"
           >{traceFlows.length} flow{traceFlows.length !== 1 ? "s" : ""}</span
         >
@@ -502,6 +517,7 @@
         {#if p95Ms > 0}
           <span class="text-muted-foreground/70">p95 {formatMs(p95Ms)}</span>
         {/if}
+        </div>
       {/snippet}
     </SectionHeader>
 

@@ -74,21 +74,35 @@
   let activeTab = $state("overview");
   let logsInitialGroup = $state("");
   let logsInitialTimestamp = $state("");
+  let xrayInitialTraceId = $state("");
 
   function readHash() {
     const raw = window.location.hash.replace("#", "");
     const [tab, qs] = raw.split("?");
     if (validTabs.includes(tab)) activeTab = tab;
+    logsInitialGroup = "";
+    logsInitialTimestamp = "";
+    xrayInitialTraceId = "";
     if (tab === "logs" && qs) {
       const params = new URLSearchParams(qs);
       logsInitialGroup = params.get("group") ?? "";
       logsInitialTimestamp = params.get("ts") ?? "";
+    }
+    if (tab === "xray" && qs) {
+      const params = new URLSearchParams(qs);
+      xrayInitialTraceId = params.get("trace") ?? "";
     }
   }
 
   function setTab(tab: string) {
     activeTab = tab;
     window.location.hash = tab;
+  }
+
+  function openTrace(traceId: string) {
+    activeTab = "xray";
+    xrayInitialTraceId = traceId;
+    window.location.hash = `xray?trace=${encodeURIComponent(traceId)}`;
   }
 
   onMount(() => {
@@ -1146,9 +1160,11 @@
               {:else}
                 {#each recentTraces.slice(0, 25) as trace (trace.id)}
                   {@const segs = chainSegs(trace)}
-                  <div
-                    class="grid cursor-pointer items-center gap-2 border-b border-border/50 py-2 transition-colors hover:bg-white/[0.02]"
+                  <button
+                    type="button"
+                    class="grid w-full cursor-pointer items-center gap-2 border-b border-border/50 py-2 text-left transition-colors hover:bg-white/[0.02]"
                     style="grid-template-columns:6px 30px 1fr auto"
+                    onclick={() => openTrace(trace.id)}
                   >
                     <!-- Status dot -->
                     <span
@@ -1205,7 +1221,7 @@
                         {timeAgo(trace.startedAt)}
                       </div>
                     </div>
-                  </div>
+                  </button>
                 {/each}
               {/if}
             </div>
@@ -1270,6 +1286,7 @@
       />
     {:else if activeTab === "xray"}
       <XraySection
+        initialTraceId={xrayInitialTraceId}
         {sidebarCollapsed}
         onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
       />

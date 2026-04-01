@@ -1,4 +1,4 @@
-export function formatJSONOrNull(value: string): string | null {
+function formatJSONOrNull(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return null;
 

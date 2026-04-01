@@ -139,6 +139,9 @@
       console.error("Failed to copy SNS filter", error);
     }
   }
+
+  const lineTabTriggerClass =
+    "rounded-none border-0 bg-transparent px-0 shadow-none data-active:border-transparent dark:data-active:border-transparent data-active:bg-transparent dark:data-active:bg-transparent";
 </script>
 
 <div class="flex min-h-full flex-col gap-4">
@@ -149,7 +152,8 @@
     {sidebarCollapsed}
     {onToggleSidebar}
   >
-    {#snippet stats()}
+    {#snippet actions()}
+      <div class="flex flex-wrap items-center gap-4 text-xs font-mono text-muted-foreground">
       <span class="inline-flex items-center gap-1.5">
         <span class="font-mono text-foreground">{topics.length}</span>
         <span class="text-muted-foreground/70">topics</span>
@@ -170,12 +174,16 @@
         <span class="font-mono text-foreground">{sqsSubscriptions}</span>
         <span class="text-muted-foreground/70">sqs targets</span>
       </span>
+      </div>
     {/snippet}
   </SectionHeader>
 
   {#if dashboard.loading && !dashboard.data}
-    <div class="overflow-hidden rounded-lg border border-border/70 bg-background/50">
-      <div class="grid gap-0 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
+    <div
+      class="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/70 bg-background/50"
+      style="height: calc(100vh - 10rem);"
+    >
+      <div class="grid h-full gap-0 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
         <div class="space-y-2 border-b border-border/70 p-4 xl:border-b-0 xl:border-r">
           {#each Array(7) as _, index (index)}
             <Skeleton class="h-12 w-full" />
@@ -189,32 +197,38 @@
       </div>
     </div>
   {:else if topics.length === 0 && subscriptions.length === 0}
-    <div class="flex min-h-[18rem] items-center justify-center rounded-lg border border-border/70 bg-background/50">
+    <div
+      class="flex min-h-0 flex-1 items-center justify-center rounded-lg border border-border/70 bg-background/50"
+      style="height: calc(100vh - 10rem);"
+    >
       <EmptyState icon={BellIcon} message="No SNS topics or subscriptions created yet." />
     </div>
   {:else}
-    <div class="overflow-hidden rounded-lg border border-border/70 bg-background/50">
-      <div class="grid gap-0 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
-        <div class="min-h-0 xl:border-r xl:border-border/70">
-          <Tabs bind:value={activeTab} class="min-h-0 gap-0">
+    <div
+      class="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/70 bg-background/50"
+      style="height: calc(100vh - 10rem);"
+    >
+      <div class="grid h-full gap-0 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
+        <div class="flex min-h-0 flex-col xl:border-r xl:border-border/70">
+          <Tabs bind:value={activeTab} class="flex min-h-0 flex-1 flex-col gap-0">
             <div class="flex flex-wrap items-end justify-between gap-4 border-b border-border/70 px-4 py-4">
               <div>
                 <p class="text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">SNS</p>
                 <p class="mt-1 text-sm text-foreground">Browse topics and subscriptions, then inspect details on the right.</p>
               </div>
-              <TabsList variant="line" class="shrink-0">
-                <TabsTrigger value="topics">Topics</TabsTrigger>
-                <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
+              <TabsList variant="line" class="shrink-0 gap-3">
+                <TabsTrigger value="topics" class={lineTabTriggerClass}>Topics</TabsTrigger>
+                <TabsTrigger value="subscriptions" class={lineTabTriggerClass}>Subscriptions</TabsTrigger>
               </TabsList>
             </div>
 
-            <TabsContent value="topics" class="min-h-0">
+            <TabsContent value="topics" class="min-h-0 flex-1">
               {#if topics.length === 0}
                 <div class="flex min-h-[18rem] items-center justify-center">
                   <EmptyState icon={BellIcon} message="No SNS topics created yet." />
                 </div>
               {:else}
-                <div class="overflow-auto">
+                <div class="min-h-0 flex-1 overflow-auto">
                   <Table>
                     <TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur [&_th]:bg-background/95">
                       <TableRow class="hover:bg-transparent">
@@ -258,13 +272,13 @@
               {/if}
             </TabsContent>
 
-            <TabsContent value="subscriptions" class="min-h-0">
+            <TabsContent value="subscriptions" class="min-h-0 flex-1">
               {#if subscriptions.length === 0}
                 <div class="flex min-h-[18rem] items-center justify-center">
                   <EmptyState icon={BellIcon} message="No subscriptions configured yet." />
                 </div>
               {:else}
-                <div class="overflow-auto">
+                <div class="min-h-0 flex-1 overflow-auto">
                   <Table>
                     <TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur [&_th]:bg-background/95">
                       <TableRow class="hover:bg-transparent">
@@ -314,7 +328,7 @@
           </Tabs>
         </div>
 
-        <div class="min-h-0 bg-background/35">
+        <div class="flex min-h-0 flex-col bg-background/35">
           {#if activeTab === "topics"}
             <div class="border-b border-border/70 px-4 py-4">
               <p class="text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Selected Topic</p>
@@ -401,7 +415,7 @@
               {/if}
             </div>
 
-            <div class="px-4 py-4">
+            <div class="flex min-h-0 flex-1 flex-col px-4 py-4">
               <div class="flex items-center justify-between gap-4">
                 <div>
                   <p class="text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Filter Policy</p>
@@ -413,9 +427,9 @@
                 </div>
                 {#if selectedSubscription?.filterPolicy}
                   <Tabs bind:value={selectedFilterView} class="gap-0">
-                    <TabsList variant="line" class="shrink-0">
-                      <TabsTrigger value="formatted">Formatted</TabsTrigger>
-                      <TabsTrigger value="raw">Raw</TabsTrigger>
+                    <TabsList variant="line" class="shrink-0 gap-3">
+                      <TabsTrigger value="formatted" class={lineTabTriggerClass}>Formatted</TabsTrigger>
+                      <TabsTrigger value="raw" class={lineTabTriggerClass}>Raw</TabsTrigger>
                     </TabsList>
                   </Tabs>
                 {/if}
@@ -430,7 +444,7 @@
                   <EmptyState icon={BellIcon} message="No filter policy configured on this subscription." />
                 </div>
               {:else}
-                <div class="group relative mt-4 rounded-md border border-border overflow-hidden">
+                <div class="group relative mt-4 min-h-0 flex-1 overflow-hidden rounded-md border border-border">
                   <button
                     type="button"
                     class="absolute right-2 top-2 z-10 inline-flex h-8 items-center gap-1.5 rounded-md border border-border/80 bg-background/90 px-2 text-[11px] text-muted-foreground opacity-0 shadow-sm backdrop-blur-sm transition-all duration-200 hover:bg-background-subtle hover:text-foreground group-hover:opacity-100 focus-visible:opacity-100"
@@ -455,18 +469,18 @@
                   {#if selectedFilterView === "formatted"}
                     {#if selectedFilter}
                       <pre
-                        class="max-h-[24rem] overflow-y-auto bg-[var(--code-bg)] px-3 py-3 font-mono text-[11px] text-foreground leading-relaxed whitespace-pre-wrap break-all"
+                        class="h-full overflow-y-auto bg-[var(--code-bg)] px-3 py-3 font-mono text-[11px] text-foreground leading-relaxed whitespace-pre-wrap break-all"
                         >{@html selectedFilter.formattedHtml}</pre
                       >
                     {:else}
                       <pre
-                        class="max-h-[24rem] overflow-y-auto bg-[var(--code-bg)] px-3 py-3 font-mono text-[11px] text-muted-foreground leading-relaxed whitespace-pre-wrap break-all"
+                        class="h-full overflow-y-auto bg-[var(--code-bg)] px-3 py-3 font-mono text-[11px] text-muted-foreground leading-relaxed whitespace-pre-wrap break-all"
                         >{selectedSubscription.filterPolicy}</pre
                       >
                     {/if}
                   {:else}
                     <pre
-                      class="max-h-[24rem] overflow-y-auto bg-[var(--code-bg)] px-3 py-3 font-mono text-[11px] text-muted-foreground leading-relaxed whitespace-pre-wrap break-all"
+                      class="h-full overflow-y-auto bg-[var(--code-bg)] px-3 py-3 font-mono text-[11px] text-muted-foreground leading-relaxed whitespace-pre-wrap break-all"
                       >{selectedSubscription.filterPolicy}</pre
                     >
                   {/if}
