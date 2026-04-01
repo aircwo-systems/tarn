@@ -335,7 +335,7 @@
   }
 </script>
 
-<div class="space-y-4">
+<div class="flex min-h-full flex-col gap-4">
   <section>
     <SectionHeader
       title="EventBridge rules"
@@ -391,7 +391,10 @@
     {/if}
   </section>
 
-  <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]">
+  <div
+    class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_26rem]"
+    style="height: calc(100vh - 12rem);"
+  >
     <div class="min-h-0 overflow-hidden rounded-lg border border-border/70 bg-background/60">
       {#if dashboard.loading && !dashboard.data}
         <div class="space-y-2 p-3">
@@ -495,8 +498,8 @@
     </div>
 
     {#if selectedRule}
-      <section class="rounded-lg border border-border bg-card p-3 space-y-3">
-        <div class="space-y-1 border-b border-border pb-2">
+      <section class="flex h-full min-h-0 flex-col rounded-lg border border-border/70 bg-background/60">
+        <div class="space-y-1 border-b border-border px-4 py-4">
           <h3 class="text-sm font-semibold text-foreground">
             {selectedRule.name}
           </h3>
@@ -505,7 +508,7 @@
           </p>
         </div>
 
-        <div class="space-y-2">
+        <div class="space-y-2 border-b border-border px-4 py-4">
           <label
             for="eventbridge-edit-schedule"
             class="block text-[11px] text-muted-foreground"
@@ -557,9 +560,9 @@
           </div>
         </div>
 
-        <div class="rounded-md border border-border p-2 space-y-2">
+        <div class="min-h-0 space-y-2 px-4 py-4">
           <div class="flex items-center justify-between">
-            <h4 class="text-xs font-semibold text-foreground">Targets</h4>
+            <h4 class="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground/70">Targets</h4>
             <span class="text-[11px] font-mono text-muted-foreground">
               {selectedRule.targets?.length ?? 0} total
             </span>
@@ -610,7 +613,7 @@
 
           {#if (selectedRule.targets?.length ?? 0) > 0}
             <div
-              class="max-h-56 overflow-y-auto rounded border border-border/60"
+              class="max-h-56 overflow-y-auto rounded-md border border-border bg-background-subtle/70"
             >
               {#each selectedRule.targets ?? [] as target (target.id)}
                 <label
@@ -665,7 +668,7 @@
       </section>
     {:else}
       <section
-        class="rounded-lg border border-border bg-card flex min-h-56 items-center justify-center px-4 py-6 text-center text-sm text-muted-foreground"
+        class="flex h-full min-h-0 items-center justify-center rounded-lg border border-border/70 bg-background/60 px-4 py-6 text-center text-sm text-muted-foreground"
       >
         Select a rule to edit schedule, targets, and run manual fires.
       </section>

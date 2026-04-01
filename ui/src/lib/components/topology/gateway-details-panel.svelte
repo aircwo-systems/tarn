@@ -104,7 +104,7 @@
 </script>
 
 <section
-  class="flex flex-col rounded-lg border border-border bg-card overflow-hidden"
+  class="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background/60"
 >
   <!-- Header -->
   <div
@@ -135,7 +135,7 @@
       <button
         type="button"
         onclick={() => onClose?.()}
-        class="ml-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-popover hover:text-foreground"
+        class="ml-2 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background-subtle hover:text-foreground"
         aria-label="Close gateway panel"
       >
         <XIcon size={14} />
@@ -145,7 +145,7 @@
 
   <!-- Invoke URL bar -->
   <div
-    class="flex items-center gap-2 border-b border-border bg-background px-3 py-2 shrink-0"
+    class="flex items-center gap-2 border-b border-border px-3 py-2 shrink-0"
   >
     <span
       class="font-mono text-[10px] uppercase tracking-wide text-muted-foreground/70 shrink-0"
@@ -186,7 +186,7 @@
           ? parseTarget(detail.integrationTarget)
           : null}
         <div
-          class="rounded-md border border-border bg-popover/60 overflow-hidden"
+          class="overflow-hidden rounded-md border border-border bg-background-subtle/70"
         >
           <!-- Route row: method · path · integration type -->
           <div class="flex items-center gap-2 px-2.5 py-2">
@@ -214,7 +214,7 @@
               class="flex items-center gap-2 border-t border-border/60 px-2.5 py-1.5"
             >
               <span
-                class="rounded border border-border bg-card px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground shrink-0"
+                class="shrink-0 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground"
               >
                 {target.kind}
               </span>
@@ -229,7 +229,7 @@
             {#each Object.entries(detail.requestTemplates!) as [contentType, template] (contentType)}
               <div class="border-t border-border/60 overflow-hidden">
                 <div
-                  class="flex items-center justify-between bg-background px-2.5 py-1 border-b border-border/40"
+                  class="flex items-center justify-between border-b border-border/40 px-2.5 py-1"
                 >
                   <span class="font-mono text-[10px] text-muted-foreground/70"
                     >{contentType}</span
@@ -240,7 +240,7 @@
                   >
                 </div>
                 <pre
-                  class="overflow-x-auto bg-background p-2.5 font-mono text-[11px] leading-relaxed text-muted-foreground whitespace-pre">{normalizeTemplate(
+                  class="overflow-x-auto p-2.5 font-mono text-[11px] leading-relaxed text-muted-foreground whitespace-pre">{normalizeTemplate(
                     template,
                   )}</pre>
               </div>
@@ -250,12 +250,12 @@
           <!-- Request parameters (v2 integrations) -->
           {#if hasParams(detail)}
             <div class="border-t border-border/60 overflow-hidden">
-              <div class="bg-background px-2.5 py-1 border-b border-border/40">
+              <div class="border-b border-border/40 px-2.5 py-1">
                 <span class="font-mono text-[10px] text-muted-foreground/70"
                   >parameters</span
                 >
               </div>
-              <div class="bg-background p-2.5 space-y-1">
+              <div class="space-y-1 p-2.5">
                 {#each Object.entries(detail.requestParameters!) as [key, value] (key)}
                   <div class="flex items-baseline gap-2 font-mono text-[11px]">
                     <span class="text-muted-foreground/70 shrink-0">{key}</span>
@@ -272,7 +272,7 @@
       {#each gateway.routeKeys as routeKey (routeKey)}
         {@const route = routeParts(routeKey)}
         <div
-          class="flex items-center gap-2 rounded-md border border-border bg-popover/60 px-2.5 py-2"
+          class="flex items-center gap-2 rounded-md border border-border bg-background-subtle/70 px-2.5 py-2"
         >
           <Badge variant={methodBadgeVariant(route.method)} class="shrink-0"
             >{route.method}</Badge
@@ -358,7 +358,7 @@
         <button
           type="button"
           onclick={downloadEnvironment}
-          class="inline-flex items-center gap-1 rounded-md border border-border bg-card px-3 py-1.5 text-xs text-foreground hover:bg-popover"
+          class="inline-flex items-center gap-1 rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-background-subtle"
         >
           <DownloadSimpleIcon size={12} />
           Env

@@ -9,7 +9,7 @@
     themeModeDraft = $bindable<ThemeMode>("system"),
     persistenceDraft = $bindable(false),
     schemaSourceDirDraft = $bindable(""),
-    logRetentionMinutesDraft = $bindable(15),
+    logRetentionMinutesDraft = $bindable(30),
     infraEnabledKindsDraft = $bindable<InfraProbeKind[]>([]),
     infraFrontendTargetsDraft = $bindable<FrontendTarget[]>([]),
     newTargetName = $bindable(""),
@@ -48,6 +48,14 @@
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === "Escape" && open) onClose();
   }
+
+  const fieldClass =
+    "h-8 w-full rounded border border-border bg-background px-2.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary";
+  const sectionClass = "space-y-2 py-4";
+  const sectionHeadingClass =
+    "text-[11px] font-semibold uppercase tracking-[0.2em] text-muted-foreground/70";
+  const unitFieldClass =
+    `${fieldClass} pr-16`;
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -62,82 +70,116 @@
     role="dialog"
     aria-modal="true"
     aria-label="UI Settings"
-    class="fixed left-1/2 top-1/2 z-[75] w-[min(32rem,90vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-card shadow-xl"
+    class="fixed left-1/2 top-1/2 z-[75] w-[min(72rem,calc(100vw-4rem))] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-background shadow-xl"
   >
-    <div class="flex items-center justify-between border-b border-border px-4 py-3">
-      <h2 class="text-[14px] font-semibold text-foreground">UI Settings</h2>
+    <div class="flex items-start justify-between border-b border-border px-4 py-3">
+      <div class="space-y-1">
+        <h2 class="text-[14px] font-semibold text-foreground">UI Settings</h2>
+        <p class="text-sm text-muted-foreground/70">
+          These preferences are saved in a browser cookie and local storage.
+        </p>
+      </div>
       <button
         type="button"
         onclick={onClose}
-        class="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+        class="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-background-subtle hover:text-foreground"
         aria-label="Close settings"
       >
         <XIcon size={14} />
       </button>
     </div>
 
-    <div class="max-h-[70vh] space-y-4 overflow-y-auto px-4 py-4">
-      <p class="text-sm text-muted-foreground/70">
-        These preferences are saved in a browser cookie and local storage.
-      </p>
-
-      <div class="space-y-1.5">
-        <label class="text-sm font-medium text-foreground" for="polling-interval">Polling Interval (seconds)</label>
-        <input id="polling-interval" type="number" min="1" max="120" step="1"
-          bind:value={pollingIntervalDraft}
-          class="w-full rounded-md border border-border bg-muted px-2.5 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary" />
+    <div class="max-h-[70vh] space-y-1 overflow-y-auto px-4 py-4">
+      <div class={sectionClass}>
+        <p class={sectionHeadingClass}>Polling Interval</p>
+        <div class="space-y-1.5">
+          <div class="max-w-xs">
+            <label class="text-sm font-medium text-foreground" for="polling-interval">Seconds</label>
+            <div class="relative">
+              <input id="polling-interval" type="number" min="1" max="120" step="1"
+                bind:value={pollingIntervalDraft}
+                class={unitFieldClass} />
+              <div class="pointer-events-none absolute inset-y-1.5 right-2 flex items-center gap-2">
+                <span class="h-4 w-px bg-border/70"></span>
+                <span class="text-[11px] font-medium text-muted-foreground/70">Seconds</span>
+              </div>
+            </div>
+          </div>
+          <p class="text-[11px] leading-relaxed text-muted-foreground/70">
+            Controls how often the dashboard refreshes live backend state.
+          </p>
+        </div>
       </div>
 
-      <div class="space-y-1.5">
-        <label class="text-sm font-medium text-foreground" for="log-retention">Log Retention (minutes)</label>
-        <input id="log-retention" type="number" min="1" max="1440" step="1"
-          bind:value={logRetentionMinutesDraft}
-          class="w-full rounded-md border border-border bg-muted px-2.5 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary" />
-        <p class="text-[11px] leading-relaxed text-muted-foreground/70">
-          Automatically remove log events older than this. Default 15 minutes. Max 1440 (24h).
-        </p>
+      <div class={sectionClass}>
+        <p class={sectionHeadingClass}>Log &amp; Trace Retention</p>
+        <div class="space-y-1.5">
+          <div class="max-w-xs">
+            <label class="sr-only" for="log-retention">Log &amp; Trace Retention (minutes)</label>
+            <div class="relative">
+              <input id="log-retention" type="number" min="1" max="1440" step="1"
+                bind:value={logRetentionMinutesDraft}
+                class={unitFieldClass} />
+              <div class="pointer-events-none absolute inset-y-1.5 right-2 flex items-center gap-2">
+                <span class="h-4 w-px bg-border/70"></span>
+                <span class="text-[11px] font-medium text-muted-foreground/70">Minutes</span>
+              </div>
+            </div>
+          </div>
+          <p class="text-[11px] leading-relaxed text-muted-foreground/70">
+            Automatically remove log events and traces older than this. Default 30 minutes. Max 1440 (24h).
+          </p>
+        </div>
       </div>
 
-      <div class="space-y-1.5">
-        <label class="text-sm font-medium text-foreground" for="theme-mode">Theme</label>
-        <select id="theme-mode" bind:value={themeModeDraft}
-          class="w-full rounded-md border border-border bg-muted px-2.5 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary">
-          <option value="system">System</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select>
+      <div class={sectionClass}>
+        <p class={sectionHeadingClass}>Theme</p>
+        <div class="max-w-xs space-y-1.5">
+          <label class="sr-only" for="theme-mode">Theme</label>
+          <select id="theme-mode" bind:value={themeModeDraft}
+            class={fieldClass}>
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
       </div>
 
-      <div class="rounded-md border border-border bg-muted/70 p-3">
+      <div class={sectionClass}>
+        <p class={sectionHeadingClass}>Persistence</p>
         <div class="flex items-start justify-between gap-3">
           <div class="min-w-0">
-            <label class="text-sm font-medium text-foreground" for="persistence-enabled">Persistence</label>
+            <label class="text-sm font-medium text-foreground" for="persistence-enabled">
+              {persistenceDraft ? "Enabled" : "Disabled"}
+            </label>
             <p class="mt-1 text-[11px] leading-relaxed text-muted-foreground/70">
               Persist configuration over Tarn sessions.
             </p>
           </div>
           <label class="relative inline-flex cursor-pointer items-center self-center">
             <input id="persistence-enabled" type="checkbox" bind:checked={persistenceDraft} class="peer sr-only" />
-            <span class="h-6 w-11 rounded-full border border-border bg-muted transition-colors peer-checked:border-primary/50 peer-checked:bg-primary/10"></span>
-            <span class="pointer-events-none absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-5 dark:bg-zinc-950"></span>
+            <span class="h-6 w-11 rounded-full border border-border/80 bg-muted/70 transition-colors peer-checked:border-primary/60 peer-checked:bg-primary/20 dark:bg-zinc-800"></span>
+            <span class="pointer-events-none absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-background shadow-sm ring-1 ring-border/70 transition-transform peer-checked:translate-x-5 dark:bg-white dark:ring-white/15"></span>
           </label>
         </div>
-        <div class="mt-2 text-[11px] font-mono text-muted-foreground/70">{persistenceDraft ? "true" : "false"}</div>
       </div>
 
-      <div class="space-y-1.5">
-        <label class="text-sm font-medium text-foreground" for="schema-source">Schema Source</label>
-        <input id="schema-source" type="text" placeholder="/path/to/lambda-repos"
-          bind:value={schemaSourceDirDraft}
-          onblur={() => (schemaSourceDirDraft = sanitizeSchemaSourceDir(schemaSourceDirDraft))}
-          class="w-full rounded-md border border-border bg-muted px-2.5 py-1.5 font-mono text-sm text-foreground outline-none focus:ring-1 focus:ring-primary" />
-        <p class="text-[11px] leading-relaxed text-muted-foreground/70">
-          Local directory used by Chaos Probe to discover <code>schemas.ts</code> and event samples.
-        </p>
+      <div class={sectionClass}>
+        <p class={sectionHeadingClass}>Schema Source</p>
+        <div class="space-y-1.5">
+          <label class="sr-only" for="schema-source">Schema Source</label>
+          <input id="schema-source" type="text" placeholder="/path/to/lambda-repos"
+            bind:value={schemaSourceDirDraft}
+            onblur={() => (schemaSourceDirDraft = sanitizeSchemaSourceDir(schemaSourceDirDraft))}
+            class={`${fieldClass} font-mono`} />
+          <p class="text-[11px] leading-relaxed text-muted-foreground/70">
+            Local directory used by Chaos Probe to discover <code>schemas.ts</code> and event samples.
+          </p>
+        </div>
       </div>
 
-      <div class="rounded-md border border-border bg-muted/70 p-3 space-y-2">
-        <p class="text-sm font-semibold uppercase tracking-wide text-muted-foreground/70">Infrastructure Probes</p>
+      <div class={sectionClass}>
+        <p class={sectionHeadingClass}>Infrastructure Probes</p>
         <p class="text-[11px] text-muted-foreground/70 leading-relaxed">
           Show local services probed by the backend. Docker is checked by default.
         </p>
@@ -153,10 +195,10 @@
         </div>
       </div>
 
-      <div class="rounded-md border border-border bg-muted/70 p-3 space-y-2">
-        <p class="text-sm font-semibold uppercase tracking-wide text-muted-foreground/70">Frontend Services</p>
+      <div class={sectionClass}>
+        <p class={sectionHeadingClass}>Additional Services</p>
         <p class="text-[11px] text-muted-foreground/70 leading-relaxed">
-          Add locally running apps to probe from the browser (localhost).
+          Add external APIs or frontend apps that sit alongside Tarn so the dashboard can probe them and include them in the topology and health view.
         </p>
         {#if infraFrontendTargetsDraft.length > 0}
           <ul class="space-y-1 pt-0.5">
@@ -173,15 +215,15 @@
             {/each}
           </ul>
         {/if}
-        <div class="flex items-center gap-1.5 pt-0.5">
+        <div class="grid grid-cols-[minmax(0,3fr)_7rem_auto] items-center gap-1.5 pt-0.5">
           <input type="text" bind:value={newTargetName}
             onkeydown={(event) => { if (event.key === "Enter") onAddFrontendTarget(); }}
-            placeholder="Name"
-            class="min-w-0 flex-1 rounded border border-border bg-muted px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground/70 outline-none focus:ring-1 focus:ring-primary" />
+            placeholder="Service name"
+            class={`${fieldClass} min-w-0 flex-1 placeholder:text-muted-foreground/70`} />
           <input type="number" bind:value={newTargetPort}
             onkeydown={(event) => { if (event.key === "Enter") onAddFrontendTarget(); }}
             placeholder="Port" min="1" max="65535"
-            class="w-16 rounded border border-border bg-muted px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground/70 outline-none focus:ring-1 focus:ring-primary" />
+            class={`${fieldClass} w-full shrink-0 placeholder:text-muted-foreground/70`} />
           <button type="button" onclick={onAddFrontendTarget}
             class="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-primary/50 bg-primary/10 text-primary transition-colors hover:bg-primary/20"
             aria-label="Add frontend service">
@@ -190,8 +232,8 @@
         </div>
       </div>
 
-      <div class="rounded-md border border-border bg-muted/70 p-3">
-        <p class="mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground/70">Instance Info</p>
+      <div class={sectionClass}>
+        <p class={sectionHeadingClass}>Instance Info</p>
         <div class="space-y-1.5 text-sm">
           <div class="grid grid-cols-[6.5rem_1fr] gap-2">
             <span class="text-muted-foreground/70">Region</span>
@@ -212,7 +254,7 @@
 
     <div class="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
       <button type="button" onclick={onClose}
-        class="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted">Cancel</button>
+        class="rounded-md border border-border px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-background-subtle">Cancel</button>
       <button type="button" onclick={onSave}
         class="rounded-md border border-primary/50 bg-primary/10 px-3 py-1.5 text-xs text-primary hover:bg-primary/20">Save</button>
     </div>

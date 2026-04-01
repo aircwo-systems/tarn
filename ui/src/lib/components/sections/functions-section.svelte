@@ -63,7 +63,8 @@
     {sidebarCollapsed}
     {onToggleSidebar}
   >
-    {#snippet stats()}
+    {#snippet actions()}
+      <div class="flex flex-wrap items-center gap-4 text-xs font-mono text-muted-foreground">
       <span class="inline-flex items-center gap-1.5">
         <span class="font-mono text-foreground">{functions.length}</span>
         <span class="text-muted-foreground/70">visible</span>
@@ -83,15 +84,13 @@
         </span>
         <span class="text-muted-foreground/70">messages processed</span>
       </span>
-    {/snippet}
-
-    {#snippet actions()}
       {#if filters.tagFilter}
-        <span class="text-muted-foreground/50">Filter</span>
-        <span class="truncate font-mono text-foreground/85" title={filters.tagFilter}>
+        <span class="text-muted-foreground/50">filter</span>
+        <span class="truncate text-foreground/85" title={filters.tagFilter}>
           {filters.tagFilter}
         </span>
       {/if}
+      </div>
     {/snippet}
   </SectionHeader>
 

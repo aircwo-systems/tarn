@@ -95,7 +95,8 @@
     {sidebarCollapsed}
     {onToggleSidebar}
   >
-    {#snippet stats()}
+    {#snippet actions()}
+      <div class="flex flex-wrap items-center gap-4 text-xs font-mono text-muted-foreground">
       <span class="inline-flex items-center gap-1.5">
         <span class="font-mono text-foreground">{tables.length}</span>
         <span class="text-muted-foreground/70">tables</span>
@@ -108,11 +109,15 @@
         <span class="font-mono text-foreground">{streamEnabledCount}</span>
         <span class="text-muted-foreground/70">stream-enabled</span>
       </span>
+      </div>
     {/snippet}
   </SectionHeader>
 
   {#if dashboard.loading && !dashboard.data}
-    <div class="overflow-hidden rounded-lg border border-border/70 bg-background/50">
+    <div
+      class="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/70 bg-background/50"
+      style="height: calc(100vh - 10rem);"
+    >
       <div class="grid gap-0 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
         <div class="space-y-2 border-b border-border/70 p-4 xl:border-b-0 xl:border-r">
           {#each Array(7) as _, index (index)}
@@ -127,13 +132,19 @@
       </div>
     </div>
   {:else if tables.length === 0 && streams.length === 0}
-    <div class="flex min-h-[18rem] items-center justify-center rounded-lg border border-border/70 bg-background/50">
+    <div
+      class="flex min-h-0 flex-1 items-center justify-center rounded-lg border border-border/70 bg-background/50"
+      style="height: calc(100vh - 10rem);"
+    >
       <EmptyState icon={DatabaseIcon} message="No DynamoDB tables created yet." />
     </div>
   {:else}
-    <div class="overflow-hidden rounded-lg border border-border/70 bg-background/50">
-      <div class="grid gap-0 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
-        <div class="min-h-0 xl:border-r xl:border-border/70">
+    <div
+      class="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/70 bg-background/50"
+      style="height: calc(100vh - 10rem);"
+    >
+      <div class="grid h-full gap-0 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
+        <div class="flex min-h-0 flex-col xl:border-r xl:border-border/70">
           <div class="flex flex-wrap items-end justify-between gap-4 border-b border-border/70 px-4 py-4">
             <div>
               <p class="text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Tables</p>
@@ -155,7 +166,7 @@
             </div>
           </div>
 
-          <div class="overflow-auto">
+          <div class="min-h-0 flex-1 overflow-auto">
             <Table>
               <TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur [&_th]:bg-background/95">
                 <TableRow class="hover:bg-transparent">
@@ -200,7 +211,7 @@
           </div>
         </div>
 
-        <div class="min-h-0 bg-background/35">
+        <div class="flex min-h-0 flex-col bg-background/35">
           <div class="border-b border-border/70 px-4 py-4">
             <p class="text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Selected Table</p>
             {#if selectedTable}
@@ -277,7 +288,7 @@
             {/if}
           </div>
 
-          <div class="px-4 py-4 text-xs">
+          <div class="overflow-y-auto px-4 py-4 text-xs">
             <p class="text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Connect Externally</p>
             <p class="mt-2 text-muted-foreground/75">
               Use an AWS SDK, the AWS CLI, or any DynamoDB-compatible client with an endpoint override pointed at your Tarn instance.

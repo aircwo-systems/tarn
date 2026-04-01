@@ -238,12 +238,16 @@
   </SectionHeader>
 
   {#if buckets.length === 0 && !dashboard.loading}
-    <div class="rounded-lg border border-border bg-card px-4 py-8 text-center">
-      <Package size={28} class="mx-auto text-muted-foreground/70 mb-2" />
-      <p class="text-sm text-muted-foreground">No S3 buckets</p>
-      <p class="text-xs text-muted-foreground/70 mt-1">
-        Create one with <code class="bg-muted px-1 py-0.5 rounded text-primary">tarn s3 mb --name my-bucket</code>
-      </p>
+    <div class="flex flex-col items-center gap-4 px-8 py-16">
+      <div class="flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-muted">
+        <Package size={24} class="text-muted-foreground/70" />
+      </div>
+      <div class="space-y-1.5 text-center">
+        <p class="text-sm font-semibold text-muted-foreground">No S3 buckets</p>
+        <p class="text-xs leading-relaxed text-muted-foreground/70">
+          Create one with <code class="rounded bg-muted px-1 py-0.5 text-primary">tarn s3 mb --name my-bucket</code>
+        </p>
+      </div>
     </div>
   {:else}
     <div class="rounded-lg border border-border bg-card overflow-hidden">

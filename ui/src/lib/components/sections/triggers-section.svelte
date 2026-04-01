@@ -414,7 +414,7 @@
   </SectionHeader>
 
   <div class="overflow-hidden rounded-lg border border-border/70 bg-background/50">
-    <div class="relative min-h-0">
+    <div class="relative min-h-0" style="height: calc(100vh - 10rem);">
       <div class="min-h-0">
         <div class="flex items-center justify-between border-b border-border/70 px-4 py-3">
           <div>
