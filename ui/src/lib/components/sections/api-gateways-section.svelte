@@ -80,16 +80,19 @@
     {sidebarCollapsed}
     {onToggleSidebar}
   >
-    {#snippet stats()}
+    {#snippet actions()}
+      <div class="flex flex-wrap items-center gap-4 text-xs font-mono text-muted-foreground">
       <span class="inline-flex items-center gap-1.5">
         <span class="font-mono text-foreground">{gateways.length}</span>
         <span class="text-muted-foreground/70">visible</span>
       </span>
+      </div>
     {/snippet}
   </SectionHeader>
 
   <div
-    class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_38rem] 2xl:grid-cols-[minmax(0,1fr)_44rem]"
+    class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_38rem] 2xl:grid-cols-[minmax(0,1fr)_44rem]"
+    style="height: calc(100vh - 10rem);"
   >
   <ResourceTable
     title="API Gateways"
@@ -134,13 +137,15 @@
       onClose={closeGatewayPanel}
     />
   {:else}
-    <section class="rounded-lg border border-border bg-card">
-      <div class="border-b border-border px-3 py-2">
+    <section class="flex h-full min-h-0 flex-col rounded-lg border border-border/70 bg-background/60">
+      <div class="border-b border-border/70 bg-background/35 px-3 py-2">
         <h3 class="text-sm font-semibold text-foreground">Gateway Details</h3>
       </div>
-      <p class="px-3 py-5 text-sm text-muted-foreground/70">
+      <div class="flex flex-1 items-center justify-center px-6 py-5 text-center">
+        <p class="max-w-sm text-sm text-muted-foreground/70">
         Select a gateway to inspect routes, integrations, and request templates.
-      </p>
+        </p>
+      </div>
     </section>
   {/if}
   </div>

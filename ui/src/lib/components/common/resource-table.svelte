@@ -33,9 +33,9 @@
   } = $props();
 </script>
 
-<div class="rounded-lg border border-border overflow-hidden">
+<div class="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background/60">
   <div
-    class="flex items-center justify-between px-3 py-2 border-b border-border bg-card"
+    class="flex items-center justify-between border-b border-border/70 bg-background/35 px-3 py-2"
   >
     <h3 class="text-sm font-semibold text-foreground">{title}</h3>
     <div class="flex items-center gap-2">
@@ -46,7 +46,7 @@
         <button
           type="button"
           onclick={onRefresh}
-          class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground/70 hover:text-foreground hover:bg-popover transition-colors"
+          class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-background-subtle hover:text-foreground"
           aria-label="Refresh"
           title="Refresh"
         >
@@ -57,25 +57,29 @@
   </div>
 
   {#if loading}
-    <div class="p-3 space-y-2">
+    <div class="flex-1 p-3 space-y-2">
       {#each Array(3) as _}
         <Skeleton class="h-8 w-full" />
       {/each}
     </div>
   {:else if empty}
-    <EmptyState message={emptyMessage} icon={emptyIcon} />
+    <div class="flex flex-1 items-center justify-center">
+      <EmptyState message={emptyMessage} icon={emptyIcon} />
+    </div>
   {:else}
-    <Table>
-      <TableHeader>
-        <TableRow>
-          {#each columns as col}
-            <TableHead>{col}</TableHead>
-          {/each}
-        </TableRow>
-      </TableHeader>
-      <TableBody>
-        {@render children?.()}
-      </TableBody>
-    </Table>
+    <div class="min-h-0 flex-1 overflow-auto">
+      <Table>
+        <TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur [&_th]:bg-background/95">
+          <TableRow>
+            {#each columns as col}
+              <TableHead>{col}</TableHead>
+            {/each}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {@render children?.()}
+        </TableBody>
+      </Table>
+    </div>
   {/if}
 </div>

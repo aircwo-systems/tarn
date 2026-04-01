@@ -123,7 +123,8 @@
     {sidebarCollapsed}
     {onToggleSidebar}
   >
-    {#snippet stats()}
+    {#snippet actions()}
+      <div class="flex flex-wrap items-center gap-4 text-xs font-mono text-muted-foreground">
       <span class="inline-flex items-center gap-1.5">
         <span class="font-mono text-foreground">{secrets.length}</span>
         <span class="text-muted-foreground/70">visible</span>
@@ -138,6 +139,7 @@
           <span>load errors</span>
         </span>
       {/if}
+      </div>
     {/snippet}
   </SectionHeader>
 
