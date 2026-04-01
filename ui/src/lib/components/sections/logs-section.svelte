@@ -7,7 +7,6 @@
     ArrowsClockwiseIcon,
     CaretDownIcon,
     XIcon,
-    CopySimpleIcon,
     TrashIcon,
     SortAscendingIcon,
     SortDescendingIcon,
@@ -67,7 +66,6 @@
 
   // Detail panel
   let selectedEvent = $state<LogEvent | null>(null);
-  let copiedMessage = $state(false);
 
   // Clear logs
   let clearing = $state(false);
@@ -310,20 +308,6 @@
       selectedEvent = null;
     } else {
       selectedEvent = event;
-      copiedMessage = false;
-    }
-  }
-
-  async function copyMessage() {
-    if (!selectedEvent) return;
-    try {
-      await navigator.clipboard.writeText(selectedEvent.message);
-      copiedMessage = true;
-      setTimeout(() => {
-        copiedMessage = false;
-      }, 2000);
-    } catch {
-      /* ignore */
     }
   }
 
@@ -739,6 +723,7 @@
       ? `${events.length} of ${eventsTotal} events`
       : "No events",
   );
+  const hasPagination = $derived(eventsTotal > eventsLimit);
   const totalEventCount = $derived(
     groups.reduce((sum, g) => sum + g.eventCount, 0),
   );
@@ -1014,7 +999,7 @@
       <!-- Two-panel layout: event list + detail panel -->
       <div
         class="rounded-lg border border-border overflow-hidden flex flex-1"
-        style="min-height: 0; height: calc(100vh - 10rem)"
+        style={`min-height: 0; height: calc(100vh - ${hasPagination ? "12.75rem" : "10rem"})`}
       >
         <!-- Event rows — compact view -->
         <div class="flex-1 min-w-0 overflow-y-auto font-mono text-[12px] leading-tight">
@@ -1121,7 +1106,7 @@
 
         <!-- Detail panel -->
         <div
-          class="shrink-0 border-l border-border bg-card overflow-hidden transition-[width,opacity] duration-200 ease-out {selectedEvent
+          class="shrink-0 overflow-hidden border-l border-border/70 bg-background/60 transition-[width,opacity] duration-200 ease-out {selectedEvent
             ? 'opacity-100'
             : 'opacity-0'}"
           style="width: {selectedEvent ? '420px' : '0px'}"
@@ -1131,7 +1116,7 @@
             <div class="flex flex-col h-full min-w-[420px]">
               <!-- Panel header -->
               <div
-                class="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5 shrink-0 bg-card"
+                class="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 bg-background/35 px-4 py-2.5"
               >
                 <div class="flex items-center gap-2 min-w-0">
                   <Badge variant={levelColor(ev.level)} class="shrink-0"
@@ -1146,7 +1131,7 @@
                 <button
                   type="button"
                   onclick={() => (selectedEvent = null)}
-                  class="h-6 w-6 flex items-center justify-center rounded text-muted-foreground/70 hover:text-foreground hover:bg-muted transition-colors shrink-0"
+                  class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-background-subtle hover:text-foreground"
                   aria-label="Close detail panel"
                 >
                   <XIcon size={14} />
@@ -1157,20 +1142,12 @@
               <div class="flex-1 overflow-y-auto p-4 space-y-4">
                 <!-- Message section -->
                 <div>
-                  <div class="flex items-center justify-between mb-2">
+                  <div class="mb-2">
                     <p
                       class="text-[10px] font-medium uppercase tracking-widest text-muted-foreground/70"
                     >
                       Message
                     </p>
-                    <button
-                      type="button"
-                      onclick={copyMessage}
-                      class="flex items-center gap-1 text-[10px] text-muted-foreground/70 hover:text-foreground transition-colors"
-                    >
-                      <CopySimpleIcon size={11} />
-                      {copiedMessage ? "Copied!" : "Copy"}
-                    </button>
                   </div>
 
                   {#if panelIsComplex}
@@ -1180,6 +1157,7 @@
                         ? panelDisplayMessage
                         : panelFormattedMessage}
                       formattedHtml={panelHighlightedHtml}
+                      variant="tabs"
                       formattedContentClass="text-[12px] text-foreground"
                       rawContentClass="text-[11px] text-muted-foreground"
                       formattedMaxHeightClass="max-h-[55vh]"
@@ -1189,16 +1167,16 @@
                     {@const jsonResult = tryFormatInlineJSON(ev.message)}
                     {#if jsonResult.isJSON}
                       <pre
-                        class="rounded-md border border-border bg-[var(--code-bg)] px-3 py-3 text-[12px] font-mono text-foreground leading-relaxed whitespace-pre-wrap break-all max-h-[55vh] overflow-y-auto">{@html highlightJSON(
+                        class="max-h-[55vh] overflow-y-auto rounded-md border border-border/70 bg-[var(--code-bg)] px-3 py-3 text-[12px] font-mono leading-relaxed whitespace-pre-wrap break-all text-foreground">{@html highlightJSON(
                           jsonResult.formatted,
                         )}</pre>
                     {:else}
                       <pre
-                        class="rounded-md border border-border bg-[var(--code-bg)] px-3 py-3 text-[13px] font-mono text-foreground leading-relaxed whitespace-pre-wrap break-all">{ev.message}</pre>
+                        class="rounded-md border border-border/70 bg-[var(--code-bg)] px-3 py-3 text-[13px] font-mono leading-relaxed whitespace-pre-wrap break-all text-foreground">{ev.message}</pre>
                     {/if}
                   {:else}
                     <pre
-                      class="rounded-md border border-border bg-[var(--code-bg)] px-3 py-3 text-[13px] font-mono text-foreground leading-relaxed whitespace-pre-wrap break-all">{ev.message}</pre>
+                      class="rounded-md border border-border/70 bg-[var(--code-bg)] px-3 py-3 text-[13px] font-mono leading-relaxed whitespace-pre-wrap break-all text-foreground">{ev.message}</pre>
                   {/if}
                 </div>
 
@@ -1210,7 +1188,7 @@
                     Details
                   </p>
                   <div
-                    class="rounded-md border border-border overflow-hidden divide-y divide-border/60"
+                    class="overflow-hidden rounded-md border border-border/70 divide-y divide-border/60"
                   >
                     <div class="flex items-start gap-4 px-3 py-2">
                       <span
@@ -1296,8 +1274,8 @@
       </div>
 
       <!-- Pagination -->
-      {#if eventsTotal > eventsLimit}
-        <div class="flex items-center justify-between px-1">
+      {#if hasPagination}
+        <div class="flex items-center justify-between px-1 pt-3">
           <p class="text-xs text-muted-foreground/70">{pageInfo}</p>
           <div class="flex items-center gap-2">
             <button
@@ -1358,7 +1336,7 @@
           type="text"
           placeholder="Search services or log groups..."
           bind:value={groupSearch}
-          class="w-full rounded-md border border-border bg-muted pl-7 pr-2 py-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/70"
+          class="w-full rounded border border-border bg-background pl-7 pr-2.5 py-1.5 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary placeholder:text-muted-foreground/70"
         />
       </div>
       <div class="flex flex-wrap gap-2">

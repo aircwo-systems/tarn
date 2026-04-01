@@ -1,9 +1,5 @@
 <script lang="ts">
-  import {
-    ChatCircleIcon,
-    CaretDownIcon,
-    CaretUpIcon,
-  } from "phosphor-svelte";
+  import { ChatCircleIcon, CaretDownIcon, CaretUpIcon } from "phosphor-svelte";
   import {
     Table,
     TableHeader,
@@ -128,7 +124,9 @@
     return new Date(ms).toLocaleString();
   }
 
-  function messageStateColor(state: string): "green" | "amber" | "red" | "gray" {
+  function messageStateColor(
+    state: string,
+  ): "green" | "amber" | "red" | "gray" {
     if (state === "visible") return "green";
     if (state === "inflight") return "amber";
     if (state === "stale") return "red";
@@ -175,7 +173,8 @@
     {sidebarCollapsed}
     {onToggleSidebar}
   >
-    {#snippet stats()}
+    {#snippet actions()}
+      <div class="flex flex-wrap items-center gap-4 text-xs font-mono text-muted-foreground">
       <span class="inline-flex items-center gap-1.5">
         <span class="font-mono text-foreground">{queues.length}</span>
         <span class="text-muted-foreground/70">visible</span>
@@ -202,11 +201,17 @@
           <span>stale</span>
         </span>
       {/if}
+      </div>
     {/snippet}
   </SectionHeader>
 
-  <div class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_24rem]">
-    <div class="min-h-0 overflow-hidden rounded-lg border border-border/70 bg-background/60">
+  <div
+    class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_420px]"
+    style="height: calc(100vh - 10rem);"
+  >
+    <div
+      class="min-h-0 overflow-hidden rounded-lg border border-border/70 bg-background/60"
+    >
       {#if dashboard.loading && !dashboard.data}
         <div class="space-y-2 p-3">
           {#each Array(6) as _, index (index)}
@@ -215,15 +220,14 @@
         </div>
       {:else if queues.length === 0}
         <div class="flex h-full min-h-[18rem] items-center justify-center">
-          <EmptyState
-            message="No queues created yet."
-            icon={ChatCircleIcon}
-          />
+          <EmptyState message="No queues created yet." icon={ChatCircleIcon} />
         </div>
       {:else}
         <div class="h-full overflow-auto">
           <Table>
-            <TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur [&_th]:bg-background/95">
+            <TableHeader
+              class="sticky top-0 z-10 bg-background/95 backdrop-blur [&_th]:bg-background/95"
+            >
               <TableRow class="hover:bg-transparent">
                 <TableHead>Queue</TableHead>
                 <TableHead>Type</TableHead>
@@ -243,14 +247,22 @@
                   onkeydown={(event: KeyboardEvent) =>
                     onQueueRowKeydown(event, queue.name)}
                 >
-                  <TableCell><ArnCell name={queue.name} arn={queue.url} /></TableCell>
-                  <TableCell class={`font-mono text-xs ${queue.fifo ? "text-amber" : "text-muted-foreground"}`}>
+                  <TableCell
+                    ><ArnCell name={queue.name} arn={queue.url} /></TableCell
+                  >
+                  <TableCell
+                    class={`font-mono text-xs ${queue.fifo ? "text-amber" : "text-muted-foreground"}`}
+                  >
                     {queue.fifo ? "FIFO" : "Standard"}
                   </TableCell>
-                  <TableCell class="w-16 text-right font-mono text-muted-foreground">
+                  <TableCell
+                    class="w-16 text-right font-mono text-muted-foreground"
+                  >
                     {queue.approxVisible}
                   </TableCell>
-                  <TableCell class="w-18 text-right font-mono text-muted-foreground">
+                  <TableCell
+                    class="w-18 text-right font-mono text-muted-foreground"
+                  >
                     {queue.approxInFlight}
                   </TableCell>
                   <TableCell class="min-w-[18rem]">
@@ -264,12 +276,20 @@
                               class="mb-1 flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground/70"
                             >
                               <span class="inline-flex items-center gap-1">
-                                <LedDot color={messageStateColor(message.state)} />
-                                <span class="text-muted-foreground">{message.state}</span>
+                                <LedDot
+                                  color={messageStateColor(message.state)}
+                                />
+                                <span class="text-muted-foreground"
+                                  >{message.state}</span
+                                >
                               </span>
-                              <span class="font-mono">{message.id.slice(0, 8)}</span>
+                              <span class="font-mono"
+                                >{message.id.slice(0, 8)}</span
+                              >
                               {#if message.receiveCount > 0}
-                                <span class="font-mono">x{message.receiveCount}</span>
+                                <span class="font-mono"
+                                  >x{message.receiveCount}</span
+                                >
                               {/if}
                             </div>
                             <p
@@ -287,7 +307,9 @@
                         {/if}
                       </div>
                     {:else}
-                      <span class="text-xs text-muted-foreground/70">No messages</span>
+                      <span class="text-xs text-muted-foreground/70"
+                        >No messages</span
+                      >
                     {/if}
                   </TableCell>
                 </TableRow>
@@ -298,8 +320,12 @@
       {/if}
     </div>
 
-    <section class="min-h-0 overflow-hidden rounded-lg border border-border/70 bg-background/60">
-      <div class="flex items-center justify-between border-b border-border px-3 py-2">
+    <section
+      class="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background/60"
+    >
+      <div
+        class="flex items-center justify-between border-b border-border px-3 py-2"
+      >
         <div>
           <h3 class="text-sm font-semibold text-foreground">Queue messages</h3>
           <p class="text-[11px] text-muted-foreground/70">
@@ -319,57 +345,108 @@
       </div>
 
       {#if !selectedQueue}
-        <div class="flex min-h-[18rem] flex-1 items-center justify-center px-6 py-8 text-center">
-          <EmptyState
-            message="Select a queue row to inspect pending messages."
-            icon={ChatCircleIcon}
-          />
+        <div
+          class="flex min-h-72 flex-1 items-center justify-center px-6 py-8 text-center text-muted-foreground/55"
+        >
+          <p class="text-sm">Select a queue row to inspect pending messages.</p>
         </div>
       {:else}
         <div class="border-b border-border px-4 py-4">
-          <p class="text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Selected Queue</p>
+          <p
+            class="text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55"
+          >
+            Selected Queue
+          </p>
           <div class="mt-2 space-y-3">
             <div>
-              <p class="truncate font-mono text-sm text-foreground">{selectedQueue.name}</p>
+              <p class="truncate font-mono text-sm text-foreground">
+                {selectedQueue.name}
+              </p>
               <p class="mt-1 text-xs text-muted-foreground/72">
-                {selectedQueue.approxVisible} visible, {selectedQueue.approxInFlight} in flight,
-                {selectedQueue.approxDelayed} delayed, {selectedQueue.processedCount ?? 0} processed{#if (selectedQueue.approxStale ?? 0) > 0},
-                  <span class="text-destructive">{selectedQueue.approxStale} stale</span>
+                {selectedQueue.approxVisible} visible, {selectedQueue.approxInFlight}
+                in flight,
+                {selectedQueue.approxDelayed} delayed, {selectedQueue.processedCount ??
+                  0} processed{#if (selectedQueue.approxStale ?? 0) > 0},
+                  <span class="text-destructive"
+                    >{selectedQueue.approxStale} stale</span
+                  >
                 {/if}
               </p>
             </div>
 
             <div class="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
               <div>
-                <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Delayed</p>
-                <p class="mt-1 font-mono text-foreground">{selectedQueue.approxDelayed}</p>
+                <p
+                  class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55"
+                >
+                  Delayed
+                </p>
+                <p class="mt-1 font-mono text-foreground">
+                  {selectedQueue.approxDelayed}
+                </p>
               </div>
               <div>
-                <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Processed</p>
-                <p class="mt-1 font-mono text-foreground">{selectedQueue.processedCount ?? 0}</p>
+                <p
+                  class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55"
+                >
+                  Processed
+                </p>
+                <p class="mt-1 font-mono text-foreground">
+                  {selectedQueue.processedCount ?? 0}
+                </p>
               </div>
               <div>
-                <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Stale</p>
-                <p class={`mt-1 font-mono ${(selectedQueue.approxStale ?? 0) > 0 ? "text-destructive" : "text-foreground"}`}>
+                <p
+                  class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55"
+                >
+                  Stale
+                </p>
+                <p
+                  class={`mt-1 font-mono ${(selectedQueue.approxStale ?? 0) > 0 ? "text-destructive" : "text-foreground"}`}
+                >
                   {selectedQueue.approxStale ?? 0}
                 </p>
               </div>
               <div>
-                <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Visibility</p>
-                <p class="mt-1 font-mono text-foreground">{selectedQueue.visibilitySec}s</p>
+                <p
+                  class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55"
+                >
+                  Visibility
+                </p>
+                <p class="mt-1 font-mono text-foreground">
+                  {selectedQueue.visibilitySec}s
+                </p>
               </div>
               <div>
-                <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Long Poll</p>
-                <p class="mt-1 font-mono text-foreground">{selectedQueue.waitTimeSec}s</p>
+                <p
+                  class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55"
+                >
+                  Long Poll
+                </p>
+                <p class="mt-1 font-mono text-foreground">
+                  {selectedQueue.waitTimeSec}s
+                </p>
               </div>
               <div>
-                <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Created</p>
-                <p class="mt-1 font-mono text-foreground">{formatUnixSeconds(selectedQueue.createdTimestamp)}</p>
+                <p
+                  class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55"
+                >
+                  Created
+                </p>
+                <p class="mt-1 font-mono text-foreground">
+                  {formatUnixSeconds(selectedQueue.createdTimestamp)}
+                </p>
               </div>
               <div>
-                <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Redrive</p>
+                <p
+                  class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55"
+                >
+                  Redrive
+                </p>
                 {#if selectedQueue.dlqName}
-                  <p class="mt-1 font-mono text-foreground">{selectedQueue.dlqName}</p>
+                  <p class="mt-1 font-mono text-foreground">
+                    {selectedQueue.dlqName}
+                  </p>
                   <p class="mt-1 text-[11px] text-muted-foreground/70">
                     max {selectedQueue.maxReceiveCount ?? "?"} receives
                   </p>
@@ -387,7 +464,7 @@
           </p>
         {/if}
 
-        <div class="max-h-[36rem] space-y-2 overflow-y-auto px-3 py-3">
+        <div class="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3">
           {#if selectedLoading}
             <p class="text-sm text-muted-foreground/70">Loading messages...</p>
           {:else if selectedMessages.length === 0}
@@ -400,14 +477,20 @@
               {@const large = isLargeBody(message.body ?? "")}
               {@const formatted = formatJSONForViewer(message.body ?? "")}
               {@const canExpand = large || formatted !== null}
-              <div class="rounded-md border border-border bg-background-subtle/70 p-2">
-                <div class="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground/70">
+              <div
+                class="rounded-md border border-border bg-background-subtle/70 p-2"
+              >
+                <div
+                  class="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground/70"
+                >
                   <Badge variant={messageBadgeVariant(message.state)}>
                     {message.state}
                   </Badge>
                   <span class="font-mono">{message.id}</span>
                   {#if message.receiveCount > 0}
-                    <span class="font-mono">receives: {message.receiveCount}</span>
+                    <span class="font-mono"
+                      >receives: {message.receiveCount}</span
+                    >
                   {/if}
                   {#if (message.retryCount ?? 0) > 0}
                     <span class="font-mono">retried: {message.retryCount}</span>
@@ -428,7 +511,9 @@
                     rawMaxHeightClass="max-h-96"
                   />
                 {:else if expanded}
-                  <p class="max-h-96 overflow-y-auto break-all whitespace-pre-wrap text-xs text-muted-foreground">
+                  <p
+                    class="max-h-96 overflow-y-auto break-all whitespace-pre-wrap text-xs text-muted-foreground"
+                  >
                     {message.body || "(empty)"}
                   </p>
                 {:else}
@@ -439,8 +524,8 @@
 
                 {#if message.state === "stale"}
                   <p class="mt-1.5 text-[11px] text-destructive/80">
-                    Parked. Failed {message.receiveCount} times with no DLQ.
-                    Tarn halts retries to prevent wasted invocations.
+                    Parked. Failed {message.receiveCount} times with no DLQ. Tarn
+                    halts retries to prevent wasted invocations.
                   </p>
                 {/if}
 
