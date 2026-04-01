@@ -34,6 +34,7 @@ func (s *Server) registerUIRoutes(mux *http.ServeMux) {
 	s.ui = handler
 	mux.Handle("/", handler)
 	mux.Handle("GET /favicon.svg", handler)
+	mux.Handle("GET /favicon.ico", handler)
 	// Explicitly register the SvelteKit asset prefix so it takes priority over
 	// the S3 wildcard route GET /{bucket}/{key...}, which would otherwise match
 	// /_app/immutable/... and return 404 (no bucket named "_app").
@@ -56,6 +57,9 @@ func newUIHandler(static fs.FS) http.Handler {
 		cleanPath := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
 		if cleanPath == "." || cleanPath == "" {
 			cleanPath = htmlToServe
+		}
+		if cleanPath == "favicon.ico" {
+			cleanPath = "favicon.svg"
 		}
 
 		// Try to open the requested file

@@ -46,7 +46,10 @@ export default defineConfig({
   base: '/tarn/',
 
   head: [
-    ['link', { rel: 'icon', href: '/tarn/favicon.svg' }],
+    ['link', { rel: 'icon', href: '/favicon.svg', type: 'image/svg+xml' }],
+    ['link', { rel: 'shortcut icon', href: '/favicon.svg', type: 'image/svg+xml' }],
+    ['meta', { name: 'theme-color', media: '(prefers-color-scheme: dark)', content: '#1b1b1f' }],
+    ['meta', { name: 'theme-color', media: '(prefers-color-scheme: light)', content: '#ffffff' }],
   ],
 
   themeConfig: {

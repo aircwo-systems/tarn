@@ -321,7 +321,7 @@
 
       <div class="space-y-1.5">
         <label class="text-sm font-medium text-foreground" for="log-retention">
-          Log Retention (minutes)
+          Log &amp; Trace Retention (minutes)
         </label>
         <input
           id="log-retention"
@@ -333,7 +333,7 @@
           class="w-full rounded-md border border-border bg-muted px-2.5 py-1.5 text-sm text-foreground outline-none focus:ring-1 focus:ring-primary"
         />
         <p class="text-[11px] leading-relaxed text-muted-foreground/70">
-          Automatically remove log events older than this. Default 15 minutes. Max 1440 (24h).
+          Automatically remove log events and traces older than this. Default 30 minutes. Max 1440 (24h).
         </p>
       </div>
 
