@@ -155,6 +155,25 @@ func (s *Store) Add(t *Trace) {
 	}
 }
 
+// PruneOlderThan removes traces older than the provided cutoff.
+func (s *Store) PruneOlderThan(cutoff time.Time) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.db == nil {
+		return 0
+	}
+
+	result, err := s.db.Exec(`DELETE FROM traces WHERE started_at < ?`, cutoff.Format(time.RFC3339Nano))
+	if err != nil {
+		log.Printf("[trace] failed to prune traces older than %s: %v", cutoff.Format(time.RFC3339Nano), err)
+		return 0
+	}
+
+	rows, _ := result.RowsAffected()
+	return rows
+}
+
 // Recent returns up to n of the most recent traces, newest first.
 func (s *Store) Recent(n int) []*Trace {
 	s.mu.RLock()

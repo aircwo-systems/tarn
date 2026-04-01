@@ -1425,21 +1425,26 @@ func (h *Handler) AllLogEvents(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// PruneLogs removes events older than the requested retention window from all groups.
+// PruneLogs removes events and traces older than the requested retention window.
 func (h *Handler) PruneLogs(w http.ResponseWriter, r *http.Request) {
 	retentionStr := r.URL.Query().Get("retention")
 	retentionMin, err := strconv.Atoi(retentionStr)
 	if err != nil || retentionMin < 1 {
-		retentionMin = 15 // default 15 minutes
+		retentionMin = 30 // default 30 minutes
 	}
 
 	cutoff := time.Now().UTC().Add(-time.Duration(retentionMin) * time.Minute)
 	pruned := h.logs.PruneOlderThan(cutoff)
+	var prunedTraces int64
+	if h.traceStore != nil {
+		prunedTraces = h.traceStore.PruneOlderThan(cutoff)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"pruned":           pruned,
+		"prunedTraces":     prunedTraces,
 		"retentionMinutes": retentionMin,
 	})
 }

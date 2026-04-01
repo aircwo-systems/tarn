@@ -7,6 +7,11 @@
       name="description"
       content="Tarn dashboard for monitoring local AWS emulation resources"
     />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="shortcut icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0f14" />
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f8fafb" />
     <script>
       (function () {
         var cookieName = "tarn-ui-settings=";
@@ -48,6 +53,16 @@
         } else {
           document.documentElement.classList.add("dark");
           document.documentElement.classList.remove("light");
+        }
+
+        // Override theme-color meta to match the user's persisted choice
+        // rather than just the OS preference, so Safari chrome tracks the app.
+        if (mode !== "system") {
+          var metas = document.querySelectorAll('meta[name="theme-color"]');
+          var color = resolved === "dark" ? "#0a0f14" : "#f8fafb";
+          for (var i = 0; i < metas.length; i++) {
+            metas[i].setAttribute("content", color);
+          }
         }
       })();
     </script>
