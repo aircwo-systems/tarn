@@ -119,6 +119,8 @@
   // ─── Kind styling ───
   function spanColor(kind: string): string {
     switch (kind.toLowerCase()) {
+      case "external":
+        return "var(--color-text-muted)";
       case "gateway":
         return "var(--color-red)";
       case "lambda":
@@ -149,6 +151,8 @@
 
   function spanKindLabel(kind: string): string {
     switch (kind.toLowerCase()) {
+      case "external":
+        return "External";
       case "gateway":
         return "API GW";
       case "lambda":
@@ -227,6 +231,14 @@
     return trace.spans.filter((span) => !SUB_SPAN_KINDS.has(span.kind.toLowerCase()));
   }
 
+  function traceExternalSpan(trace: RequestTrace): TraceSpan | null {
+    return trace.spans.find((span) => span.kind.toLowerCase() === "external") ?? null;
+  }
+
+  function traceSourceLabel(trace: RequestTrace): string {
+    return traceExternalSpan(trace)?.name?.trim() ?? "";
+  }
+
   function worstTraceStatus(a: number, b: number): number {
     return Math.max(a, b);
   }
@@ -286,8 +298,40 @@
     };
   }
 
+  function queueReceiveCount(trace: RequestTrace): number {
+    const queueSpan = trace.spans.find((span) => span.kind.toLowerCase() === "queue");
+    const raw = queueSpan?.meta?.receiveCount ?? "";
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  function lambdaSpanName(trace: RequestTrace): string {
+    return trace.spans.find((span) => span.kind.toLowerCase() === "lambda")?.name ?? "";
+  }
+
+  function queueRetryAttempt(trace: RequestTrace): boolean {
+    return queueReceiveCount(trace) > 1;
+  }
+
+  function sameQueueLambdaAttempt(a: RequestTrace, b: RequestTrace): boolean {
+    const aQueue = a.spans.find((span) => span.kind.toLowerCase() === "queue")?.name ?? "";
+    const bQueue = b.spans.find((span) => span.kind.toLowerCase() === "queue")?.name ?? "";
+    if (!aQueue || !bQueue || aQueue !== bQueue) return false;
+    const aLambda = lambdaSpanName(a);
+    const bLambda = lambdaSpanName(b);
+    return !!aLambda && aLambda === bLambda;
+  }
+
+  function isRepeatedQueueRetry(flow: TraceFlow, candidate: RequestTrace): boolean {
+    if (!queueRetryAttempt(candidate)) return false;
+    return flow.rawTraces.some((trace) => sameQueueLambdaAttempt(trace, candidate));
+  }
+
   function shouldChainTrace(flow: TraceFlow, candidate: RequestTrace): boolean {
     if (flow.correlationId && candidate.correlationId && flow.correlationId === candidate.correlationId) {
+      if (isRepeatedQueueRetry(flow, candidate)) {
+        return false;
+      }
       return true;
     }
 
@@ -696,6 +740,10 @@
                     <span>·</span>
                     <span>{trace.traceCount} hops</span>
                   {/if}
+                  {#if traceSourceLabel(trace)}
+                    <span>·</span>
+                    <span>from {traceSourceLabel(trace)}</span>
+                  {/if}
                   <span class="ml-auto">{timeAgo(trace.startedAt)}</span>
                 </div>
                 {#if traceRaceSession(trace)}
@@ -770,6 +818,13 @@
                   class="shrink-0 inline-flex items-center rounded border border-primary/20 bg-primary/8 px-2 py-0.5 text-[10px] font-mono text-primary/85"
                 >
                   chained {selectedTrace.traceCount} traces
+                </span>
+              {/if}
+              {#if traceSourceLabel(selectedTrace)}
+                <span
+                  class="shrink-0 inline-flex items-center rounded border border-border/50 bg-background/60 px-2 py-0.5 text-[10px] font-mono text-muted-foreground"
+                >
+                  from {traceSourceLabel(selectedTrace)}
                 </span>
               {/if}
               <span

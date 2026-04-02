@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 )
 
 const (
@@ -32,6 +34,11 @@ type RequestEvent struct {
 	SecretID     string
 	FunctionName string
 	Source       string
+	CallerName   string
+	CallerKind   string
+	UserAgent    string
+	Origin       string
+	ClientIP     string
 	TokenValid   bool
 	StatusCode   int
 	Error        string
@@ -59,6 +66,17 @@ func ListenAndServe(addr string, opts Options) error {
 
 func handleGetSecret(w http.ResponseWriter, r *http.Request, opts Options) {
 	start := time.Now().UTC()
+	callerSpan := tracesvc.ExternalSpanFromRequest(r.Header, r.RemoteAddr)
+	callerName := ""
+	callerKind := ""
+	callerUserAgent := strings.TrimSpace(r.Header.Get("User-Agent"))
+	callerOrigin := strings.TrimSpace(r.Header.Get("Origin"))
+	callerIP := ""
+	if callerSpan != nil {
+		callerName = callerSpan.Name
+		callerKind = callerSpan.Meta["sourceKind"]
+		callerIP = callerSpan.Meta["clientIp"]
+	}
 	if opts.RequireToken {
 		if r.Header.Get(tokenHeader) != opts.SessionToken {
 			emitRequest(opts, RequestEvent{
@@ -67,6 +85,11 @@ func handleGetSecret(w http.ResponseWriter, r *http.Request, opts Options) {
 				SecretID:     r.URL.Query().Get("secretId"),
 				FunctionName: strings.TrimSpace(r.Header.Get(functionNameHeader)),
 				Source:       "local-secrets-proxy",
+				CallerName:   callerName,
+				CallerKind:   callerKind,
+				UserAgent:    callerUserAgent,
+				Origin:       callerOrigin,
+				ClientIP:     callerIP,
 				TokenValid:   false,
 				StatusCode:   http.StatusForbidden,
 				Error:        "invalid secrets extension session token",
@@ -86,6 +109,11 @@ func handleGetSecret(w http.ResponseWriter, r *http.Request, opts Options) {
 			SecretID:     "",
 			FunctionName: strings.TrimSpace(r.Header.Get(functionNameHeader)),
 			Source:       "local-secrets-proxy",
+			CallerName:   callerName,
+			CallerKind:   callerKind,
+			UserAgent:    callerUserAgent,
+			Origin:       callerOrigin,
+			ClientIP:     callerIP,
 			TokenValid:   true,
 			StatusCode:   http.StatusBadRequest,
 			Error:        "secretId parameter is required",
@@ -104,6 +132,11 @@ func handleGetSecret(w http.ResponseWriter, r *http.Request, opts Options) {
 			SecretID:     secretID,
 			FunctionName: strings.TrimSpace(r.Header.Get(functionNameHeader)),
 			Source:       "local-secrets-proxy",
+			CallerName:   callerName,
+			CallerKind:   callerKind,
+			UserAgent:    callerUserAgent,
+			Origin:       callerOrigin,
+			ClientIP:     callerIP,
 			TokenValid:   true,
 			StatusCode:   http.StatusBadRequest,
 			Error:        "upstream endpoint is required",
@@ -132,6 +165,11 @@ func handleGetSecret(w http.ResponseWriter, r *http.Request, opts Options) {
 			SecretID:     secretID,
 			FunctionName: strings.TrimSpace(r.Header.Get(functionNameHeader)),
 			Source:       "local-secrets-proxy",
+			CallerName:   callerName,
+			CallerKind:   callerKind,
+			UserAgent:    callerUserAgent,
+			Origin:       callerOrigin,
+			ClientIP:     callerIP,
 			TokenValid:   true,
 			StatusCode:   http.StatusInternalServerError,
 			Error:        fmt.Sprintf("failed to encode request: %v", err),
@@ -150,6 +188,11 @@ func handleGetSecret(w http.ResponseWriter, r *http.Request, opts Options) {
 			SecretID:     secretID,
 			FunctionName: strings.TrimSpace(r.Header.Get(functionNameHeader)),
 			Source:       "local-secrets-proxy",
+			CallerName:   callerName,
+			CallerKind:   callerKind,
+			UserAgent:    callerUserAgent,
+			Origin:       callerOrigin,
+			ClientIP:     callerIP,
 			TokenValid:   true,
 			StatusCode:   http.StatusInternalServerError,
 			Error:        err.Error(),
@@ -174,6 +217,11 @@ func handleGetSecret(w http.ResponseWriter, r *http.Request, opts Options) {
 			SecretID:     secretID,
 			FunctionName: strings.TrimSpace(r.Header.Get(functionNameHeader)),
 			Source:       "local-secrets-proxy",
+			CallerName:   callerName,
+			CallerKind:   callerKind,
+			UserAgent:    callerUserAgent,
+			Origin:       callerOrigin,
+			ClientIP:     callerIP,
 			TokenValid:   true,
 			StatusCode:   http.StatusBadGateway,
 			Error:        fmt.Sprintf("failed to reach secrets manager: %v", err),
@@ -195,6 +243,11 @@ func handleGetSecret(w http.ResponseWriter, r *http.Request, opts Options) {
 		SecretID:     secretID,
 		FunctionName: strings.TrimSpace(r.Header.Get(functionNameHeader)),
 		Source:       "local-secrets-proxy",
+		CallerName:   callerName,
+		CallerKind:   callerKind,
+		UserAgent:    callerUserAgent,
+		Origin:       callerOrigin,
+		ClientIP:     callerIP,
 		TokenValid:   true,
 		StatusCode:   resp.StatusCode,
 	})
