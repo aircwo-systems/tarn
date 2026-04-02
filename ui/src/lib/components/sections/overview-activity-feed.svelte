@@ -31,6 +31,10 @@
     return `${method} ${path}`.trim() || `trace:${trace.id.slice(0, 8)}`;
   }
 
+  function traceSource(trace: RequestTrace): string {
+    return trace.spans.find((span) => span.kind === "external")?.name ?? "";
+  }
+
   function spanColor(kind: string): string {
     switch (kind) {
       case "gateway": return "var(--color-chart-1)";
@@ -141,6 +145,11 @@
             <div class="truncate font-mono text-[11px] text-foreground/80">
               {traceLabel(trace)}
             </div>
+            {#if traceSource(trace)}
+              <div class="mt-0.5 truncate font-mono text-[10px] text-muted-foreground/50">
+                from {traceSource(trace)}
+              </div>
+            {/if}
             {#if chain.length}
               <div class="mt-1 flex items-center gap-px">
                 {#each chain as seg}

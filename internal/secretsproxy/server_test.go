@@ -106,6 +106,7 @@ func TestHandlerEmitsRequestEvent(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/secretsmanager/get?secretId=my-secret", nil)
 	req.Header.Set(tokenHeader, "expected-token")
 	req.Header.Set("X-Tarn-Function-Name", "local-fn")
+	req.Header.Set("User-Agent", "PostmanRuntime/7.43.0")
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 
@@ -123,6 +124,48 @@ func TestHandlerEmitsRequestEvent(t *testing.T) {
 	}
 	if !emitted.TokenValid {
 		t.Fatalf("event tokenValid = false, want true")
+	}
+	if emitted.CallerName != "Postman" {
+		t.Fatalf("event callerName = %q, want %q", emitted.CallerName, "Postman")
+	}
+}
+
+func TestHandlerDetectsFrontendCaller(t *testing.T) {
+	var emitted RequestEvent
+	httpClient := &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header: http.Header{
+					"Content-Type": []string{"application/json"},
+				},
+				Body: io.NopCloser(strings.NewReader(`{"Name":"my-secret"}`)),
+			}, nil
+		}),
+	}
+
+	h := NewHandler(Options{
+		UpstreamURL:  "http://tarn.local",
+		SessionToken: "expected-token",
+		RequireToken: true,
+		HTTPClient:   httpClient,
+		OnRequest: func(event RequestEvent) {
+			emitted = event
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/secretsmanager/get?secretId=my-secret", nil)
+	req.Header.Set(tokenHeader, "expected-token")
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X)")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if emitted.CallerName != "localhost:5173" {
+		t.Fatalf("event callerName = %q, want %q", emitted.CallerName, "localhost:5173")
+	}
+	if emitted.CallerKind != "frontend" {
+		t.Fatalf("event callerKind = %q, want %q", emitted.CallerKind, "frontend")
 	}
 }
 

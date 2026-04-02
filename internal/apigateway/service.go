@@ -89,14 +89,15 @@ type StageUpdateInput struct {
 
 // InvokeInput captures request data for invoke dispatch.
 type InvokeInput struct {
-	APIID    string
-	Stage    string
-	Method   string
-	Path     string
-	RawQuery string
-	Query    url.Values
-	Headers  http.Header
-	Body     []byte
+	APIID      string
+	Stage      string
+	Method     string
+	Path       string
+	RawQuery   string
+	Query      url.Values
+	Headers    http.Header
+	RemoteAddr string
+	Body       []byte
 }
 
 // InvokeOutput captures invoke response data.
@@ -617,6 +618,9 @@ func (s *Service) recordTrace(input *InvokeInput, start time.Time, correlationID
 	gwName := input.APIID
 	if api != nil {
 		gwName = api.Name
+	}
+	if callerSpan := tracesvc.ExternalSpanFromRequest(input.Headers, input.RemoteAddr); callerSpan != nil {
+		spans = append([]tracesvc.Span{*callerSpan}, spans...)
 	}
 	s.traceStore.Add(&tracesvc.Trace{
 		ID:            uuid.NewString()[:8],

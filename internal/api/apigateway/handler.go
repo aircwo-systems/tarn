@@ -360,14 +360,15 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := h.svc.Invoke(r.Context(), &apisvc.InvokeInput{
-		APIID:    apiID,
-		Stage:    stage,
-		Method:   r.Method,
-		Path:     path,
-		RawQuery: r.URL.RawQuery,
-		Query:    r.URL.Query(),
-		Headers:  r.Header,
-		Body:     body,
+		APIID:      apiID,
+		Stage:      stage,
+		Method:     r.Method,
+		Path:       path,
+		RawQuery:   r.URL.RawQuery,
+		Query:      r.URL.Query(),
+		Headers:    r.Header,
+		RemoteAddr: r.RemoteAddr,
+		Body:       body,
 	})
 	if err != nil {
 		status := http.StatusInternalServerError

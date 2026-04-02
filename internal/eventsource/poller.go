@@ -384,7 +384,10 @@ func (p *poller) recordTrace(start time.Time, functionName string, msgs []*types
 			Name:       p.mapping.QueueName,
 			DurationMs: sqsDurationMs,
 			Status:     queueStatus,
-			Meta:       map[string]string{"msgCount": fmt.Sprintf("%d", msgCount)},
+			Meta: map[string]string{
+				"msgCount":     fmt.Sprintf("%d", msgCount),
+				"receiveCount": fmt.Sprintf("%d", maxApproximateReceiveCount(msgs)),
+			},
 		},
 		{
 			Kind:       "lambda",
@@ -405,6 +408,19 @@ func (p *poller) recordTrace(start time.Time, functionName string, msgs []*types
 		Status:        status,
 		Spans:         append(spans, subSpans...),
 	})
+}
+
+func maxApproximateReceiveCount(msgs []*types.SQSMessage) int {
+	maxCount := 0
+	for _, msg := range msgs {
+		if msg == nil {
+			continue
+		}
+		if msg.ApproximateReceiveCount > maxCount {
+			maxCount = msg.ApproximateReceiveCount
+		}
+	}
+	return maxCount
 }
 
 func correlationIDFromSQSMessageAttributes(msgs []*types.SQSMessage) string {

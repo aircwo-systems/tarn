@@ -417,6 +417,9 @@ func recordSecretsProxyTelemetry(logsSvc *logs.Service, traceStore *trace.Store,
 			fnName,
 			event.TokenValid,
 		)
+		if event.CallerName != "" {
+			msg += " caller=" + event.CallerName
+		}
 		if event.Error != "" {
 			msg += " error=" + event.Error
 		}
@@ -462,6 +465,28 @@ func recordSecretsProxyTelemetry(logsSvc *logs.Service, traceStore *trace.Store,
 					Meta: map[string]string{
 						"source": "secrets-proxy",
 					},
+				},
+			}, spans...)
+		} else if event.CallerName != "" {
+			meta := map[string]string{
+				"sourceKind": event.CallerKind,
+			}
+			if event.UserAgent != "" {
+				meta["userAgent"] = event.UserAgent
+			}
+			if event.Origin != "" {
+				meta["origin"] = event.Origin
+			}
+			if event.ClientIP != "" {
+				meta["clientIp"] = event.ClientIP
+			}
+			spans = append([]trace.Span{
+				{
+					Kind:       "external",
+					Name:       event.CallerName,
+					DurationMs: 0,
+					Status:     spanStatus,
+					Meta:       meta,
 				},
 			}, spans...)
 		}
