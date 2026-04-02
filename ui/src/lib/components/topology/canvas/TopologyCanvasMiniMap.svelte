@@ -49,7 +49,12 @@
     })),
   );
 
-  const allEdges = $derived(model.allEdges);
+  const allEdges = $derived(
+    model.allEdges.map((edge, index) => ({
+      edge,
+      miniMapKey: `${edge.from.kind}:${edge.from.id}→${edge.to.kind}:${edge.to.id}:${index}`,
+    })),
+  );
 
   const visibleRect = $derived.by(() => {
     const left = clamp((0 - viewportTransform.offsetX) / viewportTransform.scale, 0, CONNECTION_CANVAS.width);
@@ -133,7 +138,7 @@
         stroke={palette.border}
       />
 
-      {#each allEdges as edge (edge.id)}
+      {#each allEdges as { edge, miniMapKey } (miniMapKey)}
         <line
           x1={minimapX(edge.from.x)}
           y1={minimapY(edge.from.y)}
