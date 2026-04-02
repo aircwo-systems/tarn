@@ -1129,6 +1129,7 @@
         <div class="flex min-h-0 flex-col">
           <div class="flex-1 overflow-hidden rounded-[5px]">
             <TopologyCanvas
+              {canvasExpanded}
               onNavigate={setTab}
               onExpandedChange={(expanded) => (canvasExpanded = expanded)}
             />
