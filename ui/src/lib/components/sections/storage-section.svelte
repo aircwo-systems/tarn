@@ -31,11 +31,15 @@
   type ObjectPreviewState = {
     loading: boolean;
     error: string;
+    notice: string;
     content: string;
     contentType: string;
     showRaw: boolean;
     copied: boolean;
   };
+
+  const MAX_TEXT_PREVIEW_BYTES = 256 * 1024;
+  const MAX_IMAGE_PREVIEW_BYTES = 5 * 1024 * 1024;
 
   let {
     sidebarCollapsed = false,
@@ -58,6 +62,7 @@
     return {
       loading: false,
       error: "",
+      notice: "",
       content: "",
       contentType: "",
       showRaw: false,
@@ -104,6 +109,26 @@
     return contentType.startsWith("image/") || contentType === "image/svg+xml";
   }
 
+  function isTextPreviewableContent(contentType: string): boolean {
+    const normalized = contentType.toLowerCase();
+    return (
+      normalized.startsWith("text/") ||
+      normalized.includes("/json") ||
+      normalized.includes("+json") ||
+      normalized.includes("/xml") ||
+      normalized.includes("+xml") ||
+      normalized.includes("javascript") ||
+      normalized.includes("typescript") ||
+      normalized.includes("yaml") ||
+      normalized.includes("yml") ||
+      normalized.includes("svg")
+    );
+  }
+
+  function canToggleRawPreview(contentType: string): boolean {
+    return contentType === "image/svg+xml";
+  }
+
   function encodeS3KeyPath(key: string): string {
     return key
       .split("/")
@@ -145,23 +170,79 @@
     patchPreviewState(key, {
       loading: true,
       error: "",
+      notice: "",
       copied: false,
       showRaw: false,
     });
 
     try {
       const path = encodeS3KeyPath(key);
+      const objectSize = objects.find((object) => object.key === key)?.size ?? 0;
+      const headResp = await fetch(`/_s3/${bucket}/${path}`, { method: "HEAD" });
+      if (!headResp.ok) {
+        throw new Error(`HTTP ${headResp.status}`);
+      }
+
+      const contentType = headResp.headers.get("content-type") ?? "application/octet-stream";
+      const headerLength = parseInt(headResp.headers.get("content-length") ?? "0", 10);
+      const contentLength = Number.isFinite(headerLength) && headerLength > 0
+        ? headerLength
+        : objectSize;
+
+      if (isImageContent(contentType) && contentType !== "image/svg+xml") {
+        if (contentLength > MAX_IMAGE_PREVIEW_BYTES) {
+          patchPreviewState(key, {
+            loading: false,
+            error: "",
+            notice: `Preview disabled for images over ${formatBytes(MAX_IMAGE_PREVIEW_BYTES)}.`,
+            content: "",
+            contentType,
+          });
+          return;
+        }
+
+        patchPreviewState(key, {
+          loading: false,
+          error: "",
+          notice: "",
+          content: "",
+          contentType,
+        });
+        return;
+      }
+
+      if (!isTextPreviewableContent(contentType)) {
+        patchPreviewState(key, {
+          loading: false,
+          error: "",
+          notice: "Preview unavailable for binary object content.",
+          content: "",
+          contentType,
+        });
+        return;
+      }
+
+      if (contentLength > MAX_TEXT_PREVIEW_BYTES) {
+        patchPreviewState(key, {
+          loading: false,
+          error: "",
+          notice: `Preview disabled for objects over ${formatBytes(MAX_TEXT_PREVIEW_BYTES)}.`,
+          content: "",
+          contentType,
+        });
+        return;
+      }
+
       const resp = await fetch(`/_s3/${bucket}/${path}`);
       if (!resp.ok) {
         throw new Error(`HTTP ${resp.status}`);
       }
-
-      const contentType = resp.headers.get("content-type") ?? "application/octet-stream";
       const text = await resp.text();
 
       patchPreviewState(key, {
         loading: false,
         error: "",
+        notice: "",
         content: text,
         contentType,
       });
@@ -170,6 +251,7 @@
         loading: false,
         contentType: "",
         content: "",
+        notice: "",
         error: error instanceof Error ? error.message : "Failed to load object",
       });
     }
@@ -209,7 +291,11 @@
 
   function toggleRawPreview(key: string) {
     const preview = ensurePreviewState(key);
-    patchPreviewState(key, { showRaw: !preview.showRaw });
+    const nextShowRaw = !preview.showRaw;
+    patchPreviewState(key, { showRaw: nextShowRaw });
+    if (nextShowRaw && !preview.content && canToggleRawPreview(preview.contentType)) {
+      void loadObjectPreview(selectedBucket, key, true);
+    }
   }
 </script>
 
@@ -355,7 +441,7 @@
                       <p class="text-[10px] text-muted-foreground/70 font-mono">{preview?.contentType || "--"}</p>
 
                       <div class="flex items-center gap-3">
-                        {#if preview && isImageContent(preview.contentType)}
+                        {#if preview && canToggleRawPreview(preview.contentType)}
                           <button
                             type="button"
                             class="flex items-center gap-1.5 text-[11px] {preview.showRaw ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
@@ -371,7 +457,7 @@
                           </button>
                         {/if}
 
-                        {#if preview && (!isImageContent(preview.contentType) || preview.showRaw)}
+                        {#if preview && preview.content}
                           <button
                             type="button"
                             class="flex items-center gap-1.5 text-[11px] transition-colors {preview.copied ? 'text-green-400' : 'text-muted-foreground hover:text-foreground'}"
@@ -393,6 +479,8 @@
                       <div class="py-4 text-center text-xs text-muted-foreground/70 font-mono">Loading object...</div>
                     {:else if preview.error}
                       <div class="py-4 text-center text-xs text-destructive-300 font-mono">{preview.error}</div>
+                    {:else if preview.notice}
+                      <div class="py-4 text-center text-xs text-muted-foreground/70 font-mono">{preview.notice}</div>
                     {:else if isImageContent(preview.contentType) && !preview.showRaw}
                       <div class="flex justify-center bg-black/5 rounded-md p-4 border border-border/50">
                         <img
