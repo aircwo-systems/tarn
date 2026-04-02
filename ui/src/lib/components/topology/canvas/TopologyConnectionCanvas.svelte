@@ -16,11 +16,13 @@
   } from "../registry";
   import type { ConnectionNode, NodeSide, NodeSize, NodeView } from "../types";
   import {
+    applyPreviewNodePositions,
     clampViewportTransform,
     CONNECTION_CANVAS,
     computeViewportTransform,
     findNodeAt,
     hoverFocusState,
+    nodeBounds,
     resolveSnappedNodePosition,
     viewportToCanvasPoint,
     type InfraNodePosition,
@@ -86,13 +88,13 @@
     | {
         kind: "infra";
         pointerId: number;
-        nodeId: string;
-        nodeKind: ConnectionNode["kind"];
+        anchorNodeId: string;
+        anchorNodeKind: ConnectionNode["kind"];
+        dragKeys: string[];
         startClientX: number;
         startClientY: number;
-        originX: number;
-        originY: number;
-        latestPosition: NodePosition;
+        originPositions: Record<string, NodePosition>;
+        latestPositions: Record<string, NodePosition>;
         dragging: boolean;
       }
     | {
@@ -112,6 +114,8 @@
   const TRACKPAD_ZOOM_SENSITIVITY = 0.0025;
   const PLACEMENT_CONFIRMATION_FLASHES = 3;
   const PLACEMENT_CONFIRMATION_DURATION_MS = 1320;
+  const ACTIVITY_ANIMATION_NODE_THRESHOLD = 42;
+  const ACTIVITY_ANIMATION_EDGE_THRESHOLD = 84;
 
   let viewportWidth = $state<number>(CONNECTION_CANVAS.width);
   let viewportHeight = $state<number>(CONNECTION_CANVAS.height);
@@ -124,18 +128,22 @@
   let pointerInteraction = $state<PointerInteraction>({ kind: "idle" });
   let appliedViewportResetToken = $state(0);
   let placementConfirmation = $state<{
-    nodeId: string;
-    nodeKind: ConnectionNode["kind"];
+    nodeKeys: string[];
     startedAt: number;
     flashes: number;
     durationMs: number;
   } | null>(null);
+  let selectedNodeKeys = $state<Set<string>>(new Set());
 
   let redraw = $state<() => void>(() => {});
   let palette = $state<TopologyCanvasPalette>(readTopologyCanvasPalette());
   let dragSettleTimer: ReturnType<typeof window.setTimeout> | null = null;
   let placementConfirmationTimer: ReturnType<typeof window.setTimeout> | null =
     null;
+  let hoverFrame: number | null = null;
+  let pendingHoverPointer = $state<{ clientX: number; clientY: number } | null>(
+    null,
+  );
   // Store only the clicked node's kind+id; derive the live node from the current
   // model so the context menu always reflects post-rebuild state and never
   // triggers spurious onValueChange callbacks from stale prop values.
@@ -170,19 +178,20 @@
     }),
   );
   const hoverFocus = $derived(hoverFocusState(model, hoveredNodeId));
-  const activeDragNode = $derived(
+  const activeDragKeys = $derived(
     pointerInteraction.kind === "infra" && pointerInteraction.dragging
-      ? {
-          nodeId: pointerInteraction.nodeId,
-          nodeKind: pointerInteraction.nodeKind,
-        }
-      : null,
+      ? pointerInteraction.dragKeys
+      : [],
+  );
+  const activityAnimationsEnabled = $derived(
+    model.allNodes.length <= ACTIVITY_ANIMATION_NODE_THRESHOLD &&
+      model.allEdges.length <= ACTIVITY_ANIMATION_EDGE_THRESHOLD,
   );
   const shouldAnimate = $derived(
     !!selectedTrace ||
-      model.traces.edgeActivity.size > 0 ||
       !!placementConfirmation ||
-      !!activeDragNode,
+      activeDragKeys.length > 0 ||
+      (activityAnimationsEnabled && model.traces.edgeActivity.size > 0),
   );
   const minZoomScale = $derived(baselineViewport.scale * 0.78);
   const maxZoomScale = $derived(baselineViewport.scale * 2.2);
@@ -192,6 +201,7 @@
   const overlayCursor = $derived(
     canvasExpanded && hoveredNode ? "grab" : "default",
   );
+  const selectedNodeCount = $derived(selectedNodeKeys.size);
 
   onMount(() => {
     if (typeof window === "undefined") return;
@@ -226,6 +236,7 @@
     return () => {
       clearDragSettleTimer();
       clearPlacementConfirmation();
+      clearPendingHoverFrame();
       observer.disconnect();
       window.removeEventListener("keydown", handleWindowKeyDown);
     };
@@ -237,6 +248,7 @@
   }
 
   function handleCanvasNodeLeave() {
+    clearPendingHoverFrame();
     hoveredNodeId = null;
     onNodeLeave();
   }
@@ -249,19 +261,28 @@
     const point = canvasPointFromPointer(event);
     const matched = point ? findNodeAt(model, point.x, point.y) : null;
 
-    if (canvasExpanded && matched) {
+    if (canvasExpanded && matched && !event.shiftKey) {
+      const matchedKey = nodeKey(matched.kind, matched.id);
+      const dragKeys =
+        selectedNodeKeys.has(matchedKey) && selectedNodeKeys.size > 0
+          ? [...selectedNodeKeys]
+          : [matchedKey];
+      const originPositions = collectNodePositions(dragKeys, matched);
+      if (!selectedNodeKeys.has(matchedKey) || selectedNodeKeys.size === 0) {
+        selectedNodeKeys = new Set([matchedKey]);
+      }
       canvasContainer.setPointerCapture?.(event.pointerId);
       handleCanvasNodeLeave();
       pointerInteraction = {
         kind: "infra",
         pointerId: event.pointerId,
-        nodeId: matched.id,
-        nodeKind: matched.kind,
+        anchorNodeId: matched.id,
+        anchorNodeKind: matched.kind,
+        dragKeys,
         startClientX: event.clientX,
         startClientY: event.clientY,
-        originX: matched.x,
-        originY: matched.y,
-        latestPosition: { x: matched.x, y: matched.y },
+        originPositions,
+        latestPositions: originPositions,
         dragging: false,
       };
       event.preventDefault();
@@ -278,7 +299,7 @@
       moved: false,
     };
 
-    updateHover(event);
+    scheduleHoverUpdate(event.clientX, event.clientY);
   }
 
   function handlePointerMove(event: PointerEvent) {
@@ -288,35 +309,28 @@
       const dragStarted = dragMovedEnough(activeInteraction, event);
       if (!dragStarted) return;
 
-      const nextPosition = resolveSnappedNodePosition(
-        model,
-        {
-          id: activeInteraction.nodeId,
-          kind: activeInteraction.nodeKind,
-        },
-        activeInteraction.originX +
-          (event.clientX - activeInteraction.startClientX) /
-            viewportTransform.scale,
-        activeInteraction.originY +
-          (event.clientY - activeInteraction.startClientY) /
-            viewportTransform.scale,
+      const nextPositions = resolveDraggedPositions(
+        activeInteraction,
+        (event.clientX - activeInteraction.startClientX) /
+          viewportTransform.scale,
+        (event.clientY - activeInteraction.startClientY) /
+          viewportTransform.scale,
       );
-      const positionChanged =
-        nextPosition.x !== activeInteraction.latestPosition.x ||
-        nextPosition.y !== activeInteraction.latestPosition.y;
+      const positionChanged = !dragPositionsEqual(
+        activeInteraction.dragKeys,
+        nextPositions,
+        activeInteraction.latestPositions,
+      );
       pointerInteraction = {
         ...activeInteraction,
         dragging: activeInteraction.dragging || positionChanged,
-        latestPosition: positionChanged
-          ? nextPosition
-          : activeInteraction.latestPosition,
+        latestPositions: positionChanged
+          ? nextPositions
+          : activeInteraction.latestPositions,
       };
       if (positionChanged) {
-        onNodePositionChange(
-          activeInteraction.nodeId,
-          activeInteraction.nodeKind,
-          nextPosition,
-        );
+        applyPreviewNodePositions(model, nextPositions);
+        redraw?.();
         scheduleDragSettle();
       }
       handleCanvasNodeLeave();
@@ -332,14 +346,14 @@
         pointerInteraction = { ...pointerInteraction, moved: true };
       }
       if (!pointerInteraction.moved) {
-        updateHover(event);
+        scheduleHoverUpdate(event.clientX, event.clientY);
       } else {
         handleCanvasNodeLeave();
       }
       return;
     }
 
-    updateHover(event);
+    scheduleHoverUpdate(event.clientX, event.clientY);
   }
 
   function handlePointerUp(event: PointerEvent) {
@@ -357,15 +371,24 @@
     releasePointer(event.pointerId);
     pointerInteraction = { kind: "idle" };
 
-    if (
-      finishedInteraction.kind === "press" &&
-      !finishedInteraction.moved &&
-      finishedInteraction.targetNodeKind === "gateway" &&
-      finishedInteraction.targetNodeId
-    ) {
-      onGatewayClick(finishedInteraction.targetNodeId);
+    if (finishedInteraction.kind === "press" && !finishedInteraction.moved) {
+      if (finishedInteraction.targetNodeId && finishedInteraction.targetNodeKind) {
+        updateSelection(
+          finishedInteraction.targetNodeKind,
+          finishedInteraction.targetNodeId,
+          event.shiftKey,
+        );
+        if (
+          finishedInteraction.targetNodeKind === "gateway" &&
+          !event.shiftKey
+        ) {
+          onGatewayClick(finishedInteraction.targetNodeId);
+        }
+      } else if (!event.shiftKey) {
+        clearSelection();
+      }
     }
-    updateHover(event);
+    scheduleHoverUpdate(event.clientX, event.clientY);
   }
 
   function handlePointerCancel(event: PointerEvent) {
@@ -374,6 +397,10 @@
       pointerInteraction.kind !== "idle" &&
       event.pointerId === pointerInteraction.pointerId
     ) {
+      if (pointerInteraction.kind === "infra" && pointerInteraction.dragging) {
+        applyPreviewNodePositions(model, pointerInteraction.originPositions);
+        redraw?.();
+      }
       releasePointer(event.pointerId);
       pointerInteraction = { kind: "idle" };
     }
@@ -533,8 +560,28 @@
     );
   }
 
-  function updateHover(event: PointerEvent) {
-    const point = canvasPointFromPointer(event);
+  function scheduleHoverUpdate(clientX: number, clientY: number) {
+    pendingHoverPointer = { clientX, clientY };
+    if (typeof window === "undefined") return;
+    if (hoverFrame !== null) return;
+    hoverFrame = window.requestAnimationFrame(() => {
+      hoverFrame = null;
+      const pointer = pendingHoverPointer;
+      pendingHoverPointer = null;
+      if (!pointer) return;
+      updateHover(pointer.clientX, pointer.clientY);
+    });
+  }
+
+  function clearPendingHoverFrame() {
+    pendingHoverPointer = null;
+    if (hoverFrame === null || typeof window === "undefined") return;
+    window.cancelAnimationFrame(hoverFrame);
+    hoverFrame = null;
+  }
+
+  function updateHover(clientX: number, clientY: number) {
+    const point = canvasPointFromClient(clientX, clientY);
     if (
       !point ||
       point.x < 0 ||
@@ -556,9 +603,20 @@
 
     onNodeHover({
       node: matched,
-      clientX: event.clientX,
-      clientY: event.clientY,
+      clientX,
+      clientY,
     });
+  }
+
+  function canvasPointFromClient(clientX: number, clientY: number) {
+    const rect = canvasContainer?.getBoundingClientRect();
+    if (!rect) return null;
+
+    return viewportToCanvasPoint(
+      clientX - rect.left,
+      clientY - rect.top,
+      viewportTransform,
+    );
   }
 
   function dragMovedEnough(
@@ -601,29 +659,37 @@
     clearDragSettleTimer();
     releasePointer(interaction.pointerId);
     pointerInteraction = { kind: "idle" };
+    const anchorKey = nodeKey(interaction.anchorNodeKind, interaction.anchorNodeId);
+    selectedNodeKeys =
+      interaction.dragging && interaction.dragKeys.length > 1
+        ? new Set([anchorKey])
+        : new Set(interaction.dragKeys);
     if (interaction.dragging) {
-      onNodePositionChange(
-        interaction.nodeId,
-        interaction.nodeKind,
-        interaction.latestPosition,
-      );
-      triggerPlacementConfirmation(interaction.nodeId, interaction.nodeKind);
-    } else if (interaction.nodeKind === "gateway") {
-      onGatewayClick(interaction.nodeId);
+      applyPreviewNodePositions(model, interaction.latestPositions);
+      for (const key of interaction.dragKeys) {
+        const parsed = parseNodeKey(key);
+        const position = interaction.latestPositions[key];
+        if (!parsed || !position) continue;
+        onNodePositionChange(parsed.id, parsed.kind, position);
+      }
+      triggerPlacementConfirmation(interaction.dragKeys);
+    } else {
+      if (
+        interaction.dragKeys.length === 1 &&
+        interaction.anchorNodeKind === "gateway"
+      ) {
+        onGatewayClick(interaction.anchorNodeId);
+      }
     }
     handleCanvasNodeLeave();
   }
 
-  function triggerPlacementConfirmation(
-    nodeId: string,
-    nodeKind: ConnectionNode["kind"],
-  ) {
+  function triggerPlacementConfirmation(nodeKeys: string[]) {
     clearPlacementConfirmation();
     const startedAt =
       typeof performance !== "undefined" ? performance.now() : Date.now();
     placementConfirmation = {
-      nodeId,
-      nodeKind,
+      nodeKeys,
       startedAt,
       flashes: PLACEMENT_CONFIRMATION_FLASHES,
       durationMs: PLACEMENT_CONFIRMATION_DURATION_MS,
@@ -649,26 +715,165 @@
     }
   }
 
+  function nodeKey(kind: ConnectionNode["kind"], id: string): string {
+    return `${kind}:${id}`;
+  }
+
+  function parseNodeKey(
+    key: string,
+  ): { kind: ConnectionNode["kind"]; id: string } | null {
+    const separatorIndex = key.indexOf(":");
+    if (separatorIndex === -1) return null;
+    const kind = key.slice(0, separatorIndex) as ConnectionNode["kind"];
+    const id = key.slice(separatorIndex + 1);
+    if (!id) return null;
+    return { kind, id };
+  }
+
+  function clearSelection() {
+    if (selectedNodeKeys.size === 0) return;
+    selectedNodeKeys = new Set();
+  }
+
+  function updateSelection(
+    kind: ConnectionNode["kind"],
+    id: string,
+    additive: boolean,
+  ) {
+    const key = nodeKey(kind, id);
+    if (additive) {
+      const next = new Set(selectedNodeKeys);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      selectedNodeKeys = next;
+      return;
+    }
+
+    if (selectedNodeKeys.size === 1 && selectedNodeKeys.has(key)) return;
+    selectedNodeKeys = new Set([key]);
+  }
+
+  function collectNodePositions(
+    keys: string[],
+    fallbackNode?: ConnectionNode | null,
+  ): Record<string, NodePosition> {
+    const positions: Record<string, NodePosition> = {};
+    for (const key of keys) {
+      const parsed = parseNodeKey(key);
+      const node =
+        parsed ? findNodeByKindId(model, parsed.kind, parsed.id) : null;
+      const resolved =
+        node ??
+        (fallbackNode && key === nodeKey(fallbackNode.kind, fallbackNode.id)
+          ? fallbackNode
+          : null);
+      if (!resolved) continue;
+      positions[key] = { x: resolved.x, y: resolved.y };
+    }
+    return positions;
+  }
+
+  function resolveDraggedPositions(
+    interaction: Extract<PointerInteraction, { kind: "infra" }>,
+    deltaX: number,
+    deltaY: number,
+  ): Record<string, NodePosition> {
+    if (interaction.dragKeys.length <= 1) {
+      const anchorKey = nodeKey(
+        interaction.anchorNodeKind,
+        interaction.anchorNodeId,
+      );
+      const anchorOrigin = interaction.originPositions[anchorKey];
+      const nextPosition = resolveSnappedNodePosition(
+        model,
+        {
+          id: interaction.anchorNodeId,
+          kind: interaction.anchorNodeKind,
+        },
+        (anchorOrigin?.x ?? 0) + deltaX,
+        (anchorOrigin?.y ?? 0) + deltaY,
+      );
+      return { [anchorKey]: nextPosition };
+    }
+
+    const constrainedDelta = constrainGroupDelta(
+      interaction.dragKeys,
+      interaction.originPositions,
+      deltaX,
+      deltaY,
+    );
+    const nextPositions: Record<string, NodePosition> = {};
+    for (const key of interaction.dragKeys) {
+      const origin = interaction.originPositions[key];
+      if (!origin) continue;
+      nextPositions[key] = {
+        x: origin.x + constrainedDelta.x,
+        y: origin.y + constrainedDelta.y,
+      };
+    }
+    return nextPositions;
+  }
+
+  function constrainGroupDelta(
+    dragKeys: string[],
+    originPositions: Record<string, NodePosition>,
+    deltaX: number,
+    deltaY: number,
+  ): NodePosition {
+    let minDeltaX = -Infinity;
+    let maxDeltaX = Infinity;
+    let minDeltaY = -Infinity;
+    let maxDeltaY = Infinity;
+
+    for (const key of dragKeys) {
+      const parsed = parseNodeKey(key);
+      const node = parsed ? findNodeByKindId(model, parsed.kind, parsed.id) : null;
+      const origin = originPositions[key];
+      if (!node || !origin) continue;
+
+      const originalX = node.x;
+      const originalY = node.y;
+      node.x = origin.x;
+      node.y = origin.y;
+      const bounds = nodeBounds(node);
+      node.x = originalX;
+      node.y = originalY;
+
+      minDeltaX = Math.max(minDeltaX, 24 - bounds.left);
+      maxDeltaX = Math.min(maxDeltaX, CONNECTION_CANVAS.width - 24 - bounds.right);
+      minDeltaY = Math.max(minDeltaY, 24 - bounds.top);
+      maxDeltaY = Math.min(
+        maxDeltaY,
+        CONNECTION_CANVAS.height - 24 - bounds.bottom,
+      );
+    }
+
+    return {
+      x: Math.min(maxDeltaX, Math.max(minDeltaX, deltaX)),
+      y: Math.min(maxDeltaY, Math.max(minDeltaY, deltaY)),
+    };
+  }
+
+  function dragPositionsEqual(
+    dragKeys: string[],
+    nextPositions: Record<string, NodePosition>,
+    currentPositions: Record<string, NodePosition>,
+  ): boolean {
+    for (const key of dragKeys) {
+      const next = nextPositions[key];
+      const current = currentPositions[key];
+      if (!next || !current) return false;
+      if (next.x !== current.x || next.y !== current.y) return false;
+    }
+    return true;
+  }
+
   function findNodeById(
     graph: TopologyGraphModel,
     nodeId: string | null,
   ): ConnectionNode | null {
     if (!nodeId) return null;
-
-    const nodes: ConnectionNode[] = [
-      ...graph.nodes.gateways,
-      ...graph.nodes.eventbridges,
-      ...graph.nodes.topics,
-      ...graph.nodes.queues,
-      ...graph.nodes.dynamodbs,
-      ...graph.nodes.functions,
-      ...(graph.nodes.cacheExtension ? [graph.nodes.cacheExtension] : []),
-      ...graph.nodes.secrets,
-      ...graph.nodes.buckets,
-      ...graph.nodes.infra,
-    ];
-
-    return nodes.find((node) => node.id === nodeId) ?? null;
+    return graph.nodeById.get(nodeId) ?? null;
   }
 
   function findNodeByKindId(
@@ -676,27 +881,13 @@
     kind: string,
     nodeId: string,
   ): ConnectionNode | null {
-    const nodes: ConnectionNode[] = [
-      ...graph.nodes.gateways,
-      ...graph.nodes.eventbridges,
-      ...graph.nodes.topics,
-      ...graph.nodes.queues,
-      ...graph.nodes.dynamodbs,
-      ...graph.nodes.functions,
-      ...(graph.nodes.cacheExtension ? [graph.nodes.cacheExtension] : []),
-      ...graph.nodes.secrets,
-      ...graph.nodes.buckets,
-      ...graph.nodes.infra,
-    ];
-
-    return (
-      nodes.find((node) => node.kind === kind && node.id === nodeId) ?? null
-    );
+    return graph.nodeByGraphKey.get(`${kind}:${nodeId}`) ?? null;
   }
 
   $effect(() => {
     model;
     hoveredNodeId;
+    selectedNodeKeys;
     viewportTransform.scale;
     viewportTransform.offsetX;
     viewportTransform.offsetY;
@@ -723,6 +914,20 @@
       viewportDirty = false;
     }
   });
+
+  $effect(() => {
+    const validNodeKeys = new Set<string>();
+    for (const node of model.allNodes) {
+      validNodeKeys.add(nodeKey(node.kind, node.id));
+    }
+
+    const filteredSelection = [...selectedNodeKeys].filter((key) =>
+      validNodeKeys.has(key),
+    );
+    if (filteredSelection.length !== selectedNodeKeys.size) {
+      selectedNodeKeys = new Set(filteredSelection);
+    }
+  });
 </script>
 
 <div
@@ -734,6 +939,15 @@
 >
   {#if canvasExpanded}
     {#if panEnabled}
+      {#if selectedNodeCount > 0}
+        <div class="absolute left-3 top-3 z-20 rounded-lg border border-primary/40 bg-background/90 px-3 py-2 font-mono text-[10px] text-foreground shadow-lg backdrop-blur-sm">
+          <div class="flex items-center gap-2">
+            <span class="inline-block h-2 w-2 rounded-full bg-primary"></span>
+            <span>{selectedNodeCount} selected</span>
+            <span class="text-muted-foreground/60">Shift+Click to add/remove</span>
+          </div>
+        </div>
+      {/if}
       <div
         class="absolute bottom-3 left-3 z-20 flex flex-col gap-1"
       >
@@ -802,6 +1016,7 @@
       {hoverFocus}
       {palette}
       {viewportTransform}
+      {activityAnimationsEnabled}
     />
     <TopologyCanvasNodeLayer
       {model}
@@ -810,7 +1025,8 @@
       {palette}
       {viewportTransform}
       {hoveredNodeId}
-      {activeDragNode}
+      {selectedNodeKeys}
+      {activeDragKeys}
       {placementConfirmation}
     />
   </Canvas>

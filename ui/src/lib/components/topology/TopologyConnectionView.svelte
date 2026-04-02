@@ -16,6 +16,7 @@
   import type { ConnectionNode } from "./types";
   import {
     buildTopologyGraph,
+    withTopologyTraceActivity,
     type InfraNodePosition,
     type NodeOverride,
   } from "./topology-connection-model";
@@ -81,7 +82,7 @@
     onNavigate?: (tab: string) => void;
   } = $props();
 
-  const model = $derived(
+  const staticModel = $derived(
     buildTopologyGraph({
       gateways,
       functions,
@@ -97,9 +98,9 @@
       infraConnections,
       eventBridgeRules,
       infraOrderIds,
-      recentTraces,
     }),
   );
+  const model = $derived(withTopologyTraceActivity(staticModel, recentTraces));
   const selectedTrace: RequestTrace | null = null;
 
   type TooltipState = {

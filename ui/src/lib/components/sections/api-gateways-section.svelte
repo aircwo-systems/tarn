@@ -150,28 +150,3 @@
   {/if}
   </div>
 </div>
-
-<!-- Combined export — slides in from right edge, rounded left only -->
-{#if gateways.length > 0}
-  <div
-    transition:fly={{ x: 160, duration: 300, opacity: 1 }}
-    class="fixed bottom-8 right-0 z-50 flex items-center gap-4 rounded-l-xl border border-r-0 border-border bg-card pl-4 pr-5 py-3"
-  >
-    <StackIcon size={13} class="text-muted-foreground/70 shrink-0" />
-    <div class="leading-tight">
-      <p class="text-xs font-medium text-foreground">Combined Collection</p>
-      <p class="text-[11px] text-muted-foreground/70">
-        {gateways.length}
-        {gateways.length === 1 ? "gateway" : "gateways"} · sub-folders per gateway
-      </p>
-    </div>
-    <button
-      type="button"
-      onclick={downloadAll}
-      class="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-primary/50 bg-primary/10 px-3 py-1.5 text-xs text-primary hover:bg-primary/20 transition-colors"
-    >
-      <DownloadSimpleIcon size={12} />
-      Download all
-    </button>
-  </div>
-{/if}

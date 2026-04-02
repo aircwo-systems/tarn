@@ -37,39 +37,19 @@
 
   let miniMapElement = $state<HTMLDivElement | null>(null);
 
-  const allNodes = $derived([
-    ...model.nodes.gateways.map((node) => ({ node, stroke: kindColor("gateway", palette) })),
-    ...model.nodes.eventbridges.map((node) => ({ node, stroke: kindColor("eventbridge", palette) })),
-    ...model.nodes.topics.map((node) => ({ node, stroke: kindColor("topic", palette) })),
-    ...model.nodes.queues.map((node) => ({ node, stroke: kindColor("queue", palette) })),
-    ...model.nodes.functions.map((node) => ({ node, stroke: kindColor("function", palette) })),
-    ...model.nodes.buckets.map((node) => ({ node, stroke: kindColor("bucket", palette) })),
-    ...model.nodes.secrets.map((node) => ({ node, stroke: kindColor("secret", palette) })),
-    ...(model.nodes.cacheExtension
-      ? [{ node: model.nodes.cacheExtension, stroke: kindColor("extension", palette) }]
-      : []),
-    ...model.nodes.infra.map((node) => ({
+  const allNodes = $derived(
+    model.allNodes.map((node) => ({
       node,
       stroke:
-        node.status === "connected"
-          ? infraKindColor(model.infraById.get(node.id)?.kind ?? "", palette)
-          : palette.destructive,
+        node.kind === "infra"
+          ? node.status === "connected"
+            ? infraKindColor(model.infraById.get(node.id)?.kind ?? "", palette)
+            : palette.destructive
+          : kindColor(node.kind, palette),
     })),
-  ]);
+  );
 
-  const allEdges = $derived([
-    ...model.edges.apigwToQueue,
-    ...model.edges.apigwToFunction,
-    ...model.edges.eventbridgeToFunction,
-    ...model.edges.snsToQueue,
-    ...model.edges.snsToFunction,
-    ...model.edges.queueToFunction,
-    ...model.edges.queueToDlq,
-    ...model.edges.bucketToFunction,
-    ...model.edges.functionToCache,
-    ...model.edges.cacheToSecret,
-    ...model.edges.functionToInfra,
-  ]);
+  const allEdges = $derived(model.allEdges);
 
   const visibleRect = $derived.by(() => {
     const left = clamp((0 - viewportTransform.offsetX) / viewportTransform.scale, 0, CONNECTION_CANVAS.width);

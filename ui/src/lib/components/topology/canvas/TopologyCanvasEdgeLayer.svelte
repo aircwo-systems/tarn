@@ -17,17 +17,20 @@
 
   const MONO_FONT = '"JetBrains Mono Variable", "SF Mono", ui-monospace, monospace';
   const pathCache = new Map<string, Path2D>();
+  const PATH_CACHE_LIMIT = 4096;
 
   let {
     model,
     hoverFocus,
     palette,
     viewportTransform,
+    activityAnimationsEnabled = true,
   }: {
     model: TopologyGraphModel;
     hoverFocus: HoverFocusState;
     palette: TopologyCanvasPalette;
     viewportTransform: ViewportTransform;
+    activityAnimationsEnabled?: boolean;
   } = $props();
 
   const render: Render = ({ context, time }) => {
@@ -59,7 +62,7 @@
           palette,
         ),
         dash: isActive ? [6, 3] : isConnected ? [] : [5, 4],
-        animateDash: isActive,
+        animateDash: activityAnimationsEnabled && isActive,
         time,
       });
 
@@ -87,7 +90,7 @@
         width: activityWidth(edge.activity, edge.active ? 1.45 : 1.2),
         opacity: focusOpacity(activityOpacity(edge.activity, edge.active ? 0.74 : 0.5), isFocused, palette),
         dash: edge.activity ? [6, 3] : edge.active ? [] : [5, 3],
-        animateDash: !!edge.activity,
+        animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
     }
@@ -102,7 +105,7 @@
         width: activityWidth(edge.activity, edge.active ? 1.45 : 1.2),
         opacity: focusOpacity(activityOpacity(edge.activity, edge.active ? 0.82 : 0.58), isFocused, palette),
         dash: edge.activity ? [6, 3] : [],
-        animateDash: !!edge.activity,
+        animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
 
@@ -133,7 +136,7 @@
         width: activityWidth(edge.activity, 1.25),
         opacity: focusOpacity(activityOpacity(edge.activity, 0.7), isFocused, palette),
         dash: edge.activity ? [6, 3] : [5, 4],
-        animateDash: !!edge.activity,
+        animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
     }
@@ -148,7 +151,7 @@
         width: activityWidth(edge.activity, 1.3),
         opacity: focusOpacity(activityOpacity(edge.activity, 0.7), isFocused, palette),
         dash: edge.activity ? [6, 3] : [5, 4],
-        animateDash: !!edge.activity,
+        animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
     }
@@ -163,7 +166,7 @@
         width: activityWidth(edge.activity, 1.3),
         opacity: focusOpacity(activityOpacity(edge.activity, 0.76), isFocused, palette),
         dash: edge.activity ? [6, 3] : [5, 4],
-        animateDash: !!edge.activity,
+        animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
     }
@@ -178,7 +181,7 @@
         width: activityWidth(edge.activity, 1.35),
         opacity: focusOpacity(activityOpacity(edge.activity, 0.72), isFocused, palette),
         dash: edge.activity ? [6, 3] : [],
-        animateDash: !!edge.activity,
+        animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
 
@@ -218,7 +221,7 @@
         width: activityWidth(edge.activity, 1.35),
         opacity: focusOpacity(activityOpacity(edge.activity, 0.72), isFocused, palette),
         dash: edge.activity ? [6, 3] : [5, 4],
-        animateDash: !!edge.activity,
+        animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
 
@@ -242,7 +245,7 @@
         width: activityWidth(edge.activity, 1.2),
         opacity: focusOpacity(activityOpacity(edge.activity, 0.45), isFocused, palette),
         dash: edge.activity ? [5, 2] : [3, 3],
-        animateDash: !!edge.activity,
+        animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
 
@@ -280,7 +283,7 @@
         width: activityWidth(edge.activity, 1.1),
         opacity: focusOpacity(activityOpacity(edge.activity, 0.5), isEdgeFocused(edge.id), palette),
         dash: edge.activity ? [6, 3] : [4, 4],
-        animateDash: !!edge.activity,
+        animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
     }
@@ -294,7 +297,7 @@
         width: activityWidth(edge.activity, 1.1),
         opacity: focusOpacity(activityOpacity(edge.activity, 0.48), isEdgeFocused(edge.id), palette),
         dash: edge.activity ? [6, 3] : [5, 4],
-        animateDash: !!edge.activity,
+        animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
     }
@@ -329,7 +332,7 @@
           palette,
         ),
         dash: model.traces.cacheActivity ? [6, 3] : [],
-        animateDash: !!model.traces.cacheActivity,
+        animateDash: activityAnimationsEnabled && !!model.traces.cacheActivity,
         time,
       });
     }
@@ -395,6 +398,9 @@
   function getPath(path: string): Path2D {
     const cached = pathCache.get(path);
     if (cached) return cached;
+    if (pathCache.size >= PATH_CACHE_LIMIT) {
+      pathCache.clear();
+    }
     const parsed = new Path2D(path);
     pathCache.set(path, parsed);
     return parsed;
