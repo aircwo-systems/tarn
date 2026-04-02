@@ -207,6 +207,7 @@
     <div class="min-w-0 flex flex-col min-h-0">
       <div class="flex-1 min-h-0">
         <TopologyCanvas
+          canvasExpanded={isCanvasExpanded}
           {onNavigate}
           onExpandedChange={handleCanvasExpand}
         />

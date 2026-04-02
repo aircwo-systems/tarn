@@ -90,16 +90,17 @@
   const recentTraces = $derived(dashboard.data?.recentTraces ?? []);
 
   let {
+    canvasExpanded = false,
     onNavigate = (_tab: string) => {},
     onExpandedChange = (_expanded: boolean) => {},
   }: {
+    canvasExpanded?: boolean;
     onNavigate?: (tab: string) => void;
     onExpandedChange?: (expanded: boolean) => void;
   } = $props();
 
   let viewMode = $state<"components" | "connections">("connections");
   let selectedGatewayId = $state("");
-  let canvasExpanded = $state(false);
   let viewportResetToken = $state(0);
   let infraOrderIds = $state<string[]>([]);
   let infraOrderHydrated = $state(false);
@@ -503,9 +504,6 @@
     selectedGatewayId = "";
   }
 
-  $effect(() => {
-    onExpandedChange(canvasExpanded);
-  });
 </script>
 
 <svelte:document onkeydown={handleShortcutKeydown} />
@@ -548,7 +546,7 @@
           : 'group'}"
         aria-label={canvasExpanded ? "Collapse canvas" : "Expand canvas"}
         title={canvasExpanded ? "Collapse canvas" : "Expand canvas"}
-        onclick={() => (canvasExpanded = !canvasExpanded)}
+        onclick={() => onExpandedChange(!canvasExpanded)}
       >
         {#if !canvasExpanded}
           <span

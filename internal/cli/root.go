@@ -138,6 +138,7 @@ func runStart(cmd *cobra.Command, args []string) error {
    |_|\__,_|_|  |_| |_|
 
 `)
+	fmt.Fprintf(os.Stderr, "Version:  %s\n", version)
 	fmt.Fprintf(os.Stderr, "Region:   %s\n", cfg.Region)
 	fmt.Fprintf(os.Stderr, "Endpoint: %s\n", cfg.Endpoint())
 	fmt.Fprintf(os.Stderr, "Data Dir: %s\n", cfg.DataDir)
