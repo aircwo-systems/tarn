@@ -102,6 +102,19 @@ export interface TopologyGraphModel {
   functionById: Map<string, FunctionSummary>;
   dynamodbById: Map<string, DynamoDBTableSummary>;
   infraById: Map<string, InfraProbe>;
+  allNodes: ConnectionNode[];
+  hitTestNodes: ConnectionNode[];
+  nodeByGraphKey: Map<string, ConnectionNode>;
+  nodeById: Map<string, ConnectionNode>;
+  allEdges: Array<{ id: string; from: ConnectionNode; to: ConnectionNode }>;
+  forwardAdjacency: Map<
+    string,
+    Array<{ id: string; from: ConnectionNode; to: ConnectionNode }>
+  >;
+  reverseAdjacency: Map<
+    string,
+    Array<{ id: string; from: ConnectionNode; to: ConnectionNode }>
+  >;
   nodes: {
     gateways: ConnectionNode[];
     eventbridges: ConnectionNode[];
@@ -178,7 +191,7 @@ export interface BuildTopologyGraphInput {
   eventSourceMappings: EventSourceMappingSummary[];
   eventBridgeRules?: EventBridgeRuleSummary[];
   infraOrderIds: string[];
-  recentTraces: RequestTrace[];
+  recentTraces?: RequestTrace[];
   now?: number;
 }
 
@@ -198,8 +211,6 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     eventSourceMappings,
     eventBridgeRules = [],
     infraOrderIds,
-    recentTraces,
-    now = Date.now(),
   } = input;
 
   const connGateways = gateways.map(
@@ -308,24 +319,25 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     connGateways, connEventBridges, connTopics, connQueues,
     connFunctions, connSecrets, connDynamodbs, connBuckets,
   ];
+  const mainNodes = mainGroups.flat();
 
-  // Apply size/side overrides BEFORE collision resolution so the force-field
-  // uses each node's actual rendered dimensions. Each override is scoped to
-  // the individual node by ID — connected nodes are never affected.
+  // Apply size/side overrides BEFORE layout so the packer uses each node's
+  // actual rendered dimensions. Each override is scoped to the individual node
+  // by ID — connected nodes are never affected.
   for (const group of mainGroups) {
     for (const node of group) {
       applyNodeOverride(node, allNodeOverrides[`${node.kind}:${node.id}`]);
     }
   }
 
-  applyForceFieldCollisions(mainGroups);
+  packColumnGroups(mainGroups);
 
   // Apply dragged positions AFTER collision so user-pinned nodes stay put.
   for (const group of mainGroups) {
     for (const node of group) {
       const pos = getPersistedNodePosition(allNodePositions, node);
       if (!pos) continue;
-      const nextPosition = resolveNodeSpacing(node, pos, mainGroups.flat());
+      const nextPosition = resolveNodeSpacing(node, pos, mainNodes);
       node.x = nextPosition.x;
       node.y = nextPosition.y;
     }
@@ -366,7 +378,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     TOPOLOGY_MIN_NODE_GAP,
     12,
     "both",
-    new Set(mainGroups.flat().map((node) => graphNodeKey(node))),
+    new Set(mainNodes.map((node) => graphNodeKey(node))),
   );
 
   const infraLane = buildInfraLane(connInfraNodes);
@@ -378,25 +390,29 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
   const gatewayIdByName = new Map(gateways.map((gw) => [gw.name, gw.apiId]));
   const queueByName = new Map(queues.map((q) => [q.name, q]));
   const functionByName = new Map(functions.map((fn) => [fn.name, fn]));
-  const infraByNodeId = new Map(
-    connInfraNodes.map((node) => [node.id, infra.find((p) => infraNodeId(p) === node.id)]),
-  );
-
-  const traceEdgeActivity = buildTraceEdgeActivity(recentTraces, now);
+  const gatewayNodeById = new Map(connGateways.map((node) => [node.id, node]));
+  const eventBridgeNodeById = new Map(connEventBridges.map((node) => [node.id, node]));
+  const topicNodeById = new Map(connTopics.map((node) => [node.id, node]));
+  const queueNodeById = new Map(connQueues.map((node) => [node.id, node]));
+  const dynamodbNodeById = new Map(connDynamodbs.map((node) => [node.id, node]));
+  const functionNodeById = new Map(connFunctions.map((node) => [node.id, node]));
+  const bucketNodeById = new Map(connBuckets.map((node) => [node.id, node]));
+  const infraNodeById = new Map(connInfraNodes.map((node) => [node.id, node]));
+  const infraProbeByNodeId = new Map(infra.map((probe) => [infraNodeId(probe), probe]));
+  const infraByNodeId = new Map(connInfraNodes.map((node) => [node.id, infraProbeByNodeId.get(node.id)]));
 
   const apigwToQueue = withLanes(
     infraConnections.flatMap((c) => {
       if (c.targetKind !== "apigw-sqs") return [];
       const gwId = gatewayIdByName.get(c.sourceFunction) ?? c.sourceFunction;
-      const from = connGateways.find((n) => n.id === gwId);
+      const from = gatewayNodeById.get(gwId);
       const queueName = c.targetId || c.targetName;
-      const to = connQueues.find((n) => n.id === queueName);
+      const to = queueNodeById.get(queueName);
       if (!from || !to) return [];
       const queue = queueByName.get(queueName);
       const total =
         (queue?.approxVisible ?? 0) + (queue?.approxInFlight ?? 0) + (queue?.approxDelayed ?? 0);
-      const activity = traceEdgeActivity.get(`gw::${gwId}→${queueName}`);
-      return [{ from, to, active: total > 0, activity }];
+      return [{ from, to, active: total > 0 }];
     }),
     (edge) => `${edge.from.id}→${edge.to.id}`,
   ).map((edge) => ({
@@ -408,13 +424,12 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     infraConnections.flatMap((c) => {
       if (c.targetKind !== "apigw-lambda") return [];
       const gwId = gatewayIdByName.get(c.sourceFunction) ?? c.sourceFunction;
-      const from = connGateways.find((n) => n.id === gwId);
+      const from = gatewayNodeById.get(gwId);
       const fnName = c.targetId || c.targetName;
-      const to = connFunctions.find((n) => n.id === fnName);
+      const to = functionNodeById.get(fnName);
       if (!from || !to) return [];
       const fn = functionByName.get(fnName);
-      const activity = traceEdgeActivity.get(`gw::${gwId}→${fnName}`);
-      return [{ from, to, active: (fn?.messagesProcessed ?? 0) > 0, activity }];
+      return [{ from, to, active: (fn?.messagesProcessed ?? 0) > 0 }];
     }),
     (edge) => `${edge.from.id}→${edge.to.id}`,
   ).map((edge) => ({
@@ -423,30 +438,29 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
   }));
 
   const seenEbEdges = new Set<string>();
-  const ebEdgeCandidates: { from: ConnectionNode; to: ConnectionNode; activity?: EdgeActivity }[] = [];
+  const ebEdgeCandidates: { from: ConnectionNode; to: ConnectionNode }[] = [];
   for (const c of infraConnections) {
     if (c.targetKind !== "eventbridge-lambda") continue;
-    const from = connEventBridges.find((n) => n.id === c.sourceFunction);
+    const from = eventBridgeNodeById.get(c.sourceFunction);
     const fnName = c.targetId || c.targetName;
-    const to = connFunctions.find((n) => n.id === fnName);
+    const to = functionNodeById.get(fnName);
     if (!from || !to) continue;
     const key = `${from.id}→${to.id}`;
     if (seenEbEdges.has(key)) continue;
     seenEbEdges.add(key);
-    const activity = traceEdgeActivity.get(`eventbridge::${from.id}→${to.id}`);
-    ebEdgeCandidates.push({ from, to, activity });
+    ebEdgeCandidates.push({ from, to });
   }
   for (const rule of eventBridgeRules) {
-    const from = connEventBridges.find((n) => n.id === rule.name);
+    const from = eventBridgeNodeById.get(rule.name);
     if (!from) continue;
     for (const target of rule.targets ?? []) {
       const fnName = lambdaNameFromArn(target.arn);
-      const to = connFunctions.find((n) => n.id === fnName);
+      const to = functionNodeById.get(fnName);
       if (!to) continue;
       const key = `${from.id}→${to.id}`;
       if (seenEbEdges.has(key)) continue;
       seenEbEdges.add(key);
-      ebEdgeCandidates.push({ from, to, activity: undefined });
+      ebEdgeCandidates.push({ from, to });
     }
   }
   const eventbridgeToFunction = withLanes(
@@ -460,12 +474,11 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
   const snsToQueue = withLanes(
     infraConnections.flatMap((c) => {
       if (c.targetKind !== "sns-sqs") return [];
-      const from = connTopics.find((n) => n.id === c.sourceFunction);
+      const from = topicNodeById.get(c.sourceFunction);
       const queueName = c.targetId || c.targetName;
-      const to = connQueues.find((n) => n.id === queueName);
+      const to = queueNodeById.get(queueName);
       if (!from || !to) return [];
-      const activity = traceEdgeActivity.get(`sns::${from.id}→${to.id}`);
-      return [{ from, to, activity }];
+      return [{ from, to }];
     }),
     (edge) => `${edge.from.id}→${edge.to.id}`,
   ).map((edge) => ({
@@ -476,12 +489,11 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
   const snsToFunction = withLanes(
     infraConnections.flatMap((c) => {
       if (c.targetKind !== "sns-lambda") return [];
-      const from = connTopics.find((n) => n.id === c.sourceFunction);
+      const from = topicNodeById.get(c.sourceFunction);
       const fnName = c.targetId || c.targetName;
-      const to = connFunctions.find((n) => n.id === fnName);
+      const to = functionNodeById.get(fnName);
       if (!from || !to) return [];
-      const activity = traceEdgeActivity.get(`sns::${from.id}→${to.id}`);
-      return [{ from, to, activity }];
+      return [{ from, to }];
     }),
     (edge) => `${edge.from.id}→${edge.to.id}`,
   ).map((edge) => ({
@@ -494,11 +506,13 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     fnId: string;
     filterCriteria?: FilterCriteria;
   }[] = [];
-  const hasQueueFnPair = (queueId: string, fnId: string) =>
-    queueToFunctionPairs.some((pair) => pair.queueId === queueId && pair.fnId === fnId);
+  const queueFnPairKeys = new Set<string>();
+  const queueFnPairKey = (queueId: string, fnId: string) => `${queueId}→${fnId}`;
 
   for (const mapping of eventSourceMappings) {
-    if (hasQueueFnPair(mapping.queueName, mapping.functionName)) continue;
+    const pairKey = queueFnPairKey(mapping.queueName, mapping.functionName);
+    if (queueFnPairKeys.has(pairKey)) continue;
+    queueFnPairKeys.add(pairKey);
     queueToFunctionPairs.push({
       queueId: mapping.queueName,
       fnId: mapping.functionName,
@@ -509,7 +523,9 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
   for (const c of infraConnections) {
     if (c.targetKind !== "sqs-lambda") continue;
     const fnId = c.targetId || c.targetName;
-    if (hasQueueFnPair(c.sourceFunction, fnId)) continue;
+    const pairKey = queueFnPairKey(c.sourceFunction, fnId);
+    if (queueFnPairKeys.has(pairKey)) continue;
+    queueFnPairKeys.add(pairKey);
     queueToFunctionPairs.push({
       queueId: c.sourceFunction,
       fnId,
@@ -519,16 +535,14 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
 
   const queueToFunction = withLanes(
     queueToFunctionPairs.flatMap(({ queueId, fnId, filterCriteria }) => {
-      const from = connQueues.find((n) => n.id === queueId);
-      const to = connFunctions.find((n) => n.id === fnId);
+      const from = queueNodeById.get(queueId);
+      const to = functionNodeById.get(fnId);
       if (!from || !to) return [];
-      const activity = traceEdgeActivity.get(`queue::${queueId}→${fnId}`);
       return [
         {
           from,
           to,
           filterLabel: filterLabel(filterCriteria),
-          activity,
         },
       ];
     }),
@@ -543,13 +557,15 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     fnId: string;
     filterCriteria?: FilterCriteria;
   }[] = [];
-  const hasDynamoPair = (tableId: string, fnId: string) =>
-    dynamodbMappingPairs.some((pair) => pair.tableId === tableId && pair.fnId === fnId);
+  const dynamoPairKeys = new Set<string>();
+  const dynamoPairKey = (tableId: string, fnId: string) => `${tableId}→${fnId}`;
 
   for (const mapping of eventSourceMappings) {
     if ((mapping.sourceType ?? "").toLowerCase() !== "dynamodb-stream") continue;
     const tableId = mapping.sourceName || mapping.queueName;
-    if (!tableId || hasDynamoPair(tableId, mapping.functionName)) continue;
+    const pairKey = tableId ? dynamoPairKey(tableId, mapping.functionName) : "";
+    if (!tableId || dynamoPairKeys.has(pairKey)) continue;
+    dynamoPairKeys.add(pairKey);
     dynamodbMappingPairs.push({
       tableId,
       fnId: mapping.functionName,
@@ -560,7 +576,9 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
   for (const c of infraConnections) {
     if (c.targetKind !== "dynamodb-stream-lambda") continue;
     const fnId = c.targetId || c.targetName;
-    if (!c.sourceFunction || hasDynamoPair(c.sourceFunction, fnId)) continue;
+    const pairKey = c.sourceFunction ? dynamoPairKey(c.sourceFunction, fnId) : "";
+    if (!c.sourceFunction || dynamoPairKeys.has(pairKey)) continue;
+    dynamoPairKeys.add(pairKey);
     dynamodbMappingPairs.push({
       tableId: c.sourceFunction,
       fnId,
@@ -570,15 +588,14 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
 
   const dynamodbToFunction = withLanes(
     dynamodbMappingPairs.flatMap(({ tableId, fnId, filterCriteria }) => {
-      const from = connDynamodbs.find((node) => node.id === tableId);
-      const to = connFunctions.find((node) => node.id === fnId);
+      const from = dynamodbNodeById.get(tableId);
+      const to = functionNodeById.get(fnId);
       if (!from || !to) return [];
       return [
         {
           from,
           to,
           filterLabel: filterLabel(filterCriteria),
-          activity: undefined,
         },
       ];
     }),
@@ -590,17 +607,15 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
 
   const queueToDlq = infraConnections.flatMap((c) => {
     if (c.targetKind !== "queue-dlq") return [];
-    const from = connQueues.find((n) => n.id === c.sourceFunction);
-    const to = connQueues.find((n) => n.id === (c.targetId || c.targetName));
+    const from = queueNodeById.get(c.sourceFunction);
+    const to = queueNodeById.get(c.targetId || c.targetName);
     if (!from || !to || from.id === to.id) return [];
-    const activity = traceEdgeActivity.get(`dlq::${from.id}→${to.id}`);
     return [
       {
         id: `${from.id}→${to.id}`,
         from,
         to,
         path: dlqArcPath(from, to),
-        activity,
       },
     ];
   });
@@ -610,26 +625,10 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
 
   for (const c of infraConnections) {
     if (c.targetKind !== "s3-lambda") continue;
-    const from = connBuckets.find((n) => n.id === c.sourceFunction);
+    const from = bucketNodeById.get(c.sourceFunction);
     const fnName = c.targetId || c.targetName;
-    const to = connFunctions.find((n) => n.id === fnName);
+    const to = functionNodeById.get(fnName);
     if (!from || !to) continue;
-    const key = `${from.id}→${to.id}`;
-    if (seenBucketFnEdges.has(key)) continue;
-    seenBucketFnEdges.add(key);
-    bucketFnCandidates.push({ from, to });
-  }
-
-  for (const trace of recentTraces) {
-    const s3Span = trace.spans.find((span) => span.kind === "s3");
-    const lambdaSpan = trace.spans.find((span) => span.kind === "lambda");
-    if (!s3Span || !lambdaSpan) continue;
-
-    const bucketName = bucketNameFromTraceSpanName(s3Span.name);
-    const from = connBuckets.find((n) => n.id === bucketName);
-    const to = connFunctions.find((n) => n.id === lambdaSpan.name);
-    if (!from || !to) continue;
-
     const key = `${from.id}→${to.id}`;
     if (seenBucketFnEdges.has(key)) continue;
     seenBucketFnEdges.add(key);
@@ -659,11 +658,11 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
   const functionToDynamodb = withLanes(
     infraConnections.flatMap((c) => {
       if (c.targetKind !== "dynamodb-table") return [];
-      const from = connFunctions.find((n) => n.id === c.sourceFunction);
+      const from = functionNodeById.get(c.sourceFunction);
       const tableName = c.targetId || c.targetName;
-      const to = connDynamodbs.find((n) => n.id === tableName);
+      const to = dynamodbNodeById.get(tableName);
       if (!from || !to) return [];
-      return [{ from, to, activity: fnActivity(traceEdgeActivity, from.id) }];
+      return [{ from, to }];
     }),
     (edge) => `${edge.from.id}→${edge.to.id}`,
   ).map((edge) => ({
@@ -675,12 +674,11 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
   const functionToInfra = withLanes(
     infraConnections.flatMap((c) => {
       if (awsServiceKinds.includes(c.targetKind)) return [];
-      const from = connFunctions.find((n) => n.id === c.sourceFunction);
-      const to = connInfraNodes.find((n) => n.id === c.targetId);
+      const from = functionNodeById.get(c.sourceFunction);
+      const to = infraNodeById.get(c.targetId);
       if (!from || !to) return [];
       const probe = infraByNodeId.get(to.id);
-      const activity = fnActivity(traceEdgeActivity, from.id);
-      return [{ from, to, probe, isConnected: probe?.status === "connected", activity }];
+      return [{ from, to, probe, isConnected: probe?.status === "connected" }];
     }),
     (edge) => `${edge.from.id}→${edge.to.id}`,
   ).map((edge) => ({
@@ -696,7 +694,6 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
           .map((fn) => ({
             from: fn,
             to: connCacheExtension,
-            activity: fnActivity(traceEdgeActivity, fn.id),
           })),
         (edge) => `${edge.from.id}→cache`,
       ).map((edge) => ({
@@ -706,10 +703,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       }))
     : [];
 
-  const cacheActivity = aggregateActivity([
-    ...functionToCache.flatMap((edge) => (edge.activity ? [edge.activity] : [])),
-    ...(traceEdgeActivity.get("cache::global") ? [traceEdgeActivity.get("cache::global")!] : []),
-  ]);
+  const cacheActivity: EdgeActivity | undefined = undefined;
 
   const cacheToSecret = connCacheExtension
     ? withLanes(
@@ -718,7 +712,6 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
           .map((secret) => ({
             from: connCacheExtension,
             to: secret,
-            activity: cacheActivity,
           })),
         (edge) => `cache→${edge.to.id}`,
       ).map((edge) => ({
@@ -727,6 +720,72 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
         path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
       }))
     : [];
+
+  const allNodes = [
+    ...connGateways,
+    ...connEventBridges,
+    ...connTopics,
+    ...connQueues,
+    ...connDynamodbs,
+    ...connFunctions,
+    ...connBuckets,
+    ...connSecrets,
+    ...(connCacheExtension ? [connCacheExtension] : []),
+    ...connInfraNodes,
+  ];
+
+  const hitTestNodes = [
+    ...connInfraNodes,
+    ...connSecrets,
+    ...(connCacheExtension ? [connCacheExtension] : []),
+    ...connFunctions,
+    ...connDynamodbs,
+    ...connEventBridges,
+    ...connTopics,
+    ...connQueues,
+    ...connBuckets,
+    ...connGateways,
+  ];
+
+  const nodeByGraphKey = new Map(allNodes.map((node) => [graphNodeKey(node), node]));
+  const nodeById = new Map<string, ConnectionNode>();
+  for (const node of allNodes) {
+    if (!nodeById.has(node.id)) nodeById.set(node.id, node);
+  }
+
+  const allEdges = [
+    ...apigwToQueue,
+    ...apigwToFunction,
+    ...eventbridgeToFunction,
+    ...snsToQueue,
+    ...snsToFunction,
+    ...queueToFunction,
+    ...dynamodbToFunction,
+    ...queueToDlq,
+    ...bucketToFunction,
+    ...functionToDynamodb,
+    ...functionToCache,
+    ...cacheToSecret,
+    ...functionToInfra,
+  ];
+
+  const forwardAdjacency = new Map<
+    string,
+    Array<{ id: string; from: ConnectionNode; to: ConnectionNode }>
+  >();
+  const reverseAdjacency = new Map<
+    string,
+    Array<{ id: string; from: ConnectionNode; to: ConnectionNode }>
+  >();
+  for (const edge of allEdges) {
+    const forwardEdges = forwardAdjacency.get(edge.from.id) ?? [];
+    forwardEdges.push(edge);
+    forwardAdjacency.set(edge.from.id, forwardEdges);
+
+    const reverseEdges = reverseAdjacency.get(edge.to.id) ?? [];
+    reverseEdges.push(edge);
+    reverseAdjacency.set(edge.to.id, reverseEdges);
+  }
 
   return {
     hasData:
@@ -745,6 +804,13 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     infraById: new Map(
       [...infraByNodeId.entries()].filter((entry): entry is [string, InfraProbe] => !!entry[1]),
     ),
+    allNodes,
+    hitTestNodes,
+    nodeByGraphKey,
+    nodeById,
+    allEdges,
+    forwardAdjacency,
+    reverseAdjacency,
     nodes: {
       gateways: connGateways,
       eventbridges: connEventBridges,
@@ -775,10 +841,231 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     infraLane,
     infraRoute,
     traces: {
+      ticker: [],
+      edgeActivity: new Map(),
+      cacheActivity,
+    },
+  };
+}
+
+export function withTopologyTraceActivity(
+  model: TopologyGraphModel,
+  recentTraces: RequestTrace[],
+  now = Date.now(),
+): TopologyGraphModel {
+  const traceEdgeActivity = buildTraceEdgeActivity(recentTraces, now);
+
+  const seenBucketFnEdges = new Set(
+    model.edges.bucketToFunction.map((edge) => `${edge.from.id}→${edge.to.id}`),
+  );
+  const inferredBucketFnEdges: Array<{ from: ConnectionNode; to: ConnectionNode }> = [];
+
+  for (const trace of recentTraces) {
+    const s3Span = trace.spans.find((span) => span.kind === "s3");
+    const lambdaSpan = trace.spans.find((span) => span.kind === "lambda");
+    if (!s3Span || !lambdaSpan) continue;
+
+    const bucketName = bucketNameFromTraceSpanName(s3Span.name);
+    const from = model.nodeByGraphKey.get(graphNodeKey({ kind: "bucket", id: bucketName }));
+    const to = model.nodeByGraphKey.get(graphNodeKey({ kind: "function", id: lambdaSpan.name }));
+    if (!from || !to) continue;
+
+    const key = `${from.id}→${to.id}`;
+    if (seenBucketFnEdges.has(key)) continue;
+    seenBucketFnEdges.add(key);
+    inferredBucketFnEdges.push({ from, to });
+  }
+
+  const bucketToFunction = withLanes(
+    [
+      ...model.edges.bucketToFunction.map((edge) => ({
+        from: edge.from,
+        to: edge.to,
+      })),
+      ...inferredBucketFnEdges,
+    ],
+    (edge) => `${edge.from.id}→${edge.to.id}`,
+  ).map((edge) => ({
+    ...edge,
+    id: `${edge.from.id}→${edge.to.id}`,
+    path: portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount),
+  }));
+
+  const apigwToQueue = model.edges.apigwToQueue.map((edge) => ({
+    ...edge,
+    activity: traceEdgeActivity.get(`gw::${edge.from.id}→${edge.to.id}`),
+  }));
+  const apigwToFunction = model.edges.apigwToFunction.map((edge) => ({
+    ...edge,
+    activity: traceEdgeActivity.get(`gw::${edge.from.id}→${edge.to.id}`),
+  }));
+  const eventbridgeToFunction = model.edges.eventbridgeToFunction.map((edge) => ({
+    ...edge,
+    activity: traceEdgeActivity.get(`eventbridge::${edge.from.id}→${edge.to.id}`),
+  }));
+  const snsToQueue = model.edges.snsToQueue.map((edge) => ({
+    ...edge,
+    activity: traceEdgeActivity.get(`sns::${edge.from.id}→${edge.to.id}`),
+  }));
+  const snsToFunction = model.edges.snsToFunction.map((edge) => ({
+    ...edge,
+    activity: traceEdgeActivity.get(`sns::${edge.from.id}→${edge.to.id}`),
+  }));
+  const queueToFunction = model.edges.queueToFunction.map((edge) => ({
+    ...edge,
+    activity: traceEdgeActivity.get(`queue::${edge.from.id}→${edge.to.id}`),
+  }));
+  const dynamodbToFunction = model.edges.dynamodbToFunction.map((edge) => ({
+    ...edge,
+    activity: traceEdgeActivity.get(`dynamodb::${edge.from.id}→${edge.to.id}`),
+  }));
+  const queueToDlq = model.edges.queueToDlq.map((edge) => ({
+    ...edge,
+    activity: traceEdgeActivity.get(`dlq::${edge.from.id}→${edge.to.id}`),
+  }));
+  const functionToDynamodb = model.edges.functionToDynamodb.map((edge) => ({
+    ...edge,
+    activity: fnActivity(traceEdgeActivity, edge.from.id),
+  }));
+  const functionToInfra = model.edges.functionToInfra.map((edge) => ({
+    ...edge,
+    activity: fnActivity(traceEdgeActivity, edge.from.id),
+  }));
+  const functionToCache = model.edges.functionToCache.map((edge) => ({
+    ...edge,
+    activity: fnActivity(traceEdgeActivity, edge.from.id),
+  }));
+
+  const cacheActivity = aggregateActivity([
+    ...functionToCache.flatMap((edge) => (edge.activity ? [edge.activity] : [])),
+    ...(traceEdgeActivity.get("cache::global") ? [traceEdgeActivity.get("cache::global")!] : []),
+  ]);
+
+  const cacheToSecret = model.edges.cacheToSecret.map((edge) => ({
+    ...edge,
+    activity: cacheActivity,
+  }));
+
+  const allEdges = [
+    ...apigwToQueue,
+    ...apigwToFunction,
+    ...eventbridgeToFunction,
+    ...snsToQueue,
+    ...snsToFunction,
+    ...queueToFunction,
+    ...dynamodbToFunction,
+    ...queueToDlq,
+    ...bucketToFunction,
+    ...functionToDynamodb,
+    ...functionToCache,
+    ...cacheToSecret,
+    ...functionToInfra,
+  ];
+
+  const forwardAdjacency = new Map<
+    string,
+    Array<{ id: string; from: ConnectionNode; to: ConnectionNode }>
+  >();
+  const reverseAdjacency = new Map<
+    string,
+    Array<{ id: string; from: ConnectionNode; to: ConnectionNode }>
+  >();
+  for (const edge of allEdges) {
+    const forwardEdges = forwardAdjacency.get(edge.from.id) ?? [];
+    forwardEdges.push(edge);
+    forwardAdjacency.set(edge.from.id, forwardEdges);
+
+    const reverseEdges = reverseAdjacency.get(edge.to.id) ?? [];
+    reverseEdges.push(edge);
+    reverseAdjacency.set(edge.to.id, reverseEdges);
+  }
+
+  return {
+    ...model,
+    allEdges,
+    forwardAdjacency,
+    reverseAdjacency,
+    edges: {
+      ...model.edges,
+      apigwToQueue,
+      apigwToFunction,
+      eventbridgeToFunction,
+      snsToQueue,
+      snsToFunction,
+      queueToFunction,
+      dynamodbToFunction,
+      queueToDlq,
+      bucketToFunction,
+      functionToDynamodb,
+      functionToCache,
+      cacheToSecret,
+      functionToInfra,
+    },
+    traces: {
       ticker: recentTraces.slice(0, 8),
       edgeActivity: traceEdgeActivity,
       cacheActivity,
     },
+  };
+}
+
+export function applyPreviewNodePositions(
+  model: TopologyGraphModel,
+  positions: Record<string, InfraNodePosition>,
+): void {
+  if (Object.keys(positions).length === 0) return;
+
+  for (const [key, position] of Object.entries(positions)) {
+    const node = model.nodeByGraphKey.get(key);
+    if (!node) continue;
+    node.x = position.x;
+    node.y = position.y;
+  }
+
+  for (const edge of model.edges.apigwToQueue) {
+    edge.path = portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount);
+  }
+  for (const edge of model.edges.apigwToFunction) {
+    edge.path = portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount);
+  }
+  for (const edge of model.edges.eventbridgeToFunction) {
+    edge.path = portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount);
+  }
+  for (const edge of model.edges.snsToQueue) {
+    edge.path = portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount);
+  }
+  for (const edge of model.edges.snsToFunction) {
+    edge.path = portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount);
+  }
+  for (const edge of model.edges.queueToFunction) {
+    edge.path = portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount);
+  }
+  for (const edge of model.edges.dynamodbToFunction) {
+    edge.path = portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount);
+  }
+  for (const edge of model.edges.queueToDlq) {
+    edge.path = dlqArcPath(edge.from, edge.to);
+  }
+  for (const edge of model.edges.bucketToFunction) {
+    edge.path = portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount);
+  }
+  for (const edge of model.edges.functionToDynamodb) {
+    edge.path = portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount);
+  }
+  for (const edge of model.edges.functionToCache) {
+    edge.path = portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount);
+  }
+  for (const edge of model.edges.cacheToSecret) {
+    edge.path = portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount);
+  }
+  for (const edge of model.edges.functionToInfra) {
+    edge.path = portConnectPath(edge.from, edge.to, edge.lane, edge.laneCount);
+  }
+
+  model.infraLane = buildInfraLane(model.nodes.infra);
+  model.infraRoute = {
+    x: model.infraLane.x + model.infraLane.width / 2,
+    y: model.infraLane.y - 26,
   };
 }
 
@@ -838,30 +1125,30 @@ export function selectedTraceNodes(
   const secretsSpan = trace.spans.find((span) => span.kind === "secrets" || span.kind === "secret");
 
   const matchedGateway = trace.gatewayId
-    ? model.nodes.gateways.find((node) => node.id === trace.gatewayId)
+    ? model.nodeByGraphKey.get(graphNodeKey({ kind: "gateway", id: trace.gatewayId }))
     : undefined;
   const matchedFunction = lambdaSpan
-    ? model.nodes.functions.find((node) => node.id === lambdaSpan.name)
+    ? model.nodeByGraphKey.get(graphNodeKey({ kind: "function", id: lambdaSpan.name }))
     : undefined;
   const matchedEventBridge = eventBridgeSpan
-    ? model.nodes.eventbridges.find((node) => node.id === eventBridgeSpan.name)
+    ? model.nodeByGraphKey.get(graphNodeKey({ kind: "eventbridge", id: eventBridgeSpan.name }))
     : undefined;
   const matchedTopic = topicSpan
-    ? model.nodes.topics.find((node) => node.id === topicSpan.name)
+    ? model.nodeByGraphKey.get(graphNodeKey({ kind: "topic", id: topicSpan.name }))
     : undefined;
   const matchedQueue = queueSpan
-    ? model.nodes.queues.find((node) => node.id === queueSpan.name)
+    ? model.nodeByGraphKey.get(graphNodeKey({ kind: "queue", id: queueSpan.name }))
     : undefined;
   const matchedDynamodb = dynamodbSpan
-    ? model.nodes.dynamodbs.find((node) => node.id === dynamodbSpan.name)
+    ? model.nodeByGraphKey.get(graphNodeKey({ kind: "dynamodb", id: dynamodbSpan.name }))
     : undefined;
   const matchedDlq = dlqSpan
-    ? model.nodes.queues.find((node) => node.id === dlqSpan.name)
+    ? model.nodeByGraphKey.get(graphNodeKey({ kind: "queue", id: dlqSpan.name }))
     : undefined;
   const matchedCache =
     cacheSpan || secretsSpan ? (model.nodes.cacheExtension ?? undefined) : undefined;
   const matchedSecret = secretsSpan
-    ? model.nodes.secrets.find((node) => node.id === secretsSpan.name)
+    ? model.nodeByGraphKey.get(graphNodeKey({ kind: "secret", id: secretsSpan.name }))
     : undefined;
 
   return [
@@ -923,21 +1210,8 @@ function applyNodeOverride(node: ConnectionNode, override: NodeOverride | undefi
 }
 
 export function findNodeAt(model: TopologyGraphModel, x: number, y: number): ConnectionNode | null {
-  const candidates: ConnectionNode[] = [
-    ...model.nodes.infra,
-    ...model.nodes.secrets,
-    ...(model.nodes.cacheExtension ? [model.nodes.cacheExtension] : []),
-    ...model.nodes.functions,
-    ...model.nodes.dynamodbs,
-    ...model.nodes.eventbridges,
-    ...model.nodes.topics,
-    ...model.nodes.queues,
-    ...model.nodes.buckets,
-    ...model.nodes.gateways,
-  ];
-
-  for (let i = candidates.length - 1; i >= 0; i -= 1) {
-    const node = candidates[i];
+  for (let i = model.hitTestNodes.length - 1; i >= 0; i -= 1) {
+    const node = model.hitTestNodes[i];
     const bounds = nodeBounds(node);
     if (x >= bounds.left && x <= bounds.right && y >= bounds.top && y <= bounds.bottom) {
       return node;
@@ -1035,7 +1309,7 @@ export function resolveSnappedNodePosition(
   return resolveNodeSpacing(
     node,
     { x, y },
-    allGraphNodes(model),
+    model.allNodes,
   );
 }
 
@@ -1054,43 +1328,8 @@ export function hoverFocusState(
   const nodeIds = new Set<string>([hoveredNodeId]);
   const edgeIds = new Set<string>();
 
-  const allEdges: Array<{ id: string; from: ConnectionNode; to: ConnectionNode }> = [
-    ...model.edges.apigwToQueue,
-    ...model.edges.apigwToFunction,
-    ...model.edges.eventbridgeToFunction,
-    ...model.edges.snsToQueue,
-    ...model.edges.snsToFunction,
-    ...model.edges.queueToFunction,
-    ...model.edges.dynamodbToFunction,
-    ...model.edges.queueToDlq,
-    ...model.edges.bucketToFunction,
-    ...model.edges.functionToDynamodb,
-    ...model.edges.functionToCache,
-    ...model.edges.cacheToSecret,
-    ...model.edges.functionToInfra,
-  ];
-
-  const forwardByNode = new Map<
-    string,
-    Array<{ id: string; from: ConnectionNode; to: ConnectionNode }>
-  >();
-  const reverseByNode = new Map<
-    string,
-    Array<{ id: string; from: ConnectionNode; to: ConnectionNode }>
-  >();
-
-  for (const edge of allEdges) {
-    const forwardEdges = forwardByNode.get(edge.from.id) ?? [];
-    forwardEdges.push(edge);
-    forwardByNode.set(edge.from.id, forwardEdges);
-
-    const reverseEdges = reverseByNode.get(edge.to.id) ?? [];
-    reverseEdges.push(edge);
-    reverseByNode.set(edge.to.id, reverseEdges);
-  }
-
-  walkHoverFlow(hoveredNodeId, forwardByNode, true, nodeIds, edgeIds);
-  walkHoverFlow(hoveredNodeId, reverseByNode, false, nodeIds, edgeIds);
+  walkHoverFlow(hoveredNodeId, model.forwardAdjacency, true, nodeIds, edgeIds);
+  walkHoverFlow(hoveredNodeId, model.reverseAdjacency, false, nodeIds, edgeIds);
 
   return {
     active: true,
@@ -1147,6 +1386,57 @@ function nodeHalfHeight(node: ConnectionNode): number {
     case "medium": return baseHW;
     case "large":  return baseHW * 2;
     default:       return baseHH;
+  }
+}
+
+function packColumnGroups(
+  nodeGroups: ConnectionNode[][],
+  minGap = TOPOLOGY_MIN_NODE_GAP,
+): void {
+  for (const nodes of nodeGroups) {
+    packColumnNodes(nodes, minGap);
+  }
+}
+
+function packColumnNodes(
+  nodes: ConnectionNode[],
+  minGap = TOPOLOGY_MIN_NODE_GAP,
+): void {
+  if (nodes.length <= 1) return;
+
+  const sorted = [...nodes].sort((a, b) => a.y - b.y);
+
+  for (let i = 0; i < sorted.length; i += 1) {
+    const node = sorted[i];
+    const minY = nodeHalfHeight(node) + 24;
+    let nextY = Math.max(node.y, minY);
+    if (i > 0) {
+      const prev = sorted[i - 1];
+      const requiredGap = nodeHalfHeight(prev) + nodeHalfHeight(node) + minGap;
+      nextY = Math.max(nextY, prev.y + requiredGap);
+    }
+    node.y = clampNodePosition(node, node.x, nextY).y;
+  }
+
+  for (let i = sorted.length - 1; i >= 0; i -= 1) {
+    const node = sorted[i];
+    const maxY = CONNECTION_CANVAS.height - nodeHalfHeight(node) - 24;
+    let nextY = Math.min(node.y, maxY);
+    if (i < sorted.length - 1) {
+      const next = sorted[i + 1];
+      const requiredGap = nodeHalfHeight(node) + nodeHalfHeight(next) + minGap;
+      nextY = Math.min(nextY, next.y - requiredGap);
+    }
+    node.y = clampNodePosition(node, node.x, nextY).y;
+  }
+
+  for (let i = 1; i < sorted.length; i += 1) {
+    const prev = sorted[i - 1];
+    const node = sorted[i];
+    const requiredGap = nodeHalfHeight(prev) + nodeHalfHeight(node) + minGap;
+    if (node.y < prev.y + requiredGap) {
+      node.y = clampNodePosition(node, node.x, prev.y + requiredGap).y;
+    }
   }
 }
 
@@ -1433,21 +1723,6 @@ function clampNodePosition(
   };
 }
 
-function allGraphNodes(model: TopologyGraphModel): ConnectionNode[] {
-  return [
-    ...model.nodes.gateways,
-    ...model.nodes.eventbridges,
-    ...model.nodes.topics,
-    ...model.nodes.queues,
-    ...model.nodes.dynamodbs,
-    ...model.nodes.functions,
-    ...model.nodes.buckets,
-    ...model.nodes.secrets,
-    ...model.nodes.infra,
-    ...(model.nodes.cacheExtension ? [model.nodes.cacheExtension] : []),
-  ];
-}
-
 function graphNodeKey(node: { id: string; kind: ConnectionNode["kind"] }): string {
   return `${node.kind}:${node.id}`;
 }
@@ -1463,11 +1738,7 @@ function findGraphNode(
   model: TopologyGraphModel,
   nodeKey: { id: string; kind: ConnectionNode["kind"] },
 ): ConnectionNode | null {
-  return (
-    allGraphNodes(model).find(
-      (node) => node.id === nodeKey.id && node.kind === nodeKey.kind,
-    ) ?? null
-  );
+  return model.nodeByGraphKey.get(graphNodeKey(nodeKey)) ?? null;
 }
 
 function buildInfraLane(infraNodes: ConnectionNode[]): {
@@ -1721,6 +1992,9 @@ function buildTraceEdgeActivity(
     const lambdaSpan = trace.spans.find((span) => span.kind === "lambda");
     const topicSpan = trace.spans.find((span) => span.kind === "topic");
     const queueSpan = trace.spans.find((span) => span.kind === "queue");
+    const dynamodbSpan = trace.spans.find(
+      (span) => span.kind === "dynamodb" || span.kind === "ddb",
+    );
     const dlqSpan = trace.spans.find((span) => span.kind === "dlq");
     const s3Span = trace.spans.find((span) => span.kind === "s3");
     const hasCacheFlow = trace.spans.some(
@@ -1745,6 +2019,8 @@ function buildTraceEdgeActivity(
       key = `dlq::${queueSpan.name}→${dlqSpan.name}`;
     } else if (queueSpan && lambdaSpan) {
       key = `queue::${queueSpan.name}→${lambdaSpan.name}`;
+    } else if (dynamodbSpan && lambdaSpan) {
+      key = `dynamodb::${dynamodbSpan.name}→${lambdaSpan.name}`;
     } else if (s3Span && lambdaSpan) {
       key = `s3::${bucketNameFromTraceSpanName(s3Span.name)}→${lambdaSpan.name}`;
     }

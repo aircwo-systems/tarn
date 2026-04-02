@@ -33,7 +33,8 @@
     palette,
     viewportTransform,
     hoveredNodeId = null,
-    activeDragNode = null,
+    selectedNodeKeys = new Set(),
+    activeDragKeys = [],
     placementConfirmation = null,
   }: {
     model: TopologyGraphModel;
@@ -42,39 +43,25 @@
     palette: TopologyCanvasPalette;
     viewportTransform: ViewportTransform;
     hoveredNodeId?: string | null;
-    activeDragNode?: {
-      nodeId: string;
-      nodeKind: ConnectionNode["kind"];
-    } | null;
+    selectedNodeKeys?: Set<string>;
+    activeDragKeys?: string[];
     placementConfirmation?: {
-      nodeId: string;
-      nodeKind: ConnectionNode["kind"];
+      nodeKeys: string[];
       startedAt: number;
       flashes: number;
       durationMs: number;
     } | null;
   } = $props();
 
-  const graphEdges = $derived([
-    ...model.edges.apigwToQueue,
-    ...model.edges.apigwToFunction,
-    ...model.edges.eventbridgeToFunction,
-    ...model.edges.snsToQueue,
-    ...model.edges.snsToFunction,
-    ...model.edges.queueToFunction,
-    ...model.edges.dynamodbToFunction,
-    ...model.edges.queueToDlq,
-    ...model.edges.bucketToFunction,
-    ...model.edges.functionToDynamodb,
-    ...model.edges.functionToCache,
-    ...model.edges.cacheToSecret,
-    ...model.edges.functionToInfra,
-  ]);
   const inputNodeIds = $derived(
-    new Set(graphEdges.map((edge) => `${edge.to.kind}:${edge.to.id}`)),
+    new Set(model.allEdges.map((edge) => `${edge.to.kind}:${edge.to.id}`)),
   );
   const outputNodeIds = $derived(
-    new Set(graphEdges.map((edge) => `${edge.from.kind}:${edge.from.id}`)),
+    new Set(model.allEdges.map((edge) => `${edge.from.kind}:${edge.from.id}`)),
+  );
+  const activeDragKeySet = $derived(new Set(activeDragKeys));
+  const placementConfirmationKeySet = $derived(
+    new Set(placementConfirmation?.nodeKeys ?? []),
   );
 
   const render: Render = ({ context, width, height, time }) => {
@@ -84,27 +71,13 @@
     context.translate(viewportTransform.offsetX, viewportTransform.offsetY);
     context.scale(viewportTransform.scale, viewportTransform.scale);
 
-    const allNodes: Array<{ node: ConnectionNode; stroke: string }> = [
-      ...model.nodes.gateways.map((n) => ({ node: n, stroke: kindColor("gateway", palette) })),
-      ...model.nodes.eventbridges.map((n) => ({ node: n, stroke: kindColor("eventbridge", palette) })),
-      ...model.nodes.topics.map((n) => ({ node: n, stroke: kindColor("topic", palette) })),
-      ...model.nodes.queues.map((n) => ({ node: n, stroke: kindColor("queue", palette) })),
-      ...model.nodes.dynamodbs.map((n) => ({ node: n, stroke: kindColor("dynamodb", palette) })),
-      ...model.nodes.functions.map((n) => ({ node: n, stroke: kindColor("function", palette) })),
-      ...model.nodes.buckets.map((n) => ({ node: n, stroke: kindColor("bucket", palette) })),
-      ...model.nodes.secrets.map((n) => ({ node: n, stroke: kindColor("secret", palette) })),
-      ...(model.nodes.cacheExtension ? [{ node: model.nodes.cacheExtension, stroke: kindColor("extension", palette) }] : []),
-      ...model.nodes.infra.map((n) => {
-        const probe = model.infraById.get(n.id);
-        const isConnected = n.status === "connected";
-        const stroke = isConnected
-          ? infraKindColor(probe?.kind ?? "", palette)
-          : palette.destructive;
-        return { node: n, stroke };
-      }),
-    ];
-
-    for (const { node, stroke } of allNodes) {
+    for (const node of model.allNodes) {
+      const stroke =
+        node.kind === "infra"
+          ? node.status === "connected"
+            ? infraKindColor(model.infraById.get(node.id)?.kind ?? "", palette)
+            : palette.destructive
+          : kindColor(node.kind, palette);
       drawNode(context, node, {
         palette,
         stroke,
@@ -156,25 +129,15 @@
       }
     }
 
-    if (activeDragNode) {
-      const matchedNode = allNodes.find(
-        ({ node }) =>
-          node.id === activeDragNode.nodeId &&
-          node.kind === activeDragNode.nodeKind,
-      )?.node;
-      if (matchedNode) {
-        drawActiveDragBorder(context, matchedNode, palette, time);
-      }
+    for (const node of model.allNodes) {
+      if (!activeDragKeySet.has(nodeGraphKey(node))) continue;
+      drawActiveDragBorder(context, node, palette, time);
     }
 
     if (placementConfirmation) {
-      const matchedNode = allNodes.find(
-        ({ node }) =>
-          node.id === placementConfirmation.nodeId &&
-          node.kind === placementConfirmation.nodeKind,
-      )?.node;
-      if (matchedNode) {
-        drawPlacementConfirmation(context, matchedNode, palette, time);
+      for (const node of model.allNodes) {
+        if (!placementConfirmationKeySet.has(nodeGraphKey(node))) continue;
+        drawPlacementConfirmation(context, node, palette, time);
       }
     }
 
@@ -184,6 +147,10 @@
   function isFocused(nodeId: string): boolean {
     if (!hoverFocus.active) return true;
     return hoverFocus.nodeIds.has(nodeId);
+  }
+
+  function nodeGraphKey(node: ConnectionNode): string {
+    return `${node.kind}:${node.id}`;
   }
 
   function focusOpacity(

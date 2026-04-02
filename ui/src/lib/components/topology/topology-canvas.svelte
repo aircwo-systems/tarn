@@ -518,6 +518,11 @@
         ? `Explore and arrange ${resourceCount} resources of your infra below`
         : `Explore and arrange ${connectionCount} links of your infra below`}
     </span>
+    {#if canvasExpanded && viewMode === "connections"}
+      <span class="font-mono text-[10px] text-muted-foreground/40">
+        Shift+Click to multi-select
+      </span>
+    {/if}
 
     <div class="ml-auto flex items-center gap-1.5">
       {#if canvasExpanded && viewMode === "connections"}
