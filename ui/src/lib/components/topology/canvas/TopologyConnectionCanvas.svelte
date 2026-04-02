@@ -108,7 +108,7 @@
       };
 
   const DRAG_THRESHOLD_PX = 6;
-  const DRAG_SETTLE_DELAY_MS = 2200;
+  const DRAG_SETTLE_DELAY_MS = 1200;
   const KEYBOARD_PAN_STEP = 96;
   const ZOOM_STEP = 1.14;
   const TRACKPAD_ZOOM_SENSITIVITY = 0.0025;

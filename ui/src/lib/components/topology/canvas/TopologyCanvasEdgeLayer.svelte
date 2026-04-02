@@ -320,19 +320,19 @@
     }
 
     for (const edge of model.edges.cacheToSecret) {
-      const isErr = !!model.traces.cacheActivity?.hasError;
+      const isErr = !!edge.activity?.hasError;
       drawPath(context, edge.path, {
         stroke: isErr
           ? palette.destructive
           : makeEdgeGradient(context, edge.from, edge.to, kindColor("extension", palette), kindColor("secret", palette)),
-        width: activityWidth(model.traces.cacheActivity, 1.2),
+        width: activityWidth(edge.activity, 1.2),
         opacity: focusOpacity(
-          activityOpacity(model.traces.cacheActivity, 0.58),
+          activityOpacity(edge.activity, 0.58),
           isEdgeFocused(edge.id),
           palette,
         ),
-        dash: model.traces.cacheActivity ? [6, 3] : [],
-        animateDash: activityAnimationsEnabled && !!model.traces.cacheActivity,
+        dash: edge.activity ? [6, 3] : [],
+        animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
     }

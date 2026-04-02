@@ -943,7 +943,7 @@ export function withTopologyTraceActivity(
 
   const cacheToSecret = model.edges.cacheToSecret.map((edge) => ({
     ...edge,
-    activity: cacheActivity,
+    activity: traceEdgeActivity.get(`cache::secret:${edge.to.id}`),
   }));
 
   const allEdges = [
@@ -2004,6 +2004,12 @@ function buildTraceEdgeActivity(
         span.kind === "secrets" ||
         span.kind === "secret",
     );
+    const secretNames = new Set(
+      trace.spans
+        .filter((span) => span.kind === "secrets" || span.kind === "secret")
+        .map((span) => span.name)
+        .filter(Boolean),
+    );
 
     let key: string | null = null;
     if (trace.gatewayId) {
@@ -2032,6 +2038,9 @@ function buildTraceEdgeActivity(
       bump("cache::global", trace);
       if (lambdaSpan) {
         bump(`fn::${lambdaSpan.name}`, trace);
+      }
+      for (const secretName of secretNames) {
+        bump(`cache::secret:${secretName}`, trace);
       }
     }
   }
