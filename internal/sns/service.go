@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -414,8 +415,7 @@ func matchesSubscriptionFilter(sub *types.SNSSubscription, attrs map[string]type
 		return true
 	}
 
-	// Minimal support for exact-match filter values.
-	var raw map[string]any
+	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(sub.FilterPolicy), &raw); err != nil {
 		return true
 	}
@@ -430,58 +430,132 @@ func matchesSubscriptionFilter(sub *types.SNSSubscription, attrs map[string]type
 		if err := json.Unmarshal([]byte(messageBody), &body); err != nil {
 			return false
 		}
-		for key, allowed := range raw {
-			want, ok := stringCandidates(allowed)
-			if !ok {
+		for key, condJSON := range raw {
+			var conditions []any
+			if err := json.Unmarshal(condJSON, &conditions); err != nil {
 				continue
 			}
-			actual := fmt.Sprintf("%v", body[key])
-			if !containsString(want, actual) {
+			bodyVal, bodyExists := body[key]
+			bodyStr := ""
+			if bodyExists {
+				bodyStr = fmt.Sprintf("%v", bodyVal)
+			}
+			if !matchesFilterConditions(conditions, bodyExists, bodyStr) {
 				return false
 			}
 		}
 		return true
 	}
 
-	for key, allowed := range raw {
-		want, ok := stringCandidates(allowed)
-		if !ok {
+	for key, condJSON := range raw {
+		var conditions []any
+		if err := json.Unmarshal(condJSON, &conditions); err != nil {
 			continue
 		}
-		attr, exists := attrs[key]
-		if !exists {
-			return false
+		attr, attrExists := attrs[key]
+		attrVal := ""
+		if attrExists {
+			attrVal = attr.StringValue
+			if attrVal == "" {
+				attrVal = attr.BinaryValue
+			}
 		}
-		actual := attr.StringValue
-		if actual == "" {
-			actual = attr.BinaryValue
-		}
-		if !containsString(want, actual) {
+		if !matchesFilterConditions(conditions, attrExists, attrVal) {
 			return false
 		}
 	}
-
 	return true
 }
 
-func stringCandidates(value any) ([]string, bool) {
-	switch v := value.(type) {
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			out = append(out, fmt.Sprintf("%v", item))
-		}
-		return out, true
-	default:
-		return []string{fmt.Sprintf("%v", v)}, true
-	}
-}
-
-func containsString(values []string, target string) bool {
-	for _, value := range values {
-		if value == target {
-			return true
+// matchesFilterConditions returns true if any condition in the array matches.
+// Conditions within a single attribute key are OR-evaluated; all keys are AND-evaluated by the caller.
+func matchesFilterConditions(conditions []any, exists bool, value string) bool {
+	for _, cond := range conditions {
+		switch c := cond.(type) {
+		case string:
+			if exists && c == value {
+				return true
+			}
+		case map[string]any:
+			if evalFilterOperator(c, exists, value) {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+func evalFilterOperator(op map[string]any, attrExists bool, attrValue string) bool {
+	if existsVal, ok := op["exists"]; ok {
+		wantExists, _ := existsVal.(bool)
+		return attrExists == wantExists
+	}
+	if !attrExists {
+		return false
+	}
+	if prefixVal, ok := op["prefix"]; ok {
+		prefix, _ := prefixVal.(string)
+		return strings.HasPrefix(attrValue, prefix)
+	}
+	if anythingBut, ok := op["anything-but"]; ok {
+		switch v := anythingBut.(type) {
+		case []any:
+			for _, item := range v {
+				if fmt.Sprintf("%v", item) == attrValue {
+					return false
+				}
+			}
+			return true
+		default:
+			return fmt.Sprintf("%v", v) != attrValue
+		}
+	}
+	if numericConds, ok := op["numeric"]; ok {
+		return evalNumericFilter(numericConds, attrValue)
+	}
+	return false
+}
+
+func evalNumericFilter(conds any, attrValue string) bool {
+	conditions, ok := conds.([]any)
+	if !ok || len(conditions) < 2 {
+		return false
+	}
+	attrFloat, err := strconv.ParseFloat(attrValue, 64)
+	if err != nil {
+		return false
+	}
+	for i := 0; i+1 < len(conditions); i += 2 {
+		op, _ := conditions[i].(string)
+		limit, _ := conditions[i+1].(float64)
+		switch op {
+		case "=":
+			if attrFloat != limit {
+				return false
+			}
+		case "!=":
+			if attrFloat == limit {
+				return false
+			}
+		case "<":
+			if !(attrFloat < limit) {
+				return false
+			}
+		case "<=":
+			if !(attrFloat <= limit) {
+				return false
+			}
+		case ">":
+			if !(attrFloat > limit) {
+				return false
+			}
+		case ">=":
+			if !(attrFloat >= limit) {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
