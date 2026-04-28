@@ -265,6 +265,11 @@ func (c *Config) DynamoDBStatePath() string {
 	return filepath.Join(c.DynamoDBDir(), "state.json")
 }
 
+// PIDFilePath returns the path of the tarn server PID file.
+func (c *Config) PIDFilePath() string {
+	return filepath.Join(c.DataDir, "tarn.pid")
+}
+
 // Endpoint returns the full API endpoint URL.
 // Unspecified/wildcard bind addresses are normalised to 127.0.0.1 so that
 // generated URLs (queue URLs, API endpoints, invoke URLs) are routable.

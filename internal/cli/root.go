@@ -1,14 +1,23 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/aircwo-systems/tarn/internal/cli/lambda"
 	s3cli "github.com/aircwo-systems/tarn/internal/cli/s3"
 	"github.com/aircwo-systems/tarn/internal/cli/secrets"
 	"github.com/aircwo-systems/tarn/internal/cli/sns"
 	"github.com/aircwo-systems/tarn/internal/cli/sqs"
+	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -67,6 +76,8 @@ Flush provisioned resources:
 	}
 
 	root.AddCommand(newStartCmd())
+	root.AddCommand(newStopCmd())
+	root.AddCommand(newStatusCmd())
 	root.AddCommand(newFlushCmd())
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(lambda.NewLambdaCmd())
@@ -87,22 +98,120 @@ Flush provisioned resources:
 }
 
 func newVersionCmd() *cobra.Command {
-	var check bool
-
-	cmd := &cobra.Command{
+	return &cobra.Command{
 		Use:   "version",
-		Short: "Print the Tarn version",
+		Short: "Print the Tarn version and check for updates",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			fmt.Printf("tarn %s\n", version)
-			if !check {
-				return nil
-			}
 			return runVersionUpdateCheck(cmd, os.Stdout, version)
 		},
 	}
+}
 
-	cmd.Flags().BoolVar(&check, "check", false, "Check whether a newer Tarn version is available")
-	return cmd
+func newStopCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop",
+		Short: "Stop a running Tarn server",
+		RunE:  runStop,
+	}
+}
+
+func runStop(cmd *cobra.Command, args []string) error {
+	cfg := config.Default()
+	cfg.LoadFromEnv()
+	if v, err := cmd.Flags().GetString("data-dir"); err == nil && strings.TrimSpace(v) != "" {
+		cfg.DataDir = strings.TrimSpace(v)
+	}
+
+	data, err := os.ReadFile(cfg.PIDFilePath())
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("tarn does not appear to be running (no PID file at %s)", cfg.PIDFilePath())
+		}
+		return fmt.Errorf("read PID file: %w", err)
+	}
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return fmt.Errorf("invalid PID file contents: %w", err)
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("process %d not found: %w", pid, err)
+	}
+
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		return fmt.Errorf("failed to stop tarn (pid %d): %w", pid, err)
+	}
+
+	fmt.Fprintf(os.Stderr, "Stopping tarn (pid %d)...\n", pid)
+	return nil
+}
+
+func newStatusCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Show the status of a running Tarn server",
+		RunE:  runStatus,
+	}
+}
+
+func runStatus(cmd *cobra.Command, args []string) error {
+	cfg := config.Default()
+	cfg.LoadFromEnv()
+	if v, err := cmd.Flags().GetString("host"); err == nil && strings.TrimSpace(v) != "" {
+		cfg.Host = strings.TrimSpace(v)
+	}
+	if v, err := cmd.Flags().GetInt("port"); err == nil && v != 0 {
+		cfg.Port = v
+	}
+	if v, err := cmd.Flags().GetString("data-dir"); err == nil && strings.TrimSpace(v) != "" {
+		cfg.DataDir = strings.TrimSpace(v)
+	}
+
+	healthURL := cfg.Endpoint() + "/_tarn/health"
+
+	ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, healthURL, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		fmt.Printf("tarn: not running\nEndpoint: %s\n", cfg.Endpoint())
+		return nil
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	var health struct {
+		Status   string   `json:"status"`
+		Services []string `json:"services"`
+	}
+	_ = json.Unmarshal(body, &health)
+
+	status := health.Status
+	if status == "" {
+		status = "running"
+	}
+
+	fmt.Printf("tarn: %s\n", status)
+	fmt.Printf("Endpoint: %s\n", cfg.Endpoint())
+	if len(health.Services) > 0 {
+		fmt.Printf("Services: %s\n", strings.Join(health.Services, ", "))
+	}
+
+	pidData, err := os.ReadFile(cfg.PIDFilePath())
+	if err == nil {
+		fmt.Printf("PID:      %s\n", strings.TrimSpace(string(pidData)))
+	}
+
+	return nil
 }
 
 func newStartCmd() *cobra.Command {
