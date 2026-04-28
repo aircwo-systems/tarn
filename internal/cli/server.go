@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -104,9 +105,23 @@ func buildConfig(cmd *cobra.Command) (*config.Config, error) {
 	return cfg, nil
 }
 
+func writePIDFile(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644)
+}
+
 func startServer(cfg *config.Config) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	pidPath := cfg.PIDFilePath()
+	if err := writePIDFile(pidPath); err != nil {
+		log.Printf("WARNING: could not write PID file %s: %v", pidPath, err)
+	} else {
+		defer os.Remove(pidPath)
+	}
 
 	// Initialize container engine
 	eng, err := engine.New(cfg)
