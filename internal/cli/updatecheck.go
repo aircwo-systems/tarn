@@ -260,7 +260,15 @@ func newestComparableRelease(releases []latestReleaseResponse) (latestReleaseRes
 		}
 	}
 
-	// Prefer stable releases when available; fall back to prereleases.
+	// Return the globally newest release. Prefer stable when tied or newer,
+	// but don't let an older stable suppress a newer prerelease.
+	if stableSet && anySet {
+		cmp, ok := compareSemanticVersions(bestStable.TagName, bestAny.TagName)
+		if ok && cmp >= 0 {
+			return bestStable, true
+		}
+		return bestAny, true
+	}
 	if stableSet {
 		return bestStable, true
 	}
@@ -316,19 +324,11 @@ func shouldDisableUpdateCheck() bool {
 }
 
 func isOutdatedVersion(current, latest string) bool {
-	if isDevelopmentVersion(current) {
-		return false
-	}
 	cmp, ok := compareSemanticVersions(current, latest)
 	if !ok {
 		return false
 	}
 	return cmp < 0
-}
-
-func isDevelopmentVersion(v string) bool {
-	v = strings.ToLower(strings.TrimSpace(v))
-	return strings.Contains(v, "-dev")
 }
 
 type semanticVersion struct {

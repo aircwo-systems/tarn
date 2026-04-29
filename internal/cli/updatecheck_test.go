@@ -41,9 +41,10 @@ func TestCompareSemanticVersions(t *testing.T) {
 	}
 }
 
-func TestIsOutdatedVersionSkipsDevBuilds(t *testing.T) {
-	if isOutdatedVersion("0.1.0-dev", "0.2.0") {
-		t.Fatal("expected dev builds to skip outdated notifications")
+func TestIsOutdatedVersionDevBuilds(t *testing.T) {
+	// Dev builds report outdated so local builds still surface available releases.
+	if !isOutdatedVersion("0.1.0-dev", "0.2.0") {
+		t.Fatal("expected dev build to be considered outdated")
 	}
 	if !isOutdatedVersion("0.1.0", "0.2.0") {
 		t.Fatal("expected release build to be considered outdated")
@@ -190,7 +191,7 @@ func TestCheckForUpdatesDisabledByEnv(t *testing.T) {
 	}
 }
 
-func TestCheckForUpdatesPrefersStableOverPrerelease(t *testing.T) {
+func TestCheckForUpdatesReturnsNewestOverall(t *testing.T) {
 	origURL := updateCheckLatestReleaseURL
 	origReleasesURL := updateCheckReleasesURL
 	origClient := updateCheckHTTPClient
@@ -236,9 +237,9 @@ func TestCheckForUpdatesPrefersStableOverPrerelease(t *testing.T) {
 	if !result.Outdated {
 		t.Fatalf("expected outdated=true, got %+v", result)
 	}
-	// Should pick v1.0.0 (stable) over v1.1.0-beta (prerelease).
-	if result.LatestVersion != "v1.0.0" {
-		t.Fatalf("latest version = %q, want v1.0.0", result.LatestVersion)
+	// Newest overall is v1.1.0-beta; older stable v1.0.0 must not suppress it.
+	if result.LatestVersion != "v1.1.0-beta" {
+		t.Fatalf("latest version = %q, want v1.1.0-beta", result.LatestVersion)
 	}
 }
 
@@ -319,7 +320,7 @@ func TestComparePrereleaseIdentifiers(t *testing.T) {
 	}
 }
 
-func TestNewestComparableReleasePrefersStable(t *testing.T) {
+func TestNewestComparableReleaseReturnsNewest(t *testing.T) {
 	releases := []latestReleaseResponse{
 		{TagName: "v1.1.0-beta", HTMLURL: "https://example.com/v1.1.0-beta"},
 		{TagName: "v1.0.0", HTMLURL: "https://example.com/v1.0.0"},
@@ -329,8 +330,25 @@ func TestNewestComparableReleasePrefersStable(t *testing.T) {
 	if !ok {
 		t.Fatal("expected a result")
 	}
+	// v1.1.0-beta is newer than v1.0.0; older stable must not suppress it.
+	if best.TagName != "v1.1.0-beta" {
+		t.Fatalf("got %q, want v1.1.0-beta (newest overall)", best.TagName)
+	}
+}
+
+func TestNewestComparableReleasePrefersStableWhenNewer(t *testing.T) {
+	releases := []latestReleaseResponse{
+		{TagName: "v1.0.0", HTMLURL: "https://example.com/v1.0.0"},
+		{TagName: "v0.9.0-beta", HTMLURL: "https://example.com/v0.9.0-beta"},
+		{TagName: "v0.8.0", HTMLURL: "https://example.com/v0.8.0"},
+	}
+	best, ok := newestComparableRelease(releases)
+	if !ok {
+		t.Fatal("expected a result")
+	}
+	// v1.0.0 stable is newer than v0.9.0-beta; stable wins.
 	if best.TagName != "v1.0.0" {
-		t.Fatalf("got %q, want v1.0.0 (should prefer stable over prerelease)", best.TagName)
+		t.Fatalf("got %q, want v1.0.0 (stable is newest)", best.TagName)
 	}
 }
 
