@@ -100,6 +100,12 @@ func TestBuildSQSEventPayload(t *testing.T) {
 			ReceiptHandle: "rh-1",
 			Body:          `{"order":"123"}`,
 			MD5OfBody:     "abc123",
+			MessageAttributes: map[string]*types.MessageAttribute{
+				"eventType": {
+					DataType:    "String",
+					StringValue: "update-event",
+				},
+			},
 		},
 	}
 
@@ -122,6 +128,31 @@ func TestBuildSQSEventPayload(t *testing.T) {
 	}
 	if records[0].Body != `{"order":"123"}` {
 		t.Fatalf("body = %q, want %q", records[0].Body, `{"order":"123"}`)
+	}
+	if records[0].MessageAttributes["eventType"].StringValue != "update-event" {
+		t.Fatalf("stringValue = %q, want %q", records[0].MessageAttributes["eventType"].StringValue, "update-event")
+	}
+
+	var raw map[string][]map[string]any
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		t.Fatalf("unmarshal raw payload: %v", err)
+	}
+	attrs, ok := raw["Records"][0]["messageAttributes"].(map[string]any)
+	if !ok {
+		t.Fatalf("messageAttributes missing from payload: %+v", raw)
+	}
+	eventType, ok := attrs["eventType"].(map[string]any)
+	if !ok {
+		t.Fatalf("eventType attribute missing from payload: %+v", attrs)
+	}
+	if eventType["stringValue"] != "update-event" {
+		t.Fatalf("stringValue raw = %v, want %q", eventType["stringValue"], "update-event")
+	}
+	if eventType["StringValue"] != "update-event" {
+		t.Fatalf("StringValue raw = %v, want %q", eventType["StringValue"], "update-event")
+	}
+	if eventType["Value"] != "update-event" {
+		t.Fatalf("Value raw = %v, want %q", eventType["Value"], "update-event")
 	}
 }
 
