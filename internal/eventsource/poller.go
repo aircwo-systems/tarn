@@ -628,10 +628,18 @@ func matchesAllowedValues(actual interface{}, allowed []interface{}) bool {
 }
 
 // sqsMessageAttribute is the Lambda-event representation of a user-defined
-// SQS message attribute (camelCase keys, per the AWS Lambda SQS event schema).
+// SQS message attribute. We emit the AWS SQS event keys plus compatibility
+// aliases used by existing SNS-style consumers.
 type sqsMessageAttribute struct {
-	StringValue string `json:"stringValue,omitempty"`
-	DataType    string `json:"dataType"`
+	StringValue           string   `json:"stringValue,omitempty"`
+	StringValueCompat     string   `json:"StringValue,omitempty"`
+	Value                 string   `json:"Value,omitempty"`
+	DataType              string   `json:"dataType"`
+	DataTypeCompat        string   `json:"DataType,omitempty"`
+	StringListValues      []string `json:"stringListValues"`
+	BinaryListValues      []string `json:"binaryListValues"`
+	StringListValuesCompat []string `json:"StringListValues,omitempty"`
+	BinaryListValuesCompat []string `json:"BinaryListValues,omitempty"`
 }
 
 type sqsEventRecord struct {
@@ -673,8 +681,15 @@ func buildSQSEventPayload(msgs []*types.SQSMessage, eventSourceArn, queueName st
 		for k, v := range msg.MessageAttributes {
 			if v != nil {
 				msgAttrs[k] = sqsMessageAttribute{
-					StringValue: v.StringValue,
-					DataType:    v.DataType,
+					StringValue:            v.StringValue,
+					StringValueCompat:      v.StringValue,
+					Value:                  v.StringValue,
+					DataType:               v.DataType,
+					DataTypeCompat:         v.DataType,
+					StringListValues:       []string{},
+					BinaryListValues:       []string{},
+					StringListValuesCompat: []string{},
+					BinaryListValuesCompat: []string{},
 				}
 			}
 		}
