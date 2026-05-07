@@ -49,7 +49,7 @@ func virtualHostedBucket(host string) string {
 		host = h
 	}
 	host = strings.Trim(host, ".")
-	if host == "" || net.ParseIP(host) != nil || !strings.Contains(host, ".") {
+	if host == "" || net.ParseIP(host) != nil || !strings.HasSuffix(host, ".localhost") {
 		return ""
 	}
 	bucket, _, found := strings.Cut(host, ".")
