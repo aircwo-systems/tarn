@@ -86,6 +86,21 @@ func (s *Service) ListBuckets() []types.Bucket {
 	return s.store.ListBuckets()
 }
 
+// PutBucketTags stores bucket tags.
+func (s *Service) PutBucketTags(name string, tags map[string]string) error {
+	return s.store.PutBucketTags(name, tags)
+}
+
+// GetBucketTags returns bucket tags.
+func (s *Service) GetBucketTags(name string) (map[string]string, error) {
+	return s.store.GetBucketTags(name)
+}
+
+// DeleteBucketTags removes all bucket tags.
+func (s *Service) DeleteBucketTags(name string) error {
+	return s.store.DeleteBucketTags(name)
+}
+
 // PutObject stores an object.
 func (s *Service) PutObject(bucket, key, contentType string, body io.Reader, metadata map[string]string) (*types.Object, error) {
 	obj, err := s.store.PutObject(bucket, key, contentType, body, metadata)

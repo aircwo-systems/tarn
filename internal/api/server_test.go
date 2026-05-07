@@ -277,6 +277,29 @@ func TestRootDispatchKeepsS3ListBucketsForNonHTMLRequests(t *testing.T) {
 	}
 }
 
+func TestVirtualHostedStyleHeadBucketAtRoot(t *testing.T) {
+	handler := newTestHTTPHandler(t)
+
+	createReq := httptest.NewRequest(http.MethodPut, "/vh-bucket", nil)
+	createRec := httptest.NewRecorder()
+	handler.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusOK {
+		t.Fatalf("create status=%d body=%s", createRec.Code, createRec.Body.String())
+	}
+
+	headReq := httptest.NewRequest(http.MethodHead, "/", nil)
+	headReq.Host = "vh-bucket.localhost:4566"
+	headRec := httptest.NewRecorder()
+	handler.ServeHTTP(headRec, headReq)
+
+	if headRec.Code != http.StatusOK {
+		t.Fatalf("head status=%d body=%s", headRec.Code, headRec.Body.String())
+	}
+	if region := headRec.Header().Get("x-amz-bucket-region"); region != "us-east-1" {
+		t.Fatalf("bucket region=%q, want %q", region, "us-east-1")
+	}
+}
+
 func TestEventBridgeProtocolDispatchSupportsTarnPrefixedPath(t *testing.T) {
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()

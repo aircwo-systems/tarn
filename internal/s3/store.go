@@ -107,6 +107,28 @@ func encodeKey(key string) string {
 	return url.PathEscape(key)
 }
 
+func cloneBucketTags(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(src))
+	for key, value := range src {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func (s *Store) persistBucketMeta(name string, bucket *types.Bucket) error {
+	data, err := json.Marshal(bucket)
+	if err != nil {
+		return fmt.Errorf("marshal bucket meta: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(s.bucketDir(name), ".meta.json"), data, 0600); err != nil {
+		return fmt.Errorf("write bucket meta: %w", err)
+	}
+	return nil
+}
+
 // CreateBucket creates a new bucket.
 func (s *Store) CreateBucket(name, region string) (*types.Bucket, error) {
 	s.mu.Lock()
@@ -130,9 +152,8 @@ func (s *Store) CreateBucket(name, region string) (*types.Bucket, error) {
 		return nil, fmt.Errorf("create objmeta dir: %w", err)
 	}
 
-	data, _ := json.Marshal(bucket)
-	if err := os.WriteFile(filepath.Join(dir, ".meta.json"), data, 0600); err != nil {
-		return nil, fmt.Errorf("write bucket meta: %w", err)
+	if err := s.persistBucketMeta(name, bucket); err != nil {
+		return nil, err
 	}
 
 	s.buckets[name] = &bucketState{meta: bucket}
@@ -196,6 +217,47 @@ func (s *Store) ListBuckets() []types.Bucket {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result
+}
+
+// PutBucketTags stores bucket tags.
+func (s *Store) PutBucketTags(name string, tags map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	bs, exists := s.buckets[name]
+	if !exists {
+		return fmt.Errorf("NoSuchBucket")
+	}
+
+	bs.meta.Tags = cloneBucketTags(tags)
+	return s.persistBucketMeta(name, bs.meta)
+}
+
+// GetBucketTags returns bucket tags.
+func (s *Store) GetBucketTags(name string) (map[string]string, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	bs, exists := s.buckets[name]
+	if !exists {
+		return nil, fmt.Errorf("NoSuchBucket")
+	}
+
+	return cloneBucketTags(bs.meta.Tags), nil
+}
+
+// DeleteBucketTags removes all bucket tags.
+func (s *Store) DeleteBucketTags(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	bs, exists := s.buckets[name]
+	if !exists {
+		return fmt.Errorf("NoSuchBucket")
+	}
+
+	bs.meta.Tags = nil
+	return s.persistBucketMeta(name, bs.meta)
 }
 
 // PutObject stores an object in a bucket.
