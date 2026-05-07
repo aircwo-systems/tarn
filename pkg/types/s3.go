@@ -7,6 +7,7 @@ type Bucket struct {
 	Name         string    `json:"Name"`
 	CreationDate time.Time `json:"CreationDate"`
 	Region       string    `json:"Region"`
+	Tags         map[string]string `json:"Tags,omitempty"`
 }
 
 // Object represents metadata for an S3 object.

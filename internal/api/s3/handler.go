@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -42,6 +43,21 @@ func NewHandler(svc *s3svc.Service) *Handler {
 	}
 }
 
+func virtualHostedBucket(host string) string {
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	host = strings.Trim(host, ".")
+	if host == "" || net.ParseIP(host) != nil || !strings.Contains(host, ".") {
+		return ""
+	}
+	bucket, _, found := strings.Cut(host, ".")
+	if !found || bucket == "" {
+		return ""
+	}
+	return bucket
+}
+
 // Dispatch routes S3 API requests by method, bucket, key and query params.
 func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 	// Strip /_s3 prefix
@@ -50,9 +66,16 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		path = "/"
 	}
 
-	// Parse bucket and key from path
-	path = strings.TrimPrefix(path, "/")
-	bucket, key, _ := strings.Cut(path, "/")
+	// Virtual-hosted-style requests carry the bucket name in Host and keep the
+	// path rooted at / or /{key...}. Fall back to path-style parsing otherwise.
+	trimmedPath := strings.TrimPrefix(path, "/")
+	bucket, key := "", ""
+	if hostBucket := virtualHostedBucket(r.Host); hostBucket != "" && !strings.HasPrefix(r.URL.Path, "/_s3/") && r.URL.Path != "/_s3" {
+		bucket = hostBucket
+		key = trimmedPath
+	} else {
+		bucket, key, _ = strings.Cut(trimmedPath, "/")
+	}
 
 	switch {
 	case bucket == "":
@@ -65,6 +88,10 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		// Operations on a bucket
 		switch r.Method {
 		case http.MethodPut:
+			if r.URL.Query().Has("tagging") {
+				h.putBucketTagging(w, r, bucket)
+				return
+			}
 			if r.URL.Query().Has("notification") {
 				h.putBucketNotification(w, r, bucket)
 				return
@@ -79,6 +106,10 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 			h.headBucket(w, r, bucket)
 			return
 		case http.MethodDelete:
+			if r.URL.Query().Has("tagging") {
+				h.deleteBucketTagging(w, r, bucket)
+				return
+			}
 			if r.URL.Query().Has("policy") {
 				h.deleteBucketPolicy(w, r, bucket)
 				return
@@ -240,11 +271,20 @@ func (h *Handler) listBuckets(w http.ResponseWriter, _ *http.Request) {
 func (h *Handler) createBucket(w http.ResponseWriter, r *http.Request, bucket string) {
 	// Determine the bucket region from the request body or signing headers.
 	region := ""
+	tags := map[string]string{}
 	body, _ := io.ReadAll(r.Body)
 	if len(body) > 0 {
 		var cfg struct {
 			XMLName            xml.Name `xml:"CreateBucketConfiguration"`
 			LocationConstraint string   `xml:"LocationConstraint"`
+			Tags               []struct {
+				Key   string `xml:"Key"`
+				Value string `xml:"Value"`
+			} `xml:"Tags>Tag"`
+			TagSet []struct {
+				Key   string `xml:"Key"`
+				Value string `xml:"Value"`
+			} `xml:"Tags>TagSet>Tag"`
 		}
 		if err := xml.Unmarshal(body, &cfg); err == nil && cfg.LocationConstraint != "" {
 			// AWS rejects explicit us-east-1 LocationConstraint.
@@ -253,6 +293,16 @@ func (h *Handler) createBucket(w http.ResponseWriter, r *http.Request, bucket st
 				return
 			}
 			region = cfg.LocationConstraint
+		}
+		for _, tag := range cfg.Tags {
+			if tag.Key != "" {
+				tags[tag.Key] = tag.Value
+			}
+		}
+		for _, tag := range cfg.TagSet {
+			if tag.Key != "" {
+				tags[tag.Key] = tag.Value
+			}
 		}
 	}
 	if region == "" {
@@ -272,6 +322,12 @@ func (h *Handler) createBucket(w http.ResponseWriter, r *http.Request, bucket st
 			writeS3Error(w, http.StatusInternalServerError, "InternalError", msg)
 		}
 		return
+	}
+	if len(tags) > 0 {
+		if err := h.svc.PutBucketTags(bucket, tags); err != nil {
+			writeS3Error(w, http.StatusInternalServerError, "InternalError", err.Error())
+			return
+		}
 	}
 	w.Header().Set("Location", "/"+bucket)
 	w.WriteHeader(http.StatusOK)
@@ -433,11 +489,76 @@ func (h *Handler) getBucketObjectLock(w http.ResponseWriter, _ *http.Request, bu
 }
 
 func (h *Handler) getBucketTagging(w http.ResponseWriter, _ *http.Request, bucket string) {
-	if err := h.svc.HeadBucket(bucket); err != nil {
+	tags, err := h.svc.GetBucketTags(bucket)
+	if err != nil {
 		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
 		return
 	}
+	if len(tags) == 0 {
 	writeS3Error(w, http.StatusNotFound, "NoSuchTagSet", "The TagSet does not exist")
+		return
+	}
+
+	type xmlTag struct {
+		Key   string `xml:"Key"`
+		Value string `xml:"Value"`
+	}
+	type taggingResponse struct {
+		XMLName xml.Name `xml:"Tagging"`
+		Xmlns   string   `xml:"xmlns,attr"`
+		TagSet  []xmlTag `xml:"TagSet>Tag"`
+	}
+	keys := make([]string, 0, len(tags))
+	for key := range tags {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	resp := taggingResponse{Xmlns: s3Namespace, TagSet: make([]xmlTag, 0, len(keys))}
+	for _, key := range keys {
+		resp.TagSet = append(resp.TagSet, xmlTag{Key: key, Value: tags[key]})
+	}
+	writeXML(w, http.StatusOK, resp)
+}
+
+func (h *Handler) putBucketTagging(w http.ResponseWriter, r *http.Request, bucket string) {
+	type xmlTag struct {
+		Key   string `xml:"Key"`
+		Value string `xml:"Value"`
+	}
+	type taggingRequest struct {
+		XMLName xml.Name `xml:"Tagging"`
+		TagSet  []xmlTag `xml:"TagSet>Tag"`
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeS3Error(w, http.StatusBadRequest, "MalformedXML", "Unable to read request body")
+		return
+	}
+	var req taggingRequest
+	if err := xml.Unmarshal(body, &req); err != nil {
+		writeS3Error(w, http.StatusBadRequest, "MalformedXML", "The XML you provided was not well-formed")
+		return
+	}
+	tags := make(map[string]string, len(req.TagSet))
+	for _, tag := range req.TagSet {
+		if tag.Key != "" {
+			tags[tag.Key] = tag.Value
+		}
+	}
+	if err := h.svc.PutBucketTags(bucket, tags); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+func (h *Handler) deleteBucketTagging(w http.ResponseWriter, _ *http.Request, bucket string) {
+	if err := h.svc.DeleteBucketTags(bucket); err != nil {
+		writeS3Error(w, http.StatusNotFound, "NoSuchBucket", "The specified bucket does not exist")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) getBucketLifecycle(w http.ResponseWriter, _ *http.Request, bucket string) {

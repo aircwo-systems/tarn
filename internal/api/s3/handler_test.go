@@ -331,3 +331,75 @@ func TestBucketSubresourceTerraformStubs(t *testing.T) {
 		})
 	}
 }
+
+func TestBucketTaggingLifecycle(t *testing.T) {
+	h := newTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodPut, "/_s3/tf-bucket", nil)
+	rec := httptest.NewRecorder()
+	h.Dispatch(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	taggingXML := `<Tagging xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><TagSet><Tag><Key>env</Key><Value>local</Value></Tag><Tag><Key>service</Key><Value>dpc</Value></Tag></TagSet></Tagging>`
+	req = httptest.NewRequest(http.MethodPut, "/_s3/tf-bucket?tagging", strings.NewReader(taggingXML))
+	rec = httptest.NewRecorder()
+	h.Dispatch(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("put tagging status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/_s3/tf-bucket?tagging", nil)
+	rec = httptest.NewRecorder()
+	h.Dispatch(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get tagging status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "<Key>env</Key>") || !strings.Contains(body, "<Value>local</Value>") {
+		t.Fatalf("tagging body missing env tag: %s", body)
+	}
+	if !strings.Contains(body, "<Key>service</Key>") || !strings.Contains(body, "<Value>dpc</Value>") {
+		t.Fatalf("tagging body missing service tag: %s", body)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/_s3/tf-bucket?tagging", nil)
+	rec = httptest.NewRecorder()
+	h.Dispatch(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("delete tagging status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/_s3/tf-bucket?tagging", nil)
+	rec = httptest.NewRecorder()
+	h.Dispatch(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("get tagging after delete status = %d, want %d, body: %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "NoSuchTagSet") {
+		t.Fatalf("expected NoSuchTagSet after delete, got: %s", rec.Body.String())
+	}
+}
+
+func TestCreateBucketPersistsTagsFromCreateRequest(t *testing.T) {
+	h := newTestHandler(t)
+
+	body := `<CreateBucketConfiguration xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><LocationConstraint>eu-west-1</LocationConstraint><Tags><Tag><Key>env</Key><Value>local</Value></Tag></Tags></CreateBucketConfiguration>`
+	req := httptest.NewRequest(http.MethodPut, "/_s3/tagged-bucket", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.Dispatch(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("create status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/_s3/tagged-bucket?tagging", nil)
+	rec = httptest.NewRecorder()
+	h.Dispatch(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get tagging status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "<Key>env</Key>") || !strings.Contains(rec.Body.String(), "<Value>local</Value>") {
+		t.Fatalf("tagging body missing create tags: %s", rec.Body.String())
+	}
+}
