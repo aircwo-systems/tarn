@@ -303,7 +303,7 @@ func TestRunFlushClearsS3TriggersWithoutStorage(t *testing.T) {
 					"secrets":[],
 					"eventSourceMappings":[],
 					"buckets":[
-						{"name":"r10-artifacts","objects":0,"totalSize":0},
+						{"name":"r10-artifacts","objects":0,"totalSize":0,"hasNotifications":true},
 						{"name":"r9-artifacts","objects":0,"totalSize":0}
 					]
 				}`)

@@ -10,17 +10,21 @@ const (
 	RuntimeNodeJS20  Runtime = "nodejs20.x"
 	RuntimeNodeJS22  Runtime = "nodejs22.x"
 	RuntimeNodeJS24  Runtime = "nodejs24.x"
+	RuntimeNodeJS25  Runtime = "nodejs25.x"
 	RuntimePython39  Runtime = "python3.9"
 	RuntimePython310 Runtime = "python3.10"
 	RuntimePython311 Runtime = "python3.11"
 	RuntimePython312 Runtime = "python3.12"
 	RuntimePython313 Runtime = "python3.13"
-	RuntimeGo        Runtime = "provided.al2023"
+	RuntimeProvided      Runtime = "provided"
+	RuntimeProvidedAL2   Runtime = "provided.al2"
+	RuntimeProvidedAL2023 Runtime = "provided.al2023"
 	RuntimeDotNet6   Runtime = "dotnet6"
 	RuntimeDotNet8   Runtime = "dotnet8"
 	RuntimeJava11    Runtime = "java11"
 	RuntimeJava17    Runtime = "java17"
 	RuntimeJava21    Runtime = "java21"
+	RuntimeJava25    Runtime = "java25"
 	RuntimeRuby32    Runtime = "ruby3.2"
 	RuntimeRuby33    Runtime = "ruby3.3"
 )
@@ -31,17 +35,21 @@ var RuntimeImageMap = map[Runtime]string{
 	RuntimeNodeJS20:  "public.ecr.aws/lambda/nodejs:20",
 	RuntimeNodeJS22:  "public.ecr.aws/lambda/nodejs:22",
 	RuntimeNodeJS24:  "public.ecr.aws/lambda/nodejs:24",
+	RuntimeNodeJS25:  "public.ecr.aws/lambda/nodejs:25",
 	RuntimePython39:  "public.ecr.aws/lambda/python:3.9",
 	RuntimePython310: "public.ecr.aws/lambda/python:3.10",
 	RuntimePython311: "public.ecr.aws/lambda/python:3.11",
 	RuntimePython312: "public.ecr.aws/lambda/python:3.12",
 	RuntimePython313: "public.ecr.aws/lambda/python:3.13",
-	RuntimeGo:        "public.ecr.aws/lambda/provided:al2023",
+	RuntimeProvided:       "public.ecr.aws/lambda/provided:latest",
+	RuntimeProvidedAL2:    "public.ecr.aws/lambda/provided:al2",
+	RuntimeProvidedAL2023: "public.ecr.aws/lambda/provided:al2023",
 	RuntimeDotNet6:   "public.ecr.aws/lambda/dotnet:6",
 	RuntimeDotNet8:   "public.ecr.aws/lambda/dotnet:8",
 	RuntimeJava11:    "public.ecr.aws/lambda/java:11",
 	RuntimeJava17:    "public.ecr.aws/lambda/java:17",
 	RuntimeJava21:    "public.ecr.aws/lambda/java:21",
+	RuntimeJava25:    "public.ecr.aws/lambda/java:25",
 	RuntimeRuby32:    "public.ecr.aws/lambda/ruby:3.2",
 	RuntimeRuby33:    "public.ecr.aws/lambda/ruby:3.3",
 }

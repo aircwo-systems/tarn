@@ -32,27 +32,23 @@ func TestCreateFunctionCreatesLambdaLogGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create function: %v", err)
 	}
-	// newly created functions start pending; the caller should see that.
-	if fn.State != types.FunctionStatePending {
-		t.Fatalf("expected pending state, got %q", fn.State)
+	// Functions are immediately Active — no Pending→Active dance.
+	if fn.State != types.FunctionStateActive {
+		t.Fatalf("expected active state, got %q", fn.State)
 	}
-	if fn.LastUpdateStatus != types.LastUpdateStatusPending {
-		t.Fatalf("expected last update status pending, got %q", fn.LastUpdateStatus)
+	if fn.LastUpdateStatus != types.LastUpdateStatusSuccessful {
+		t.Fatalf("expected successful update status, got %q", fn.LastUpdateStatus)
 	}
-	// First fetch triggers the Pending → Active transition (Active state saved asynchronously).
-	if _, err := svc.GetFunction("log-group-test"); err != nil {
-		t.Fatalf("get function (first): %v", err)
-	}
-	// Second fetch should observe the Active state.
+	// GetFunction should also return Active immediately.
 	retrieved, err := svc.GetFunction("log-group-test")
 	if err != nil {
-		t.Fatalf("get function (second): %v", err)
+		t.Fatalf("get function: %v", err)
 	}
 	if retrieved.State != types.FunctionStateActive {
-		t.Fatalf("expected active state after second fetch, got %q", retrieved.State)
+		t.Fatalf("expected active state, got %q", retrieved.State)
 	}
 	if retrieved.LastUpdateStatus != types.LastUpdateStatusSuccessful {
-		t.Fatalf("expected successful update status after second fetch, got %q", retrieved.LastUpdateStatus)
+		t.Fatalf("expected successful update status, got %q", retrieved.LastUpdateStatus)
 	}
 }
 
