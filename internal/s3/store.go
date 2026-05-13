@@ -22,6 +22,7 @@ type Store struct {
 	baseDir       string
 	buckets       map[string]*bucketState
 	notifications map[string]*types.BucketNotificationConfiguration
+	configs       map[string]*types.BucketConfig
 }
 
 type bucketState struct {
@@ -44,6 +45,7 @@ func NewStore(baseDir string) *Store {
 		baseDir:       baseDir,
 		buckets:       make(map[string]*bucketState),
 		notifications: make(map[string]*types.BucketNotificationConfiguration),
+		configs:       make(map[string]*types.BucketConfig),
 	}
 }
 
@@ -84,6 +86,16 @@ func (s *Store) Init() error {
 			var cfg types.BucketNotificationConfiguration
 			if err := json.Unmarshal(notifData, &cfg); err == nil {
 				s.notifications[name] = &cfg
+			}
+		}
+
+		// Load bucket config if present
+		configPath := filepath.Join(s.baseDir, name, ".config.json")
+		configData, err := os.ReadFile(configPath)
+		if err == nil {
+			var cfg types.BucketConfig
+			if err := json.Unmarshal(configData, &cfg); err == nil {
+				s.configs[name] = &cfg
 			}
 		}
 	}
@@ -658,4 +670,34 @@ func (s *Store) GetBucketNotification(bucket string) *types.BucketNotificationCo
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.notifications[bucket]
+}
+
+// GetBucketConfig returns a copy of the bucket config (nil if not set).
+func (s *Store) GetBucketConfig(bucket string) *types.BucketConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.configs[bucket]
+}
+
+// UpdateBucketConfig applies fn to the bucket's config under the write lock and persists to disk.
+func (s *Store) UpdateBucketConfig(bucket string, fn func(*types.BucketConfig)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.buckets[bucket]; !exists {
+		return fmt.Errorf("NoSuchBucket")
+	}
+
+	cfg := s.configs[bucket]
+	if cfg == nil {
+		cfg = &types.BucketConfig{}
+	}
+	fn(cfg)
+	s.configs[bucket] = cfg
+
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(s.baseDir, bucket, ".config.json"), data, 0600)
 }

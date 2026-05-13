@@ -62,3 +62,105 @@ type S3LambdaNotification struct {
 type BucketNotificationConfiguration struct {
 	LambdaConfigurations []S3LambdaNotification `json:"LambdaFunctionConfigurations,omitempty"`
 }
+
+// BucketConfig stores all mutable bucket configuration settings.
+type BucketConfig struct {
+	Versioning        *BucketVersioning        `json:"Versioning,omitempty"`
+	ACL               string                   `json:"ACL,omitempty"`
+	Tags              map[string]string        `json:"Tags,omitempty"`
+	Policy            string                   `json:"Policy,omitempty"`
+	CORS              []CORSRule               `json:"CORS,omitempty"`
+	Encryption        *BucketEncryption        `json:"Encryption,omitempty"`
+	PublicAccessBlock *PublicAccessBlockConfig `json:"PublicAccessBlock,omitempty"`
+	Lifecycle         []LifecycleRule          `json:"Lifecycle,omitempty"`
+	Logging           *BucketLogging           `json:"Logging,omitempty"`
+	OwnershipControls string                   `json:"OwnershipControls,omitempty"`
+	ObjectLock        *ObjectLockConfig        `json:"ObjectLock,omitempty"`
+}
+
+// BucketVersioning holds the versioning state for a bucket.
+type BucketVersioning struct {
+	Status    string `json:"Status"`              // "Enabled" | "Suspended"
+	MFADelete string `json:"MFADelete,omitempty"` // "Enabled" | "Disabled"
+}
+
+// CORSRule defines a single CORS rule.
+type CORSRule struct {
+	ID             string   `json:"ID,omitempty"`
+	AllowedHeaders []string `json:"AllowedHeaders,omitempty"`
+	AllowedMethods []string `json:"AllowedMethods"`
+	AllowedOrigins []string `json:"AllowedOrigins"`
+	ExposeHeaders  []string `json:"ExposeHeaders,omitempty"`
+	MaxAgeSeconds  int      `json:"MaxAgeSeconds,omitempty"`
+}
+
+// BucketEncryption holds the default SSE configuration.
+type BucketEncryption struct {
+	Rules []SSERule `json:"Rules"`
+}
+
+// SSERule defines a single server-side encryption rule.
+type SSERule struct {
+	Algorithm        string `json:"Algorithm"`
+	KMSMasterKeyID   string `json:"KMSMasterKeyID,omitempty"`
+	BucketKeyEnabled bool   `json:"BucketKeyEnabled,omitempty"`
+}
+
+// PublicAccessBlockConfig holds the public access block settings.
+type PublicAccessBlockConfig struct {
+	BlockPublicAcls       bool `json:"BlockPublicAcls"`
+	IgnorePublicAcls      bool `json:"IgnorePublicAcls"`
+	BlockPublicPolicy     bool `json:"BlockPublicPolicy"`
+	RestrictPublicBuckets bool `json:"RestrictPublicBuckets"`
+}
+
+// LifecycleRule defines a single bucket lifecycle rule.
+type LifecycleRule struct {
+	ID                             string                          `json:"ID,omitempty"`
+	Status                         string                          `json:"Status"`
+	Prefix                         string                          `json:"Prefix,omitempty"`
+	Expiration                     *LifecycleExpiration            `json:"Expiration,omitempty"`
+	NoncurrentVersionExpiration    *NoncurrentVersionExpiration    `json:"NoncurrentVersionExpiration,omitempty"`
+	AbortIncompleteMultipartUpload *AbortIncompleteMultipartUpload `json:"AbortIncompleteMultipartUpload,omitempty"`
+}
+
+// LifecycleExpiration defines when objects expire.
+type LifecycleExpiration struct {
+	Days                      int    `json:"Days,omitempty"`
+	Date                      string `json:"Date,omitempty"`
+	ExpiredObjectDeleteMarker bool   `json:"ExpiredObjectDeleteMarker,omitempty"`
+}
+
+// NoncurrentVersionExpiration defines when non-current versions expire.
+type NoncurrentVersionExpiration struct {
+	NoncurrentDays int `json:"NoncurrentDays"`
+}
+
+// AbortIncompleteMultipartUpload defines when to abort incomplete MPU.
+type AbortIncompleteMultipartUpload struct {
+	DaysAfterInitiation int `json:"DaysAfterInitiation"`
+}
+
+// BucketLogging configures access log delivery to another bucket.
+type BucketLogging struct {
+	TargetBucket string `json:"TargetBucket"`
+	TargetPrefix string `json:"TargetPrefix,omitempty"`
+}
+
+// ObjectLockConfig holds the object lock configuration.
+type ObjectLockConfig struct {
+	ObjectLockEnabled string          `json:"ObjectLockEnabled"` // "Enabled"
+	Rule              *ObjectLockRule `json:"Rule,omitempty"`
+}
+
+// ObjectLockRule defines the default retention settings.
+type ObjectLockRule struct {
+	DefaultRetention ObjectLockRetention `json:"DefaultRetention"`
+}
+
+// ObjectLockRetention specifies the default retention mode and period.
+type ObjectLockRetention struct {
+	Mode  string `json:"Mode"` // "GOVERNANCE" | "COMPLIANCE"
+	Days  int    `json:"Days,omitempty"`
+	Years int    `json:"Years,omitempty"`
+}

@@ -169,3 +169,147 @@ func (s *Service) PutBucketNotificationConfiguration(bucket string, cfg *types.B
 func (s *Service) GetBucketNotificationConfiguration(bucket string) *types.BucketNotificationConfiguration {
 	return s.store.GetBucketNotification(bucket)
 }
+
+// --- Bucket configuration ---
+
+func (s *Service) PutBucketVersioning(bucket string, cfg *types.BucketVersioning) error {
+	return s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.Versioning = cfg })
+}
+
+func (s *Service) GetBucketVersioning(bucket string) *types.BucketVersioning {
+	if cfg := s.store.GetBucketConfig(bucket); cfg != nil {
+		return cfg.Versioning
+	}
+	return nil
+}
+
+func (s *Service) PutBucketACL(bucket, acl string) error {
+	return s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.ACL = acl })
+}
+
+func (s *Service) PutBucketPolicy(bucket, policy string) error {
+	return s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.Policy = policy })
+}
+
+func (s *Service) GetBucketPolicy(bucket string) string {
+	if cfg := s.store.GetBucketConfig(bucket); cfg != nil {
+		return cfg.Policy
+	}
+	return ""
+}
+
+func (s *Service) DeleteBucketPolicy(bucket string) {
+	_ = s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.Policy = "" })
+}
+
+func (s *Service) PutBucketTagging(bucket string, tags map[string]string) error {
+	return s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.Tags = tags })
+}
+
+func (s *Service) GetBucketTagging(bucket string) map[string]string {
+	if cfg := s.store.GetBucketConfig(bucket); cfg != nil {
+		return cfg.Tags
+	}
+	return nil
+}
+
+func (s *Service) DeleteBucketTagging(bucket string) {
+	_ = s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.Tags = nil })
+}
+
+func (s *Service) PutBucketCORS(bucket string, rules []types.CORSRule) error {
+	return s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.CORS = rules })
+}
+
+func (s *Service) GetBucketCORS(bucket string) []types.CORSRule {
+	if cfg := s.store.GetBucketConfig(bucket); cfg != nil {
+		return cfg.CORS
+	}
+	return nil
+}
+
+func (s *Service) DeleteBucketCORS(bucket string) {
+	_ = s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.CORS = nil })
+}
+
+func (s *Service) PutBucketEncryption(bucket string, cfg *types.BucketEncryption) error {
+	return s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.Encryption = cfg })
+}
+
+func (s *Service) GetBucketEncryption(bucket string) *types.BucketEncryption {
+	if cfg := s.store.GetBucketConfig(bucket); cfg != nil {
+		return cfg.Encryption
+	}
+	return nil
+}
+
+func (s *Service) DeleteBucketEncryption(bucket string) {
+	_ = s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.Encryption = nil })
+}
+
+func (s *Service) PutPublicAccessBlock(bucket string, cfg *types.PublicAccessBlockConfig) error {
+	return s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.PublicAccessBlock = cfg })
+}
+
+func (s *Service) GetPublicAccessBlock(bucket string) *types.PublicAccessBlockConfig {
+	if cfg := s.store.GetBucketConfig(bucket); cfg != nil {
+		return cfg.PublicAccessBlock
+	}
+	return nil
+}
+
+func (s *Service) DeletePublicAccessBlock(bucket string) {
+	_ = s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.PublicAccessBlock = nil })
+}
+
+func (s *Service) PutBucketLifecycle(bucket string, rules []types.LifecycleRule) error {
+	return s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.Lifecycle = rules })
+}
+
+func (s *Service) GetBucketLifecycle(bucket string) []types.LifecycleRule {
+	if cfg := s.store.GetBucketConfig(bucket); cfg != nil {
+		return cfg.Lifecycle
+	}
+	return nil
+}
+
+func (s *Service) DeleteBucketLifecycle(bucket string) {
+	_ = s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.Lifecycle = nil })
+}
+
+func (s *Service) PutBucketLogging(bucket string, cfg *types.BucketLogging) error {
+	return s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.Logging = cfg })
+}
+
+func (s *Service) GetBucketLogging(bucket string) *types.BucketLogging {
+	if cfg := s.store.GetBucketConfig(bucket); cfg != nil {
+		return cfg.Logging
+	}
+	return nil
+}
+
+func (s *Service) PutBucketOwnershipControls(bucket, objectOwnership string) error {
+	return s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.OwnershipControls = objectOwnership })
+}
+
+func (s *Service) GetBucketOwnershipControls(bucket string) string {
+	if cfg := s.store.GetBucketConfig(bucket); cfg != nil {
+		return cfg.OwnershipControls
+	}
+	return ""
+}
+
+func (s *Service) DeleteBucketOwnershipControls(bucket string) {
+	_ = s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.OwnershipControls = "" })
+}
+
+func (s *Service) PutBucketObjectLock(bucket string, cfg *types.ObjectLockConfig) error {
+	return s.store.UpdateBucketConfig(bucket, func(c *types.BucketConfig) { c.ObjectLock = cfg })
+}
+
+func (s *Service) GetBucketObjectLock(bucket string) *types.ObjectLockConfig {
+	if cfg := s.store.GetBucketConfig(bucket); cfg != nil {
+		return cfg.ObjectLock
+	}
+	return nil
+}
