@@ -4,13 +4,17 @@ BUILD_DIR := ./build
 GO_FILES := $(shell git ls-files '*.go')
 LDFLAGS := -ldflags "-X github.com/aircwo-systems/tarn/internal/cli.version=$(VERSION)"
 
-.PHONY: all build secrets-proxy db-proxy start run clean test lint fmt vet ui-install ui-dev ui-build docker-build docker-build-ui docker-run
+.PHONY: all build build-lite secrets-proxy db-proxy start run clean test lint fmt vet ui-install ui-dev ui-build docker-build docker-build-ui docker-run
 
 all: build
 
 build: secrets-proxy db-proxy
 	@mkdir -p $(BUILD_DIR)
 	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/tarn
+
+build-lite:
+	@mkdir -p $(BUILD_DIR)
+	go build $(LDFLAGS) -tags lite -o $(BUILD_DIR)/$(BINARY_NAME)-lite ./cmd/tarn
 
 secrets-proxy:
 	@mkdir -p $(BUILD_DIR)
