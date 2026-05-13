@@ -27,6 +27,17 @@ make build
 ./build/tarn start
 ```
 
+### Lite Build
+
+The lite build strips the embedded dashboard UI and the `lambda`/`s3`/`sqs`/`sns`/`secrets` CLI sub-commands, producing a smaller binary suited for environments that use `awslocal` or another AWS CLI wrapper instead of the built-in commands:
+
+```bash
+make build-lite
+./build/tarn-lite start
+```
+
+The lite binary runs the full API server — all emulated AWS services are available. Only the interactive CLI commands and the bundled dashboard are removed. Use `awslocal` or any AWS SDK to interact with the endpoint as normal.
+
 ### Requirements
 
 - **Go 1.26+** (for building)

@@ -15,8 +15,8 @@ Tarn can be configured via command-line flags or environment variables.
 | `--region` | `TARN_REGION` | `us-east-1` | Emulated AWS region |
 | `--data-dir` | `TARN_DATA_DIR` | `~/.tarn/data` | Persistent storage location |
 | `--persist` | `TARN_PERSIST` | `true` | Persist state across restarts |
-| `--ui` | `TARN_UI_ENABLED` | `false` | Enable dashboard UI (localhost:4566) |
-| `--ui-dir` | `TARN_UI_DIR` | `./ui/build` | Path to built UI assets |
+| `--ui` | `TARN_UI_ENABLED` | `false` | Enable dashboard UI (localhost:4566) — full build only |
+| `--ui-dir` | `TARN_UI_DIR` | `./ui/build` | Path to built UI assets — full build only |
 | `--expose-secrets-proxy` | `TARN_EXPOSE_SECRETS_PROXY` | `false` | Run the local secrets extension-compatible proxy |
 | `--secrets-proxy-host` | `TARN_SECRETS_PROXY_HOST` | `127.0.0.1` | Bind address for the local secrets proxy |
 | `--secrets-proxy-port` | `TARN_SECRETS_PROXY_PORT` | `2773` | Port for the local secrets proxy |
