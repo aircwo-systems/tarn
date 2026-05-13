@@ -85,8 +85,8 @@ func TestGetFunctionConfigurationIncludesLastUpdateStatus(t *testing.T) {
 	}
 }
 
-// the handler should surface the transition from Pending -> Active on
-// successive fetches, just like the service.
+// Functions are immediately Active — GetFunctionConfiguration should return
+// Active on the very first fetch with no Pending→Active dance required.
 func TestFunctionStateTransitionsViaHandler(t *testing.T) {
 	h := newLambdaHandler(t)
 
@@ -100,34 +100,22 @@ func TestFunctionStateTransitionsViaHandler(t *testing.T) {
 		t.Fatalf("create function: %v", err)
 	}
 
-	// first request should report Pending
 	req := httptest.NewRequest(http.MethodGet, "/2015-03-31/functions/bar/configuration", nil)
 	req.SetPathValue("name", "bar")
 	rec := httptest.NewRecorder()
 	h.GetFunctionConfiguration(rec, req)
 	if rec.Code != http.StatusOK {
-		t.Fatalf("first status=%d", rec.Code)
+		t.Fatalf("status=%d", rec.Code)
 	}
 	var cfg types.FunctionConfig
 	if err := json.NewDecoder(rec.Body).Decode(&cfg); err != nil {
-		t.Fatalf("decode first: %v", err)
+		t.Fatalf("decode: %v", err)
 	}
-	if cfg.State != types.FunctionStatePending {
-		t.Fatalf("expected pending state first, got %s", cfg.State)
+	if cfg.State != types.FunctionStateActive {
+		t.Fatalf("expected active state on first fetch, got %s", cfg.State)
 	}
-
-	// second call should now return active
-	rec2 := httptest.NewRecorder()
-	h.GetFunctionConfiguration(rec2, req)
-	if rec2.Code != http.StatusOK {
-		t.Fatalf("second status=%d", rec2.Code)
-	}
-	var cfg2 types.FunctionConfig
-	if err := json.NewDecoder(rec2.Body).Decode(&cfg2); err != nil {
-		t.Fatalf("decode second: %v", err)
-	}
-	if cfg2.State != types.FunctionStateActive {
-		t.Fatalf("expected active on second fetch, got %s", cfg2.State)
+	if cfg.LastUpdateStatus != types.LastUpdateStatusSuccessful {
+		t.Fatalf("expected successful update status, got %s", cfg.LastUpdateStatus)
 	}
 }
 
@@ -145,9 +133,6 @@ func TestGetFunctionWrapperIncludesLastUpdateStatus(t *testing.T) {
 	}
 	req := httptest.NewRequest(http.MethodGet, "/2015-03-31/functions/baz", nil)
 	req.SetPathValue("name", "baz")
-	// First call triggers Pending → Active transition (saved asynchronously).
-	h.GetFunction(httptest.NewRecorder(), req)
-	// Second call should observe Active state.
 	rec := httptest.NewRecorder()
 	h.GetFunction(rec, req)
 	if rec.Code != http.StatusOK {

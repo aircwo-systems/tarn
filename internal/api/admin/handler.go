@@ -147,11 +147,12 @@ type eventBridgeRuleSummary struct {
 }
 
 type s3BucketSummary struct {
-	Name           string                  `json:"name"`
-	Objects        int                     `json:"objects"`
-	TotalSize      int64                   `json:"totalSize"`
-	CreatedDate    time.Time               `json:"createdDate"`
-	PreviewObjects []s3BucketObjectPreview `json:"previewObjects,omitempty"`
+	Name             string                  `json:"name"`
+	Objects          int                     `json:"objects"`
+	TotalSize        int64                   `json:"totalSize"`
+	CreatedDate      time.Time               `json:"createdDate"`
+	HasNotifications bool                    `json:"hasNotifications,omitempty"`
+	PreviewObjects   []s3BucketObjectPreview `json:"previewObjects,omitempty"`
 }
 
 type s3BucketObjectPreview struct {
@@ -964,12 +965,15 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(resp.Secrets, func(i, j int) bool { return resp.Secrets[i].Name < resp.Secrets[j].Name })
 
 	for _, b := range buckets {
+		notifCfg := h.s3.GetBucketNotificationConfiguration(b.Name)
+		hasNotifications := notifCfg != nil && len(notifCfg.LambdaConfigurations) > 0
 		resp.Buckets = append(resp.Buckets, s3BucketSummary{
-			Name:           b.Name,
-			Objects:        h.s3.ObjectCount(b.Name),
-			TotalSize:      h.s3.TotalSize(b.Name),
-			CreatedDate:    b.CreationDate,
-			PreviewObjects: h.bucketPreviewObjects(b.Name, 12),
+			Name:             b.Name,
+			Objects:          h.s3.ObjectCount(b.Name),
+			TotalSize:        h.s3.TotalSize(b.Name),
+			CreatedDate:      b.CreationDate,
+			HasNotifications: hasNotifications,
+			PreviewObjects:   h.bucketPreviewObjects(b.Name, 12),
 		})
 	}
 	sort.Slice(resp.Buckets, func(i, j int) bool { return resp.Buckets[i].Name < resp.Buckets[j].Name })

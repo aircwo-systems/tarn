@@ -41,8 +41,6 @@ type FunctionMetrics struct {
 	LastInvokedAt     time.Time `json:"lastInvokedAt"`
 }
 
-const pendingToActiveDelay = 750 * time.Millisecond
-
 const (
 	coldStartInvokeRetryAttempts = 4
 	coldStartInvokeRetryBackoff  = 150 * time.Millisecond
@@ -84,14 +82,11 @@ func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, 
 	}
 
 	fn.FunctionArn = fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", s.cfg.Region, s.cfg.AccountID, fn.FunctionName)
-	// AWS starts a newly created function in the "Pending" state; the
-	// SDK/client waiters observe a transition to "Active".  We mimic that
-	// behavior so that the Terraform AWS provider's waiter sees a change
-	// and exits promptly.  The create response itself still returns the
-	// pending values but we mark the stored config as pending and switch
-	// to active on the first subsequent lookup.
-	fn.State = types.FunctionStatePending
-	fn.LastUpdateStatus = types.LastUpdateStatusPending
+	// Skip the Pending→Active transition dance: return Active immediately so
+	// Terraform's WaitUntilFunctionActiveV2 waiter completes on its first poll
+	// rather than requiring two round-trips (~5s per function on default intervals).
+	fn.State = types.FunctionStateActive
+	fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
 	fn.LastModified = time.Now()
 
 	if len(code) > 0 {
@@ -111,7 +106,6 @@ func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, 
 	if err := s.store.SaveFunction(fn); err != nil {
 		return nil, fmt.Errorf("failed to save function: %w", err)
 	}
-	s.schedulePendingActivation(fn.FunctionName)
 	s.ensureFunctionMetrics(fn.FunctionName)
 	if s.logsSvc != nil {
 		s.logsSvc.CreateLogGroup(fmt.Sprintf("/aws/lambda/%s", fn.FunctionName))
@@ -130,18 +124,6 @@ func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, 
 	}
 
 	return fn, nil
-}
-
-func (s *Service) schedulePendingActivation(name string) {
-	go func() {
-		timer := time.NewTimer(pendingToActiveDelay)
-		defer timer.Stop()
-		<-timer.C
-
-		if err := s.promoteFunctionToActiveIfPending(name); err != nil && !strings.Contains(err.Error(), "not found") {
-			log.Printf("[lambda] warning: failed to promote function %s to active: %v", name, err)
-		}
-	}()
 }
 
 func (s *Service) promoteFunctionToActiveIfPending(name string) error {

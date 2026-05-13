@@ -70,9 +70,10 @@ type flushOverview struct {
 		} `json:"targets"`
 	} `json:"eventBridgeRules"`
 	Buckets []struct {
-		Name      string `json:"name"`
-		Objects   int    `json:"objects"`
-		TotalSize int64  `json:"totalSize"`
+		Name             string `json:"name"`
+		Objects          int    `json:"objects"`
+		TotalSize        int64  `json:"totalSize"`
+		HasNotifications bool   `json:"hasNotifications"`
 	} `json:"buckets"`
 }
 
@@ -138,7 +139,21 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		TotalSize int64
 	}{}
 	if !opts.Storage {
-		filteredNotificationBuckets = filterBuckets(overview.Buckets, opts.TagFilter)
+		// Only include buckets that actually have Lambda notification configs so
+		// that an empty-but-existing bucket does not appear as an unflushed trigger
+		// on every subsequent flush call.
+		for _, b := range overview.Buckets {
+			if !b.HasNotifications {
+				continue
+			}
+			if matchesBucketSelector(b.Name, opts.TagFilter) {
+				filteredNotificationBuckets = append(filteredNotificationBuckets, struct {
+					Name      string
+					Objects   int
+					TotalSize int64
+				}{Name: b.Name, Objects: b.Objects, TotalSize: b.TotalSize})
+			}
+		}
 	}
 	if opts.Storage {
 		filteredBuckets = filterBuckets(overview.Buckets, opts.TagFilter)
@@ -645,9 +660,10 @@ func filterSecrets(items []struct {
 }
 
 func filterBuckets(items []struct {
-	Name      string `json:"name"`
-	Objects   int    `json:"objects"`
-	TotalSize int64  `json:"totalSize"`
+	Name             string `json:"name"`
+	Objects          int    `json:"objects"`
+	TotalSize        int64  `json:"totalSize"`
+	HasNotifications bool   `json:"hasNotifications"`
 }, query string) []struct {
 	Name      string
 	Objects   int

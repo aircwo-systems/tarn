@@ -42,6 +42,12 @@ type Engine struct {
 	cfg        *config.Config
 	containers map[string]*ContainerInfo // functionName -> container
 	mu         sync.RWMutex
+	// imageKnown caches runtimes confirmed to have their image present locally,
+	// avoiding a Docker ImageList call on every EnsureImage invocation.
+	imageKnown sync.Map // types.Runtime → struct{}
+	// pullMus holds a per-runtime mutex so concurrent EnsureImage calls for the
+	// same runtime serialise rather than spawning duplicate Docker pulls.
+	pullMus sync.Map // types.Runtime → *sync.Mutex
 }
 
 // New creates a new container engine.
@@ -110,16 +116,42 @@ func (e *Engine) ImageExists(ctx context.Context, runtime types.Runtime) (bool, 
 	return false, nil
 }
 
+// runtimePullMu returns the per-runtime mutex, creating it lazily.
+func (e *Engine) runtimePullMu(runtime types.Runtime) *sync.Mutex {
+	mu := &sync.Mutex{}
+	actual, _ := e.pullMus.LoadOrStore(runtime, mu)
+	return actual.(*sync.Mutex)
+}
+
 // EnsureImage pulls the runtime image if not already present, blocking until ready.
+// A per-runtime mutex prevents duplicate concurrent pulls; an in-memory cache
+// skips the Docker ImageList RPC for runtimes already confirmed present.
 func (e *Engine) EnsureImage(ctx context.Context, runtime types.Runtime) error {
+	if _, ok := e.imageKnown.Load(runtime); ok {
+		return nil
+	}
+
+	mu := e.runtimePullMu(runtime)
+	mu.Lock()
+	defer mu.Unlock()
+
+	if _, ok := e.imageKnown.Load(runtime); ok {
+		return nil
+	}
+
 	exists, err := e.ImageExists(ctx, runtime)
 	if err != nil {
 		return err
 	}
 	if exists {
+		e.imageKnown.Store(runtime, struct{}{})
 		return nil
 	}
-	return e.PullImage(ctx, runtime)
+	if err := e.PullImage(ctx, runtime); err != nil {
+		return err
+	}
+	e.imageKnown.Store(runtime, struct{}{})
+	return nil
 }
 
 // CreateContainer creates a new Lambda execution container with port mapping
@@ -285,8 +317,10 @@ func (e *Engine) StartContainer(ctx context.Context, info *ContainerInfo) error 
 	}
 
 	// Inspect to get the dynamically assigned host port.
-	// Retry a few times because the port mapping may take a moment to appear.
+	// Use exponential backoff starting at 10ms — on fast local Docker the
+	// mapping appears in the first inspect call with no delay.
 	var hostPort string
+	backoff := 10 * time.Millisecond
 	for attempt := 0; attempt < 10; attempt++ {
 		inspect, err := e.client.ContainerInspect(ctx, info.ID)
 		if err != nil {
@@ -309,7 +343,10 @@ func (e *Engine) StartContainer(ctx context.Context, info *ContainerInfo) error 
 			break
 		}
 
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(backoff)
+		if backoff < 200*time.Millisecond {
+			backoff *= 2
+		}
 	}
 
 	if hostPort == "" {
