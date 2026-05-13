@@ -1,6 +1,6 @@
 # API Coverage
 
-Tarn implements **200+ AWS API actions** across 11 services, with service-specific compatibility fallbacks to keep Terraform and SDK workflows moving when optional APIs are probed.
+Tarn implements **225+ AWS API actions** across 11 services, with service-specific compatibility fallbacks to keep Terraform and SDK workflows moving when optional APIs are probed.
 
 ## Coverage Matrix
 
@@ -9,7 +9,7 @@ Tarn implements **200+ AWS API actions** across 11 services, with service-specif
 | **SNS** | Query/XML | 16 | `sns` |
 | **SQS** | Query + JSON | 16 | `sqs` |
 | **Lambda** | REST/JSON | 30 | `lambda` |
-| **S3** | REST/XML | 30+ | `s3` |
+| **S3** | REST/XML | 55+ | `s3` |
 | **DynamoDB** | JSON | 27 | `dynamodb` |
 | **Secrets Manager** | JSON-RPC | 10 | `secretsmanager` |
 | **EventBridge** | JSON | 14 | `events` |
@@ -35,23 +35,26 @@ When Tarn receives an API action it doesn't explicitly implement, the fallback d
 
 All stubbed actions are logged: `[service] unhandled action (returning empty OK): ActionName`
 
-## S3 Sub-Resource Stubs
+## S3 Bucket Sub-Resources
 
-Terraform's S3 provider probes many bucket sub-resources during every plan/apply. Tarn returns appropriate "not configured" responses:
+Terraform's S3 provider probes many bucket sub-resources during every plan/apply. Most are now fully implemented and persisted to disk. A few remain as stubs for Terraform compatibility:
 
-| Sub-resource | Status | Response |
+| Sub-resource | Implementation | Notes |
 |---|---|---|
-| `?versioning` | 200 | Empty `<VersioningConfiguration/>` |
-| `?encryption` | 404 | `ServerSideEncryptionConfigurationNotFoundError` |
-| `?cors` | 404 | `NoSuchCORSConfiguration` |
-| `?logging` | 200 | Empty `<BucketLoggingStatus/>` |
-| `?acl` | 200 | Default private ACL |
-| `?replication` | 404 | `ReplicationConfigurationNotFoundError` |
-| `?accelerate` | 200 | `Suspended` |
-| `?request-payment` | 200 | `BucketOwner` |
-| `?object-lock` | 404 | `ObjectLockConfigurationNotFoundError` |
-| `?tagging` | 404 | `NoSuchTagSet` |
-| `?lifecycle` | 404 | `NoSuchLifecycleConfiguration` |
+| `?versioning` | Full | GET/PUT persisted |
+| `?encryption` | Full | GET/PUT/DELETE persisted |
+| `?cors` | Full | GET/PUT/DELETE persisted |
+| `?logging` | Full | GET/PUT persisted |
+| `?acl` | Full | GET/PUT persisted |
+| `?tagging` | Full | GET/PUT/DELETE persisted |
+| `?lifecycle` | Full | GET/PUT/DELETE persisted |
+| `?policy` | Full | GET/PUT/DELETE persisted |
+| `?publicAccessBlock` | Full | GET/PUT/DELETE persisted |
+| `?ownershipControls` | Full | GET/PUT/DELETE persisted |
+| `?object-lock` | Full | GET/PUT persisted |
+| `?replication` | Stub | GET → `ReplicationConfigurationNotFoundError`; PUT/DELETE accept and discard |
+| `?accelerate` | Stub | GET → `Suspended`; PUT accepts and discards |
+| `?request-payment` | Stub | GET → `BucketOwner`; PUT accepts and discards |
 
 ## Protocol Routing
 
