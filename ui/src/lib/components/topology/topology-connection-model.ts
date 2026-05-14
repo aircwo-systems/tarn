@@ -1316,7 +1316,7 @@ export function viewportToCanvasPoint(
   };
 }
 
-export function clampInfraNodePosition(x: number, y: number, canvasH = CONNECTION_CANVAS.height): InfraNodePosition {
+export function clampInfraNodePosition(x: number, y: number, canvasH: number = CONNECTION_CANVAS.height): InfraNodePosition {
   return {
     x: clamp(
       x,
@@ -1425,7 +1425,7 @@ function nodeHalfHeight(node: ConnectionNode): number {
 function packColumnGroups(
   nodeGroups: ConnectionNode[][],
   minGap = TOPOLOGY_MIN_NODE_GAP,
-  canvasH = CONNECTION_CANVAS.height,
+  canvasH: number = CONNECTION_CANVAS.height,
 ): void {
   for (const nodes of nodeGroups) {
     packColumnNodes(nodes, minGap, canvasH);
@@ -1435,7 +1435,7 @@ function packColumnGroups(
 function packColumnNodes(
   nodes: ConnectionNode[],
   minGap = TOPOLOGY_MIN_NODE_GAP,
-  canvasH = CONNECTION_CANVAS.height,
+  canvasH: number = CONNECTION_CANVAS.height,
 ): void {
   if (nodes.length <= 1) return;
 
@@ -1487,7 +1487,7 @@ function applyForceFieldCollisions(
   iterations = 8,
   axis: "y" | "both" = "y",
   lockedNodeKeys: ReadonlySet<string> = new Set(),
-  canvasH = CONNECTION_CANVAS.height,
+  canvasH: number = CONNECTION_CANVAS.height,
 ): void {
   const all = nodeGroups.flat();
   if (all.length <= 1) return;
@@ -1567,7 +1567,7 @@ function resolveNodeSpacing(
   desiredPosition: InfraNodePosition,
   nodes: ConnectionNode[],
   minGap = TOPOLOGY_MIN_NODE_GAP,
-  canvasH = CONNECTION_CANVAS.height,
+  canvasH: number = CONNECTION_CANVAS.height,
 ): InfraNodePosition {
   let candidate = clampNodePosition(node, desiredPosition.x, desiredPosition.y, canvasH);
   const others = nodes.filter((other) => other !== node);
@@ -1638,7 +1638,7 @@ function distributedColumnY(
   total: number,
   gap: number,
   centerY: number,
-  canvasH = CONNECTION_CANVAS.height,
+  canvasH: number = CONNECTION_CANVAS.height,
 ): number {
   if (total <= 1) return centerY;
 
@@ -1661,7 +1661,7 @@ function buildInfraNodes(
   infra: InfraProbe[],
   infraOrderIds: string[],
   allNodePositions: Record<string, InfraNodePosition>,
-  canvasH = CONNECTION_CANVAS.height,
+  canvasH: number = CONNECTION_CANVAS.height,
 ): ConnectionNode[] {
   const visible = infra.map((probe) => ({ id: infraNodeId(probe), probe }));
   if (visible.length === 0) return [];
@@ -1749,7 +1749,7 @@ function clampNodePosition(
   node: ConnectionNode,
   x: number,
   y: number,
-  canvasH = CONNECTION_CANVAS.height,
+  canvasH: number = CONNECTION_CANVAS.height,
 ): InfraNodePosition {
   return {
     x: clamp(

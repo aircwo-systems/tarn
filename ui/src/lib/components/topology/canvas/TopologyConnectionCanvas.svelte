@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import {
     MagnifyingGlassMinusIcon,
     MagnifyingGlassPlusIcon,
@@ -123,8 +123,8 @@
   let viewportDirty = $state(false);
   let viewportTransform = $state<ViewportTransform>(
     computeViewportTransform(CONNECTION_CANVAS.width, CONNECTION_CANVAS.height, {
-      canvasWidth: model.canvasSize.width,
-      canvasHeight: model.canvasSize.height,
+      canvasWidth: untrack(() => model.canvasSize.width),
+      canvasHeight: untrack(() => model.canvasSize.height),
     }),
   );
   let canvasContainer = $state<HTMLDivElement | null>(null);
