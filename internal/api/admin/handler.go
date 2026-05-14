@@ -1429,6 +1429,41 @@ func (h *Handler) AllLogEvents(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// TracesForLog returns the best-matching trace for a log event from a lambda function.
+// Query params: function (lambda name, not the full group path), ts (RFC3339 timestamp).
+func (h *Handler) TracesForLog(w http.ResponseWriter, r *http.Request) {
+	functionName := r.URL.Query().Get("function")
+	tsStr := r.URL.Query().Get("ts")
+	if functionName == "" || tsStr == "" {
+		writeError(w, http.StatusBadRequest, "function and ts are required")
+		return
+	}
+
+	ts, err := time.Parse(time.RFC3339Nano, tsStr)
+	if err != nil {
+		ts, err = time.Parse(time.RFC3339, tsStr)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid ts: expected RFC3339")
+			return
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	enc := json.NewEncoder(w)
+
+	if h.traceStore == nil {
+		_ = enc.Encode(nil)
+		return
+	}
+
+	matches := h.traceStore.FindNear(functionName, ts, 5000)
+	if len(matches) == 0 {
+		_ = enc.Encode(nil)
+		return
+	}
+	_ = enc.Encode(matches[0])
+}
+
 // PruneLogs removes events and traces older than the requested retention window.
 func (h *Handler) PruneLogs(w http.ResponseWriter, r *http.Request) {
 	retentionStr := r.URL.Query().Get("retention")
