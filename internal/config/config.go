@@ -270,6 +270,19 @@ func (c *Config) PIDFilePath() string {
 	return filepath.Join(c.DataDir, "tarn.pid")
 }
 
+// ForAccount returns a copy of c scoped to accountID.
+// For accounts other than the configured default (c.AccountID), DataDir is
+// namespaced under accounts/<accountID> so each account gets independent
+// persistent storage without affecting existing single-account data.
+func (c *Config) ForAccount(accountID string) *Config {
+	derived := *c
+	derived.AccountID = accountID
+	if accountID != c.AccountID {
+		derived.DataDir = filepath.Join(c.DataDir, "accounts", accountID)
+	}
+	return &derived
+}
+
 // Endpoint returns the full API endpoint URL.
 // Unspecified/wildcard bind addresses are normalised to 127.0.0.1 so that
 // generated URLs (queue URLs, API endpoints, invoke URLs) are routable.
