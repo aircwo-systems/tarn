@@ -8,7 +8,6 @@ Tarn is under active development. Expect breaking changes as we finalize the MVP
 Known limitations:
 - EventBridge: Scheduled rules only; event patterns are not supported yet
 - S3: Path-style only; virtual-hosted style is not supported
-- SNS and SQS cross-account resources are not supported
 
 Learn more about what we want to build with Tarn in the [project roadmap](https://github.com/aircwo-systems/tarn/blob/develop-docs/ROADMAP.md).
 :::
