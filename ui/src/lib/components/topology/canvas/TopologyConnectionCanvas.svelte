@@ -122,7 +122,10 @@
   let hoveredNodeId = $state<string | null>(null);
   let viewportDirty = $state(false);
   let viewportTransform = $state<ViewportTransform>(
-    computeViewportTransform(CONNECTION_CANVAS.width, CONNECTION_CANVAS.height),
+    computeViewportTransform(CONNECTION_CANVAS.width, CONNECTION_CANVAS.height, {
+      canvasWidth: model.canvasSize.width,
+      canvasHeight: model.canvasSize.height,
+    }),
   );
   let canvasContainer = $state<HTMLDivElement | null>(null);
   let pointerInteraction = $state<PointerInteraction>({ kind: "idle" });
@@ -175,6 +178,8 @@
   const baselineViewport = $derived(
     computeViewportTransform(viewportWidth, viewportHeight, {
       expanded: canvasExpanded,
+      canvasWidth: model.canvasSize.width,
+      canvasHeight: model.canvasSize.height,
     }),
   );
   const hoverFocus = $derived(hoverFocusState(model, hoveredNodeId));
@@ -193,7 +198,11 @@
       activeDragKeys.length > 0 ||
       (activityAnimationsEnabled && model.traces.edgeActivity.size > 0),
   );
-  const minZoomScale = $derived(baselineViewport.scale * 0.78);
+  const fullFitScale = $derived(Math.min(
+    viewportWidth / (model.canvasSize.width + 32),
+    viewportHeight / (model.canvasSize.height + 32),
+  ));
+  const minZoomScale = $derived(Math.min(baselineViewport.scale * 0.78, fullFitScale * 0.94));
   const maxZoomScale = $derived(baselineViewport.scale * 2.2);
   const canZoomOut = $derived(viewportTransform.scale > minZoomScale + 0.001);
   const canZoomIn = $derived(viewportTransform.scale < maxZoomScale - 0.001);
@@ -423,8 +432,8 @@
     const inBounds =
       point.x >= 0 &&
       point.y >= 0 &&
-      point.x <= CONNECTION_CANVAS.width &&
-      point.y <= CONNECTION_CANVAS.height;
+      point.x <= model.canvasSize.width &&
+      point.y <= model.canvasSize.height;
     const matched = inBounds ? findNodeAt(model, point.x, point.y) : null;
     if (!matched) {
       e.preventDefault();
@@ -465,11 +474,11 @@
       scale: viewportTransform.scale,
       offsetX: viewportTransform.offsetX + deltaX,
       offsetY: viewportTransform.offsetY + deltaY,
-    });
+    }, { canvasWidth: model.canvasSize.width, canvasHeight: model.canvasSize.height });
     handleCanvasNodeLeave();
   }
 
-  function zoomViewportBy(factor: number) {
+  function zoomViewportBy(factor: number, pivotX = viewportWidth / 2, pivotY = viewportHeight / 2) {
     const currentScale = viewportTransform.scale;
     const nextScale = Math.min(
       maxZoomScale,
@@ -478,14 +487,15 @@
     if (Math.abs(nextScale - currentScale) < 0.001) return;
 
     viewportDirty = true;
-    const centerCanvasX = (viewportWidth / 2 - viewportTransform.offsetX) / currentScale;
-    const centerCanvasY = (viewportHeight / 2 - viewportTransform.offsetY) / currentScale;
+    // Keep the canvas point under pivotX/pivotY fixed during scale change
+    const anchorX = (pivotX - viewportTransform.offsetX) / currentScale;
+    const anchorY = (pivotY - viewportTransform.offsetY) / currentScale;
     viewportTransform = clampViewportTransform(viewportWidth, viewportHeight, {
       scale: nextScale,
-      offsetX: viewportWidth / 2 - centerCanvasX * nextScale,
-      offsetY: viewportHeight / 2 - centerCanvasY * nextScale,
-    });
-    handleCanvasNodeLeave();
+      offsetX: pivotX - anchorX * nextScale,
+      offsetY: pivotY - anchorY * nextScale,
+    }, { canvasWidth: model.canvasSize.width, canvasHeight: model.canvasSize.height });
+    if (hoveredNodeId !== null) handleCanvasNodeLeave();
   }
 
   function handleZoomControlPointerDown(event: PointerEvent, factor: number) {
@@ -518,7 +528,10 @@
     event.stopPropagation();
 
     if (event.ctrlKey || event.metaKey) {
-      zoomViewportBy(Math.exp(-event.deltaY * TRACKPAD_ZOOM_SENSITIVITY));
+      const rect = canvasContainer?.getBoundingClientRect();
+      const pivotX = rect ? event.clientX - rect.left : undefined;
+      const pivotY = rect ? event.clientY - rect.top : undefined;
+      zoomViewportBy(Math.exp(-event.deltaY * TRACKPAD_ZOOM_SENSITIVITY), pivotX, pivotY);
       return;
     }
 
@@ -531,7 +544,7 @@
       scale: viewportTransform.scale,
       offsetX: viewportWidth / 2 - canvasX * viewportTransform.scale,
       offsetY: viewportHeight / 2 - canvasY * viewportTransform.scale,
-    });
+    }, { canvasWidth: model.canvasSize.width, canvasHeight: model.canvasSize.height });
     handleCanvasNodeLeave();
   }
 
@@ -586,8 +599,8 @@
       !point ||
       point.x < 0 ||
       point.y < 0 ||
-      point.x > CONNECTION_CANVAS.width ||
-      point.y > CONNECTION_CANVAS.height
+      point.x > model.canvasSize.width ||
+      point.y > model.canvasSize.height
     ) {
       handleCanvasNodeLeave();
       return;
@@ -840,11 +853,11 @@
       node.y = originalY;
 
       minDeltaX = Math.max(minDeltaX, 24 - bounds.left);
-      maxDeltaX = Math.min(maxDeltaX, CONNECTION_CANVAS.width - 24 - bounds.right);
+      maxDeltaX = Math.min(maxDeltaX, model.canvasSize.width - 24 - bounds.right);
       minDeltaY = Math.max(minDeltaY, 24 - bounds.top);
       maxDeltaY = Math.min(
         maxDeltaY,
-        CONNECTION_CANVAS.height - 24 - bounds.bottom,
+        model.canvasSize.height - 24 - bounds.bottom,
       );
     }
 

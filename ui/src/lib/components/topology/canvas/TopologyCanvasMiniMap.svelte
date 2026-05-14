@@ -1,6 +1,5 @@
 <script lang="ts">
   import {
-    CONNECTION_CANVAS,
     nodeBounds,
     type TopologyGraphModel,
     type ViewportTransform,
@@ -57,17 +56,19 @@
   );
 
   const visibleRect = $derived.by(() => {
-    const left = clamp((0 - viewportTransform.offsetX) / viewportTransform.scale, 0, CONNECTION_CANVAS.width);
-    const top = clamp((0 - viewportTransform.offsetY) / viewportTransform.scale, 0, CONNECTION_CANVAS.height);
+    const cw = model.canvasSize.width;
+    const ch = model.canvasSize.height;
+    const left = clamp((0 - viewportTransform.offsetX) / viewportTransform.scale, 0, cw);
+    const top = clamp((0 - viewportTransform.offsetY) / viewportTransform.scale, 0, ch);
     const right = clamp(
       (viewportWidth - viewportTransform.offsetX) / viewportTransform.scale,
       0,
-      CONNECTION_CANVAS.width,
+      cw,
     );
     const bottom = clamp(
       (viewportHeight - viewportTransform.offsetY) / viewportTransform.scale,
       0,
-      CONNECTION_CANVAS.height,
+      ch,
     );
     return { left, top, right, bottom };
   });
@@ -76,16 +77,16 @@
     model.hasData &&
       (visibleRect.left > 1 ||
         visibleRect.top > 1 ||
-        visibleRect.right < CONNECTION_CANVAS.width - 1 ||
-        visibleRect.bottom < CONNECTION_CANVAS.height - 1),
+        visibleRect.right < model.canvasSize.width - 1 ||
+        visibleRect.bottom < model.canvasSize.height - 1),
   );
 
   function minimapX(x: number): number {
-    return MINI_MAP_PADDING + (x / CONNECTION_CANVAS.width) * plotWidth;
+    return MINI_MAP_PADDING + (x / model.canvasSize.width) * plotWidth;
   }
 
   function minimapY(y: number): number {
-    return MINI_MAP_PADDING + (y / CONNECTION_CANVAS.height) * plotHeight;
+    return MINI_MAP_PADDING + (y / model.canvasSize.height) * plotHeight;
   }
 
   function handlePointerDown(event: PointerEvent) {
@@ -93,9 +94,10 @@
     const rect = miniMapElement.getBoundingClientRect();
     const localX = clamp(event.clientX - rect.left, MINI_MAP_PADDING, MINI_MAP_PADDING + plotWidth);
     const localY = clamp(event.clientY - rect.top, MINI_MAP_PADDING, MINI_MAP_PADDING + plotHeight);
-    const canvasX = ((localX - MINI_MAP_PADDING) / plotWidth) * CONNECTION_CANVAS.width;
-    const canvasY = ((localY - MINI_MAP_PADDING) / plotHeight) * CONNECTION_CANVAS.height;
-    onFocusCanvas(canvasX, canvasY);
+    onFocusCanvas(
+      ((localX - MINI_MAP_PADDING) / plotWidth) * model.canvasSize.width,
+      ((localY - MINI_MAP_PADDING) / plotHeight) * model.canvasSize.height,
+    );
   }
 
   function clamp(value: number, min: number, max: number): number {

@@ -1,7 +1,6 @@
 <script lang="ts">
   import { Layer, type Render } from "svelte-canvas";
   import {
-    CONNECTION_CANVAS,
     type ViewportTransform,
     type TopologyGraphModel,
   } from "../topology-connection-model";
@@ -58,8 +57,8 @@
       context.textBaseline = "middle";
       context.fillText(
         "No architecture data",
-        CONNECTION_CANVAS.width / 2,
-        CONNECTION_CANVAS.height / 2,
+        model.canvasSize.width / 2,
+        model.canvasSize.height / 2,
       );
     }
 
