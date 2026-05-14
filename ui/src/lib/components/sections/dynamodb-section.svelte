@@ -1,5 +1,6 @@
 <script lang="ts">
   import { DatabaseIcon } from "phosphor-svelte";
+  import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
   import {
     Table,
     TableBody,
@@ -139,12 +140,8 @@
       <EmptyState icon={DatabaseIcon} message="No DynamoDB tables created yet." />
     </div>
   {:else}
-    <div
-      class="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/70 bg-background/50"
-      style="height: calc(100vh - 10rem);"
-    >
-      <div class="grid h-full gap-0 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
-        <div class="flex min-h-0 flex-col xl:border-r xl:border-border/70">
+    <PaneGroup direction="horizontal" class="min-h-0 flex-1 rounded-lg border border-border/70" style="height: calc(100vh - 10rem);">
+      <Pane defaultSize={62} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-background/50">
           <div class="flex flex-wrap items-end justify-between gap-4 border-b border-border/70 px-4 py-4">
             <div>
               <p class="text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Tables</p>
@@ -209,9 +206,9 @@
               </TableBody>
             </Table>
           </div>
-        </div>
-
-        <div class="flex min-h-0 flex-col bg-background/35">
+      </Pane>
+      <Handle />
+      <Pane defaultSize={38} minSize={25} class="flex min-h-0 flex-col overflow-hidden bg-background/35">
           <div class="border-b border-border/70 px-4 py-4">
             <p class="text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Selected Table</p>
             {#if selectedTable}
@@ -314,8 +311,7 @@
               </p>
             </div>
           </div>
-        </div>
-      </div>
-    </div>
+      </Pane>
+    </PaneGroup>
   {/if}
 </div>

@@ -6,6 +6,7 @@
   } from "phosphor-svelte";
   import { fly } from "svelte/transition";
   import { TableRow, TableCell } from "$lib/components/ui/table";
+  import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
   import ResourceTable from "$lib/components/common/resource-table.svelte";
   import ArnCell from "$lib/components/common/arn-cell.svelte";
   import GatewayDetailsPanel from "$lib/components/topology/gateway-details-panel.svelte";
@@ -90,10 +91,8 @@
     {/snippet}
   </SectionHeader>
 
-  <div
-    class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_38rem] 2xl:grid-cols-[minmax(0,1fr)_44rem]"
-    style="height: calc(100vh - 10rem);"
-  >
+  <PaneGroup direction="horizontal" class="min-h-0 flex-1 rounded-lg border border-border/70" style="height: calc(100vh - 10rem);">
+    <Pane defaultSize={58} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-background/60">
   <ResourceTable
     title="API Gateways"
     count={gateways.length}
@@ -130,14 +129,16 @@
       </TableRow>
     {/each}
   </ResourceTable>
-
+    </Pane>
+    <Handle />
+    <Pane defaultSize={42} minSize={25} class="flex min-h-0 flex-col overflow-hidden bg-background/60">
   {#if selectedGateway}
     <GatewayDetailsPanel
       gateway={selectedGateway}
       onClose={closeGatewayPanel}
     />
   {:else}
-    <section class="flex h-full min-h-0 flex-col rounded-lg border border-border/70 bg-background/60">
+    <section class="flex h-full min-h-0 flex-col">
       <div class="border-b border-border/70 bg-background/35 px-3 py-2">
         <h3 class="text-sm font-semibold text-foreground">Gateway Details</h3>
       </div>
@@ -148,5 +149,6 @@
       </div>
     </section>
   {/if}
-  </div>
+    </Pane>
+  </PaneGroup>
 </div>
