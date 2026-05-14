@@ -7,6 +7,7 @@ import type {
   SecretValueResult,
   LogGroupSummary,
   LogEventsResponse,
+  RequestTrace,
 } from "$lib/types";
 
 const configuredBase = normalizeBase(
@@ -228,6 +229,22 @@ export async function clearLogGroup(groupName: string, signal?: AbortSignal): Pr
   if (!response.ok) {
     throw new Error(`Failed to clear logs: HTTP ${response.status}`);
   }
+}
+
+export async function fetchTraceForLog(
+  functionName: string,
+  timestamp: string,
+  signal?: AbortSignal,
+): Promise<RequestTrace | null> {
+  const qs = new URLSearchParams({ function: functionName, ts: timestamp });
+  const response = await fetch(endpoint(`/_tarn/admin/traces/for-log?${qs}`), {
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (!response.ok) return null;
+  const data = await response.json();
+  if (!data) return null;
+  return data as RequestTrace;
 }
 
 export interface PutEventBridgeRuleInput {
