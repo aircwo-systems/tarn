@@ -32,6 +32,37 @@ provider "aws" {
 S3 requires the `/_s3` path prefix. All other services use the root endpoint. You must also set `s3_use_path_style = true` since Tarn only supports path-style S3 URLs.
 :::
 
+## Multi-Account
+
+Set `access_key` to a **12-digit numeric** string to deploy resources into an isolated account namespace. Any value that isn't 12 digits (including `"test"`) routes to the default account (`000000000000`).
+
+```hcl
+variable "aws_access_key" {
+  description = "12-digit account ID for tarn multi-account routing"
+  default     = "test"
+  sensitive   = true
+}
+
+provider "aws" {
+  access_key = var.aws_access_key
+  secret_key = "test"
+  # ...
+}
+```
+
+Then pass the account in a `.tfvars` file:
+
+```hcl
+# local.tfvars
+aws_access_key = "111111111111"
+```
+
+```bash
+terraform apply -var-file=local.tfvars
+```
+
+Resources are isolated per account — separate queues, functions, secrets, buckets, and so on. The default account (`test` / `000000000000`) is unaffected. See [Multi-Account](/guide/configuration#multi-account) for the full data layout and CLI usage.
+
 <div class="tf-grid">
   <div class="tf-grid-item">
     <div class="label">Default Endpoint</div>

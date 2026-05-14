@@ -24,7 +24,6 @@ Open-source AWS cloud emulator for local development and testing. Single binary,
 **Known Limitations:**
 - **EventBridge**: Only scheduled rules (no event patterns or `PutEvents`)
 - **S3**: Path-style only (no virtual-hosted style)
-- **Cross-account**: No SNS/SQS cross-account resources
 
 See [GitHub issues](https://github.com/aircwo-systems/tarn/issues) for planned features and roadmap.
 
@@ -41,10 +40,12 @@ Point the AWS CLI, SDK, or Terraform at it:
 
 ```bash
 export AWS_ENDPOINT_URL=http://127.0.0.1:4566
-export AWS_ACCESS_KEY_ID=test
+export AWS_ACCESS_KEY_ID=test        # or a 12-digit ID for multi-account
 export AWS_SECRET_ACCESS_KEY=test
 export AWS_DEFAULT_REGION=us-east-1
 ```
+
+To use multiple isolated accounts, set `AWS_ACCESS_KEY_ID` to a 12-digit numeric string — each unique value gets its own resource namespace. See [Multi-Account](docs/guide/configuration.md#multi-account) for details.
 
 ## Documentation
 

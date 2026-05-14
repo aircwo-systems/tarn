@@ -59,6 +59,75 @@ const lambdaEast = new LambdaClient({ endpoint: "http://127.0.0.1:4566" });
 const lambdaWest = new LambdaClient({ endpoint: "http://127.0.0.1:4567" });
 ```
 
+## Multi-Account
+
+Tarn supports multiple isolated AWS accounts in a single running instance — compatible with LocalStack's multi-account approach.
+
+### How It Works
+
+Account routing uses the SigV4 `Authorization` header. If the `Credential` field contains a **12-digit numeric** access key ID, Tarn treats it as the AWS account ID and routes the request to that account's isolated resource namespace. Any other value (including `"test"`) falls back to the default account (`000000000000`).
+
+```
+Authorization: AWS4-HMAC-SHA256 Credential=111111111111/...
+```
+
+### Data Layout
+
+Each non-default account gets its own subdirectory under `data-dir`:
+
+```
+~/.tarn/data/
+├── queues/, sns/, secrets/, s3/, ...  # default account (backward compatible)
+└── accounts/
+    └── 111111111111/
+        ├── queues/, sns/, secrets/, s3/, ...
+```
+
+The trace database (`traces.db`) is shared across all accounts.
+
+### AWS CLI / SDK
+
+```bash
+# Default account
+AWS_ACCESS_KEY_ID=test aws --endpoint http://localhost:4566 sqs list-queues
+
+# Account 111111111111
+AWS_ACCESS_KEY_ID=111111111111 AWS_SECRET_ACCESS_KEY=test \
+  aws --endpoint http://localhost:4566 sqs list-queues
+```
+
+### Tarn CLI
+
+Use `TARN_ACCOUNT_ID` or `--account` (flush only) to target a specific account:
+
+```bash
+# All tarn subcommands respect TARN_ACCOUNT_ID
+TARN_ACCOUNT_ID=111111111111 tarn sqs list
+TARN_ACCOUNT_ID=111111111111 tarn lambda list
+
+# flush accepts an explicit --account flag (takes precedence over env)
+tarn flush --account 111111111111
+tarn flush --account 111111111111 --tag feature=r10 --storage
+```
+
+### Terraform
+
+Set `access_key` to a 12-digit numeric string in the AWS provider:
+
+```hcl
+provider "aws" {
+  access_key = "111111111111"   # routes to account 111111111111
+  secret_key = "test"
+  # ...
+}
+```
+
+See the [Terraform guide](/guide/terraform) for the full provider configuration.
+
+### Dashboard UI
+
+Switch accounts from the **Settings** dialog (gear icon in the sidebar). Add any 12-digit account ID, give it a label, and click **Switch** — the dashboard immediately reloads data for that account. The active account ID is shown in the sidebar footer.
+
 ## Infrastructure Probing
 
 Infrastructure probing is enabled by default. Tarn can probe common local dependencies such as PostgreSQL, Redis, MySQL, and MongoDB, which is useful when frontend applications or local dashboards need a quick view of what backing services are reachable in a development environment.

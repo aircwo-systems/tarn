@@ -20,6 +20,8 @@ features:
     details: Works with AWS CLI, SDK v2, and Terraform. Drop-in replacement — point your endpoint and go.
   - title: Docker Native Lambda
     details: Lambda containers run in Docker with AWS Runtime Interface Emulator. Layers, extensions, and secrets cache built in.
+  - title: Multi-Account
+    details: Isolate resources by AWS account ID — set a 12-digit numeric access key and each account gets its own namespace. Switch accounts instantly in the dashboard.
   - title: Dashboard UI
     details: Built-in web console to manage resources, view topology, inspect logs, and monitor event flows.
   - title: Event Driven

@@ -61,7 +61,8 @@ tarn/
 │   ├── secrets-proxy/     # Lambda extension
 │   └── db-proxy/          # Database proxy
 ├── internal/              # Core packages
-│   ├── api/               # HTTP API handlers
+│   ├── account/           # Multi-account routing (SigV4 AKID extraction)
+│   ├── api/               # HTTP API handlers + per-account handler registry
 │   ├── lambda/            # Lambda service
 │   ├── sqs/               # SQS service
 │   ├── sns/               # SNS service
@@ -69,7 +70,7 @@ tarn/
 │   ├── secrets/           # Secrets Manager
 │   ├── eventbridge/       # EventBridge
 │   ├── apigateway*/       # API Gateway v1/v2
-│   ├── config/            # Configuration
+│   ├── config/            # Configuration (incl. ForAccount data-dir isolation)
 │   ├── cli/               # CLI commands
 │   └── trace/             # Tracing/logging
 ├── ui/                    # SvelteKit dashboard (optional)
@@ -111,9 +112,11 @@ go test -race ./...
 
 1. Create `internal/{service}/` package
 2. Implement API handlers in `internal/api/{service}/`
-3. Add CLI commands in `internal/cli/{service}/`
-4. Write tests
-5. Update documentation in `docs/services/`
+3. Add the handler to `HandlerSet` in `internal/api/server.go`
+4. Wire the service in `initAccountBundle` in `internal/cli/server.go` — services are instantiated per-account; add to the `stop` closure if it runs background workers
+5. Add CLI commands in `internal/cli/{service}/` — use `common.SetAccountHeader` or `common.PostForm` so `TARN_ACCOUNT_ID` is respected
+6. Write tests
+7. Update documentation in `docs/services/`
 
 ### Fixing a Bug
 
