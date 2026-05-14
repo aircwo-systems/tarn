@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +36,7 @@ func newReceiveCmd() *cobra.Command {
 				form.Set("WaitTimeSeconds", strconv.Itoa(wait))
 			}
 
-			resp, err := http.PostForm(endpoint+"/"+getAccountID()+"/"+queue, form)
+			resp, err := common.PostForm(endpoint+"/"+common.AccountID()+"/"+queue, form)
 			if err != nil {
 				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}

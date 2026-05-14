@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -47,14 +48,14 @@ func newSetDLQCmd() *cobra.Command {
 					maxReceiveCount = 3
 				}
 				region := "us-east-1"
-				accountID := getAccountID()
+				accountID := common.AccountID()
 				dlqArn := fmt.Sprintf("arn:aws:sqs:%s:%s:%s", region, accountID, dlq)
 				redrivePolicy := fmt.Sprintf(`{"deadLetterTargetArn":"%s","maxReceiveCount":%d}`, dlqArn, maxReceiveCount)
 				form.Set("Attribute.1.Name", "RedrivePolicy")
 				form.Set("Attribute.1.Value", redrivePolicy)
 			}
 
-			resp, err := http.PostForm(queueURL, form)
+			resp, err := common.PostForm(queueURL, form)
 			if err != nil {
 				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}

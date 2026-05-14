@@ -8,6 +8,7 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -19,7 +20,12 @@ func newListCmd() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			endpoint := getEndpoint(cmd)
 
-			resp, err := http.Get(endpoint + "/2015-03-31/functions")
+			req, err := http.NewRequest(http.MethodGet, endpoint+"/2015-03-31/functions", nil)
+			if err != nil {
+				return err
+			}
+			common.SetAccountHeader(req)
+			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}

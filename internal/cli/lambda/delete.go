@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -23,6 +24,7 @@ func newDeleteCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			common.SetAccountHeader(req)
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {

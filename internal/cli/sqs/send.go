@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -43,7 +44,7 @@ func newSendCmd() *cobra.Command {
 				form.Set("MessageDeduplicationId", dedupID)
 			}
 
-			resp, err := http.PostForm(endpoint+"/"+getAccountID()+"/"+queue, form)
+			resp, err := common.PostForm(endpoint+"/"+common.AccountID()+"/"+queue, form)
 			if err != nil {
 				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
