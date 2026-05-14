@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -24,7 +25,7 @@ func newDeleteQueueCmd() *cobra.Command {
 				"QueueUrl": {queueURL(endpoint, name)},
 			}
 
-			resp, err := http.PostForm(endpoint+"/"+getAccountID()+"/"+name, form)
+			resp, err := common.PostForm(endpoint+"/"+common.AccountID()+"/"+name, form)
 			if err != nil {
 				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}

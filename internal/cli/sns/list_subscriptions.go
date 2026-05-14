@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -26,7 +27,7 @@ func newListSubscriptionsCmd() *cobra.Command {
 				form.Set("TopicArn", topicArn)
 			}
 
-			resp, err := http.PostForm(endpoint, form)
+			resp, err := common.PostForm(endpoint, form)
 			if err != nil {
 				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}

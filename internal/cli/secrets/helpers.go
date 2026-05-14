@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -39,6 +40,7 @@ func secretsRequest(endpoint, action string, body interface{}) (map[string]inter
 	}
 	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
 	req.Header.Set("X-Amz-Target", "secretsmanager."+action)
+	common.SetAccountHeader(req)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

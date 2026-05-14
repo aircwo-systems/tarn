@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
+
 func newCreateQueueCmd() *cobra.Command {
 	var (
 		name            string
@@ -46,7 +47,7 @@ func newCreateQueueCmd() *cobra.Command {
 					maxReceiveCount = 3
 				}
 				region := "us-east-1"
-				accountID := getAccountID()
+				accountID := common.AccountID()
 				dlqArn := fmt.Sprintf("arn:aws:sqs:%s:%s:%s", region, accountID, dlq)
 				redrivePolicy := fmt.Sprintf(`{"deadLetterTargetArn":"%s","maxReceiveCount":%d}`, dlqArn, maxReceiveCount)
 				form.Set(fmt.Sprintf("Attribute.%d.Name", attrIdx), "RedrivePolicy")
@@ -74,7 +75,7 @@ func newCreateQueueCmd() *cobra.Command {
 				}
 			}
 
-			resp, err := http.PostForm(endpoint, form)
+			resp, err := common.PostForm(endpoint, form)
 			if err != nil {
 				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}

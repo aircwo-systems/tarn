@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -22,13 +23,6 @@ func getEndpoint(cmd *cobra.Command) string {
 	return fmt.Sprintf("http://%s:%d", host, port)
 }
 
-func getAccountID() string {
-	if v := os.Getenv("TARN_ACCOUNT_ID"); v != "" {
-		return v
-	}
-	return "000000000000"
-}
-
 func queueURL(endpoint, queueName string) string {
-	return fmt.Sprintf("%s/%s/%s", endpoint, getAccountID(), queueName)
+	return fmt.Sprintf("%s/%s/%s", endpoint, common.AccountID(), queueName)
 }

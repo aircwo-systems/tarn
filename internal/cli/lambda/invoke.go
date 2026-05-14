@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -36,6 +37,7 @@ func newInvokeCmd() *cobra.Command {
 				return err
 			}
 			req.Header.Set("Content-Type", "application/json")
+			common.SetAccountHeader(req)
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {

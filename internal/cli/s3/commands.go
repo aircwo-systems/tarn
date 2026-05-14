@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/spf13/cobra"
 )
 
@@ -25,6 +26,7 @@ func newMBCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			common.SetAccountHeader(req)
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
@@ -61,6 +63,7 @@ func newRBCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			common.SetAccountHeader(req)
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
@@ -107,7 +110,12 @@ func newLsCmd() *cobra.Command {
 }
 
 func listBuckets(endpoint string) error {
-	resp, err := http.Get(s3URL(endpoint, ""))
+	req, err := http.NewRequest(http.MethodGet, s3URL(endpoint, ""), nil)
+	if err != nil {
+		return err
+	}
+	common.SetAccountHeader(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 	}
@@ -141,7 +149,12 @@ func listBuckets(endpoint string) error {
 }
 
 func listObjects(endpoint, bucket string) error {
-	resp, err := http.Get(s3URL(endpoint, bucket+"?list-type=2"))
+	req, err := http.NewRequest(http.MethodGet, s3URL(endpoint, bucket+"?list-type=2"), nil)
+	if err != nil {
+		return err
+	}
+	common.SetAccountHeader(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 	}
@@ -200,6 +213,7 @@ func newCpCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			common.SetAccountHeader(req)
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
@@ -241,7 +255,12 @@ func newGetCmd() *cobra.Command {
 			endpoint := getEndpoint(cmd)
 
 			url := s3URL(endpoint, bucket+"/"+key)
-			resp, err := http.Get(url)
+			req, err := http.NewRequest(http.MethodGet, url, nil)
+			if err != nil {
+				return err
+			}
+			common.SetAccountHeader(req)
+			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
 				return fmt.Errorf("failed to connect to Tarn at %s: %w", endpoint, err)
 			}
@@ -298,6 +317,7 @@ func newRmCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			common.SetAccountHeader(req)
 
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
