@@ -9,6 +9,7 @@
     StackIcon,
     XIcon,
   } from "phosphor-svelte";
+  import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
   import {
     Table,
     TableBody,
@@ -379,7 +380,7 @@
   }
 </script>
 
-<div class="space-y-4">
+<div class="flex min-h-full flex-col gap-4">
   <SectionHeader
     title="Triggers"
     description="Event sources wired to functions and APIs."
@@ -413,9 +414,8 @@
     {/snippet}
   </SectionHeader>
 
-  <div class="overflow-hidden rounded-lg border border-border/70 bg-background/50">
-    <div class="relative min-h-0" style="height: calc(100vh - 10rem);">
-      <div class="min-h-0">
+  <PaneGroup direction="horizontal" class="min-h-0 flex-1 rounded-lg border border-border/70" style="height: calc(100vh - 10rem);">
+    <Pane defaultSize={62} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-background/50">
         <div class="flex items-center justify-between border-b border-border/70 px-4 py-3">
           <div>
             <h3 class="text-sm font-semibold text-foreground">Trigger Mappings</h3>
@@ -437,7 +437,7 @@
             No triggers configured yet.
           </div>
         {:else}
-          <div class="overflow-auto">
+          <div class="min-h-0 flex-1 overflow-auto">
             <Table>
               <TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur [&_th]:bg-background/95">
                 <TableRow class="hover:bg-transparent">
@@ -505,15 +505,12 @@
             </Table>
           </div>
         {/if}
-      </div>
-
-      <div
-        class="absolute inset-y-0 right-0 z-10 overflow-hidden border-l border-border bg-card shadow-xl transition-[width,opacity] duration-200 ease-out {selectedTrigger ? 'opacity-100' : 'pointer-events-none opacity-0'}"
-        style="width: {selectedTrigger ? '420px' : '0px'}"
-      >
-        {#if selectedTrigger}
-          <div class="flex h-full min-w-[420px] flex-col">
-            <div class="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5 shrink-0 bg-card">
+    </Pane>
+    <Handle />
+    <Pane defaultSize={38} minSize={22} class="flex min-h-0 flex-col overflow-hidden bg-background/35">
+      {#if selectedTrigger}
+          <div class="flex h-full flex-col">
+            <div class="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4 py-2.5">
               <div class="min-w-0">
                 <p class="truncate font-mono text-sm text-foreground">
                   {selectedTrigger.sourceName} → {selectedTrigger.targetName}
@@ -601,8 +598,11 @@
               </div>
             </div>
           </div>
-        {/if}
-      </div>
-    </div>
-  </div>
+      {:else}
+        <div class="flex h-full items-center justify-center px-6 py-12 text-center">
+          <p class="max-w-sm text-sm text-muted-foreground/70">Select a mapping to inspect its source, target, and payload details.</p>
+        </div>
+      {/if}
+    </Pane>
+  </PaneGroup>
 </div>

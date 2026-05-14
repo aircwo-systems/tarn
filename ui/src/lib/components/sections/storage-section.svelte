@@ -20,6 +20,7 @@
     AccordionContent,
   } from "$lib/components/ui/accordion";
   import SectionHeader from "./section-header.svelte";
+  import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
 
   type BucketObject = {
     key: string;
@@ -299,7 +300,7 @@
   }
 </script>
 
-<div class="space-y-4">
+<div class="flex min-h-full flex-col gap-4">
   <SectionHeader
     title="S3 storage"
     description="Buckets, object previews and direct Tarn storage paths."
@@ -323,201 +324,209 @@
     {/snippet}
   </SectionHeader>
 
-  {#if buckets.length === 0 && !dashboard.loading}
-    <div class="flex flex-col items-center gap-4 px-8 py-16">
-      <div class="flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-muted">
-        <Package size={24} class="text-muted-foreground/70" />
-      </div>
-      <div class="space-y-1.5 text-center">
-        <p class="text-sm font-semibold text-muted-foreground">No S3 buckets</p>
-        <p class="text-xs leading-relaxed text-muted-foreground/70">
-          Create one with <code class="rounded bg-muted px-1 py-0.5 text-primary">tarn s3 mb --name my-bucket</code>
-        </p>
-      </div>
-    </div>
-  {:else}
-    <div class="rounded-lg border border-border bg-card overflow-hidden">
-      <table class="w-full text-xs">
-        <thead>
-          <tr class="border-b border-border bg-muted/50">
-            <th class="text-left px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Bucket</th>
-            <th class="text-right px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Objects</th>
-            <th class="text-right px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Total Size</th>
-            <th class="text-right px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Created</th>
-            <th class="text-right px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {#each buckets as bucket}
-            <tr class="border-b border-border last:border-b-0 hover:bg-muted/40 transition-colors">
-              <td class="px-3 py-2">
-                <div class="flex items-center gap-2">
-                  <LedDot color="green" />
-                  <span class="text-foreground font-mono">{bucket.name}</span>
-                </div>
-              </td>
-              <td class="text-right px-3 py-2 text-muted-foreground font-mono">{bucket.objects}</td>
-              <td class="text-right px-3 py-2 text-muted-foreground font-mono">{formatBytes(bucket.totalSize)}</td>
-              <td class="text-right px-3 py-2 text-muted-foreground/70 font-mono">
-                {new Date(bucket.createdDate).toLocaleDateString()}
-              </td>
-              <td class="text-right px-3 py-2">
-                <button
-                  type="button"
-                  class="text-primary hover:underline text-[11px]"
-                  onclick={() => void browseBucket(bucket.name)}
-                >
-                  Browse
-                </button>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-    </div>
-  {/if}
-
-  {#if selectedBucket}
-    <div class="rounded-lg border border-primary/50 bg-card overflow-hidden">
-      <div class="flex items-center justify-between px-3 py-2 border-b border-border bg-muted/30">
-        <div class="flex items-center gap-2">
-          <HardDrive size={13} class="text-primary" />
-          <span class="text-xs font-mono text-foreground">s3://{selectedBucket}</span>
-          <span class="text-[10px] text-muted-foreground/70 font-mono">({objects.length} objects)</span>
-        </div>
-        <div class="flex items-center gap-2">
-          <button
-            type="button"
-            onclick={() => void browseBucket(selectedBucket)}
-            class="text-muted-foreground hover:text-foreground transition-colors"
-            aria-label="Refresh objects"
-          >
-            <ArrowClockwise size={12} class={loadingObjects ? "animate-spin" : ""} />
-          </button>
-          <button
-            type="button"
-            onclick={closeBrowser}
-            class="text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            Close
-          </button>
-        </div>
-      </div>
-
-      {#if loadingObjects}
-        <div class="px-3 py-6 text-center text-xs text-muted-foreground/70 font-mono">Loading objects...</div>
-      {:else if objects.length === 0}
-        <div class="px-3 py-6 text-center text-xs text-muted-foreground/70 font-mono">Bucket is empty</div>
-      {:else}
-        <div class="max-h-96 overflow-y-auto px-3">
-          <div class="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-3 border-b border-border py-1.5 text-[10px] text-muted-foreground/70 font-mono uppercase tracking-wider">
-            <span>Key</span>
-            <span class="text-right">Size</span>
-            <span class="text-right">Last Modified</span>
-            <span class="text-right">Action</span>
+  <PaneGroup direction="horizontal" class="min-h-0 flex-1 rounded-lg border border-border/70" style="height: calc(100vh - 10rem);">
+    <Pane defaultSize={38} minSize={22} class="flex min-h-0 flex-col overflow-hidden bg-background/50">
+      {#if buckets.length === 0 && !dashboard.loading}
+        <div class="flex h-full flex-col items-center justify-center gap-4 px-8">
+          <div class="flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-muted">
+            <Package size={24} class="text-muted-foreground/70" />
           </div>
-
-          <Accordion
-            type="multiple"
-            value={openObjectKeys}
-            onValueChange={handleObjectOpenChange}
-            class="w-full"
-          >
-            {#each objects as obj}
-              {@const preview = previewByKey[obj.key]}
-              <AccordionItem value={obj.key}>
-                <AccordionTrigger class="w-full py-1.5 text-foreground hover:bg-muted/20">
-                  <div class="grid w-full grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-3 pr-2">
-                    <span class="truncate font-mono" title={obj.key}>{obj.key}</span>
-                    <span class="text-right text-muted-foreground font-mono whitespace-nowrap">{formatBytes(obj.size)}</span>
-                    <span class="text-right text-muted-foreground/70 font-mono whitespace-nowrap">{new Date(obj.lastModified).toLocaleString()}</span>
-                    <span class="text-right text-primary text-[11px]">{isObjectOpen(obj.key) ? "Close" : "View"}</span>
-                  </div>
-                </AccordionTrigger>
-
-                <AccordionContent class="pt-0">
-                  <div class="rounded-md border border-border bg-muted/20 px-3 py-2 mb-2">
-                    <div class="flex items-center justify-between border-b border-border pb-2 mb-2">
-                      <p class="text-[10px] text-muted-foreground/70 font-mono">{preview?.contentType || "--"}</p>
-
-                      <div class="flex items-center gap-3">
-                        {#if preview && canToggleRawPreview(preview.contentType)}
-                          <button
-                            type="button"
-                            class="flex items-center gap-1.5 text-[11px] {preview.showRaw ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
-                            onclick={() => toggleRawPreview(obj.key)}
-                          >
-                            {#if preview.showRaw}
-                              <Eye size={14} />
-                              <span>Preview</span>
-                            {:else}
-                              <Code size={14} />
-                              <span>Raw</span>
-                            {/if}
-                          </button>
-                        {/if}
-
-                        {#if preview && preview.content}
-                          <button
-                            type="button"
-                            class="flex items-center gap-1.5 text-[11px] transition-colors {preview.copied ? 'text-green-400' : 'text-muted-foreground hover:text-foreground'}"
-                            onclick={() => void copyToClipboard(obj.key)}
-                          >
-                            {#if preview.copied}
-                              <Check size={14} />
-                              <span>Copied</span>
-                            {:else}
-                              <CopySimple size={14} />
-                              <span>Copy</span>
-                            {/if}
-                          </button>
-                        {/if}
-                      </div>
+          <div class="space-y-1.5 text-center">
+            <p class="text-sm font-semibold text-muted-foreground">No S3 buckets</p>
+            <p class="text-xs leading-relaxed text-muted-foreground/70">
+              Create one with <code class="rounded bg-muted px-1 py-0.5 text-primary">tarn s3 mb --name my-bucket</code>
+            </p>
+          </div>
+        </div>
+      {:else}
+        <div class="border-b border-border/70 px-3 py-2.5">
+          <p class="text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Buckets</p>
+          <p class="mt-1 text-[11px] text-muted-foreground/70">Select a bucket to browse its objects.</p>
+        </div>
+        <div class="min-h-0 flex-1 overflow-auto">
+          <table class="w-full text-xs">
+            <thead>
+              <tr class="border-b border-border/70 bg-background/80 sticky top-0 z-10">
+                <th class="text-left px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Bucket</th>
+                <th class="text-right px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Objects</th>
+                <th class="text-right px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Size</th>
+                <th class="text-right px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              {#each buckets as bucket}
+                <tr
+                  class="cursor-pointer border-b border-border/60 last:border-b-0 transition-colors {bucket.name === selectedBucket ? 'bg-muted/50' : 'hover:bg-muted/30'}"
+                  role="button"
+                  tabindex={0}
+                  onclick={() => void browseBucket(bucket.name)}
+                  onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void browseBucket(bucket.name); }}}
+                >
+                  <td class="px-3 py-2">
+                    <div class="flex items-center gap-2">
+                      <LedDot color="green" />
+                      <span class="font-mono text-foreground">{bucket.name}</span>
                     </div>
-
-                    {#if !preview || preview.loading}
-                      <div class="py-4 text-center text-xs text-muted-foreground/70 font-mono">Loading object...</div>
-                    {:else if preview.error}
-                      <div class="py-4 text-center text-xs text-destructive-300 font-mono">{preview.error}</div>
-                    {:else if preview.notice}
-                      <div class="py-4 text-center text-xs text-muted-foreground/70 font-mono">{preview.notice}</div>
-                    {:else if isImageContent(preview.contentType) && !preview.showRaw}
-                      <div class="flex justify-center bg-black/5 rounded-md p-4 border border-border/50">
-                        <img
-                          src={`/_s3/${selectedBucket}/${encodeS3KeyPath(obj.key)}`}
-                          alt={obj.key}
-                          class="max-w-full h-auto shadow-sm"
-                        />
-                      </div>
-                    {:else}
-                      {@const formattedPreview = isJSONContentType(preview.contentType)
-                        ? formatJSONForViewer(preview.content)
-                        : formatJSONForViewer(preview.content)}
-                      {#if formattedPreview}
-                        <FormattedMessageViewer
-                          raw={preview.content}
-                          formatted={formattedPreview.formatted}
-                          formattedHtml={formattedPreview.formattedHtml}
-                          formattedLabel="JSON"
-                          rawLabel="Raw Object"
-                          formattedOpenByDefault={true}
-                          rawOpenByDefault={false}
-                          formattedContentClass="text-[11px] text-foreground"
-                          rawContentClass="text-[11px] text-muted-foreground"
-                          formattedMaxHeightClass="max-h-96"
-                          rawMaxHeightClass="max-h-72"
-                        />
-                      {:else}
-                        <pre class="text-xs font-mono text-foreground whitespace-pre-wrap break-words leading-relaxed">{preview.content}</pre>
-                      {/if}
-                    {/if}
-                  </div>
-                </AccordionContent>
-              </AccordionItem>
-            {/each}
-          </Accordion>
+                  </td>
+                  <td class="text-right px-3 py-2 text-muted-foreground font-mono">{bucket.objects}</td>
+                  <td class="text-right px-3 py-2 text-muted-foreground font-mono">{formatBytes(bucket.totalSize)}</td>
+                  <td class="text-right px-3 py-2 text-muted-foreground/70 font-mono">
+                    {new Date(bucket.createdDate).toLocaleDateString()}
+                  </td>
+                </tr>
+              {/each}
+            </tbody>
+          </table>
         </div>
       {/if}
-    </div>
-  {/if}
+    </Pane>
+    <Handle />
+    <Pane defaultSize={62} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-background/35">
+      {#if selectedBucket}
+        <div class="flex shrink-0 items-center justify-between border-b border-border/70 px-3 py-2">
+          <div class="flex items-center gap-2">
+            <HardDrive size={13} class="text-primary" />
+            <span class="text-xs font-mono text-foreground">s3://{selectedBucket}</span>
+            <span class="text-[10px] text-muted-foreground/70 font-mono">({objects.length} objects)</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <button
+              type="button"
+              onclick={() => void browseBucket(selectedBucket)}
+              class="text-muted-foreground hover:text-foreground transition-colors"
+              aria-label="Refresh objects"
+            >
+              <ArrowClockwise size={12} class={loadingObjects ? "animate-spin" : ""} />
+            </button>
+            <button
+              type="button"
+              onclick={closeBrowser}
+              class="text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+
+        {#if loadingObjects}
+          <div class="flex flex-1 items-center justify-center text-xs text-muted-foreground/70 font-mono">Loading objects...</div>
+        {:else if objects.length === 0}
+          <div class="flex flex-1 items-center justify-center text-xs text-muted-foreground/70 font-mono">Bucket is empty</div>
+        {:else}
+          <div class="min-h-0 flex-1 overflow-y-auto px-3">
+            <div class="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-3 border-b border-border/70 py-1.5 text-[10px] text-muted-foreground/70 font-mono uppercase tracking-wider sticky top-0 bg-background/95 backdrop-blur z-10">
+              <span>Key</span>
+              <span class="text-right">Size</span>
+              <span class="text-right">Last Modified</span>
+              <span class="text-right">Action</span>
+            </div>
+
+            <Accordion
+              type="multiple"
+              value={openObjectKeys}
+              onValueChange={handleObjectOpenChange}
+              class="w-full"
+            >
+              {#each objects as obj}
+                {@const preview = previewByKey[obj.key]}
+                <AccordionItem value={obj.key}>
+                  <AccordionTrigger class="w-full py-1.5 text-foreground hover:bg-muted/20">
+                    <div class="grid w-full grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-3 pr-2">
+                      <span class="truncate font-mono" title={obj.key}>{obj.key}</span>
+                      <span class="text-right text-muted-foreground font-mono whitespace-nowrap">{formatBytes(obj.size)}</span>
+                      <span class="text-right text-muted-foreground/70 font-mono whitespace-nowrap">{new Date(obj.lastModified).toLocaleString()}</span>
+                      <span class="text-right text-primary text-[11px]">{isObjectOpen(obj.key) ? "Close" : "View"}</span>
+                    </div>
+                  </AccordionTrigger>
+
+                  <AccordionContent class="pt-0">
+                    <div class="rounded-md border border-border bg-muted/20 px-3 py-2 mb-2">
+                      <div class="flex items-center justify-between border-b border-border pb-2 mb-2">
+                        <p class="text-[10px] text-muted-foreground/70 font-mono">{preview?.contentType || "--"}</p>
+
+                        <div class="flex items-center gap-3">
+                          {#if preview && canToggleRawPreview(preview.contentType)}
+                            <button
+                              type="button"
+                              class="flex items-center gap-1.5 text-[11px] {preview.showRaw ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
+                              onclick={() => toggleRawPreview(obj.key)}
+                            >
+                              {#if preview.showRaw}
+                                <Eye size={14} />
+                                <span>Preview</span>
+                              {:else}
+                                <Code size={14} />
+                                <span>Raw</span>
+                              {/if}
+                            </button>
+                          {/if}
+
+                          {#if preview && preview.content}
+                            <button
+                              type="button"
+                              class="flex items-center gap-1.5 text-[11px] transition-colors {preview.copied ? 'text-green-400' : 'text-muted-foreground hover:text-foreground'}"
+                              onclick={() => void copyToClipboard(obj.key)}
+                            >
+                              {#if preview.copied}
+                                <Check size={14} />
+                                <span>Copied</span>
+                              {:else}
+                                <CopySimple size={14} />
+                                <span>Copy</span>
+                              {/if}
+                            </button>
+                          {/if}
+                        </div>
+                      </div>
+
+                      {#if !preview || preview.loading}
+                        <div class="py-4 text-center text-xs text-muted-foreground/70 font-mono">Loading object...</div>
+                      {:else if preview.error}
+                        <div class="py-4 text-center text-xs text-destructive-300 font-mono">{preview.error}</div>
+                      {:else if preview.notice}
+                        <div class="py-4 text-center text-xs text-muted-foreground/70 font-mono">{preview.notice}</div>
+                      {:else if isImageContent(preview.contentType) && !preview.showRaw}
+                        <div class="flex justify-center bg-black/5 rounded-md p-4 border border-border/50">
+                          <img
+                            src={`/_s3/${selectedBucket}/${encodeS3KeyPath(obj.key)}`}
+                            alt={obj.key}
+                            class="max-w-full h-auto shadow-sm"
+                          />
+                        </div>
+                      {:else}
+                        {@const formattedPreview = isJSONContentType(preview.contentType)
+                          ? formatJSONForViewer(preview.content)
+                          : formatJSONForViewer(preview.content)}
+                        {#if formattedPreview}
+                          <FormattedMessageViewer
+                            raw={preview.content}
+                            formatted={formattedPreview.formatted}
+                            formattedHtml={formattedPreview.formattedHtml}
+                            formattedLabel="JSON"
+                            rawLabel="Raw Object"
+                            formattedOpenByDefault={true}
+                            rawOpenByDefault={false}
+                            formattedContentClass="text-[11px] text-foreground"
+                            rawContentClass="text-[11px] text-muted-foreground"
+                            formattedMaxHeightClass="max-h-96"
+                            rawMaxHeightClass="max-h-72"
+                          />
+                        {:else}
+                          <pre class="text-xs font-mono text-foreground whitespace-pre-wrap break-words leading-relaxed">{preview.content}</pre>
+                        {/if}
+                      {/if}
+                    </div>
+                  </AccordionContent>
+                </AccordionItem>
+              {/each}
+            </Accordion>
+          </div>
+        {/if}
+      {:else}
+        <div class="flex h-full items-center justify-center px-6 py-12 text-center">
+          <p class="max-w-xs text-sm text-muted-foreground/70">Select a bucket from the left to browse its objects.</p>
+        </div>
+      {/if}
+    </Pane>
+  </PaneGroup>
 </div>

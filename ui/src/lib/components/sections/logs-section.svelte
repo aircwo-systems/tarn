@@ -11,21 +11,33 @@
     SortAscendingIcon,
     SortDescendingIcon,
     ClipboardTextIcon,
+    ArrowUpRightIcon,
   } from "phosphor-svelte";
   import Badge from "$lib/components/ui/badge/badge.svelte";
   import { Skeleton } from "$lib/components/ui/skeleton";
   import EmptyState from "$lib/components/common/empty-state.svelte";
   import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
   import SectionHeader from "./section-header.svelte";
+  import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
   import {
     fetchLogGroups,
     fetchLogEvents,
     fetchAllLogEvents,
     clearLogGroup,
+    fetchTraceForLog,
     type FetchLogEventsParams,
   } from "$lib/api";
   import { highlightJSON } from "$lib/json-format";
-  import type { LogGroupSummary, LogEvent } from "$lib/types";
+  import {
+    SUB_SPAN_KINDS,
+    spanColor,
+    spanKindLabel,
+    formatMs,
+    buildWaterfall,
+    traceTitle,
+    type WaterfallRow,
+  } from "$lib/trace-utils";
+  import type { LogGroupSummary, LogEvent, RequestTrace } from "$lib/types";
 
   let {
     initialGroup = "",
@@ -66,6 +78,8 @@
 
   // Detail panel
   let selectedEvent = $state<LogEvent | null>(null);
+  let logTrace = $state<RequestTrace | null>(null);
+  let logTraceLoading = $state(false);
 
   // Clear logs
   let clearing = $state(false);
@@ -131,6 +145,31 @@
         }
       });
     }
+  });
+
+  // Fetch trace for selected lambda log event
+  $effect(() => {
+    const ev = selectedEvent;
+    const group = selectedGroup;
+    if (!ev || !group.startsWith("/aws/lambda/")) {
+      logTrace = null;
+      logTraceLoading = false;
+      return;
+    }
+    const ctrl = new AbortController();
+    const functionName = group.slice("/aws/lambda/".length);
+    logTraceLoading = true;
+    fetchTraceForLog(functionName, ev.timestamp, ctrl.signal)
+      .then((t) => {
+        logTrace = t;
+      })
+      .catch(() => {
+        logTrace = null;
+      })
+      .finally(() => {
+        logTraceLoading = false;
+      });
+    return () => ctrl.abort();
   });
 
   // ── Data fetching ────────────────────────────────────────────────────
@@ -304,11 +343,7 @@
   }
 
   function selectEvent(event: LogEvent) {
-    if (selectedEvent === event) {
-      selectedEvent = null;
-    } else {
-      selectedEvent = event;
-    }
+    selectedEvent = event;
   }
 
   function formatDetailTimestamp(ts: string): string {
@@ -693,6 +728,14 @@
     return msg.slice(0, maxLen) + "...";
   }
 
+  function openInXRay(trace: RequestTrace) {
+    window.location.hash = `xray?trace=${encodeURIComponent(trace.id)}`;
+  }
+
+  const logWaterfallRows = $derived(
+    logTrace ? buildWaterfall(logTrace.spans, logTrace.durationMs) : ([] as WaterfallRow[]),
+  );
+
   const selectedGroupSummary = $derived(
     groups.find((group) => group.name === selectedGroup) ?? null,
   );
@@ -996,13 +1039,9 @@
         icon={ScrollIcon}
       />
     {:else}
-      <!-- Two-panel layout: event list + detail panel -->
-      <div
-        class="rounded-lg border border-border overflow-hidden flex flex-1"
-        style={`min-height: 0; height: calc(100vh - ${hasPagination ? "12.75rem" : "10rem"})`}
-      >
-        <!-- Event rows — compact view -->
-        <div class="flex-1 min-w-0 overflow-y-auto font-mono text-[12px] leading-tight">
+      <!-- Event rows snippet — shared between full-width and split-panel views -->
+      {#snippet eventRows()}
+        <div class="min-w-0 overflow-y-auto font-mono text-[12px] leading-tight h-full">
           {#if showLiveLoadingSkeleton}
             <div class="sticky top-0 z-10 border-b border-border bg-card/95 backdrop-blur px-3 py-2">
               <div class="mb-1.5 flex items-center gap-2 text-[10px] uppercase tracking-wider text-muted-foreground/70">
@@ -1103,17 +1142,21 @@
             </div>
           {/each}
         </div>
+      {/snippet}
 
-        <!-- Detail panel -->
-        <div
-          class="shrink-0 overflow-hidden border-l border-border/70 bg-background/60 transition-[width,opacity] duration-200 ease-out {selectedEvent
-            ? 'opacity-100'
-            : 'opacity-0'}"
-          style="width: {selectedEvent ? '420px' : '0px'}"
+      {#if selectedEvent}
+        {@const ev = selectedEvent}
+        <PaneGroup
+          direction="horizontal"
+          class="min-h-0 rounded-lg border border-border overflow-hidden"
+          style={`height: calc(100vh - ${hasPagination ? "12.75rem" : "10rem"})`}
         >
-          {#if selectedEvent}
-            {@const ev = selectedEvent}
-            <div class="flex flex-col h-full min-w-[420px]">
+          <Pane defaultSize={62} minSize={35} class="flex min-h-0 flex-col overflow-hidden">
+            {@render eventRows()}
+          </Pane>
+          <Handle />
+          <Pane defaultSize={38} minSize={25} class="flex min-h-0 flex-col overflow-hidden bg-background/35">
+            <div class="flex flex-col h-full">
               <!-- Panel header -->
               <div
                 class="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 bg-background/35 px-4 py-2.5"
@@ -1267,11 +1310,93 @@
                     {/if}
                   </div>
                 </div>
+
+                <!-- ── Trace context (lambda groups only) ── -->
+                {#if selectedGroupIsLambda}
+                  <div>
+                    <div class="flex items-center justify-between mb-2">
+                      <p class="text-[10px] font-medium uppercase tracking-widest text-muted-foreground/70">
+                        Trace Context
+                      </p>
+                      {#if logTrace}
+                        {@const lt = logTrace}
+                        <button
+                          type="button"
+                          onclick={() => openInXRay(lt)}
+                          class="inline-flex items-center gap-1 text-[10px] font-mono text-primary/70 hover:text-primary transition-colors"
+                        >
+                          <ArrowUpRightIcon size={10} />
+                          X-Ray
+                        </button>
+                      {/if}
+                    </div>
+
+                    {#if logTraceLoading}
+                      <div class="rounded-md border border-border/60 px-3 py-2.5 space-y-2">
+                        <div class="h-3 w-3/4 rounded bg-muted animate-pulse"></div>
+                        <div class="h-2.5 w-full rounded bg-muted/70 animate-pulse"></div>
+                        <div class="h-2.5 w-4/5 rounded bg-muted/50 animate-pulse"></div>
+                      </div>
+                    {:else if logTrace}
+                      {@const t = logTrace}
+                      <div class="rounded-md border border-border/60 overflow-hidden">
+                        <div class="flex items-center gap-2 px-3 py-2 border-b border-border/40 bg-background/30">
+                          <span class="text-[10px] font-mono text-muted-foreground/60 shrink-0">via</span>
+                          <span class="text-[11px] font-mono text-foreground/80 truncate">{traceTitle(t)}</span>
+                          <span class="ml-auto shrink-0 text-[10px] font-mono text-muted-foreground/60">{formatMs(t.durationMs)}</span>
+                        </div>
+                        <div class="px-3 py-2 space-y-1.5">
+                          {#each logWaterfallRows as { span, offsetPct, widthPct, nested }, i (i)}
+                            {@const color = spanColor(span.kind)}
+                            {@const opacity = span.status === "error" ? 0.85 : nested ? 0.4 : 0.5}
+                            <div class="flex items-center gap-2 {nested ? 'pl-3' : ''}">
+                              {#if nested}
+                                <span class="text-[10px] font-mono text-muted-foreground/40 shrink-0 select-none">└</span>
+                              {/if}
+                              <div class="w-[5.5rem] shrink-0">
+                                <span
+                                  class="block whitespace-nowrap text-right text-[9px] font-mono px-1 py-0.5 rounded"
+                                  style="color:{color};background:{color}18;border:1px solid {color}28"
+                                >{spanKindLabel(span.kind)}</span>
+                              </div>
+                              <div class="w-24 shrink-0 min-w-0">
+                                <span
+                                  class="block overflow-hidden text-ellipsis whitespace-nowrap text-[10px] font-mono text-muted-foreground/80"
+                                  title={span.name}
+                                >{span.name}</span>
+                              </div>
+                              <div class="flex-1 {nested ? 'h-2' : 'h-2.5'} rounded bg-muted relative overflow-hidden">
+                                <div
+                                  class="absolute top-0 h-full rounded"
+                                  style="left:{offsetPct}%;width:{widthPct}%;background:{color};opacity:{opacity};min-width:2px"
+                                ></div>
+                              </div>
+                              <span class="w-10 text-right text-[9px] font-mono text-muted-foreground/60 shrink-0">{formatMs(span.durationMs)}</span>
+                            </div>
+                          {/each}
+                        </div>
+                        <div class="flex items-center justify-between px-3 pb-2 text-[9px] font-mono text-muted-foreground/50 border-t border-border/30 pt-1.5">
+                          <span>0ms</span>
+                          <span>{formatMs(t.durationMs)}</span>
+                        </div>
+                      </div>
+                    {:else}
+                      <p class="text-[11px] text-muted-foreground/40 italic">No trace recorded for this event</p>
+                    {/if}
+                  </div>
+                {/if}
               </div>
             </div>
-          {/if}
+          </Pane>
+        </PaneGroup>
+      {:else}
+        <div
+          class="min-h-0 rounded-lg border border-border overflow-hidden"
+          style={`height: calc(100vh - ${hasPagination ? "12.75rem" : "10rem"})`}
+        >
+          {@render eventRows()}
         </div>
-      </div>
+      {/if}
 
       <!-- Pagination -->
       {#if hasPagination}

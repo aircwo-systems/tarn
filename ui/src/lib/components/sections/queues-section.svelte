@@ -1,5 +1,6 @@
 <script lang="ts">
   import { ChatCircleIcon, CaretDownIcon, CaretUpIcon } from "phosphor-svelte";
+  import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
   import {
     Table,
     TableHeader,
@@ -205,12 +206,10 @@
     {/snippet}
   </SectionHeader>
 
-  <div
-    class="grid min-h-0 flex-1 gap-4 xl:grid-cols-[minmax(0,1fr)_420px]"
-    style="height: calc(100vh - 10rem);"
-  >
+  <PaneGroup direction="horizontal" class="min-h-0 flex-1 gap-0 rounded-lg border border-border/70" style="height: calc(100vh - 10rem);">
+    <Pane defaultSize={65} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-background/60">
     <div
-      class="min-h-0 overflow-hidden rounded-lg border border-border/70 bg-background/60"
+      class="min-h-0 h-full overflow-hidden"
     >
       {#if dashboard.loading && !dashboard.data}
         <div class="space-y-2 p-3">
@@ -265,51 +264,14 @@
                   >
                     {queue.approxInFlight}
                   </TableCell>
-                  <TableCell class="min-w-[18rem]">
+                  <TableCell>
                     {#if queue.recentMessages?.length}
-                      <div class="space-y-1.5">
-                        {#each queue.recentMessages.slice(0, 3) as message}
-                          <div
-                            class="rounded-md border border-border bg-background-subtle/70 px-2 py-1.5"
-                          >
-                            <div
-                              class="mb-1 flex items-center gap-2 text-[10px] uppercase tracking-wide text-muted-foreground/70"
-                            >
-                              <span class="inline-flex items-center gap-1">
-                                <LedDot
-                                  color={messageStateColor(message.state)}
-                                />
-                                <span class="text-muted-foreground"
-                                  >{message.state}</span
-                                >
-                              </span>
-                              <span class="font-mono"
-                                >{message.id.slice(0, 8)}</span
-                              >
-                              {#if message.receiveCount > 0}
-                                <span class="font-mono"
-                                  >x{message.receiveCount}</span
-                                >
-                              {/if}
-                            </div>
-                            <p
-                              class="max-h-9 overflow-hidden break-all text-xs text-muted-foreground"
-                              title={message.body}
-                            >
-                              {message.body || "(empty)"}
-                            </p>
-                          </div>
-                        {/each}
-                        {#if queue.recentMessages.length > 3}
-                          <p class="text-[11px] text-muted-foreground/70">
-                            +{queue.recentMessages.length - 3} more messages
-                          </p>
-                        {/if}
-                      </div>
+                      <span class="inline-flex items-center gap-1.5 rounded-full border border-border/60 px-2 py-0.5 font-mono text-[11px] text-muted-foreground/70">
+                        <LedDot color="green" />
+                        {queue.recentMessages.length}
+                      </span>
                     {:else}
-                      <span class="text-xs text-muted-foreground/70"
-                        >No messages</span
-                      >
+                      <span class="text-xs text-muted-foreground/30">—</span>
                     {/if}
                   </TableCell>
                 </TableRow>
@@ -319,9 +281,11 @@
         </div>
       {/if}
     </div>
-
+    </Pane>
+    <Handle />
+    <Pane defaultSize={35} minSize={20} class="flex min-h-0 flex-col overflow-hidden bg-background/60">
     <section
-      class="flex min-h-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background/60"
+      class="flex min-h-0 flex-col overflow-hidden"
     >
       <div
         class="flex items-center justify-between border-b border-border px-3 py-2"
@@ -555,5 +519,6 @@
         </div>
       {/if}
     </section>
-  </div>
+    </Pane>
+  </PaneGroup>
 </div>

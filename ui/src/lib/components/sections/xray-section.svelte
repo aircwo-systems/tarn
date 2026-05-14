@@ -3,6 +3,15 @@
   import { runEventBridgeRace } from "$lib/api";
   import { getDashboard, refresh } from "$lib/state.svelte";
   import type { RequestTrace, TraceSpan } from "$lib/types";
+  import {
+    SUB_SPAN_KINDS,
+    spanColor,
+    spanKindLabel,
+    formatMs,
+    buildWaterfall,
+    traceTitle,
+    type WaterfallRow,
+  } from "$lib/trace-utils";
   import SectionHeader from "./section-header.svelte";
 
   let {
@@ -116,76 +125,6 @@
       : 0,
   );
 
-  // ─── Kind styling ───
-  function spanColor(kind: string): string {
-    switch (kind.toLowerCase()) {
-      case "external":
-        return "var(--color-text-muted)";
-      case "gateway":
-        return "var(--color-red)";
-      case "lambda":
-        return "var(--chart-6)";
-      case "eventbridge":
-        return "var(--color-blue)";
-      case "queue":
-        return "var(--color-amber)";
-      case "topic":
-        return "var(--color-primary)";
-      case "dlq":
-        return "var(--color-red)";
-      case "s3":
-        return "var(--color-amber)";
-      case "secret":
-      case "secrets":
-        return "var(--chart-2)";
-      case "postgres":
-      case "postgresql":
-      case "mysql":
-        return "var(--color-blue)";
-      case "redis":
-        return "var(--color-amber)";
-      default:
-        return "var(--color-text-muted)";
-    }
-  }
-
-  function spanKindLabel(kind: string): string {
-    switch (kind.toLowerCase()) {
-      case "external":
-        return "External";
-      case "gateway":
-        return "API GW";
-      case "lambda":
-        return "Lambda";
-      case "eventbridge":
-        return "EventBridge";
-      case "queue":
-        return "SQS";
-      case "topic":
-        return "SNS";
-      case "dlq":
-        return "DLQ";
-      case "s3":
-        return "S3";
-      case "secret":
-      case "secrets":
-        return "Secrets";
-      case "postgres":
-      case "postgresql":
-        return "PostgreSQL";
-      case "mysql":
-        return "MySQL";
-      case "redis":
-        return "Redis";
-      default:
-        return kind.length > 9 ? kind.slice(0, 8) + "…" : kind;
-    }
-  }
-
-  function formatMs(ms: number): string {
-    if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(2)}s`;
-  }
 
   function timeAgo(iso: string): string {
     const diff = Date.now() - new Date(iso).getTime();
@@ -195,37 +134,12 @@
     return new Date(iso).toLocaleTimeString();
   }
 
-  function traceTitle(t: RequestTrace): string {
-    const eventBridge = t.spans.find((s) => s.kind === "eventbridge");
-    if (eventBridge) return `EventBridge → ${eventBridge.name}`;
-    if (t.method && t.path) return `${t.method} ${t.path}`;
-    const s3 = t.spans.find((s) => s.kind === "s3");
-    if (s3) return `S3 → ${s3.name}`;
-    const topic = t.spans.find((s) => s.kind === "topic");
-    if (topic) return `SNS → ${topic.name}`;
-    const q = t.spans.find((s) => s.kind === "queue" || s.kind === "dlq");
-    if (q) return `ESM → ${q.name}`;
-    const fn = t.spans.find((s) => s.kind === "lambda");
-    if (fn) return `Invoke: ${fn.name}`;
-    return `trace:${t.id.slice(0, 8)}`;
-  }
-
   function traceRaceSession(trace: RequestTrace): string {
     return (
       trace.spans.find((span) => span.kind === "eventbridge")?.meta?.raceSession ?? ""
     );
   }
 
-  const SUB_SPAN_KINDS = new Set([
-    "postgres",
-    "postgresql",
-    "mysql",
-    "redis",
-    "cache_extension",
-    "cache-extension",
-    "secret",
-    "secrets",
-  ]);
 
   function traceCoreSpans(trace: RequestTrace): TraceSpan[] {
     return trace.spans.filter((span) => !SUB_SPAN_KINDS.has(span.kind.toLowerCase()));
@@ -475,60 +389,6 @@
   const nodeCY = PAD_Y + NODE_H / 2;
 
   // ─── Waterfall ───
-  // "Sub-spans" are collected from inside the Lambda execution (DB calls, secret
-  // fetches, etc.). They are NESTED within the Lambda span, not sequential after
-  // it. We right-align them within the enclosing Lambda: since the Lambda cannot
-  // return before the sub-span completes, the sub-span's right edge ≈ Lambda's
-  // right edge. This is the best approximation without absolute start timestamps.
-  interface WaterfallRow {
-    span: TraceSpan;
-    offsetPct: number;
-    widthPct: number;
-    nested: boolean;
-  }
-
-  function buildWaterfall(spans: TraceSpan[], total: number): WaterfallRow[] {
-    if (total <= 0)
-      return spans.map((span) => ({
-        span,
-        offsetPct: 0,
-        widthPct: 2,
-        nested: false,
-      }));
-
-    let cum = 0;
-    let lambdaStartMs = 0;
-    let lambdaDurationMs = total;
-    const rows: WaterfallRow[] = [];
-
-    for (const span of spans) {
-      const kind = span.kind.toLowerCase();
-      const nested = SUB_SPAN_KINDS.has(kind);
-
-      let offsetMs: number;
-      if (nested) {
-        // Right-align within enclosing Lambda's time window.
-        const lambdaEnd = lambdaStartMs + lambdaDurationMs;
-        offsetMs = Math.max(lambdaStartMs, lambdaEnd - span.durationMs);
-      } else {
-        offsetMs = cum;
-        if (kind === "lambda") {
-          lambdaStartMs = cum;
-          lambdaDurationMs = span.durationMs;
-        }
-        cum += span.durationMs;
-      }
-
-      rows.push({
-        span,
-        offsetPct: (offsetMs / total) * 100,
-        widthPct: Math.max(0.5, (span.durationMs / total) * 100),
-        nested,
-      });
-    }
-
-    return rows;
-  }
 </script>
 
 <div class="space-y-4">

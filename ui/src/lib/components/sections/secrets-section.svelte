@@ -5,6 +5,7 @@
     KeyIcon,
     CopyIcon,
     CheckIcon,
+    XIcon,
   } from "phosphor-svelte";
   import {
     Table,
@@ -17,8 +18,8 @@
   import { Skeleton } from "$lib/components/ui/skeleton";
   import EmptyState from "$lib/components/common/empty-state.svelte";
   import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
-  import DetailPanel from "$lib/components/common/detail-panel.svelte";
   import SectionHeader from "./section-header.svelte";
+  import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
   import { fetchSecretValue } from "$lib/api";
   import { formatJSONForViewer } from "$lib/json-format";
   import {
@@ -71,7 +72,7 @@
   );
 
   function selectSecret(name: string) {
-    selectedSecretName = selectedSecretName === name ? null : name;
+    selectedSecretName = name;
   }
 
   function hasLoadedSecretValue(name: string): boolean {
@@ -163,9 +164,8 @@
     {/snippet}
   </SectionHeader>
 
-  <div class="overflow-hidden rounded-lg border border-border/70 bg-background/50">
-    <div class="relative min-h-0" style="height: calc(100vh - 10rem);">
-
+  <PaneGroup direction="horizontal" class="min-h-0 flex-1 rounded-lg border border-border/70" style="height: calc(100vh - 10rem);">
+    <Pane defaultSize={60} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-background/50">
       {#if dashboard.loading && !dashboard.data}
         <div class="space-y-2 p-3">
           {#each Array(6) as _, index (index)}
@@ -209,51 +209,23 @@
                   <TableCell class="text-xs text-muted-foreground whitespace-normal break-words align-top">
                     {secret.description || "--"}
                   </TableCell>
-                  <TableCell class="!whitespace-normal align-top" onclick={(e: MouseEvent) => e.stopPropagation()}>
-                    <div class="flex items-start gap-2">
-                      <div class="min-w-0 flex-1">
-                        {#if !secretVisible[secret.name] || secretLoading[secret.name] || secretErrors[secret.name]}
-                          <span
-                            class={`break-all font-mono text-xs ${secretErrors[secret.name] ? "text-destructive" : "text-muted-foreground/70"}`}
-                          >
-                            {renderSecretValue(secret.name)}
-                          </span>
-                        {:else if secretFormattedValue(secret.name)}
-                          <FormattedMessageViewer
-                            raw={secretValues[secret.name] ?? ""}
-                            formatted={secretFormattedValue(secret.name)?.formatted}
-                            formattedHtml={secretFormattedValue(secret.name)?.formattedHtml}
-                            formattedLabel="JSON"
-                            rawLabel="Raw Value"
-                            formattedOpenByDefault={true}
-                            rawOpenByDefault={false}
-                            formattedContentClass="text-[11px] text-muted-foreground"
-                            rawContentClass="text-[11px] text-muted-foreground"
-                            formattedMaxHeightClass="max-h-52"
-                            rawMaxHeightClass="max-h-40"
-                          />
-                        {:else}
-                          <div class="max-h-40 overflow-y-auto rounded">
-                            <span class="break-all font-mono text-xs text-muted-foreground/70">
-                              {renderSecretValue(secret.name)}
-                            </span>
-                          </div>
-                        {/if}
-                      </div>
+                  <TableCell class="align-top">
+                    <div class="flex items-center gap-2">
+                      <span class={`break-all font-mono text-xs ${secretErrors[secret.name] ? "text-destructive" : "text-muted-foreground/70"}`}>
+                        {renderSecretValue(secret.name)}
+                      </span>
                       <button
                         type="button"
-                        class="shrink-0 rounded-md border border-border p-1 text-muted-foreground transition-colors hover:bg-background-subtle hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                        onclick={() => void toggleSecretValue(secret.name)}
+                        class="ml-auto shrink-0 rounded border border-border p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                        onclick={(e: MouseEvent) => { e.stopPropagation(); void toggleSecretValue(secret.name); }}
                         disabled={secretLoading[secret.name]}
-                        title={secretVisible[secret.name] ? "Hide secret value" : "View secret value"}
-                        aria-label={secretVisible[secret.name]
-                          ? `Hide secret value for ${secret.name}`
-                          : `View secret value for ${secret.name}`}
+                        title={secretVisible[secret.name] ? "Hide" : "Reveal"}
+                        aria-label={secretVisible[secret.name] ? `Hide ${secret.name}` : `Reveal ${secret.name}`}
                       >
                         {#if secretVisible[secret.name]}
-                          <EyeSlashIcon size={14} />
+                          <EyeSlashIcon size={13} />
                         {:else}
-                          <EyeIcon size={14} />
+                          <EyeIcon size={13} />
                         {/if}
                       </button>
                     </div>
@@ -264,15 +236,26 @@
           </Table>
         </div>
       {/if}
-
-      <DetailPanel
-        open={selectedSecret !== null}
-        onclose={() => (selectedSecretName = null)}
-        title={selectedSecret?.name ?? ""}
-        subtitle="Secret detail"
-      >
-        {#if selectedSecret}
-          {@const name = selectedSecret.name}
+    </Pane>
+    <Handle />
+    <Pane defaultSize={40} minSize={25} class="flex min-h-0 flex-col overflow-hidden bg-background/35">
+      {#if selectedSecret}
+        {@const name = selectedSecret.name}
+        <div class="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4 py-2.5">
+          <div class="min-w-0">
+            <p class="truncate font-mono text-sm text-foreground">{selectedSecret.name}</p>
+            <p class="mt-0.5 text-[11px] text-muted-foreground/70">Secret detail</p>
+          </div>
+          <button
+            type="button"
+            onclick={() => (selectedSecretName = null)}
+            class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
+            aria-label="Close detail panel"
+          >
+            <XIcon size={14} />
+          </button>
+        </div>
+        <div class="flex-1 space-y-4 overflow-y-auto p-4">
 
           <!-- Identity -->
           <div>
@@ -424,9 +407,12 @@
               </div>
             </div>
           </div>
-        {/if}
-      </DetailPanel>
-
-    </div>
-  </div>
+        </div>
+      {:else}
+        <div class="flex h-full items-center justify-center px-6 py-12 text-center">
+          <p class="max-w-xs text-sm text-muted-foreground/70">Select a secret to inspect its value and metadata.</p>
+        </div>
+      {/if}
+    </Pane>
+  </PaneGroup>
 </div>

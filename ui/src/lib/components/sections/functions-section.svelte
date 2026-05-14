@@ -19,6 +19,16 @@
     matchesTagFilter,
   } from "$lib/state.svelte";
   import { formatBytes, formatDate } from "$lib/utils";
+  import type { FunctionSummary } from "$lib/types";
+  import LambdaDetailDialog from "./lambda-detail-dialog.svelte";
+
+  let selectedFn = $state<FunctionSummary | null>(null);
+  let dialogOpen = $state(false);
+
+  function openDetail(fn: FunctionSummary) {
+    selectedFn = fn;
+    dialogOpen = true;
+  }
 
   let {
     sidebarCollapsed = false,
@@ -127,7 +137,10 @@
           </TableHeader>
           <TableBody>
             {#each functions as fn}
-              <TableRow>
+              <TableRow
+                class="cursor-pointer transition-colors hover:bg-muted/30"
+                onclick={() => openDetail(fn)}
+              >
                 <TableCell><ArnCell name={fn.name} arn={fn.arn} /></TableCell>
                 <TableCell class="font-mono text-xs text-muted-foreground">
                   {fn.runtime}
@@ -163,3 +176,5 @@
     {/if}
   </div>
 </div>
+
+<LambdaDetailDialog bind:open={dialogOpen} fn={selectedFn} />
