@@ -113,6 +113,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /_tarn/admin/logs/events/{name...}", s.admin.LogEvents)
 	mux.HandleFunc("DELETE /_tarn/admin/logs/events/{name...}", s.admin.ClearLogGroup)
 	mux.HandleFunc("POST /_tarn/admin/logs/prune", s.admin.PruneLogs)
+	mux.HandleFunc("GET /_tarn/admin/traces/for-log", s.admin.TracesForLog)
 	mux.HandleFunc("GET /_tarn/admin/infrastructure", s.admin.Infrastructure)
 	mux.HandleFunc("POST /_tarn/admin/chaos", s.admin.RunChaos)
 	mux.HandleFunc("POST /_tarn/admin/chaos/source", s.admin.ScanChaosSource)

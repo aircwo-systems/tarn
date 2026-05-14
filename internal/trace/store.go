@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -174,6 +175,32 @@ func (s *Store) PruneOlderThan(cutoff time.Time) int64 {
 	return rows
 }
 
+// scanTrace reads one trace from a sql.Rows cursor. Returns nil and logs on scan error.
+func scanTrace(rows *sql.Rows) *Trace {
+	var (
+		t             Trace
+		correlationID string
+		startedAt     string
+		spansJSON     string
+	)
+	if err := rows.Scan(&t.ID, &correlationID, &startedAt, &t.DurationMs, &t.Status, &t.Method, &t.Path, &t.GatewayID, &t.GatewayName, &spansJSON); err != nil {
+		log.Printf("[trace] failed to scan trace row: %v", err)
+		return nil
+	}
+	if strings.TrimSpace(correlationID) != "" {
+		t.CorrelationID = correlationID
+	} else {
+		t.CorrelationID = t.ID
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, startedAt); err == nil {
+		t.StartedAt = parsed
+	}
+	if err := json.Unmarshal([]byte(spansJSON), &t.Spans); err != nil {
+		t.Spans = nil
+	}
+	return &t
+}
+
 // Recent returns up to n of the most recent traces, newest first.
 func (s *Store) Recent(n int) []*Trace {
 	s.mu.RLock()
@@ -196,28 +223,87 @@ func (s *Store) Recent(n int) []*Trace {
 
 	var out []*Trace
 	for rows.Next() {
-		var (
-			t         Trace
-			correlationID string
-			startedAt string
-			spansJSON string
-		)
-		if err := rows.Scan(&t.ID, &correlationID, &startedAt, &t.DurationMs, &t.Status, &t.Method, &t.Path, &t.GatewayID, &t.GatewayName, &spansJSON); err != nil {
-			log.Printf("[trace] failed to scan trace row: %v", err)
+		if t := scanTrace(rows); t != nil {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// FindNear returns traces whose execution window overlaps with [around-windowMs, around+windowMs]
+// and which contain a lambda span named functionName. Results are ordered by proximity to around.
+func (s *Store) FindNear(functionName string, around time.Time, windowMs int64) []*Trace {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.db == nil {
+		return nil
+	}
+
+	// Query traces that started within [around-windowMs, around+windowMs].
+	// The log event T may occur during lambda execution, so startedAt can be before T.
+	lo := around.Add(-time.Duration(windowMs) * time.Millisecond).Format(time.RFC3339Nano)
+	hi := around.Add(time.Duration(windowMs) * time.Millisecond).Format(time.RFC3339Nano)
+
+	// Pre-filter on spans_json containing "lambda" to reduce Go-side JSON unmarshaling.
+	// LIMIT is applied after this filter so all matching candidates in the window are found.
+	rows, err := s.db.Query(`
+		SELECT id, correlation_id, started_at, duration_ms, status, method, path, gateway_id, gateway_name, spans_json
+		FROM traces
+		WHERE started_at BETWEEN ? AND ?
+		  AND spans_json LIKE '%"kind":"lambda"%'
+		ORDER BY started_at DESC
+		LIMIT 100`, lo, hi)
+	if err != nil {
+		log.Printf("[trace] FindNear query error: %v", err)
+		return nil
+	}
+	defer rows.Close()
+
+	aroundUnix := around.UnixMilli()
+	type candidate struct {
+		trace *Trace
+		dist  int64
+	}
+	var candidates []candidate
+
+	for rows.Next() {
+		t := scanTrace(rows)
+		if t == nil {
 			continue
 		}
-		if strings.TrimSpace(correlationID) != "" {
-			t.CorrelationID = correlationID
-		} else {
-			t.CorrelationID = t.ID
+
+		hasLambda := false
+		for _, sp := range t.Spans {
+			if strings.EqualFold(sp.Kind, "lambda") && sp.Name == functionName {
+				hasLambda = true
+				break
+			}
 		}
-		if parsed, err := time.Parse(time.RFC3339Nano, startedAt); err == nil {
-			t.StartedAt = parsed
+		if !hasLambda {
+			continue
 		}
-		if err := json.Unmarshal([]byte(spansJSON), &t.Spans); err != nil {
-			t.Spans = nil
+
+		midUnix := t.StartedAt.UnixMilli() + t.DurationMs/2
+		dist := aroundUnix - midUnix
+		if dist < 0 {
+			dist = -dist
 		}
-		out = append(out, &t)
+		candidates = append(candidates, candidate{trace: t, dist: dist})
+	}
+
+	if len(candidates) == 0 {
+		return nil
+	}
+
+	// Sort by proximity.
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].dist < candidates[j].dist
+	})
+
+	out := make([]*Trace, len(candidates))
+	for i, c := range candidates {
+		out[i] = c.trace
 	}
 	return out
 }
