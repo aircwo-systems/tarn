@@ -9,6 +9,18 @@ import (
 	"strings"
 	"testing"
 
+	adminhandler "github.com/aircwo-systems/tarn/internal/api/admin"
+	apigatewayhandler "github.com/aircwo-systems/tarn/internal/api/apigateway"
+	apigatewayv1handler "github.com/aircwo-systems/tarn/internal/api/apigatewayv1"
+	dynamodbhandler "github.com/aircwo-systems/tarn/internal/api/dynamodb"
+	eventbridgehandler "github.com/aircwo-systems/tarn/internal/api/eventbridge"
+	eventsourcehandler "github.com/aircwo-systems/tarn/internal/api/eventsource"
+	iamhandler "github.com/aircwo-systems/tarn/internal/api/iam"
+	lambdahandler "github.com/aircwo-systems/tarn/internal/api/lambda"
+	s3handler "github.com/aircwo-systems/tarn/internal/api/s3"
+	secretshandler "github.com/aircwo-systems/tarn/internal/api/secrets"
+	snshandler "github.com/aircwo-systems/tarn/internal/api/sns"
+	sqshandler "github.com/aircwo-systems/tarn/internal/api/sqs"
 	"github.com/aircwo-systems/tarn/internal/apigateway"
 	"github.com/aircwo-systems/tarn/internal/apigatewayv1"
 	"github.com/aircwo-systems/tarn/internal/config"
@@ -25,14 +37,8 @@ import (
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
-func newTestHTTPHandler(t *testing.T) http.Handler {
-	t.Helper()
-	cfg := config.Default()
-	cfg.DataDir = t.TempDir()
-	return newTestHTTPHandlerWithConfig(t, cfg)
-}
-
-func newTestHTTPHandlerWithConfig(t *testing.T, cfg *config.Config) http.Handler {
+// newTestBundle builds a single-account AccountBundle from scratch for testing.
+func newTestBundle(t *testing.T, cfg *config.Config) *AccountBundle {
 	t.Helper()
 
 	store := lambda.NewStore(cfg)
@@ -57,7 +63,43 @@ func newTestHTTPHandlerWithConfig(t *testing.T, cfg *config.Config) http.Handler
 		t.Fatalf("init eventbridge service: %v", err)
 	}
 
-	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
+	lh := lambdahandler.NewHandler(lambdaSvc, s3Svc)
+	sh := secretshandler.NewHandler(cfg, secretsSvc)
+
+	hs := &HandlerSet{
+		APIGateway:  apigatewayhandler.NewHandler(gatewaySvc),
+		APIGatewayV1: apigatewayv1handler.NewHandler(gatewayV1Svc),
+		Lambda:      lh,
+		S3:          s3handler.NewHandler(s3Svc),
+		SQS:         sqshandler.NewHandler(sqsSvc),
+		SNS:         snshandler.NewHandler(snsSvc),
+		DynamoDB:    dynamodbhandler.NewHandler(dynamoSvc),
+		Secrets:     sh,
+		EventSource: eventsourcehandler.NewHandler(esmSvc),
+		EventBridge: eventbridgehandler.NewHandler(ebSvc),
+		IAM:         iamhandler.NewHandler(cfg.AccountID),
+		Admin:       adminhandler.NewHandler(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil),
+	}
+	return NewAccountBundle(hs, nil)
+}
+
+func newTestHTTPHandler(t *testing.T) http.Handler {
+	t.Helper()
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	return newTestHTTPHandlerWithConfig(t, cfg)
+}
+
+func newTestHTTPHandlerWithConfig(t *testing.T, cfg *config.Config) http.Handler {
+	t.Helper()
+
+	bundle := newTestBundle(t, cfg)
+	registry := NewHandlerRegistry(func(accountID string) (*AccountBundle, error) {
+		return bundle, nil
+	})
+
+	logsSvc := logs.NewService(cfg)
+	s := NewServer(cfg, registry, logsSvc, nil)
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 	return s.withLogging(mux)
@@ -67,31 +109,16 @@ func TestNewServerRegistersRoutes(t *testing.T) {
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
 
-	store := lambda.NewStore(cfg)
-	if err := store.Init(); err != nil {
-		t.Fatalf("init lambda store: %v", err)
-	}
-	lambdaSvc := lambda.NewService(cfg, store, nil, nil, nil)
-	gatewaySvc := apigateway.NewService(cfg, lambdaSvc, nil)
-	gatewayV1Svc := apigatewayv1.NewService(cfg, lambdaSvc, nil)
+	bundle := newTestBundle(t, cfg)
+	registry := NewHandlerRegistry(func(accountID string) (*AccountBundle, error) {
+		return bundle, nil
+	})
 	logsSvc := logs.NewService(cfg)
-	sqsSvc := sqs.NewService(cfg)
-	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
-	dynamoSvc := dynamodb.NewService(cfg)
-	secretsSvc := secrets.NewService(cfg)
-
-	s3Svc := s3store.NewService(cfg)
-	infraSvc := infrastructure.NewService("", false)
-	esmStore := eventsource.NewStore(cfg)
-	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil, nil)
-	ebStore := eventbridge.NewStore(cfg)
-	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
-	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
+	s := NewServer(cfg, registry, logsSvc, nil)
 	if s == nil {
 		t.Fatal("NewServer returned nil")
 	}
 
-	// start a test HTTP server using the same mux as NewServer
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 	handler := s.withLogging(mux)
@@ -160,36 +187,15 @@ func TestNewServerRegistersRoutes(t *testing.T) {
 	}
 }
 
-func TestEventBridgeProtocolDispatchSupportsNonRootPath(t *testing.T) {
+func newTestServerForEB(t *testing.T) http.Handler {
+	t.Helper()
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
+	return newTestHTTPHandlerWithConfig(t, cfg)
+}
 
-	store := lambda.NewStore(cfg)
-	if err := store.Init(); err != nil {
-		t.Fatalf("init lambda store: %v", err)
-	}
-	lambdaSvc := lambda.NewService(cfg, store, nil, nil, nil)
-	gatewaySvc := apigateway.NewService(cfg, lambdaSvc, nil)
-	gatewayV1Svc := apigatewayv1.NewService(cfg, lambdaSvc, nil)
-	logsSvc := logs.NewService(cfg)
-	sqsSvc := sqs.NewService(cfg)
-	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
-	dynamoSvc := dynamodb.NewService(cfg)
-	secretsSvc := secrets.NewService(cfg)
-	s3Svc := s3store.NewService(cfg)
-	infraSvc := infrastructure.NewService("", false)
-	esmStore := eventsource.NewStore(cfg)
-	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil, nil)
-	ebStore := eventbridge.NewStore(cfg)
-	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
-	if err := ebSvc.Init(); err != nil {
-		t.Fatalf("init eventbridge service: %v", err)
-	}
-
-	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
-	mux := http.NewServeMux()
-	s.registerRoutes(mux)
-	handler := s.withLogging(mux)
+func TestEventBridgeProtocolDispatchSupportsNonRootPath(t *testing.T) {
+	handler := newTestServerForEB(t)
 
 	putBody := []byte(`{"Name":"rule-a","ScheduleExpression":"rate(1 minute)","State":"ENABLED"}`)
 	putReq := httptest.NewRequest(http.MethodPost, "/events", bytes.NewReader(putBody))
@@ -301,35 +307,7 @@ func TestVirtualHostedStyleHeadBucketAtRoot(t *testing.T) {
 }
 
 func TestEventBridgeProtocolDispatchSupportsTarnPrefixedPath(t *testing.T) {
-	cfg := config.Default()
-	cfg.DataDir = t.TempDir()
-
-	store := lambda.NewStore(cfg)
-	if err := store.Init(); err != nil {
-		t.Fatalf("init lambda store: %v", err)
-	}
-	lambdaSvc := lambda.NewService(cfg, store, nil, nil, nil)
-	gatewaySvc := apigateway.NewService(cfg, lambdaSvc, nil)
-	gatewayV1Svc := apigatewayv1.NewService(cfg, lambdaSvc, nil)
-	logsSvc := logs.NewService(cfg)
-	sqsSvc := sqs.NewService(cfg)
-	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
-	dynamoSvc := dynamodb.NewService(cfg)
-	secretsSvc := secrets.NewService(cfg)
-	s3Svc := s3store.NewService(cfg)
-	infraSvc := infrastructure.NewService("", false)
-	esmStore := eventsource.NewStore(cfg)
-	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil, nil)
-	ebStore := eventbridge.NewStore(cfg)
-	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
-	if err := ebSvc.Init(); err != nil {
-		t.Fatalf("init eventbridge service: %v", err)
-	}
-
-	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
-	mux := http.NewServeMux()
-	s.registerRoutes(mux)
-	handler := s.withLogging(mux)
+	handler := newTestServerForEB(t)
 
 	putBody := []byte(`{"Name":"rule-b","ScheduleExpression":"rate(1 minute)","State":"ENABLED"}`)
 	putReq := httptest.NewRequest(http.MethodPost, "/_tarn", bytes.NewReader(putBody))
@@ -353,35 +331,7 @@ func TestEventBridgeProtocolDispatchSupportsTarnPrefixedPath(t *testing.T) {
 }
 
 func TestEventBridgeProtocolDispatchSupportsTarnEventsPath(t *testing.T) {
-	cfg := config.Default()
-	cfg.DataDir = t.TempDir()
-
-	store := lambda.NewStore(cfg)
-	if err := store.Init(); err != nil {
-		t.Fatalf("init lambda store: %v", err)
-	}
-	lambdaSvc := lambda.NewService(cfg, store, nil, nil, nil)
-	gatewaySvc := apigateway.NewService(cfg, lambdaSvc, nil)
-	gatewayV1Svc := apigatewayv1.NewService(cfg, lambdaSvc, nil)
-	logsSvc := logs.NewService(cfg)
-	sqsSvc := sqs.NewService(cfg)
-	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
-	dynamoSvc := dynamodb.NewService(cfg)
-	secretsSvc := secrets.NewService(cfg)
-	s3Svc := s3store.NewService(cfg)
-	infraSvc := infrastructure.NewService("", false)
-	esmStore := eventsource.NewStore(cfg)
-	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil, nil)
-	ebStore := eventbridge.NewStore(cfg)
-	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
-	if err := ebSvc.Init(); err != nil {
-		t.Fatalf("init eventbridge service: %v", err)
-	}
-
-	s := NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil)
-	mux := http.NewServeMux()
-	s.registerRoutes(mux)
-	handler := s.withLogging(mux)
+	handler := newTestServerForEB(t)
 
 	putBody := []byte(`{"Name":"rule-c","ScheduleExpression":"rate(1 minute)","State":"ENABLED"}`)
 	putReq := httptest.NewRequest(http.MethodPost, "/_tarn/events", bytes.NewReader(putBody))

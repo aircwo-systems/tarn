@@ -17,6 +17,18 @@ import (
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/api"
+	adminhandler "github.com/aircwo-systems/tarn/internal/api/admin"
+	apigatewayhandler "github.com/aircwo-systems/tarn/internal/api/apigateway"
+	apigatewayv1handler "github.com/aircwo-systems/tarn/internal/api/apigatewayv1"
+	dynamodbhandler "github.com/aircwo-systems/tarn/internal/api/dynamodb"
+	eventbridgehandler "github.com/aircwo-systems/tarn/internal/api/eventbridge"
+	eventsourcehandler "github.com/aircwo-systems/tarn/internal/api/eventsource"
+	iamhandler "github.com/aircwo-systems/tarn/internal/api/iam"
+	lambdahandler "github.com/aircwo-systems/tarn/internal/api/lambda"
+	s3handler "github.com/aircwo-systems/tarn/internal/api/s3"
+	secretshandler "github.com/aircwo-systems/tarn/internal/api/secrets"
+	snshandler "github.com/aircwo-systems/tarn/internal/api/sns"
+	sqshandler "github.com/aircwo-systems/tarn/internal/api/sqs"
 	"github.com/aircwo-systems/tarn/internal/apigateway"
 	"github.com/aircwo-systems/tarn/internal/apigatewayv1"
 	"github.com/aircwo-systems/tarn/internal/config"
@@ -112,87 +124,70 @@ func writePIDFile(path string) error {
 	return os.WriteFile(path, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644)
 }
 
-func startServer(cfg *config.Config) error {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+// sharedDeps holds services that are global across all accounts.
+type sharedDeps struct {
+	eng        *engine.Engine
+	pool       *engine.WarmPool
+	logsSvc    *logs.Service
+	traceStore *trace.Store
+	collector  *trace.Collector
+	infraSvc   *infrastructure.Service
+	vault      *secrets.Vault
+}
 
-	pidPath := cfg.PIDFilePath()
-	if err := writePIDFile(pidPath); err != nil {
-		log.Printf("WARNING: could not write PID file %s: %v", pidPath, err)
-	} else {
-		defer os.Remove(pidPath)
+// initAccountBundle creates all per-account services and handlers.
+// It is called once per account ID, either at startup (default) or lazily.
+func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.AccountBundle, error) {
+	log.Printf("[account] initializing %s (data: %s)", acctCfg.AccountID, acctCfg.DataDir)
+
+	if err := acctCfg.EnsureDataDir(); err != nil {
+		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 
-	// Initialize container engine
-	eng, err := engine.New(cfg)
-	if err != nil {
-		return fmt.Errorf("failed to initialize container engine: %w", err)
+	// Lambda
+	lambdaStore := lambda.NewStore(acctCfg)
+	if err := lambdaStore.Init(); err != nil {
+		return nil, fmt.Errorf("lambda store: %w", err)
 	}
-	defer eng.Close()
-
-	dockerPingErr := eng.Ping(ctx)
-	if dockerPingErr != nil {
-		log.Printf("WARNING: %v", dockerPingErr)
-		log.Println("Lambda functions requiring Docker will not work until Docker is available.")
-	}
-
-	// Initialize warm pool
-	pool := engine.NewWarmPool(eng, cfg.LambdaKeepAliveMS)
-	pool.Start()
-	defer pool.Stop()
-
-	// Initialize Logs service
-	logsSvc := logs.NewService(cfg)
-
-	// Initialize Lambda store and service
-	store := lambda.NewStore(cfg)
-	if err := store.Init(); err != nil {
-		return fmt.Errorf("failed to initialize store: %w", err)
-	}
-	lambdaSvc := lambda.NewService(cfg, store, eng, pool, logsSvc)
+	lambdaSvc := lambda.NewService(acctCfg, lambdaStore, shared.eng, shared.pool, shared.logsSvc)
 	lambdaSvc.ActivatePendingFunctions()
 
-	// Initialize SQS service
-	sqsSvc := sqs.NewService(cfg)
+	// SQS
+	sqsSvc := sqs.NewService(acctCfg)
 	if err := sqsSvc.Init(); err != nil {
-		return fmt.Errorf("failed to initialize sqs store: %w", err)
+		return nil, fmt.Errorf("sqs store: %w", err)
 	}
 	sqsSvc.Start()
-	defer sqsSvc.Stop()
 
-	// Initialize Secrets Manager service
-	secretsSvc := secrets.NewService(cfg)
-	if cfg.VaultKeyPath != "" {
-		vault, err := secrets.LoadOrCreateVault(cfg.VaultKeyPath)
-		if err != nil {
-			return fmt.Errorf("failed to initialize vault: %w", err)
-		}
-		secretsSvc.SetVault(vault)
-		log.Printf("[vault] secrets encryption enabled (key: %s)", cfg.VaultKeyPath)
+	// Secrets
+	secretsSvc := secrets.NewService(acctCfg)
+	if shared.vault != nil {
+		secretsSvc.SetVault(shared.vault)
 	}
 	if err := secretsSvc.Init(); err != nil {
-		return fmt.Errorf("failed to initialize secrets store: %w", err)
+		return nil, fmt.Errorf("secrets store: %w", err)
 	}
 
-	// Initialize DynamoDB service
-	dynamoSvc := dynamodb.NewService(cfg)
+	// DynamoDB
+	dynamoSvc := dynamodb.NewService(acctCfg)
 	if err := dynamoSvc.Init(); err != nil {
-		return fmt.Errorf("failed to initialize dynamodb store: %w", err)
+		return nil, fmt.Errorf("dynamodb store: %w", err)
 	}
 
-	// Initialize SNS service
-	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
+	// SNS
+	snsSvc := sns.NewService(acctCfg, sqsSvc, lambdaSvc)
 	if err := snsSvc.Init(); err != nil {
-		return fmt.Errorf("failed to initialize sns store: %w", err)
+		return nil, fmt.Errorf("sns store: %w", err)
 	}
+	snsSvc.SetTraceStore(shared.traceStore)
 
-	// Initialize S3 service
-	s3Svc := s3store.NewService(cfg)
+	// S3
+	s3Svc := s3store.NewService(acctCfg)
 	if err := s3Svc.Init(); err != nil {
-		return fmt.Errorf("failed to initialize s3 store: %w", err)
+		return nil, fmt.Errorf("s3 store: %w", err)
 	}
 
-	// Initialize API Gateway services (with shared SQS send function)
+	// SQS send helper shared by both API Gateway versions
 	sqsSendFn := func(queueName, body string, attrs map[string]*types.MessageAttribute, groupId, dedupId string) (string, string, error) {
 		msg, err := sqsSvc.SendMessage(queueName, body, 0, attrs, groupId, dedupId)
 		if err != nil {
@@ -200,60 +195,42 @@ func startServer(cfg *config.Config) error {
 		}
 		return msg.MessageId, msg.MD5OfBody, nil
 	}
-	sqsSend := apigateway.SQSSendFunc(sqsSendFn)
-	gatewaySvc := apigateway.NewService(cfg, lambdaSvc, sqsSend)
+
+	// API Gateway v2
+	gatewaySvc := apigateway.NewService(acctCfg, lambdaSvc, apigateway.SQSSendFunc(sqsSendFn))
 	if err := gatewaySvc.Init(); err != nil {
-		return fmt.Errorf("failed to initialize api gateway store: %w", err)
+		return nil, fmt.Errorf("api gateway store: %w", err)
 	}
+	gatewaySvc.SetTraceStore(shared.traceStore)
+	gatewaySvc.SetCollector(shared.collector)
 
-	// Initialize API Gateway v1 (REST API) service
-	sqsSendV1 := apigatewayv1.SQSSendFunc(func(queueName, body string, attrs map[string]*types.MessageAttribute, groupId, dedupId string) (string, string, error) {
-		msg, err := sqsSvc.SendMessage(queueName, body, 0, attrs, groupId, dedupId)
-		if err != nil {
-			return "", "", err
-		}
-		return msg.MessageId, msg.MD5OfBody, nil
-	})
-	gatewayV1Svc := apigatewayv1.NewService(cfg, lambdaSvc, sqsSendV1)
+	// API Gateway v1
+	gatewayV1Svc := apigatewayv1.NewService(acctCfg, lambdaSvc, apigatewayv1.SQSSendFunc(sqsSendFn))
 	if err := gatewayV1Svc.Init(); err != nil {
-		return fmt.Errorf("failed to initialize api gateway v1 store: %w", err)
+		return nil, fmt.Errorf("api gateway v1 store: %w", err)
 	}
+	gatewayV1Svc.SetTraceStore(shared.traceStore)
+	gatewayV1Svc.SetCollector(shared.collector)
 
-	// Initialize event source mapping service
-	esmStore := eventsource.NewStore(cfg)
-	esmSvc := eventsource.NewService(cfg, esmStore, lambdaSvc, sqsSvc, dynamoSvc)
+	// Event Source Mapping
+	esmStore := eventsource.NewStore(acctCfg)
+	esmSvc := eventsource.NewService(acctCfg, esmStore, lambdaSvc, sqsSvc, dynamoSvc)
 	if err := esmSvc.Init(); err != nil {
-		return fmt.Errorf("failed to initialize event source store: %w", err)
+		return nil, fmt.Errorf("eventsource store: %w", err)
 	}
+	esmSvc.SetTraceStore(shared.traceStore)
+	esmSvc.SetCollector(shared.collector)
 
-	// Initialize request trace store and sub-span collector. Attach both to gateway
-	// and ESM before starting pollers so boot-time invocations are fully traced.
-	traceStore := trace.OpenStore(cfg.DataDir)
-	defer traceStore.Close()
-	collector := trace.NewCollector()
-	gatewaySvc.SetTraceStore(traceStore)
-	gatewaySvc.SetCollector(collector)
-	gatewayV1Svc.SetTraceStore(traceStore)
-	gatewayV1Svc.SetCollector(collector)
-	snsSvc.SetTraceStore(traceStore)
-	esmSvc.SetTraceStore(traceStore)
-	esmSvc.SetCollector(collector)
-
-	// Initialize EventBridge scheduled-rules service.
-	eventbridgeStore := eventbridge.NewStore(cfg)
-	eventbridgeSvc := eventbridge.NewService(cfg, eventbridgeStore, lambdaSvc)
+	// EventBridge
+	eventbridgeStore := eventbridge.NewStore(acctCfg)
+	eventbridgeSvc := eventbridge.NewService(acctCfg, eventbridgeStore, lambdaSvc)
 	if err := eventbridgeSvc.Init(); err != nil {
-		return fmt.Errorf("failed to initialize eventbridge store: %w", err)
+		return nil, fmt.Errorf("eventbridge store: %w", err)
 	}
-	eventbridgeSvc.SetTraceStore(traceStore)
-	eventbridgeSvc.SetCollector(collector)
-	eventbridgeSvc.Start()
-	defer eventbridgeSvc.Stop()
+	eventbridgeSvc.SetTraceStore(shared.traceStore)
+	eventbridgeSvc.SetCollector(shared.collector)
 
-	esmSvc.Start()
-	defer esmSvc.Stop()
-
-	// Wire S3 event callback for bucket notifications
+	// S3 event callback — routes object events to this account's Lambda functions.
 	s3Svc.SetEventCallback(func(eventName string, bucket, key string, size int64, etag string) {
 		notifCfg := s3Svc.GetBucketNotificationConfiguration(bucket)
 		if notifCfg == nil {
@@ -264,9 +241,9 @@ func startServer(cfg *config.Config) error {
 				continue
 			}
 			correlationID := trace.NewCorrelationID()
-			payload := buildS3EventPayload(eventName, bucket, key, size, etag, cfg.Region, correlationID)
+			payload := buildS3EventPayload(eventName, bucket, key, size, etag, acctCfg.Region, correlationID)
 			go func(fnName string, p []byte, corr string) {
-				collector.Begin(fnName)
+				shared.collector.Begin(fnName)
 				traceStart := time.Now()
 				invokeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
@@ -276,14 +253,14 @@ func startServer(cfg *config.Config) error {
 					InvocationType: "Event",
 				})
 				durationMs := time.Since(traceStart).Milliseconds()
-				subSpans := trace.SubSpansToSpans(collector.CollectWithFlush(fnName))
+				subSpans := trace.SubSpansToSpans(shared.collector.CollectWithFlush(fnName))
 				status := 200
 				spanStatus := "ok"
 				if err != nil || (out != nil && out.FunctionError != "") {
 					status = 500
 					spanStatus = "error"
 				}
-				traceStore.Add(&trace.Trace{
+				shared.traceStore.Add(&trace.Trace{
 					ID:            uuid.NewString()[:8],
 					CorrelationID: corr,
 					StartedAt:     traceStart,
@@ -298,12 +275,85 @@ func startServer(cfg *config.Config) error {
 		}
 	})
 
-	// Initialize infrastructure probe service
+	// Start background workers
+	eventbridgeSvc.Start()
+	esmSvc.Start()
+
+	// Build HTTP handlers
+	lh := lambdahandler.NewHandler(lambdaSvc, s3Svc)
+	lh.SetTraceStore(shared.traceStore)
+	lh.SetCollector(shared.collector)
+
+	sh := secretshandler.NewHandler(acctCfg, secretsSvc)
+	sh.SetCollector(shared.collector)
+
+	hs := &api.HandlerSet{
+		APIGateway:  apigatewayhandler.NewHandler(gatewaySvc),
+		APIGatewayV1: apigatewayv1handler.NewHandler(gatewayV1Svc),
+		Lambda:      lh,
+		S3:          s3handler.NewHandler(s3Svc),
+		SQS:         sqshandler.NewHandler(sqsSvc),
+		SNS:         snshandler.NewHandler(snsSvc),
+		DynamoDB:    dynamodbhandler.NewHandler(dynamoSvc),
+		Secrets:     sh,
+		EventSource: eventsourcehandler.NewHandler(esmSvc),
+		EventBridge: eventbridgehandler.NewHandler(eventbridgeSvc),
+		IAM:         iamhandler.NewHandler(acctCfg.AccountID),
+		Admin: adminhandler.NewHandler(
+			acctCfg, gatewaySvc, gatewayV1Svc, lambdaSvc, shared.logsSvc,
+			sqsSvc, snsSvc, dynamoSvc, secretsSvc, shared.infraSvc,
+			s3Svc, esmSvc, eventbridgeSvc, shared.traceStore,
+		),
+	}
+
+	stop := func() {
+		sqsSvc.Stop()
+		esmSvc.Stop()
+		eventbridgeSvc.Stop()
+	}
+
+	return api.NewAccountBundle(hs, stop), nil
+}
+
+func startServer(cfg *config.Config) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	pidPath := cfg.PIDFilePath()
+	if err := writePIDFile(pidPath); err != nil {
+		log.Printf("WARNING: could not write PID file %s: %v", pidPath, err)
+	} else {
+		defer os.Remove(pidPath)
+	}
+
+	// Initialize container engine (shared across all accounts)
+	eng, err := engine.New(cfg)
+	if err != nil {
+		return fmt.Errorf("failed to initialize container engine: %w", err)
+	}
+	defer eng.Close()
+
+	dockerPingErr := eng.Ping(ctx)
+	if dockerPingErr != nil {
+		log.Printf("WARNING: %v", dockerPingErr)
+		log.Println("Lambda functions requiring Docker will not work until Docker is available.")
+	}
+
+	// Warm pool is shared so containers can be reused across accounts
+	pool := engine.NewWarmPool(eng, cfg.LambdaKeepAliveMS)
+	pool.Start()
+	defer pool.Stop()
+
+	// Shared services
+	logsSvc := logs.NewService(cfg)
+	traceStore := trace.OpenStore(cfg.DataDir)
+	defer traceStore.Close()
+	collector := trace.NewCollector()
+
 	infraSvc := infrastructure.NewService(cfg.InfraProbeTargets, cfg.InfraProbeEnabled)
 	infraSvc.Start(ctx)
 	defer infraSvc.Stop()
 
-	// Inject Docker engine connectivity as an infra probe result
 	dockerStatus := "connected"
 	dockerErr := ""
 	if dockerPingErr != nil {
@@ -319,9 +369,50 @@ func startServer(cfg *config.Config) error {
 		Error:  dockerErr,
 	})
 
+	// Load vault once for all accounts (secrets encryption key is global)
+	var vault *secrets.Vault
+	if cfg.VaultKeyPath != "" {
+		v, err := secrets.LoadOrCreateVault(cfg.VaultKeyPath)
+		if err != nil {
+			return fmt.Errorf("failed to initialize vault: %w", err)
+		}
+		vault = v
+		log.Printf("[vault] secrets encryption enabled (key: %s)", cfg.VaultKeyPath)
+	}
+
+	shared := &sharedDeps{
+		eng:        eng,
+		pool:       pool,
+		logsSvc:    logsSvc,
+		traceStore: traceStore,
+		collector:  collector,
+		infraSvc:   infraSvc,
+		vault:      vault,
+	}
+
+	// Build the per-account factory closure. It captures all shared deps.
+	factory := func(accountID string) (*api.AccountBundle, error) {
+		acctCfg := cfg.ForAccount(accountID)
+		return initAccountBundle(acctCfg, shared)
+	}
+
+	registry := api.NewHandlerRegistry(factory)
+
+	// Pre-initialize the default account so it's ready before the first request.
+	// Any startup errors (e.g. corrupt state files) surface here rather than on
+	// the first API call.
+	if _, err := registry.PreInit(cfg.AccountID); err != nil {
+		return fmt.Errorf("failed to initialize default account: %w", err)
+	}
+
+	// Secrets proxy (uses default account's secrets service — single account proxy)
 	var secretsProxyServer *http.Server
 	if cfg.ExposeSecretsProxy {
+		// Get the default account's secrets service for the proxy by initializing
+		// it eagerly — the admin handler wires up the proxy telemetry via logsSvc.
 		logsSvc.CreateLogGroup("/tarn/secrets-proxy")
+
+		// Wire secrets proxy using the upstream endpoint
 		addr := fmt.Sprintf("%s:%d", cfg.SecretsProxyHost, cfg.SecretsProxyPort)
 		upstream := cfg.Endpoint()
 		token := cfg.SecretsProxySessionToken
@@ -362,7 +453,7 @@ func startServer(cfg *config.Config) error {
 	}
 
 	// Create and start API server
-	server := api.NewServer(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, eventbridgeSvc, traceStore, collector)
+	server := api.NewServer(cfg, registry, logsSvc, collector)
 
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -382,7 +473,6 @@ func startServer(cfg *config.Config) error {
 	}()
 
 	err = server.Start()
-	// http.ErrServerClosed is expected on graceful shutdown
 	if err != nil && err.Error() == "http: Server closed" {
 		return nil
 	}
