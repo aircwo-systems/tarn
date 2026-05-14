@@ -1,4 +1,4 @@
-import { fetchOverview, pruneOldLogs } from "$lib/api";
+import { fetchOverview, pruneOldLogs, setApiAccount } from "$lib/api";
 import type { InfraProbe, OverviewResponse } from "$lib/types";
 
 export type InfraProbeKind =
@@ -36,6 +36,7 @@ let inFlight = false;
 const SETTINGS_COOKIE = "tarn-ui-settings";
 const INFRA_SETTINGS_KEY = "tarn-infra-settings";
 const PROJECT_SETTINGS_KEY = "tarn-project-settings";
+const ACCOUNTS_KEY = "tarn-accounts";
 const DEFAULT_POLLING_INTERVAL_SECONDS = 5;
 const MIN_POLLING_INTERVAL_SECONDS = 1;
 const MAX_POLLING_INTERVAL_SECONDS = 120;
@@ -59,6 +60,15 @@ let logRetentionMinutes = $state(DEFAULT_LOG_RETENTION_MINUTES);
 let infraEnabledKinds = $state<InfraProbeKind[]>([...DEFAULT_INFRA_ENABLED_KINDS]);
 let infraFrontendTargets = $state<FrontendTarget[]>([]);
 let infraFrontendResults = $state<InfraProbe[]>([]);
+
+export interface KnownAccount {
+  id: string;
+  label: string;
+}
+
+const DEFAULT_ACCOUNT: KnownAccount = { id: "000000000000", label: "Default" };
+let activeAccountId = $state("000000000000");
+let knownAccounts = $state<KnownAccount[]>([{ ...DEFAULT_ACCOUNT }]);
 
 let systemThemeMediaQuery: MediaQueryList | null = null;
 let systemThemeListener: ((event: MediaQueryListEvent) => void) | null = null;
@@ -154,6 +164,7 @@ export function initUISettings() {
   applyTheme(themeMode);
   initInfraSettings();
   initProjectSettings();
+  initAccountSettings();
 }
 
 export function getInfraSettings() {
@@ -168,6 +179,45 @@ export function getInfraSettings() {
       return infraFrontendResults;
     },
   };
+}
+
+export function getAccountSettings() {
+  return {
+    get activeAccountId() {
+      return activeAccountId;
+    },
+    get knownAccounts() {
+      return knownAccounts;
+    },
+  };
+}
+
+export function switchAccount(id: string) {
+  if (id === activeAccountId) return;
+  activeAccountId = id;
+  setApiAccount(id);
+  persistAccountSettings();
+  refresh();
+}
+
+export function addKnownAccount(id: string, label: string): boolean {
+  const trimmed = id.trim();
+  if (!/^\d{12}$/.test(trimmed)) return false;
+  if (knownAccounts.some((a) => a.id === trimmed)) return false;
+  knownAccounts = [...knownAccounts, { id: trimmed, label: label.trim() || trimmed }];
+  persistAccountSettings();
+  return true;
+}
+
+export function removeKnownAccount(id: string) {
+  if (id === "000000000000") return;
+  knownAccounts = knownAccounts.filter((a) => a.id !== id);
+  if (activeAccountId === id) {
+    activeAccountId = "000000000000";
+    setApiAccount("000000000000");
+    refresh();
+  }
+  persistAccountSettings();
 }
 
 export function setInfraEnabledKinds(kinds: InfraProbeKind[]) {
@@ -514,6 +564,52 @@ async function probeFrontendTargets() {
     }),
   );
   infraFrontendResults = results;
+}
+
+function initAccountSettings() {
+  if (typeof localStorage === "undefined") return;
+  try {
+    const raw = localStorage.getItem(ACCOUNTS_KEY);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as { activeAccountId?: string; knownAccounts?: unknown[] };
+    if (Array.isArray(parsed.knownAccounts)) {
+      const valid = parsed.knownAccounts.filter(isValidKnownAccount);
+      if (valid.length > 0) {
+        if (!valid.some((a) => a.id === "000000000000")) {
+          valid.unshift({ ...DEFAULT_ACCOUNT });
+        }
+        knownAccounts = valid;
+      }
+    }
+    if (
+      typeof parsed.activeAccountId === "string" &&
+      knownAccounts.some((a) => a.id === parsed.activeAccountId)
+    ) {
+      activeAccountId = parsed.activeAccountId;
+      setApiAccount(activeAccountId);
+    }
+  } catch {
+    // ignore corrupt data
+  }
+}
+
+function persistAccountSettings() {
+  if (typeof localStorage === "undefined") return;
+  localStorage.setItem(
+    ACCOUNTS_KEY,
+    JSON.stringify({ activeAccountId, knownAccounts }),
+  );
+}
+
+function isValidKnownAccount(v: unknown): v is KnownAccount {
+  return (
+    typeof v === "object" &&
+    v !== null &&
+    "id" in v &&
+    typeof (v as KnownAccount).id === "string" &&
+    "label" in v &&
+    typeof (v as KnownAccount).label === "string"
+  );
 }
 
 const VALID_INFRA_KINDS = new Set<InfraProbeKind>([

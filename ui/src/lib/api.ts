@@ -10,6 +10,19 @@ import type {
   RequestTrace,
 } from "$lib/types";
 
+let _activeAccountId = "000000000000";
+
+export function setApiAccount(id: string) {
+  _activeAccountId = id;
+}
+
+function accountHeaders(): Record<string, string> {
+  if (_activeAccountId === "000000000000") return {};
+  return {
+    Authorization: `AWS4-HMAC-SHA256 Credential=${_activeAccountId}/20000101/us-east-1/tarn/aws4_request, SignedHeaders=host, Signature=0`,
+  };
+}
+
 const configuredBase = normalizeBase(
   typeof import.meta !== "undefined" && import.meta.env?.VITE_TARN_API_BASE
     ? String(import.meta.env.VITE_TARN_API_BASE)
@@ -33,6 +46,7 @@ export async function fetchOverview(signal?: AbortSignal): Promise<OverviewRespo
     method: "GET",
     headers: {
       Accept: "application/json",
+      ...accountHeaders(),
     },
     signal,
   });
@@ -43,6 +57,7 @@ export async function fetchOverview(signal?: AbortSignal): Promise<OverviewRespo
       method: "GET",
       headers: {
         Accept: "application/json",
+        ...accountHeaders(),
       },
       signal,
     }).catch(() => null);
@@ -81,6 +96,7 @@ export async function fetchQueueMessages(
     method: "GET",
     headers: {
       Accept: "application/json",
+      ...accountHeaders(),
     },
     signal,
   });
@@ -105,6 +121,7 @@ export async function fetchSecretValue(
     method: "GET",
     headers: {
       Accept: "application/json",
+      ...accountHeaders(),
     },
     signal,
   });
@@ -133,7 +150,7 @@ export async function fetchSecretValue(
 export async function fetchLogGroups(signal?: AbortSignal): Promise<LogGroupSummary[]> {
   const response = await fetch(endpoint("/_tarn/admin/logs/groups"), {
     method: "GET",
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", ...accountHeaders() },
     signal,
   });
   if (!response.ok) {
@@ -173,7 +190,7 @@ export async function fetchLogEvents(
   );
   const response = await fetch(url, {
     method: "GET",
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", ...accountHeaders() },
     signal,
   });
   if (!response.ok) {
@@ -198,7 +215,7 @@ export async function fetchAllLogEvents(
   const url = endpoint(`/_tarn/admin/logs/events-all${qs ? "?" + qs : ""}`);
   const response = await fetch(url, {
     method: "GET",
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", ...accountHeaders() },
     signal,
   });
   if (!response.ok) {
@@ -211,7 +228,7 @@ export async function pruneOldLogs(retentionMinutes: number, signal?: AbortSigna
   const url = endpoint(`/_tarn/admin/logs/prune?retention=${retentionMinutes}`);
   const response = await fetch(url, {
     method: "POST",
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", ...accountHeaders() },
     signal,
   });
   if (!response.ok) {
@@ -223,7 +240,7 @@ export async function clearLogGroup(groupName: string, signal?: AbortSignal): Pr
   const url = endpoint(`/_tarn/admin/logs/events/${encodeURIComponent(groupName)}`);
   const response = await fetch(url, {
     method: "DELETE",
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", ...accountHeaders() },
     signal,
   });
   if (!response.ok) {
@@ -238,7 +255,7 @@ export async function fetchTraceForLog(
 ): Promise<RequestTrace | null> {
   const qs = new URLSearchParams({ function: functionName, ts: timestamp });
   const response = await fetch(endpoint(`/_tarn/admin/traces/for-log?${qs}`), {
-    headers: { Accept: "application/json" },
+    headers: { Accept: "application/json", ...accountHeaders() },
     signal,
   });
   if (!response.ok) return null;
@@ -379,7 +396,7 @@ export async function removeEventBridgeTargets(
 export async function fireEventBridgeRule(ruleName: string): Promise<EventBridgeFireResult> {
   const response = await fetch(endpoint("/_tarn/admin/eventbridge/fire"), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: { "Content-Type": "application/json", Accept: "application/json", ...accountHeaders() },
     body: JSON.stringify({ ruleName }),
   });
   if (!response.ok) {
@@ -395,7 +412,7 @@ export async function runEventBridgeRace(
 ): Promise<EventBridgeRaceResult> {
   const response = await fetch(endpoint("/_tarn/admin/eventbridge/race"), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json" },
+    headers: { "Content-Type": "application/json", Accept: "application/json", ...accountHeaders() },
     body: JSON.stringify({ ruleName, runs, concurrency }),
   });
   if (!response.ok) {
@@ -466,6 +483,7 @@ async function eventBridgeCall<T = unknown>(action: string, body: unknown): Prom
     "Content-Type": "application/x-amz-json-1.1",
     "X-Amz-Target": `AWSEvents.${action}`,
     Accept: "application/json",
+    ...accountHeaders(),
   };
   const payload = JSON.stringify(body ?? {});
   const candidateURLs = [endpoint("/_tarn/events")];

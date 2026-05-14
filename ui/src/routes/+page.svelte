@@ -47,6 +47,7 @@
     getDashboardFilters,
     getUISettings,
     getInfraSettings,
+    getAccountSettings,
     getVisibleInfra,
     matchesTagFilter,
     setInfraEnabledKinds,
@@ -56,6 +57,9 @@
     setPollingIntervalSeconds,
     setSchemaSourceDir,
     setThemeMode,
+    switchAccount,
+    addKnownAccount,
+    removeKnownAccount,
     sanitizeSchemaSourceDir,
     type ThemeMode,
     type InfraProbeKind,
@@ -71,6 +75,7 @@
   const filters = getDashboardFilters();
   const uiSettings = getUISettings();
   const infraSettings = getInfraSettings();
+  const accountSettings = getAccountSettings();
 
   // ── Routing ─────────────────────────────────────────────────────
   const validTabs = ["overview","gateways","chaos","functions","queues","dynamodb","sns","secrets","triggers","eventbridge","storage","logs","xray"];
@@ -315,6 +320,7 @@
     {connectionStatus}
     region={dashboard.data?.config.region}
     pollingIntervalSeconds={uiSettings.pollingIntervalSeconds}
+    activeAccountId={accountSettings.activeAccountId}
     onSetTab={setTab}
     onOpenSettings={openSettings}
   />
@@ -440,9 +446,14 @@
   bind:newTargetPort
   infraKinds={INFRA_KINDS}
   instanceInfo={dashboard.data?.config ?? null}
+  knownAccounts={accountSettings.knownAccounts}
+  activeAccountId={accountSettings.activeAccountId}
   {sanitizeSchemaSourceDir}
   onClose={closeSettings}
   onSave={applySettings}
   onAddFrontendTarget={addFrontendTarget}
   onRemoveFrontendTarget={removeFrontendTarget}
+  onSwitchAccount={switchAccount}
+  onAddAccount={addKnownAccount}
+  onRemoveAccount={removeKnownAccount}
 />

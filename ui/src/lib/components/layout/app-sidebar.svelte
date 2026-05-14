@@ -24,6 +24,7 @@
     connectionStatus,
     region,
     pollingIntervalSeconds,
+    activeAccountId = "000000000000",
     onSetTab,
     onOpenSettings,
   }: {
@@ -33,9 +34,12 @@
     connectionStatus: "ok" | "loading" | "error" | "idle";
     region?: string;
     pollingIntervalSeconds: number;
+    activeAccountId?: string;
     onSetTab: (tab: string) => void;
     onOpenSettings: () => void;
   } = $props();
+
+  const isNonDefaultAccount = $derived(activeAccountId !== "000000000000");
 </script>
 
 <aside
@@ -108,22 +112,35 @@
   <div class="border-t border-border px-1.5 py-1.5">
     {#if !sidebarCollapsed}
       <div class="flex items-center gap-1">
-        <div class="flex flex-1 items-center gap-1.5 px-1 text-[10px] text-muted-foreground/50">
-          <span
-            class="inline-block h-1.5 w-1.5 shrink-0 rounded-full
-            {connectionStatus === 'ok'
-              ? 'bg-primary shadow-[0_0_5px_var(--color-primary)]'
-              : connectionStatus === 'loading'
-                ? 'bg-amber-400'
-                : 'bg-destructive'}"
-          ></span>
-          <span class="truncate">
-            {connectionStatus === "ok"
-              ? (region ?? "connected")
-              : connectionStatus === "loading"
-                ? "connecting…"
-                : "error"}
-          </span>
+        <div class="flex flex-1 flex-col px-1">
+          <div class="flex items-center gap-1.5 text-[10px] text-muted-foreground/50">
+            <span
+              class="inline-block h-1.5 w-1.5 shrink-0 rounded-full
+              {connectionStatus === 'ok'
+                ? 'bg-primary shadow-[0_0_5px_var(--color-primary)]'
+                : connectionStatus === 'loading'
+                  ? 'bg-amber-400'
+                  : 'bg-destructive'}"
+            ></span>
+            <span class="truncate">
+              {connectionStatus === "ok"
+                ? (region ?? "connected")
+                : connectionStatus === "loading"
+                  ? "connecting…"
+                  : "error"}
+            </span>
+          </div>
+          {#if isNonDefaultAccount}
+            <button
+              type="button"
+              onclick={onOpenSettings}
+              title="Switch account"
+              class="flex items-center gap-1.5 rounded text-[10px] font-mono transition-colors hover:bg-primary/[0.06]"
+            >
+              <span class="h-1.5 w-1.5 shrink-0 rounded-full bg-primary shadow-[0_0_4px_var(--color-primary)]"></span>
+              <span class="truncate text-primary">{activeAccountId}</span>
+            </button>
+          {/if}
         </div>
         <ThemeToggle />
         <button
@@ -137,6 +154,16 @@
       </div>
     {:else}
       <div class="flex flex-col items-center gap-1">
+        {#if isNonDefaultAccount}
+          <button
+            type="button"
+            onclick={onOpenSettings}
+            title="Account: {activeAccountId}"
+            class="flex h-8 w-8 items-center justify-center rounded-md transition-colors hover:bg-primary/[0.08]"
+          >
+            <span class="h-2 w-2 rounded-full bg-primary shadow-[0_0_4px_var(--color-primary)]"></span>
+          </button>
+        {/if}
         <ThemeToggle />
         <button
           type="button"

@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { PlusIcon, TrashIcon, XIcon } from "phosphor-svelte";
+  import { PlusIcon, TrashIcon, XIcon, CheckIcon } from "phosphor-svelte";
 
-  import type { FrontendTarget, InfraProbeKind, ThemeMode } from "$lib/state.svelte";
+  import type { FrontendTarget, InfraProbeKind, KnownAccount, ThemeMode } from "$lib/state.svelte";
 
   let {
     open = false,
@@ -16,11 +16,16 @@
     newTargetPort = $bindable(""),
     infraKinds = [],
     instanceInfo = null,
+    knownAccounts = [],
+    activeAccountId = "000000000000",
     sanitizeSchemaSourceDir = (value: string) => value,
     onClose = () => {},
     onSave = () => {},
     onAddFrontendTarget = () => {},
     onRemoveFrontendTarget = (_id: string) => {},
+    onSwitchAccount = (_id: string) => {},
+    onAddAccount = (_id: string, _label: string) => false,
+    onRemoveAccount = (_id: string) => {},
   }: {
     open?: boolean;
     pollingIntervalDraft?: number;
@@ -38,15 +43,40 @@
       accountId?: string;
       endpoint?: string;
     } | null;
+    knownAccounts?: KnownAccount[];
+    activeAccountId?: string;
     sanitizeSchemaSourceDir?: (value: string) => string;
     onClose?: () => void;
     onSave?: () => void;
     onAddFrontendTarget?: () => void;
     onRemoveFrontendTarget?: (id: string) => void;
+    onSwitchAccount?: (id: string) => void;
+    onAddAccount?: (id: string, label: string) => boolean;
+    onRemoveAccount?: (id: string) => void;
   } = $props();
+
+  let newAccountId = $state("");
+  let newAccountLabel = $state("");
+  let newAccountError = $state("");
 
   function handleKeydown(event: KeyboardEvent) {
     if (event.key === "Escape" && open) onClose();
+  }
+
+  function handleAddAccount() {
+    newAccountError = "";
+    const id = newAccountId.trim();
+    if (!/^\d{12}$/.test(id)) {
+      newAccountError = "Must be exactly 12 digits";
+      return;
+    }
+    const ok = onAddAccount(id, newAccountLabel);
+    if (!ok) {
+      newAccountError = "Account already exists";
+      return;
+    }
+    newAccountId = "";
+    newAccountLabel = "";
   }
 
   const fieldClass =
@@ -90,6 +120,80 @@
     </div>
 
     <div class="max-h-[70vh] space-y-1 overflow-y-auto px-4 py-4">
+      <div class={sectionClass}>
+        <p class={sectionHeadingClass}>Accounts</p>
+        <p class="text-[11px] text-muted-foreground/70 leading-relaxed">
+          Switch between AWS accounts. The active account is used for all API requests.
+          Use a 12-digit account ID (e.g. <code class="font-mono">111111111111</code>).
+        </p>
+        <ul class="mt-2 space-y-1">
+          {#each knownAccounts as acct (acct.id)}
+            {@const isActive = acct.id === activeAccountId}
+            <li class="flex items-center gap-2 rounded-md border px-2.5 py-1.5
+              {isActive ? 'border-primary/40 bg-primary/[0.06]' : 'border-border bg-background-subtle/30'}">
+              <span class="h-1.5 w-1.5 shrink-0 rounded-full {isActive ? 'bg-primary shadow-[0_0_4px_var(--color-primary)]' : 'bg-muted-foreground/30'}"></span>
+              <span class="flex-1 min-w-0">
+                <span class="block truncate text-xs {isActive ? 'font-semibold text-primary' : 'text-foreground'}">{acct.label}</span>
+                <span class="block font-mono text-[10px] text-muted-foreground/60">{acct.id}</span>
+              </span>
+              {#if !isActive}
+                <button
+                  type="button"
+                  onclick={() => onSwitchAccount(acct.id)}
+                  class="shrink-0 rounded border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary transition-colors hover:bg-primary/20"
+                >
+                  Switch
+                </button>
+              {:else}
+                <span class="flex shrink-0 items-center gap-1 text-[10px] font-medium text-primary/70">
+                  <CheckIcon size={11} />Active
+                </span>
+              {/if}
+              {#if acct.id !== "000000000000"}
+                <button
+                  type="button"
+                  onclick={() => onRemoveAccount(acct.id)}
+                  class="flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground/50 transition-colors hover:bg-destructive/10 hover:text-destructive"
+                  aria-label={`Remove account ${acct.id}`}
+                >
+                  <TrashIcon size={11} />
+                </button>
+              {/if}
+            </li>
+          {/each}
+        </ul>
+        <div class="mt-2 grid grid-cols-[6rem_minmax(0,1fr)_auto] items-start gap-1.5">
+          <div class="relative">
+            <input
+              type="text"
+              maxlength="12"
+              bind:value={newAccountId}
+              onkeydown={(e) => { if (e.key === "Enter") handleAddAccount(); }}
+              placeholder="012345678901"
+              class="{fieldClass} font-mono placeholder:text-muted-foreground/40"
+            />
+          </div>
+          <input
+            type="text"
+            bind:value={newAccountLabel}
+            onkeydown={(e) => { if (e.key === "Enter") handleAddAccount(); }}
+            placeholder="Label (optional)"
+            class="{fieldClass} placeholder:text-muted-foreground/40"
+          />
+          <button
+            type="button"
+            onclick={handleAddAccount}
+            class="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-primary/50 bg-primary/10 text-primary transition-colors hover:bg-primary/20"
+            aria-label="Add account"
+          >
+            <PlusIcon size={12} />
+          </button>
+        </div>
+        {#if newAccountError}
+          <p class="text-[11px] text-destructive">{newAccountError}</p>
+        {/if}
+      </div>
+
       <div class={sectionClass}>
         <p class={sectionHeadingClass}>Polling Interval</p>
         <div class="space-y-1.5">
