@@ -20,6 +20,7 @@ type flushOptions struct {
 	TagFilter string
 	DryRun    bool
 	Storage   bool
+	AccountID string
 }
 
 type flushOverview struct {
@@ -101,11 +102,23 @@ Use --storage to also purge S3 bucket contents and delete buckets.`,
 	cmd.Flags().StringVar(&opts.TagFilter, "tag", "", "Filter resources by tag query, e.g. feature=r10 or r10")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Print resources that would be deleted without deleting them")
 	cmd.Flags().BoolVar(&opts.Storage, "storage", false, "Also flush S3 buckets and objects")
+	cmd.Flags().StringVar(&opts.AccountID, "account", "", "12-digit account ID to flush (overrides TARN_ACCOUNT_ID)")
 	return cmd
 }
 
 func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	endpoint := getCLIEndpoint(cmd)
+
+	accountID := resolveFlushAccountID(opts.AccountID)
+	if accountID != "000000000000" {
+		saved := cliHTTPClient
+		cliHTTPClient = &http.Client{Transport: &accountRoundTripper{
+			base:      http.DefaultTransport,
+			accountID: accountID,
+		}}
+		defer func() { cliHTTPClient = saved }()
+	}
+
 	overview, err := fetchFlushOverview(endpoint)
 	if err != nil {
 		return err
@@ -1431,6 +1444,30 @@ func deleteS3Bucket(endpoint, bucket string) error {
 		return fmt.Errorf("delete bucket error (%d): %s", resp.StatusCode, string(body))
 	}
 	return nil
+}
+
+func resolveFlushAccountID(flagValue string) string {
+	if flagValue != "" {
+		return flagValue
+	}
+	if v := os.Getenv("TARN_ACCOUNT_ID"); v != "" {
+		return v
+	}
+	return "000000000000"
+}
+
+type accountRoundTripper struct {
+	base      http.RoundTripper
+	accountID string
+}
+
+func (t *accountRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Header.Set("Authorization", fmt.Sprintf(
+		"AWS4-HMAC-SHA256 Credential=%s/20000101/us-east-1/tarn/aws4_request, SignedHeaders=host, Signature=0",
+		t.accountID,
+	))
+	return t.base.RoundTrip(req)
 }
 
 func getCLIEndpoint(cmd *cobra.Command) string {
