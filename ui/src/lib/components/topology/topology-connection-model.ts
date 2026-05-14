@@ -51,6 +51,14 @@ const TOPOLOGY_VIEWPORT_REFERENCE = {
   height: 1000,
 } as const;
 
+const CANVAS_DYNAMIC_PADDING = 200;
+
+function computeDynamicCanvasHeight(maxColumnNodes: number): number {
+  const minNodeHeight = CONNECTION_CANVAS.nodeHalfHeight * 2 + TOPOLOGY_MIN_NODE_GAP;
+  const required = maxColumnNodes * minNodeHeight + CANVAS_DYNAMIC_PADDING;
+  return Math.max(CONNECTION_CANVAS.height, required);
+}
+
 const TRACE_WINDOW_MS = 60_000;
 
 export interface EdgeActivity {
@@ -98,6 +106,7 @@ export interface InfraEdge extends LaneEdge {
 
 export interface TopologyGraphModel {
   hasData: boolean;
+  canvasSize: { width: number; height: number };
   eventBridgeRuleById: Map<string, EventBridgeRuleSummary>;
   functionById: Map<string, FunctionSummary>;
   dynamodbById: Map<string, DynamoDBTableSummary>;
@@ -213,17 +222,6 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     infraOrderIds,
   } = input;
 
-  const connGateways = gateways.map(
-    (gw, i): ConnectionNode => ({
-      id: gw.apiId,
-      x: CONNECTION_CANVAS.colGateway,
-      y: distributedColumnY(i, gateways.length, 170, 790),
-      label: trimLabel(gw.name, 13),
-      sub: `${gw.routes} routes`,
-      kind: "gateway",
-    }),
-  );
-
   const eventBridgeTargetCounts = new Map<string, number>();
   for (const connection of infraConnections) {
     if (connection.targetKind !== "eventbridge-lambda") continue;
@@ -235,11 +233,35 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       eventBridgeTargetCounts.set(rule.name, rule.targets?.length ?? 0);
     }
   }
+
+  const maxColumnNodes = Math.max(
+    gateways.length,
+    eventBridgeTargetCounts.size,
+    topics.length,
+    queues.length,
+    dynamodbTables.length,
+    functions.length,
+    buckets.length,
+    secrets.length,
+  );
+  const dynamicCanvasH = computeDynamicCanvasHeight(maxColumnNodes);
+
+  const connGateways = gateways.map(
+    (gw, i): ConnectionNode => ({
+      id: gw.apiId,
+      x: CONNECTION_CANVAS.colGateway,
+      y: distributedColumnY(i, gateways.length, 170, 790, dynamicCanvasH),
+      label: trimLabel(gw.name, 13),
+      sub: `${gw.routes} routes`,
+      kind: "gateway",
+    }),
+  );
+
   const connEventBridges = [...eventBridgeTargetCounts.entries()].map(
     ([ruleName, targetCount], i): ConnectionNode => ({
       id: ruleName,
       x: CONNECTION_CANVAS.colEventBridge,
-      y: distributedColumnY(i, eventBridgeTargetCounts.size, 140, 770),
+      y: distributedColumnY(i, eventBridgeTargetCounts.size, 140, 770, dynamicCanvasH),
       label: trimLabel(ruleName, 13),
       sub: `${targetCount} target${targetCount === 1 ? "" : "s"}`,
       kind: "eventbridge",
@@ -250,7 +272,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     (t, i): ConnectionNode => ({
       id: t.name,
       x: CONNECTION_CANVAS.colTopic,
-      y: distributedColumnY(i, topics.length, 140, 740),
+      y: distributedColumnY(i, topics.length, 140, 740, dynamicCanvasH),
       label: trimLabel(t.name, 13),
       sub: `${t.subscriptions} sub`,
       kind: "topic",
@@ -261,7 +283,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     (q, i): ConnectionNode => ({
       id: q.name,
       x: CONNECTION_CANVAS.colQueue,
-      y: distributedColumnY(i, queues.length, 150, 855),
+      y: distributedColumnY(i, queues.length, 150, 855, dynamicCanvasH),
       label: trimLabel(q.name, 13),
       sub: `${q.approxVisible + q.approxInFlight + q.approxDelayed} msg`,
       kind: "queue",
@@ -272,7 +294,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     (table, i): ConnectionNode => ({
       id: table.name,
       x: CONNECTION_CANVAS.colDynamodb,
-      y: distributedColumnY(i, dynamodbTables.length, 170, 900),
+      y: distributedColumnY(i, dynamodbTables.length, 170, 900, dynamicCanvasH),
       label: trimLabel(table.name, 13),
       sub: table.streamEnabled
         ? `${table.itemCount} item · stream`
@@ -285,7 +307,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     (fn, i): ConnectionNode => ({
       id: fn.name,
       x: CONNECTION_CANVAS.colFunction,
-      y: distributedColumnY(i, functions.length, 170, 915),
+      y: distributedColumnY(i, functions.length, 170, 915, dynamicCanvasH),
       label: trimLabel(fn.name, 13),
       sub: fn.runtime,
       kind: "function",
@@ -296,7 +318,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     (b, i): ConnectionNode => ({
       id: b.name,
       x: CONNECTION_CANVAS.colBucket,
-      y: distributedColumnY(i, buckets.length, 120, 1080),
+      y: distributedColumnY(i, buckets.length, 120, 1080, dynamicCanvasH),
       label: trimLabel(b.name, 13),
       sub: `${b.objects} obj`,
       kind: "bucket",
@@ -308,7 +330,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     (s, i): ConnectionNode => ({
       id: s.name,
       x: CONNECTION_CANVAS.colSecret,
-      y: distributedColumnY(i, secrets.length, 190, 985),
+      y: distributedColumnY(i, secrets.length, 190, 985, dynamicCanvasH),
       label: trimLabel(s.name, 13),
       sub: `v${s.versionId.slice(0, 6)}`,
       kind: "secret",
@@ -330,20 +352,20 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     }
   }
 
-  packColumnGroups(mainGroups);
+  packColumnGroups(mainGroups, TOPOLOGY_MIN_NODE_GAP, dynamicCanvasH);
 
   // Apply dragged positions AFTER collision so user-pinned nodes stay put.
   for (const group of mainGroups) {
     for (const node of group) {
       const pos = getPersistedNodePosition(allNodePositions, node);
       if (!pos) continue;
-      const nextPosition = resolveNodeSpacing(node, pos, mainNodes);
+      const nextPosition = resolveNodeSpacing(node, pos, mainNodes, TOPOLOGY_MIN_NODE_GAP, dynamicCanvasH);
       node.x = nextPosition.x;
       node.y = nextPosition.y;
     }
   }
 
-  const connInfraNodes = buildInfraNodes(infra, infraOrderIds, allNodePositions);
+  const connInfraNodes = buildInfraNodes(infra, infraOrderIds, allNodePositions, dynamicCanvasH);
   for (const node of connInfraNodes) applyNodeOverride(node, allNodeOverrides[`${node.kind}:${node.id}`]);
 
   const connCacheExtension: ConnectionNode | null =
@@ -351,7 +373,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       ? {
           id: "secrets-cache-extension",
           x: cacheExtensionX(),
-          y: CONNECTION_CANVAS.height / 2 + 46,
+          y: dynamicCanvasH / 2 + 46,
           label: "Secrets Cache",
           sub: "localhost:2773",
           kind: "extension",
@@ -364,6 +386,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       connCacheExtension,
       pos?.x ?? connCacheExtension.x,
       pos?.y ?? connCacheExtension.y,
+      dynamicCanvasH,
     );
     connCacheExtension.x = nextPosition.x;
     connCacheExtension.y = nextPosition.y;
@@ -379,6 +402,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
     12,
     "both",
     new Set(mainNodes.map((node) => graphNodeKey(node))),
+    dynamicCanvasH,
   );
 
   const infraLane = buildInfraLane(connInfraNodes);
@@ -798,6 +822,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       buckets.length > 0 ||
       secrets.length > 0 ||
       infra.length > 0,
+    canvasSize: { width: CONNECTION_CANVAS.width, height: dynamicCanvasH },
     eventBridgeRuleById: new Map(eventBridgeRules.map((rule) => [rule.name, rule])),
     functionById: new Map(functions.map((fn) => [fn.name, fn])),
     dynamodbById: new Map(dynamodbTables.map((table) => [table.name, table])),
@@ -1224,15 +1249,17 @@ export function findNodeAt(model: TopologyGraphModel, x: number, y: number): Con
 export function computeViewportTransform(
   viewportWidth: number,
   viewportHeight: number,
-  options: { expanded?: boolean } = {},
+  options: { expanded?: boolean; canvasWidth?: number; canvasHeight?: number } = {},
 ): ViewportTransform {
+  const canvasW = options.canvasWidth ?? CONNECTION_CANVAS.width;
+  const canvasH = options.canvasHeight ?? CONNECTION_CANVAS.height;
   const safeWidth = Math.max(1, viewportWidth);
   const safeHeight = Math.max(1, viewportHeight);
   const paddingX = safeWidth < 900 ? 10 : 16;
   const paddingY = safeHeight < 640 ? 10 : 16;
   const fitScale = Math.min(
-    safeWidth / (CONNECTION_CANVAS.width + paddingX * 2),
-    safeHeight / (CONNECTION_CANVAS.height + paddingY * 2),
+    safeWidth / (canvasW + paddingX * 2),
+    safeHeight / (canvasH + paddingY * 2),
   );
   const referenceFitScale = Math.min(
     safeWidth / (TOPOLOGY_VIEWPORT_REFERENCE.width + paddingX * 2),
@@ -1251,8 +1278,8 @@ export function computeViewportTransform(
 
   return {
     scale,
-    offsetX: (safeWidth - CONNECTION_CANVAS.width * scale) / 2,
-    offsetY: (safeHeight - CONNECTION_CANVAS.height * scale) / 2,
+    offsetX: (safeWidth - canvasW * scale) / 2,
+    offsetY: (safeHeight - canvasH * scale) / 2,
   };
 }
 
@@ -1260,11 +1287,14 @@ export function clampViewportTransform(
   viewportWidth: number,
   viewportHeight: number,
   transform: ViewportTransform,
+  options: { canvasWidth?: number; canvasHeight?: number } = {},
 ): ViewportTransform {
+  const canvasWidth = options.canvasWidth ?? CONNECTION_CANVAS.width;
+  const canvasHeight = options.canvasHeight ?? CONNECTION_CANVAS.height;
   const safeWidth = Math.max(1, viewportWidth);
   const safeHeight = Math.max(1, viewportHeight);
-  const contentWidth = CONNECTION_CANVAS.width * transform.scale;
-  const contentHeight = CONNECTION_CANVAS.height * transform.scale;
+  const contentWidth = canvasWidth * transform.scale;
+  const contentHeight = canvasHeight * transform.scale;
   const overscrollX = contentWidth > safeWidth ? Math.min(420, safeWidth * 0.35) : 0;
   const overscrollY = contentHeight > safeHeight ? Math.min(320, safeHeight * 0.28) : 0;
 
@@ -1286,14 +1316,14 @@ export function viewportToCanvasPoint(
   };
 }
 
-export function clampInfraNodePosition(x: number, y: number): InfraNodePosition {
+export function clampInfraNodePosition(x: number, y: number, canvasH = CONNECTION_CANVAS.height): InfraNodePosition {
   return {
     x: clamp(
       x,
       CONNECTION_CANVAS.infraHalfWidth + 24,
       CONNECTION_CANVAS.width - CONNECTION_CANVAS.infraHalfWidth - 24,
     ),
-    y: clamp(y, 120, CONNECTION_CANVAS.height - CONNECTION_CANVAS.nodeHalfHeight - 24),
+    y: clamp(y, 120, canvasH - CONNECTION_CANVAS.nodeHalfHeight - 24),
   };
 }
 
@@ -1303,13 +1333,16 @@ export function resolveSnappedNodePosition(
   x: number,
   y: number,
 ): InfraNodePosition {
+  const canvasH = model.canvasSize.height;
   const node = findGraphNode(model, nodeKey);
-  if (!node) return clampInfraNodePosition(x, y);
+  if (!node) return clampInfraNodePosition(x, y, canvasH);
 
   return resolveNodeSpacing(
     node,
     { x, y },
     model.allNodes,
+    TOPOLOGY_MIN_NODE_GAP,
+    canvasH,
   );
 }
 
@@ -1392,15 +1425,17 @@ function nodeHalfHeight(node: ConnectionNode): number {
 function packColumnGroups(
   nodeGroups: ConnectionNode[][],
   minGap = TOPOLOGY_MIN_NODE_GAP,
+  canvasH = CONNECTION_CANVAS.height,
 ): void {
   for (const nodes of nodeGroups) {
-    packColumnNodes(nodes, minGap);
+    packColumnNodes(nodes, minGap, canvasH);
   }
 }
 
 function packColumnNodes(
   nodes: ConnectionNode[],
   minGap = TOPOLOGY_MIN_NODE_GAP,
+  canvasH = CONNECTION_CANVAS.height,
 ): void {
   if (nodes.length <= 1) return;
 
@@ -1415,19 +1450,19 @@ function packColumnNodes(
       const requiredGap = nodeHalfHeight(prev) + nodeHalfHeight(node) + minGap;
       nextY = Math.max(nextY, prev.y + requiredGap);
     }
-    node.y = clampNodePosition(node, node.x, nextY).y;
+    node.y = clampNodePosition(node, node.x, nextY, canvasH).y;
   }
 
   for (let i = sorted.length - 1; i >= 0; i -= 1) {
     const node = sorted[i];
-    const maxY = CONNECTION_CANVAS.height - nodeHalfHeight(node) - 24;
+    const maxY = canvasH - nodeHalfHeight(node) - 24;
     let nextY = Math.min(node.y, maxY);
     if (i < sorted.length - 1) {
       const next = sorted[i + 1];
       const requiredGap = nodeHalfHeight(node) + nodeHalfHeight(next) + minGap;
       nextY = Math.min(nextY, next.y - requiredGap);
     }
-    node.y = clampNodePosition(node, node.x, nextY).y;
+    node.y = clampNodePosition(node, node.x, nextY, canvasH).y;
   }
 
   for (let i = 1; i < sorted.length; i += 1) {
@@ -1435,7 +1470,7 @@ function packColumnNodes(
     const node = sorted[i];
     const requiredGap = nodeHalfHeight(prev) + nodeHalfHeight(node) + minGap;
     if (node.y < prev.y + requiredGap) {
-      node.y = clampNodePosition(node, node.x, prev.y + requiredGap).y;
+      node.y = clampNodePosition(node, node.x, prev.y + requiredGap, canvasH).y;
     }
   }
 }
@@ -1452,6 +1487,7 @@ function applyForceFieldCollisions(
   iterations = 8,
   axis: "y" | "both" = "y",
   lockedNodeKeys: ReadonlySet<string> = new Set(),
+  canvasH = CONNECTION_CANVAS.height,
 ): void {
   const all = nodeGroups.flat();
   if (all.length <= 1) return;
@@ -1482,17 +1518,17 @@ function applyForceFieldCollisions(
             deltaX === 0 ? (b.x >= CONNECTION_CANVAS.width / 2 ? 1 : -1) : Math.sign(deltaX);
           const totalPush = overlapX + 1;
           if (lockA) {
-            const nextB = clampNodePosition(b, b.x + direction * totalPush, b.y);
+            const nextB = clampNodePosition(b, b.x + direction * totalPush, b.y, canvasH);
             b.x = nextB.x;
             b.y = nextB.y;
           } else if (lockB) {
-            const nextA = clampNodePosition(a, a.x - direction * totalPush, a.y);
+            const nextA = clampNodePosition(a, a.x - direction * totalPush, a.y, canvasH);
             a.x = nextA.x;
             a.y = nextA.y;
           } else {
             const push = totalPush / 2;
-            const nextA = clampNodePosition(a, a.x - direction * push, a.y);
-            const nextB = clampNodePosition(b, b.x + direction * push, b.y);
+            const nextA = clampNodePosition(a, a.x - direction * push, a.y, canvasH);
+            const nextB = clampNodePosition(b, b.x + direction * push, b.y, canvasH);
             a.x = nextA.x;
             a.y = nextA.y;
             b.x = nextB.x;
@@ -1502,17 +1538,17 @@ function applyForceFieldCollisions(
           const direction = deltaY === 0 ? (b.y >= a.y ? 1 : -1) : Math.sign(deltaY);
           const totalPush = overlapY + 1;
           if (lockA) {
-            const nextB = clampNodePosition(b, b.x, b.y + direction * totalPush);
+            const nextB = clampNodePosition(b, b.x, b.y + direction * totalPush, canvasH);
             b.x = nextB.x;
             b.y = nextB.y;
           } else if (lockB) {
-            const nextA = clampNodePosition(a, a.x, a.y - direction * totalPush);
+            const nextA = clampNodePosition(a, a.x, a.y - direction * totalPush, canvasH);
             a.x = nextA.x;
             a.y = nextA.y;
           } else {
             const push = totalPush / 2;
-            const nextA = clampNodePosition(a, a.x, a.y - direction * push);
-            const nextB = clampNodePosition(b, b.x, b.y + direction * push);
+            const nextA = clampNodePosition(a, a.x, a.y - direction * push, canvasH);
+            const nextB = clampNodePosition(b, b.x, b.y + direction * push, canvasH);
             a.x = nextA.x;
             a.y = nextA.y;
             b.x = nextB.x;
@@ -1531,8 +1567,9 @@ function resolveNodeSpacing(
   desiredPosition: InfraNodePosition,
   nodes: ConnectionNode[],
   minGap = TOPOLOGY_MIN_NODE_GAP,
+  canvasH = CONNECTION_CANVAS.height,
 ): InfraNodePosition {
-  let candidate = clampNodePosition(node, desiredPosition.x, desiredPosition.y);
+  let candidate = clampNodePosition(node, desiredPosition.x, desiredPosition.y, canvasH);
   const others = nodes.filter((other) => other !== node);
   if (others.length === 0) return candidate;
 
@@ -1560,6 +1597,7 @@ function resolveNodeSpacing(
           node,
           candidate.x + direction * (overlapX + 1),
           candidate.y,
+          canvasH,
         );
       } else {
         const direction =
@@ -1568,6 +1606,7 @@ function resolveNodeSpacing(
           node,
           candidate.x,
           candidate.y + direction * (overlapY + 1),
+          canvasH,
         );
       }
 
@@ -1599,12 +1638,13 @@ function distributedColumnY(
   total: number,
   gap: number,
   centerY: number,
+  canvasH = CONNECTION_CANVAS.height,
 ): number {
   if (total <= 1) return centerY;
 
   const totalSpan = gap * (total - 1);
   const topBound = CONNECTION_CANVAS.nodeHalfHeight + 80;
-  const bottomBound = CONNECTION_CANVAS.height - CONNECTION_CANVAS.nodeHalfHeight - 120;
+  const bottomBound = canvasH - CONNECTION_CANVAS.nodeHalfHeight - 120;
   const start = clamp(
     centerY - totalSpan / 2,
     topBound,
@@ -1621,6 +1661,7 @@ function buildInfraNodes(
   infra: InfraProbe[],
   infraOrderIds: string[],
   allNodePositions: Record<string, InfraNodePosition>,
+  canvasH = CONNECTION_CANVAS.height,
 ): ConnectionNode[] {
   const visible = infra.map((probe) => ({ id: infraNodeId(probe), probe }));
   if (visible.length === 0) return [];
@@ -1631,7 +1672,7 @@ function buildInfraNodes(
     ...visible.map((entry) => entry.id).filter((id) => !infraOrderIds.includes(id)),
   ];
 
-  const laneBottomY = CONNECTION_CANVAS.height - 240;
+  const laneBottomY = canvasH - 240;
   const horizontalMinX = 320;
   const horizontalMaxX = CONNECTION_CANVAS.width - 220;
   const availableWidth = horizontalMaxX - horizontalMinX;
@@ -1656,7 +1697,7 @@ function buildInfraNodes(
     const persistedPosition =
       allNodePositions[`infra:${id}`] ?? allNodePositions[id];
     const position = persistedPosition
-      ? clampInfraNodePosition(persistedPosition.x, persistedPosition.y)
+      ? clampInfraNodePosition(persistedPosition.x, persistedPosition.y, canvasH)
       : { x: fallbackX, y: fallbackY };
     return {
       id,
@@ -1677,7 +1718,7 @@ function buildInfraNodes(
   for (const node of nodes) {
     const persistedPosition = getPersistedNodePosition(allNodePositions, node);
     if (!persistedPosition) continue;
-    const nextPosition = resolveNodeSpacing(node, persistedPosition, nodes);
+    const nextPosition = resolveNodeSpacing(node, persistedPosition, nodes, TOPOLOGY_MIN_NODE_GAP, canvasH);
     node.x = nextPosition.x;
     node.y = nextPosition.y;
   }
@@ -1708,6 +1749,7 @@ function clampNodePosition(
   node: ConnectionNode,
   x: number,
   y: number,
+  canvasH = CONNECTION_CANVAS.height,
 ): InfraNodePosition {
   return {
     x: clamp(
@@ -1718,7 +1760,7 @@ function clampNodePosition(
     y: clamp(
       y,
       nodeHalfHeight(node) + 24,
-      CONNECTION_CANVAS.height - nodeHalfHeight(node) - 24,
+      canvasH - nodeHalfHeight(node) - 24,
     ),
   };
 }

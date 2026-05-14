@@ -8,7 +8,6 @@
   } from "$lib/types";
   import { formatBytes } from "$lib/utils";
   import {
-    CONNECTION_CANVAS,
     nodeBounds,
     portPos,
     selectedTraceNodes,
