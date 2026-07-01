@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/pkg/types"
@@ -14,9 +16,10 @@ import (
 
 // Store is an API Gateway store with optional disk-backed persistence.
 type Store struct {
-	mu   sync.RWMutex
-	apis map[string]*apiRecord
-	cfg  *config.Config
+	mu    sync.RWMutex
+	dirty atomic.Bool
+	apis  map[string]*apiRecord
+	cfg   *config.Config
 }
 
 type apiRecord struct {
@@ -43,6 +46,7 @@ func (s *Store) Init() error {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return nil
 	}
+	go s.startFlusher()
 
 	if err := os.MkdirAll(s.cfg.APIGatewayDir(), 0755); err != nil {
 		return fmt.Errorf("create apigateway dir: %w", err)
@@ -111,7 +115,7 @@ func (s *Store) CreateAPI(api *types.APIGatewayAPI, stage *types.APIGatewayStage
 	}
 
 	s.apis[api.APIID] = rec
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -152,7 +156,7 @@ func (s *Store) SaveAPI(api *types.APIGatewayAPI) error {
 		return fmt.Errorf("api %s not found", api.APIID)
 	}
 	rec.api = cloneAPI(api)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -164,7 +168,7 @@ func (s *Store) DeleteAPI(apiID string) error {
 		return fmt.Errorf("api %s not found", apiID)
 	}
 	delete(s.apis, apiID)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -180,7 +184,7 @@ func (s *Store) CreateIntegration(apiID string, integration *types.APIGatewayInt
 		return fmt.Errorf("integration %s already exists", integration.IntegrationID)
 	}
 	rec.integrations[integration.IntegrationID] = cloneIntegration(integration)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -228,7 +232,7 @@ func (s *Store) SaveIntegration(apiID string, integration *types.APIGatewayInteg
 		return fmt.Errorf("integration %s not found", integration.IntegrationID)
 	}
 	rec.integrations[integration.IntegrationID] = cloneIntegration(integration)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -244,7 +248,7 @@ func (s *Store) DeleteIntegration(apiID, integrationID string) error {
 		return fmt.Errorf("integration %s not found", integrationID)
 	}
 	delete(rec.integrations, integrationID)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -260,7 +264,7 @@ func (s *Store) CreateRoute(apiID string, route *types.APIGatewayRoute) error {
 		return fmt.Errorf("route %s already exists", route.RouteID)
 	}
 	rec.routes[route.RouteID] = cloneRoute(route)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -308,7 +312,7 @@ func (s *Store) SaveRoute(apiID string, route *types.APIGatewayRoute) error {
 		return fmt.Errorf("route %s not found", route.RouteID)
 	}
 	rec.routes[route.RouteID] = cloneRoute(route)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -324,7 +328,7 @@ func (s *Store) DeleteRoute(apiID, routeID string) error {
 		return fmt.Errorf("route %s not found", routeID)
 	}
 	delete(rec.routes, routeID)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -372,7 +376,7 @@ func (s *Store) SaveStage(apiID string, stage *types.APIGatewayStage) error {
 		return fmt.Errorf("stage %s not found", stage.StageName)
 	}
 	rec.stages[stage.StageName] = cloneStage(stage)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -414,11 +418,24 @@ func cloneStage(in *types.APIGatewayStage) *types.APIGatewayStage {
 	return &out
 }
 
-func (s *Store) persistLocked() {
+func (s *Store) Flush() { s.flushToDisk() }
+
+func (s *Store) startFlusher() {
+	t := time.NewTicker(250 * time.Millisecond)
+	defer t.Stop()
+	for range t.C {
+		if s.dirty.Swap(false) {
+			s.flushToDisk()
+		}
+	}
+}
+
+func (s *Store) flushToDisk() {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return
 	}
 
+	s.mu.RLock()
 	apiIDs := make([]string, 0, len(s.apis))
 	for apiID := range s.apis {
 		apiIDs = append(apiIDs, apiID)
@@ -469,8 +486,9 @@ func (s *Store) persistLocked() {
 
 		snapshot.APIs = append(snapshot.APIs, item)
 	}
+	s.mu.RUnlock()
 
-	data, err := json.MarshalIndent(snapshot, "", "  ")
+	data, err := json.Marshal(snapshot)
 	if err != nil {
 		return
 	}

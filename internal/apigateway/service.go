@@ -41,6 +41,9 @@ type Service struct {
 	collector  *tracesvc.Collector
 }
 
+// Flush forces an immediate synchronous disk write (for tests).
+func (s *Service) Flush() { s.store.Flush() }
+
 // SetTraceStore attaches a trace store for recording request traces.
 func (s *Service) SetTraceStore(ts *tracesvc.Store) { s.traceStore = ts }
 

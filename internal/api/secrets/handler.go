@@ -3,6 +3,7 @@ package secrets
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -98,11 +99,11 @@ func (h *Handler) createSecret(w http.ResponseWriter, r *http.Request) {
 
 	secret, err := h.svc.CreateSecret(req.Name, req.Description, req.SecretString, binaryData, req.Tags)
 	if err != nil {
-		if strings.Contains(err.Error(), "already exists") {
-			writeError(w, 400, "ResourceExistsException", err.Error())
-		} else {
-			writeError(w, 500, "InternalServiceError", err.Error())
+		if errors.Is(err, secretssvc.ErrSecretExists) {
+			writeError(w, 400, "ResourceExistsException", "The operation failed because the secret "+req.Name+" already exists.")
+			return
 		}
+		writeError(w, 500, "InternalServiceError", err.Error())
 		return
 	}
 

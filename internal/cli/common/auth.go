@@ -23,10 +23,46 @@ func SetAccountHeader(req *http.Request) {
 	if acct == "" {
 		return
 	}
+	setAccountAuthorization(req, acct)
+}
+
+// SetAccountHeaderForAccount injects the account Authorization header for an
+// explicit 12-digit account (e.g. parsed from an ARN). When account is empty it
+// falls back to the TARN_ACCOUNT_ID-based behaviour, so commands that carry an
+// ARN can target the right account without requiring TARN_ACCOUNT_ID to be set.
+func SetAccountHeaderForAccount(req *http.Request, account string) {
+	if account == "" {
+		SetAccountHeader(req)
+		return
+	}
+	setAccountAuthorization(req, account)
+}
+
+func setAccountAuthorization(req *http.Request, acct string) {
 	req.Header.Set("Authorization", fmt.Sprintf(
 		"AWS4-HMAC-SHA256 Credential=%s/20000101/us-east-1/tarn/aws4_request, SignedHeaders=host, Signature=0",
 		acct,
 	))
+}
+
+// AccountFromARN extracts the account ID from an AWS ARN of the form
+// arn:partition:service:region:ACCOUNT:resource. It returns "" when the ARN has
+// no 12-digit account segment, letting callers fall back to the default.
+func AccountFromARN(arn string) string {
+	parts := strings.Split(arn, ":")
+	if len(parts) < 5 {
+		return ""
+	}
+	acct := parts[4]
+	if len(acct) != 12 {
+		return ""
+	}
+	for _, r := range acct {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return acct
 }
 
 // PostForm is a drop-in replacement for http.PostForm that injects the account

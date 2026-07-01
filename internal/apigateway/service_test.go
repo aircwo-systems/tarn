@@ -202,6 +202,7 @@ func TestAPIGatewayStatePersistsToDisk(t *testing.T) {
 	if _, err := svc.CreateRoute(api.APIID, RouteCreateInput{RouteKey: "GET /orders/{id}", Target: "integrations/" + integration.IntegrationID}); err != nil {
 		t.Fatalf("create route: %v", err)
 	}
+	svc.Flush()
 
 	reloaded := NewService(cfg, lambdaSvc, nil)
 	if err := reloaded.Init(); err != nil {

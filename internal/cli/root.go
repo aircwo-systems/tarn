@@ -19,6 +19,7 @@ import (
 	"github.com/aircwo-systems/tarn/internal/cli/secrets"
 	"github.com/aircwo-systems/tarn/internal/cli/sns"
 	"github.com/aircwo-systems/tarn/internal/cli/sqs"
+	"github.com/aircwo-systems/tarn/internal/cli/stepfunctions"
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -87,6 +88,7 @@ Flush provisioned resources:
 	root.AddCommand(sqs.NewSQSCmd())
 	root.AddCommand(sns.NewSNSCmd())
 	root.AddCommand(secrets.NewSecretsCmd())
+	root.AddCommand(stepfunctions.NewStepFunctionsCmd())
 
 	root.PersistentFlags().String("host", "0.0.0.0", "API server bind address")
 	root.PersistentFlags().Int("port", 4566, "API server port")

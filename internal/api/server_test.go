@@ -78,7 +78,8 @@ func newTestBundle(t *testing.T, cfg *config.Config) *AccountBundle {
 		EventSource: eventsourcehandler.NewHandler(esmSvc),
 		EventBridge: eventbridgehandler.NewHandler(ebSvc),
 		IAM:         iamhandler.NewHandler(cfg.AccountID),
-		Admin:       adminhandler.NewHandler(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil),
+		Admin:       adminhandler.NewHandler(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil),
+		Logs:        logsSvc,
 	}
 	return NewAccountBundle(hs, nil)
 }
@@ -411,5 +412,89 @@ func TestSNSProtocolDispatchRoutesUnknownActionByVersionOnNonRootPath(t *testing
 	}
 	if !strings.Contains(body, `http://sns.amazonaws.com/doc/2010-03-31/`) {
 		t.Fatalf("expected sns namespace, got: %s", body)
+	}
+}
+
+// TestRequestLogsAreAccountSpecific verifies that the request-logging middleware
+// records each request into the resolved account's own logs service, so logs do
+// not leak across accounts. A 12-digit AKID selects the account; absent auth
+// falls back to the default account.
+func TestRequestLogsAreAccountSpecific(t *testing.T) {
+	base := config.Default()
+	base.DataDir = t.TempDir()
+
+	const other = "111111111111"
+	if base.AccountID == other {
+		t.Fatalf("test assumes default account differs from %s", other)
+	}
+
+	// One bundle per account, each with its own logs service.
+	bundles := map[string]*AccountBundle{}
+	registry := NewHandlerRegistry(func(accountID string) (*AccountBundle, error) {
+		if b, ok := bundles[accountID]; ok {
+			return b, nil
+		}
+		acctCfg := base.ForAccount(accountID)
+		if err := acctCfg.EnsureDataDir(); err != nil {
+			return nil, err
+		}
+		b := newTestBundle(t, acctCfg)
+		bundles[accountID] = b
+		return b, nil
+	})
+
+	srv := NewServer(base, registry, logs.NewService(base), nil)
+	mux := http.NewServeMux()
+	srv.registerRoutes(mux)
+	h := srv.withLogging(mux)
+
+	// Request authenticated as the non-default account.
+	reqOther := httptest.NewRequest(http.MethodGet, "/path-other", nil)
+	reqOther.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+other+"/20240101/us-east-1/s3/aws4_request, SignedHeaders=host, Signature=x")
+	h.ServeHTTP(httptest.NewRecorder(), reqOther)
+
+	// Request with no auth -> default account.
+	reqDefault := httptest.NewRequest(http.MethodGet, "/path-default", nil)
+	h.ServeHTTP(httptest.NewRecorder(), reqDefault)
+
+	otherBundle, ok := bundles[other]
+	if !ok {
+		t.Fatalf("no bundle created for %s", other)
+	}
+	defaultBundle, ok := bundles[base.AccountID]
+	if !ok {
+		t.Fatalf("no bundle created for default account")
+	}
+
+	otherLogs := otherBundle.Handlers().Logs
+	defaultLogs := defaultBundle.Handlers().Logs
+	if otherLogs == nil || defaultLogs == nil {
+		t.Fatal("each account bundle must have a logs service")
+	}
+	if otherLogs == defaultLogs {
+		t.Fatal("accounts must not share a logs service")
+	}
+
+	otherEvents, _, _ := otherLogs.GetLogEvents("/tarn/api", nil)
+	defaultEvents, _, _ := defaultLogs.GetLogEvents("/tarn/api", nil)
+
+	if len(otherEvents) != 1 {
+		t.Fatalf("%s /tarn/api event count = %d, want 1", other, len(otherEvents))
+	}
+	if len(defaultEvents) != 1 {
+		t.Fatalf("default /tarn/api event count = %d, want 1", len(defaultEvents))
+	}
+	if !strings.Contains(otherEvents[0].Message, "/path-other") {
+		t.Fatalf("%s log = %q, want it to mention /path-other", other, otherEvents[0].Message)
+	}
+	if !strings.Contains(defaultEvents[0].Message, "/path-default") {
+		t.Fatalf("default log = %q, want it to mention /path-default", defaultEvents[0].Message)
+	}
+	// Cross-check: neither account recorded the other's request.
+	if strings.Contains(otherEvents[0].Message, "/path-default") {
+		t.Fatalf("%s log leaked the default account's request", other)
+	}
+	if strings.Contains(defaultEvents[0].Message, "/path-other") {
+		t.Fatal("default account log leaked the other account's request")
 	}
 }

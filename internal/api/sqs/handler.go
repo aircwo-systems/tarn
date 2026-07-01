@@ -117,10 +117,8 @@ func (h *Handler) deleteQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.DeleteQueue(name); err != nil {
-		writeXMLError(w, 400, "AWS.SimpleQueueService.NonExistentQueue", err.Error())
-		return
-	}
+	// Idempotent: ignore not-found (matches real AWS behavior).
+	_ = h.svc.DeleteQueue(name)
 
 	body := fmt.Sprintf(`<DeleteQueueResponse xmlns="%s">
   <ResponseMetadata>
