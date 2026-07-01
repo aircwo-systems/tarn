@@ -1,6 +1,7 @@
 <script lang="ts">
   import { CaretDownIcon, CheckIcon, CopySimpleIcon } from "phosphor-svelte";
   import { Tabs, TabsList, TabsTrigger } from "$lib/components/ui/tabs";
+  import VirtualizedCode from "$lib/components/common/virtualized-code.svelte";
 
   let {
     raw,
@@ -108,18 +109,18 @@
         <span>{copiedContent ? "Copied" : "Copy"}</span>
       </button>
       {#if !hasFormatted || activeView === "raw"}
-        <pre
-          class={`bg-[var(--code-bg)] px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${rawContentClass} ${rawMaxHeightClass}`}>{raw}</pre
-        >
-      {:else if formattedHtml}
-        <div
-          class={`bg-[var(--code-bg)] px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${formattedContentClass} ${formattedMaxHeightClass}`}
-          >{@html formattedHtml}</div
-        >
+        <VirtualizedCode
+          text={raw}
+          contentClass={rawContentClass}
+          maxHeightClass={rawMaxHeightClass}
+        />
       {:else}
-        <pre
-          class={`bg-[var(--code-bg)] px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${formattedContentClass} ${formattedMaxHeightClass}`}>{formatted}</pre
-        >
+        <VirtualizedCode
+          text={formatted ?? raw}
+          html={formattedHtml}
+          contentClass={formattedContentClass}
+          maxHeightClass={formattedMaxHeightClass}
+        />
       {/if}
     </div>
   </div>
@@ -163,16 +164,12 @@
             </span>
             <span>{copiedContent ? "Copied" : "Copy"}</span>
           </button>
-          {#if formattedHtml}
-            <div
-              class={`bg-[var(--code-bg)] px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${formattedContentClass} ${formattedMaxHeightClass}`}
-              >{@html formattedHtml}</div
-            >
-          {:else}
-            <pre
-              class={`bg-[var(--code-bg)] px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${formattedContentClass} ${formattedMaxHeightClass}`}>{formatted}</pre
-            >
-          {/if}
+          <VirtualizedCode
+            text={formatted ?? raw}
+            html={formattedHtml}
+            contentClass={formattedContentClass}
+            maxHeightClass={formattedMaxHeightClass}
+          />
         </div>
       {/if}
     </div>
@@ -194,9 +191,13 @@
       />
     </button>
     {#if rawExpanded}
-      <pre
-        class={`border-t border-border bg-[var(--code-bg)] px-3 py-3 font-mono leading-relaxed whitespace-pre-wrap break-all overflow-y-auto ${rawContentClass} ${rawMaxHeightClass}`}>{raw}</pre
-      >
+      <div class="border-t border-border">
+        <VirtualizedCode
+          text={raw}
+          contentClass={rawContentClass}
+          maxHeightClass={rawMaxHeightClass}
+        />
+      </div>
     {/if}
   </div>
 {/if}

@@ -15,6 +15,7 @@
     DetectiveIcon,
     SidebarSimpleIcon,
     DatabaseIcon,
+    FlowArrowIcon,
   } from "phosphor-svelte";
   import { onMount } from "svelte";
 
@@ -32,6 +33,7 @@
   import SecretsSection from "$lib/components/sections/secrets-section.svelte";
   import TriggersSection from "$lib/components/sections/triggers-section.svelte";
   import EventBridgeSection from "$lib/components/sections/eventbridge-section.svelte";
+  import StepFunctionsSection from "$lib/components/sections/stepfunctions-section.svelte";
   import DynamoDBSection from "$lib/components/sections/dynamodb-section.svelte";
   import StorageSection from "$lib/components/sections/storage-section.svelte";
   import LogsSection from "$lib/components/sections/logs-section.svelte";
@@ -78,10 +80,11 @@
   const accountSettings = getAccountSettings();
 
   // ── Routing ─────────────────────────────────────────────────────
-  const validTabs = ["overview","gateways","chaos","functions","queues","dynamodb","sns","secrets","triggers","eventbridge","storage","logs","xray"];
+  const validTabs = ["overview","gateways","chaos","functions","queues","dynamodb","sns","secrets","triggers","eventbridge","stepfunctions","storage","logs","xray"];
   let activeTab = $state("overview");
   let logsInitialGroup = $state("");
   let logsInitialTimestamp = $state("");
+  let logsInitialStream = $state("");
   let xrayInitialTraceId = $state("");
 
   function readHash() {
@@ -90,11 +93,13 @@
     if (validTabs.includes(tab)) activeTab = tab;
     logsInitialGroup = "";
     logsInitialTimestamp = "";
+    logsInitialStream = "";
     xrayInitialTraceId = "";
     if (tab === "logs" && qs) {
       const params = new URLSearchParams(qs);
       logsInitialGroup = params.get("group") ?? "";
       logsInitialTimestamp = params.get("ts") ?? "";
+      logsInitialStream = params.get("stream") ?? "";
     }
     if (tab === "xray" && qs) {
       const params = new URLSearchParams(qs);
@@ -205,6 +210,7 @@
   const countSecrets     = $derived((dashboard.data?.secrets ?? []).filter(s => matchesPrototypeResourceFilter("secret", s.tags)).length);
   const countBuckets     = $derived((dashboard.data?.buckets ?? []).filter(() => matchesPrototypeResourceFilter("bucket")).length);
   const countEventBridge = $derived((dashboard.data?.eventBridgeRules ?? []).filter(() => matchesPrototypeResourceFilter("eventbridge")).length);
+  const countStateMachines = $derived(directPrototypeFilter ? 0 : (dashboard.data?.stateMachines ?? []).length);
   const countTriggers    = $derived(directPrototypeFilter ? 0 : (dashboard.data?.eventSourceMappings ?? []).length);
 
   const recentTraces = $derived(dashboard.data?.recentTraces ?? []);
@@ -292,6 +298,7 @@
         { id: "secrets",      label: "Secrets",     icon: KeyIcon,                  count: countSecrets     },
         { id: "triggers",     label: "Triggers",    icon: ArrowsClockwiseIcon,      count: countTriggers    },
         { id: "eventbridge",  label: "EventBridge", icon: BridgeIcon,               count: countEventBridge },
+        { id: "stepfunctions", label: "Step Functions", icon: FlowArrowIcon,        count: countStateMachines },
         { id: "storage",      label: "Storage",     icon: HardDriveIcon,            count: countBuckets     },
       ],
     },
@@ -407,12 +414,15 @@
       <TriggersSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
     {:else if activeTab === "eventbridge"}
       <EventBridgeSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+    {:else if activeTab === "stepfunctions"}
+      <StepFunctionsSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
     {:else if activeTab === "storage"}
       <StorageSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
     {:else if activeTab === "logs"}
       <LogsSection
         initialGroup={logsInitialGroup}
         initialTimestamp={logsInitialTimestamp}
+        initialStream={logsInitialStream}
         {sidebarCollapsed}
         onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
       />

@@ -42,11 +42,13 @@
   let {
     initialGroup = "",
     initialTimestamp = "",
+    initialStream = "",
     sidebarCollapsed = false,
     onToggleSidebar = () => {},
   }: {
     initialGroup?: string;
     initialTimestamp?: string;
+    initialStream?: string;
     sidebarCollapsed?: boolean;
     onToggleSidebar?: () => void;
   } = $props();
@@ -108,6 +110,15 @@
   $effect(() => {
     if (initialTimestamp) {
       highlightTimestamp = initialTimestamp;
+    }
+  });
+
+  // Seed the stream filter from a deep link so the first load is scoped to the
+  // exact invocation's stream. Runs before the loadEvents effect below.
+  $effect(() => {
+    if (initialStream) {
+      filterStream = initialStream;
+      showFilters = true;
     }
   });
 
