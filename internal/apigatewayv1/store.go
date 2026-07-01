@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/pkg/types"
@@ -14,9 +16,10 @@ import (
 
 // Store persists REST API (v1) state.
 type Store struct {
-	mu   sync.RWMutex
-	apis map[string]*restAPIRecord
-	cfg  *config.Config
+	mu    sync.RWMutex
+	dirty atomic.Bool
+	apis  map[string]*restAPIRecord
+	cfg   *config.Config
 }
 
 type restAPIRecord struct {
@@ -69,6 +72,7 @@ func (s *Store) Init() error {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return nil
 	}
+	go s.startFlusher()
 	if err := os.MkdirAll(s.cfg.APIGatewayV1Dir(), 0755); err != nil {
 		return fmt.Errorf("create apigatewayv1 dir: %w", err)
 	}
@@ -142,7 +146,7 @@ func (s *Store) CreateAPI(api *types.RestAPI, rootResource *types.RestResource) 
 		rec.resources[rootResource.ID] = rootResource
 	}
 	s.apis[api.ID] = rec
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -199,7 +203,7 @@ func (s *Store) SaveAPI(api *types.RestAPI) error {
 	}
 	cp := *api
 	rec.api = &cp
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -211,7 +215,7 @@ func (s *Store) DeleteAPI(apiID string) error {
 		return fmt.Errorf("rest api %s not found", apiID)
 	}
 	delete(s.apis, apiID)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -225,7 +229,7 @@ func (s *Store) CreateResource(apiID string, res *types.RestResource) error {
 	}
 	cp := *res
 	rec.resources[res.ID] = &cp
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -274,7 +278,7 @@ func (s *Store) DeleteResource(apiID, resourceID string) error {
 		return fmt.Errorf("resource %s not found", resourceID)
 	}
 	delete(rec.resources, resourceID)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -288,7 +292,7 @@ func (s *Store) PutMethod(apiID string, method *types.RestMethod) error {
 	}
 	cp := *method
 	rec.methods[methodKey{method.ResourceID, method.HTTPMethod}] = &cp
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -321,7 +325,7 @@ func (s *Store) DeleteMethod(apiID, resourceID, httpMethod string) error {
 		return fmt.Errorf("method %s not found on resource %s", httpMethod, resourceID)
 	}
 	delete(rec.methods, k)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -335,7 +339,7 @@ func (s *Store) PutIntegration(apiID string, integration *types.RestIntegration)
 	}
 	cp := *integration
 	rec.integrations[methodKey{integration.ResourceID, integration.MethodHTTPMethod}] = &cp
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -384,7 +388,7 @@ func (s *Store) DeleteIntegration(apiID, resourceID, httpMethod string) error {
 		return fmt.Errorf("integration not found for %s on resource %s", httpMethod, resourceID)
 	}
 	delete(rec.integrations, k)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -398,7 +402,7 @@ func (s *Store) PutMethodResponse(apiID string, mr *types.RestMethodResponse) er
 	}
 	cp := *mr
 	rec.methodResponses[responseKey{mr.ResourceID, mr.HTTPMethod, mr.StatusCode}] = &cp
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -428,7 +432,7 @@ func (s *Store) PutIntegrationResponse(apiID string, ir *types.RestIntegrationRe
 	}
 	cp := *ir
 	rec.integrationResponses[responseKey{ir.ResourceID, ir.HTTPMethod, ir.StatusCode}] = &cp
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -458,7 +462,7 @@ func (s *Store) CreateDeployment(apiID string, dep *types.RestDeployment) error 
 	}
 	cp := *dep
 	rec.deployments[dep.ID] = &cp
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -505,7 +509,7 @@ func (s *Store) CreateStage(apiID string, stage *types.RestStage) error {
 	}
 	cp := *stage
 	rec.stages[stage.StageName] = &cp
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -554,7 +558,7 @@ func (s *Store) DeleteStage(apiID, stageName string) error {
 		return fmt.Errorf("stage %s not found", stageName)
 	}
 	delete(rec.stages, stageName)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -563,10 +567,22 @@ func (s *Store) GetAllIntegrationsForAPI(apiID string) ([]*types.RestIntegration
 	return s.ListIntegrations(apiID)
 }
 
-func (s *Store) persistLocked() {
+func (s *Store) startFlusher() {
+	t := time.NewTicker(250 * time.Millisecond)
+	defer t.Stop()
+	for range t.C {
+		if s.dirty.Swap(false) {
+			s.flushToDisk()
+		}
+	}
+}
+
+func (s *Store) flushToDisk() {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return
 	}
+
+	s.mu.RLock()
 	apiIDs := make([]string, 0, len(s.apis))
 	for id := range s.apis {
 		apiIDs = append(apiIDs, id)
@@ -609,8 +625,9 @@ func (s *Store) persistLocked() {
 		}
 		snap.APIs = append(snap.APIs, item)
 	}
+	s.mu.RUnlock()
 
-	data, err := json.MarshalIndent(snap, "", "  ")
+	data, err := json.Marshal(snap)
 	if err != nil {
 		return
 	}

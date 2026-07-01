@@ -23,6 +23,7 @@ import (
 	secretshandler "github.com/aircwo-systems/tarn/internal/api/secrets"
 	snshandler "github.com/aircwo-systems/tarn/internal/api/sns"
 	sqshandler "github.com/aircwo-systems/tarn/internal/api/sqs"
+	stepfunctionshandler "github.com/aircwo-systems/tarn/internal/api/stepfunctions"
 	"github.com/aircwo-systems/tarn/internal/config"
 	logssvc "github.com/aircwo-systems/tarn/internal/logs"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
@@ -40,8 +41,13 @@ type HandlerSet struct {
 	Secrets     *secretshandler.Handler
 	EventSource *eventsourcehandler.Handler
 	EventBridge *eventbridgehandler.Handler
+	StepFunctions *stepfunctionshandler.Handler
 	IAM         *iamhandler.Handler
 	Admin       *adminhandler.Handler
+	// Logs is this account's CloudWatch-style logs service. It is per-account so
+	// log groups (e.g. /aws/lambda/<fn>) and the account's API request log do not
+	// leak across accounts.
+	Logs *logssvc.Service
 }
 
 // AccountBundle pairs a HandlerSet with the stoppable services it owns.
@@ -55,6 +61,11 @@ type AccountBundle struct {
 func NewAccountBundle(hs *HandlerSet, stop func()) *AccountBundle {
 	return &AccountBundle{handlers: hs, stop: stop}
 }
+
+// Handlers returns the bundle's HandlerSet. It lets callers outside this package
+// (e.g. the secrets proxy wiring) reach a specific account's services, such as
+// its per-account logs.
+func (b *AccountBundle) Handlers() *HandlerSet { return b.handlers }
 
 // HandlerRegistry lazily creates and caches per-account HandlerSets.
 type HandlerRegistry struct {
@@ -447,6 +458,10 @@ func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
 		hs.EventBridge.Dispatch(w, r)
 		return
 	}
+	if strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AWSStepFunctions.") {
+		hs.StepFunctions.Dispatch(w, r)
+		return
+	}
 	if strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AmazonSQS.") {
 		hs.SQS.Dispatch(w, r)
 		return
@@ -488,7 +503,7 @@ func (s *Server) telemetryDBHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","sns","dynamodb","secretsmanager","eventsource","eventbridge"]}`)
+	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","sns","dynamodb","secretsmanager","eventsource","eventbridge","stepfunctions"]}`)
 }
 
 func (s *Server) withLogging(next http.Handler) http.Handler {
@@ -508,8 +523,17 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 		} else {
 			log.Printf("%s %s %d %s", r.Method, r.URL.Path, wrapped.status, duration)
 		}
-		if s.logsSvc != nil && !strings.HasPrefix(r.URL.Path, "/_tarn/") {
-			s.logsSvc.LogAPIRequest(r.Method, r.URL.Path, wrapped.status, duration)
+		if !strings.HasPrefix(r.URL.Path, "/_tarn/") {
+			// Record the request in the resolved account's own log so request
+			// logs stay account-specific; fall back to the server-level logs
+			// service if the account has none.
+			logsSvc := s.logsSvc
+			if hs := s.hs(r); hs != nil && hs.Logs != nil {
+				logsSvc = hs.Logs
+			}
+			if logsSvc != nil {
+				logsSvc.LogAPIRequest(r.Method, r.URL.Path, wrapped.status, duration)
+			}
 		}
 	})
 }
@@ -540,6 +564,10 @@ func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request)
 	target := strings.TrimSpace(r.Header.Get("X-Amz-Target"))
 	if strings.HasPrefix(target, "AWSEvents.") {
 		hs.EventBridge.Dispatch(w, r)
+		return true
+	}
+	if strings.HasPrefix(target, "AWSStepFunctions.") {
+		hs.StepFunctions.Dispatch(w, r)
 		return true
 	}
 	if strings.HasPrefix(target, "AmazonSQS.") {

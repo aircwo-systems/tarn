@@ -22,6 +22,7 @@ export interface OverviewResponse {
     logGroups: number;
     eventSourceMappings: number;
     eventBridgeRules: number;
+    stateMachines?: number;
   };
   gateways: GatewaySummary[];
   functions: FunctionSummary[];
@@ -34,6 +35,7 @@ export interface OverviewResponse {
   dynamodbStreams?: DynamoDBStreamSummary[];
   eventSourceMappings: EventSourceMappingSummary[];
   eventBridgeRules?: EventBridgeRuleSummary[];
+  stateMachines?: StateMachineSummary[];
   infrastructure: InfraProbe[];
   connections?: InfraConnection[];
   recentTraces?: RequestTrace[];
@@ -380,6 +382,37 @@ export interface EventBridgeRaceResult {
   traceIds?: string[];
   startedAt: string;
   finishedAt: string;
+}
+
+export interface StateMachineEventSummary {
+  id: number;
+  type: string;
+  timestamp?: string;
+  details?: Record<string, unknown>;
+}
+
+export interface StateMachineExecutionSummary {
+  arn: string;
+  name: string;
+  status: "RUNNING" | "SUCCEEDED" | "FAILED" | "ABORTED" | "TIMED_OUT" | string;
+  startDate?: string;
+  stopDate?: string;
+  output?: string;
+  error?: string;
+  cause?: string;
+  traceId?: string;
+  events?: StateMachineEventSummary[];
+}
+
+export interface StateMachineSummary {
+  name: string;
+  arn: string;
+  type: "STANDARD" | "EXPRESS" | string;
+  status: "ACTIVE" | "DELETING" | string;
+  roleArn?: string;
+  definition?: string;
+  createdAt?: string;
+  executions?: StateMachineExecutionSummary[];
 }
 
 export interface LogGroupSummary {

@@ -27,6 +27,7 @@ import (
 	secretssvc "github.com/aircwo-systems/tarn/internal/secrets"
 	snssvc "github.com/aircwo-systems/tarn/internal/sns"
 	sqssvc "github.com/aircwo-systems/tarn/internal/sqs"
+	stepfunctionssvc "github.com/aircwo-systems/tarn/internal/stepfunctions"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
@@ -46,10 +47,11 @@ type Handler struct {
 	infra       *infrasvc.Service
 	esm         *eventsourcesvc.Service
 	eventbridge *eventbridgesvc.Service
+	stepfunctions *stepfunctionssvc.Service
 	traceStore  *tracesvc.Store
 }
 
-func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apigatewayv1svc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, sns *snssvc.Service, dynamodb *dynamodbsvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, eventbridge *eventbridgesvc.Service, traceStore *tracesvc.Store) *Handler {
+func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apigatewayv1svc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, sns *snssvc.Service, dynamodb *dynamodbsvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, eventbridge *eventbridgesvc.Service, stepfunctions *stepfunctionssvc.Service, traceStore *tracesvc.Store) *Handler {
 	return &Handler{
 		cfg:         cfg,
 		apigw:       apigw,
@@ -64,6 +66,7 @@ func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apiga
 		infra:       infra,
 		esm:         esm,
 		eventbridge: eventbridge,
+		stepfunctions: stepfunctions,
 		traceStore:  traceStore,
 	}
 }
@@ -85,6 +88,7 @@ type overviewResponse struct {
 	DynamoDBStreams     []dynamodbStreamSummary  `json:"dynamodbStreams,omitempty"`
 	EventSourceMappings []esmSummary             `json:"eventSourceMappings"`
 	EventBridgeRules    []eventBridgeRuleSummary `json:"eventBridgeRules,omitempty"`
+	StateMachines       []stateMachineSummary    `json:"stateMachines,omitempty"`
 	Infrastructure      []infrasvc.ProbeResult   `json:"infrastructure"`
 	Connections         []infraConnection        `json:"connections,omitempty"`
 	RecentTraces        []*tracesvc.Trace        `json:"recentTraces,omitempty"`
@@ -112,6 +116,43 @@ type overviewCounts struct {
 	LogGroups           int `json:"logGroups"`
 	EventSourceMappings int `json:"eventSourceMappings"`
 	EventBridgeRules    int `json:"eventBridgeRules"`
+	StateMachines       int `json:"stateMachines"`
+}
+
+// maxOverviewExecutions bounds how many executions (with full history) are
+// surfaced per state machine in the dashboard overview payload.
+const maxOverviewExecutions = 50
+
+type stateMachineEventSummary struct {
+	ID        int64          `json:"id"`
+	Type      string         `json:"type"`
+	Timestamp string         `json:"timestamp,omitempty"`
+	Details   map[string]any `json:"details,omitempty"`
+}
+
+type stateMachineExecutionSummary struct {
+	Arn       string                     `json:"arn"`
+	Name      string                     `json:"name"`
+	Status    string                     `json:"status"`
+	StartDate string                     `json:"startDate,omitempty"`
+	StopDate  string                     `json:"stopDate,omitempty"`
+	Output    string                     `json:"output,omitempty"`
+	Error     string                     `json:"error,omitempty"`
+	Cause     string                     `json:"cause,omitempty"`
+	TraceID   string                     `json:"traceId,omitempty"`
+	Events    []stateMachineEventSummary `json:"events,omitempty"`
+}
+
+type stateMachineSummary struct {
+	Name       string                         `json:"name"`
+	Arn        string                         `json:"arn"`
+	Type       string                         `json:"type"`
+	Status     string                         `json:"status"`
+	RoleArn    string                         `json:"roleArn,omitempty"`
+	Definition string                         `json:"definition,omitempty"`
+	CreatedAt  string                         `json:"createdAt,omitempty"`
+	Tags       map[string]string              `json:"tags,omitempty"`
+	Executions []stateMachineExecutionSummary `json:"executions,omitempty"`
 }
 
 type esmSummary struct {
@@ -419,11 +460,15 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	if h.eventbridge != nil {
 		eventBridgeRules, _, _ = h.eventbridge.ListRules("", "", 500, "")
 	}
+	var stateMachines []*types.StateMachine
+	if h.stepfunctions != nil {
+		stateMachines = h.stepfunctions.ListStateMachines()
+	}
 
 	resp := overviewResponse{
 		Status:    "running",
 		Timestamp: time.Now().UTC(),
-		Services:  []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "sns", "dynamodb", "secretsmanager", "eventsource", "eventbridge"},
+		Services:  []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "sns", "dynamodb", "secretsmanager", "eventsource", "eventbridge", "stepfunctions"},
 		Config: overviewConfig{
 			Region:    h.cfg.Region,
 			AccountID: h.cfg.AccountID,
@@ -444,6 +489,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			LogGroups:           len(logGroups),
 			EventSourceMappings: len(esmMappings),
 			EventBridgeRules:    len(eventBridgeRules),
+			StateMachines:       len(stateMachines),
 		},
 		Gateways:            make([]gatewaySummary, 0, len(gateways)),
 		Functions:           make([]functionSummary, 0, len(functions)),
@@ -456,6 +502,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		DynamoDBStreams:     dynamoStreams,
 		EventSourceMappings: make([]esmSummary, 0, len(esmMappings)),
 		EventBridgeRules:    make([]eventBridgeRuleSummary, 0, len(eventBridgeRules)),
+		StateMachines:       make([]stateMachineSummary, 0, len(stateMachines)),
 		Infrastructure:      infraResults,
 		Connections:         inferInfraConnections(functions, infraResults),
 		RecentTraces:        h.recentTraces(),
@@ -530,6 +577,58 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	sort.Slice(resp.EventBridgeRules, func(i, j int) bool { return resp.EventBridgeRules[i].Name < resp.EventBridgeRules[j].Name })
+
+	// Step Functions state machine summaries (with their recent executions).
+	for _, sm := range stateMachines {
+		var execs []stateMachineExecutionSummary
+		if h.stepfunctions != nil {
+			list, _ := h.stepfunctions.ListExecutions(sm.Arn, "")
+			// Cap how many executions (with their full event history) we surface
+			// per machine to keep the overview payload bounded; ListExecutions is
+			// already newest-first.
+			if len(list) > maxOverviewExecutions {
+				list = list[:maxOverviewExecutions]
+			}
+			execs = make([]stateMachineExecutionSummary, 0, len(list))
+			for _, ex := range list {
+				summary := stateMachineExecutionSummary{
+					Arn:       ex.Arn,
+					Name:      ex.Name,
+					Status:    ex.Status,
+					StartDate: ex.StartDate.UTC().Format(time.RFC3339),
+					Output:    ex.Output,
+					Error:     ex.Error,
+					Cause:     ex.Cause,
+					TraceID:   ex.TraceID,
+				}
+				if ex.StopDate != nil {
+					summary.StopDate = ex.StopDate.UTC().Format(time.RFC3339)
+				}
+				summary.Events = make([]stateMachineEventSummary, 0, len(ex.History))
+				for _, evt := range ex.History {
+					summary.Events = append(summary.Events, stateMachineEventSummary{
+						ID:        evt.ID,
+						Type:      evt.Type,
+						Timestamp: evt.Timestamp.UTC().Format(time.RFC3339),
+						Details:   evt.Details,
+					})
+				}
+				execs = append(execs, summary)
+			}
+		}
+		resp.StateMachines = append(resp.StateMachines, stateMachineSummary{
+			Name:       sm.Name,
+			Arn:        sm.Arn,
+			Type:       sm.Type,
+			Status:     sm.Status,
+			RoleArn:    sm.RoleArn,
+			Definition: sm.Definition,
+			CreatedAt:  sm.CreatedAt.UTC().Format(time.RFC3339),
+			Tags:       sm.Tags,
+			Executions: execs,
+		})
+	}
+	sort.Slice(resp.StateMachines, func(i, j int) bool { return resp.StateMachines[i].Name < resp.StateMachines[j].Name })
 
 	// S3→Lambda notification connections
 	for _, b := range buckets {

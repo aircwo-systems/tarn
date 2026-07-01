@@ -618,5 +618,5 @@ func newTestHandler(t *testing.T) *Handler {
 	esm := eventsourcesvc.NewService(cfg, esmStore, nil, nil, nil)
 	eventbridgeStore := eventbridgesvc.NewStore(cfg)
 	eventbridge := eventbridgesvc.NewService(cfg, eventbridgeStore, lambda)
-	return NewHandler(cfg, apigw, apigwv1, lambda, logs, sqs, sns, dynamodb, secrets, infra, s3, esm, eventbridge, nil)
+	return NewHandler(cfg, apigw, apigwv1, lambda, logs, sqs, sns, dynamodb, secrets, infra, s3, esm, eventbridge, nil, nil)
 }

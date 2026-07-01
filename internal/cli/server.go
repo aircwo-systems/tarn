@@ -29,6 +29,7 @@ import (
 	secretshandler "github.com/aircwo-systems/tarn/internal/api/secrets"
 	snshandler "github.com/aircwo-systems/tarn/internal/api/sns"
 	sqshandler "github.com/aircwo-systems/tarn/internal/api/sqs"
+	stepfunctionshandler "github.com/aircwo-systems/tarn/internal/api/stepfunctions"
 	"github.com/aircwo-systems/tarn/internal/apigateway"
 	"github.com/aircwo-systems/tarn/internal/apigatewayv1"
 	"github.com/aircwo-systems/tarn/internal/config"
@@ -44,6 +45,7 @@ import (
 	"github.com/aircwo-systems/tarn/internal/secretsproxy"
 	"github.com/aircwo-systems/tarn/internal/sns"
 	"github.com/aircwo-systems/tarn/internal/sqs"
+	stepfunctionssvc "github.com/aircwo-systems/tarn/internal/stepfunctions"
 	"github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
 	"github.com/google/uuid"
@@ -128,7 +130,6 @@ func writePIDFile(path string) error {
 type sharedDeps struct {
 	eng        *engine.Engine
 	pool       *engine.WarmPool
-	logsSvc    *logs.Service
 	traceStore *trace.Store
 	collector  *trace.Collector
 	infraSvc   *infrastructure.Service
@@ -144,12 +145,16 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 
+	// Logs — per-account so log groups (e.g. /aws/lambda/<fn>) and this account's
+	// API request log are isolated from other accounts.
+	logsSvc := logs.NewService(acctCfg)
+
 	// Lambda
 	lambdaStore := lambda.NewStore(acctCfg)
 	if err := lambdaStore.Init(); err != nil {
 		return nil, fmt.Errorf("lambda store: %w", err)
 	}
-	lambdaSvc := lambda.NewService(acctCfg, lambdaStore, shared.eng, shared.pool, shared.logsSvc)
+	lambdaSvc := lambda.NewService(acctCfg, lambdaStore, shared.eng, shared.pool, logsSvc)
 	lambdaSvc.ActivatePendingFunctions()
 
 	// SQS
@@ -230,6 +235,14 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	eventbridgeSvc.SetTraceStore(shared.traceStore)
 	eventbridgeSvc.SetCollector(shared.collector)
 
+	// Step Functions
+	stepFunctionsStore := stepfunctionssvc.NewStore(acctCfg)
+	stepFunctionsSvc := stepfunctionssvc.NewService(acctCfg, stepFunctionsStore, lambdaSvc)
+	if err := stepFunctionsSvc.Init(); err != nil {
+		return nil, fmt.Errorf("stepfunctions store: %w", err)
+	}
+	stepFunctionsSvc.SetTraceStore(shared.traceStore)
+
 	// S3 event callback — routes object events to this account's Lambda functions.
 	s3Svc.SetEventCallback(func(eventName string, bucket, key string, size int64, etag string) {
 		notifCfg := s3Svc.GetBucketNotificationConfiguration(bucket)
@@ -278,6 +291,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	// Start background workers
 	eventbridgeSvc.Start()
 	esmSvc.Start()
+	stepFunctionsSvc.Start()
 
 	// Build HTTP handlers
 	lh := lambdahandler.NewHandler(lambdaSvc, s3Svc)
@@ -298,18 +312,21 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 		Secrets:     sh,
 		EventSource: eventsourcehandler.NewHandler(esmSvc),
 		EventBridge: eventbridgehandler.NewHandler(eventbridgeSvc),
+		StepFunctions: stepfunctionshandler.NewHandler(stepFunctionsSvc),
 		IAM:         iamhandler.NewHandler(acctCfg.AccountID),
 		Admin: adminhandler.NewHandler(
-			acctCfg, gatewaySvc, gatewayV1Svc, lambdaSvc, shared.logsSvc,
+			acctCfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc,
 			sqsSvc, snsSvc, dynamoSvc, secretsSvc, shared.infraSvc,
-			s3Svc, esmSvc, eventbridgeSvc, shared.traceStore,
+			s3Svc, esmSvc, eventbridgeSvc, stepFunctionsSvc, shared.traceStore,
 		),
+		Logs: logsSvc,
 	}
 
 	stop := func() {
 		sqsSvc.Stop()
 		esmSvc.Stop()
 		eventbridgeSvc.Stop()
+		stepFunctionsSvc.Stop()
 	}
 
 	return api.NewAccountBundle(hs, stop), nil
@@ -344,8 +361,8 @@ func startServer(cfg *config.Config) error {
 	pool.Start()
 	defer pool.Stop()
 
-	// Shared services
-	logsSvc := logs.NewService(cfg)
+	// Shared services. Logs are NOT shared — each account gets its own logs
+	// service inside initAccountBundle so log groups stay account-specific.
 	traceStore := trace.OpenStore(cfg.DataDir)
 	defer traceStore.Close()
 	collector := trace.NewCollector()
@@ -383,7 +400,6 @@ func startServer(cfg *config.Config) error {
 	shared := &sharedDeps{
 		eng:        eng,
 		pool:       pool,
-		logsSvc:    logsSvc,
 		traceStore: traceStore,
 		collector:  collector,
 		infraSvc:   infraSvc,
@@ -401,9 +417,13 @@ func startServer(cfg *config.Config) error {
 	// Pre-initialize the default account so it's ready before the first request.
 	// Any startup errors (e.g. corrupt state files) surface here rather than on
 	// the first API call.
-	if _, err := registry.PreInit(cfg.AccountID); err != nil {
+	defaultBundle, err := registry.PreInit(cfg.AccountID)
+	if err != nil {
 		return fmt.Errorf("failed to initialize default account: %w", err)
 	}
+	// The secrets proxy and server-level request logging are single-account
+	// (default) concerns, so they use the default account's logs service.
+	logsSvc := defaultBundle.Handlers().Logs
 
 	// Secrets proxy (uses default account's secrets service — single account proxy)
 	var secretsProxyServer *http.Server

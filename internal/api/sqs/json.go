@@ -121,10 +121,8 @@ func (h *Handler) jsonDeleteQueue(w http.ResponseWriter, body []byte) {
 		writeJSONError(w, 400, "MissingParameter", "QueueUrl is required")
 		return
 	}
-	if err := h.svc.DeleteQueue(name); err != nil {
-		writeJSONError(w, 400, "AWS.SimpleQueueService.NonExistentQueue", err.Error())
-		return
-	}
+	// Idempotent: return 200 even if queue already deleted (matches real AWS behavior).
+	_ = h.svc.DeleteQueue(name)
 	writeJSON(w, 200, map[string]any{})
 }
 
@@ -155,7 +153,7 @@ func (h *Handler) jsonGetQueueUrl(w http.ResponseWriter, body []byte) {
 	}
 	url, err := h.svc.GetQueueUrl(req.QueueName)
 	if err != nil {
-		writeJSONError(w, 400, "AWS.SimpleQueueService.NonExistentQueue", err.Error())
+		writeJSONError(w, 400, "QueueDoesNotExist", err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]string{"QueueUrl": url})
@@ -177,7 +175,9 @@ func (h *Handler) jsonGetQueueAttributes(w http.ResponseWriter, body []byte) {
 	}
 	attrs, err := h.svc.GetQueueAttributes(name, req.AttributeNames)
 	if err != nil {
-		writeJSONError(w, 400, "AWS.SimpleQueueService.NonExistentQueue", err.Error())
+		// Use QueueDoesNotExist (JSON protocol name) so AWS SDK v2 maps it to
+		// *awstypes.QueueDoesNotExist — required for Terraform's waitQueueDeleted to terminate.
+		writeJSONError(w, 400, "QueueDoesNotExist", err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]any{"Attributes": attrs})
@@ -198,7 +198,7 @@ func (h *Handler) jsonSetQueueAttributes(w http.ResponseWriter, body []byte) {
 		return
 	}
 	if err := h.svc.SetQueueAttributes(name, req.Attributes); err != nil {
-		writeJSONError(w, 400, "AWS.SimpleQueueService.NonExistentQueue", err.Error())
+		writeJSONError(w, 400, "QueueDoesNotExist", err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]any{})
@@ -317,7 +317,7 @@ func (h *Handler) jsonReceiveMessage(w http.ResponseWriter, body []byte) {
 
 	msgs, err := h.svc.ReceiveMessage(name, maxCount, visTimeout, req.WaitTimeSeconds)
 	if err != nil {
-		writeJSONError(w, 400, "AWS.SimpleQueueService.NonExistentQueue", err.Error())
+		writeJSONError(w, 400, "QueueDoesNotExist", err.Error())
 		return
 	}
 
@@ -455,7 +455,7 @@ func (h *Handler) jsonPurgeQueue(w http.ResponseWriter, body []byte) {
 		return
 	}
 	if err := h.svc.PurgeQueue(name); err != nil {
-		writeJSONError(w, 400, "AWS.SimpleQueueService.NonExistentQueue", err.Error())
+		writeJSONError(w, 400, "QueueDoesNotExist", err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]any{})
@@ -476,7 +476,7 @@ func (h *Handler) jsonTagQueue(w http.ResponseWriter, body []byte) {
 		return
 	}
 	if err := h.svc.TagQueue(name, req.Tags); err != nil {
-		writeJSONError(w, 400, "AWS.SimpleQueueService.NonExistentQueue", err.Error())
+		writeJSONError(w, 400, "QueueDoesNotExist", err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]any{})
@@ -497,7 +497,7 @@ func (h *Handler) jsonUntagQueue(w http.ResponseWriter, body []byte) {
 		return
 	}
 	if err := h.svc.UntagQueue(name, req.TagKeys); err != nil {
-		writeJSONError(w, 400, "AWS.SimpleQueueService.NonExistentQueue", err.Error())
+		writeJSONError(w, 400, "QueueDoesNotExist", err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]any{})
@@ -518,7 +518,7 @@ func (h *Handler) jsonListQueueTags(w http.ResponseWriter, body []byte) {
 	}
 	tags, err := h.svc.ListQueueTags(name)
 	if err != nil {
-		writeJSONError(w, 400, "AWS.SimpleQueueService.NonExistentQueue", err.Error())
+		writeJSONError(w, 400, "QueueDoesNotExist", err.Error())
 		return
 	}
 	writeJSON(w, 200, map[string]any{"Tags": tags})
@@ -531,7 +531,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeJSONError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
+	// Match the AWS SQS JSON (awsjson1_0) error wire format so AWS SDK v2 / the
+	// Terraform AWS provider map the error to its typed exception (e.g.
+	// *types.QueueDoesNotExist) and treat a missing queue as drift instead of a
+	// hard error. smithy-go resolves the error shape from the X-Amzn-Errortype
+	// header first, then the body __type; we set both, and echo the awsjson
+	// content type.
+	w.Header().Set("Content-Type", "application/x-amz-json-1.0")
+	w.Header().Set("X-Amzn-Errortype", code)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"__type":  code,

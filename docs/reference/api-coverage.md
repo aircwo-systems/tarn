@@ -13,6 +13,7 @@ Tarn implements **225+ AWS API actions** across 11 services, with service-specif
 | **DynamoDB** | JSON | 27 | `dynamodb` |
 | **Secrets Manager** | JSON-RPC | 10 | `secretsmanager` |
 | **EventBridge** | JSON | 14 | `events` |
+| **Step Functions** | JSON (1.0) | 13 | `stepfunctions` |
 | **API Gateway v2** | REST/JSON | 18 | `apigatewayv2` |
 | **API Gateway v1** | REST/JSON | 19 | `apigateway` |
 | **IAM** | Query/XML | 17 | default |
@@ -60,7 +61,7 @@ Terraform's S3 provider probes many bucket sub-resources during every plan/apply
 
 All services share a single endpoint (`localhost:4566`). Requests are routed by:
 
-1. **`X-Amz-Target` header** — EventBridge (`AWSEvents.*`), SQS JSON (`AmazonSQS.*`), Secrets Manager (`secretsmanager.*`), DynamoDB (`DynamoDB_20120810.*`), DynamoDB Streams (`DynamoDBStreams_20120810.*`)
+1. **`X-Amz-Target` header** — EventBridge (`AWSEvents.*`), Step Functions (`AWSStepFunctions.*`), SQS JSON (`AmazonSQS.*`), Secrets Manager (`secretsmanager.*`), DynamoDB (`DynamoDB_20120810.*`), DynamoDB Streams (`DynamoDBStreams_20120810.*`)
 2. **`Version` form parameter** — IAM (`2010-05-08`), SNS (`2010-03-31`)
 3. **URL path** — Lambda (`/2015-03-31/functions/`), S3 (`/_s3/`), API Gateway (`/v2/apis/`, `/restapis/`)
 4. **Fallback** — SQS query protocol (default for `POST /`)
