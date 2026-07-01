@@ -493,6 +493,7 @@ func TestQueueStatePersistsToDisk(t *testing.T) {
 	if _, err := store.SendMessage("persisted-queue", "hello persistence", 0, nil, "", ""); err != nil {
 		t.Fatalf("send message: %v", err)
 	}
+	store.Flush()
 
 	reloaded := NewStore(cfg)
 	if err := reloaded.Init(); err != nil {
@@ -542,6 +543,7 @@ func TestProcessedCountPersistsToDisk(t *testing.T) {
 	if err := store.IncrementProcessedCount("processed-persisted-queue", 1); err != nil {
 		t.Fatalf("increment processed count: %v", err)
 	}
+	store.Flush()
 
 	reloaded := NewStore(cfg)
 	if err := reloaded.Init(); err != nil {
@@ -606,6 +608,7 @@ func TestInitToleratesTrailingGarbageInStateFile(t *testing.T) {
 	if _, err := store.CreateQueue("q-corrupt", nil, nil); err != nil {
 		t.Fatalf("create queue: %v", err)
 	}
+	store.Flush()
 
 	original, err := os.ReadFile(cfg.QueuesStatePath())
 	if err != nil {

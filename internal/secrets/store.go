@@ -2,6 +2,7 @@ package secrets
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -19,6 +21,7 @@ import (
 // Store is an in-memory secrets store.
 type Store struct {
 	mu      sync.RWMutex
+	dirty   atomic.Bool
 	secrets map[string]*types.Secret // keyed by secret name
 	cfg     *config.Config
 	vault   *Vault // nil when encryption is disabled
@@ -42,6 +45,7 @@ func (s *Store) Init() error {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return nil
 	}
+	go s.startFlusher()
 
 	if err := os.MkdirAll(s.cfg.SecretsDir(), 0755); err != nil {
 		return fmt.Errorf("create secrets dir: %w", err)
@@ -92,18 +96,25 @@ func (s *Store) Init() error {
 	return nil
 }
 
-// CreateSecret stores a new secret. Returns error if name already exists.
-func (s *Store) CreateSecret(secret *types.Secret) error {
+// ErrSecretExists is returned by CreateSecret when a secret with the same name
+// already exists, mirroring AWS Secrets Manager's ResourceExistsException.
+var ErrSecretExists = errors.New("secret already exists")
+
+// CreateSecret stores a new secret. It returns ErrSecretExists if a secret with
+// the same name already exists, matching AWS's ResourceExistsException. The
+// persistence reload path populates the store directly (see Init) and bypasses
+// this method, so restored state is unaffected.
+func (s *Store) CreateSecret(secret *types.Secret) (*types.Secret, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.secrets[secret.Name]; exists {
-		return fmt.Errorf("secret %s already exists", secret.Name)
+		return nil, ErrSecretExists
 	}
 
 	s.secrets[secret.Name] = cloneSecret(secret)
-	s.persistLocked()
-	return nil
+	s.dirty.Store(true)
+	return cloneSecret(secret), nil
 }
 
 // GetSecretValue retrieves a secret by name or ARN.
@@ -153,7 +164,7 @@ func (s *Store) UpdateSecret(nameOrArn string, secretString string, secretBinary
 
 	secret.VersionId = uuid.New().String()
 	secret.LastChangedDate = time.Now()
-	s.persistLocked()
+	s.dirty.Store(true)
 
 	return cloneSecret(secret), nil
 }
@@ -169,7 +180,7 @@ func (s *Store) DeleteSecret(nameOrArn string) error {
 	}
 
 	delete(s.secrets, secret.Name)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -209,7 +220,7 @@ func (s *Store) TagResource(nameOrArn string, tags []types.SecretTag) error {
 			secret.Tags = append(secret.Tags, newTag)
 		}
 	}
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -235,7 +246,7 @@ func (s *Store) UntagResource(nameOrArn string, tagKeys []string) error {
 		}
 	}
 	secret.Tags = filtered
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -260,7 +271,19 @@ func (s *Store) resolve(nameOrArn string) *types.Secret {
 	return nil
 }
 
-func (s *Store) persistLocked() {
+func (s *Store) Flush() { s.flushToDisk() }
+
+func (s *Store) startFlusher() {
+	t := time.NewTicker(250 * time.Millisecond)
+	defer t.Stop()
+	for range t.C {
+		if s.dirty.Swap(false) {
+			s.flushToDisk()
+		}
+	}
+}
+
+func (s *Store) flushToDisk() {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return
 	}
@@ -271,6 +294,7 @@ func (s *Store) persistLocked() {
 		Secrets: make([]*types.Secret, 0, len(s.secrets)),
 	}
 
+	s.mu.RLock()
 	names := make([]string, 0, len(s.secrets))
 	for name := range s.secrets {
 		names = append(names, name)
@@ -278,11 +302,16 @@ func (s *Store) persistLocked() {
 	sort.Strings(names)
 	for _, name := range names {
 		sec := cloneSecret(s.secrets[name])
-		if s.vault != nil {
+		snapshot.Secrets = append(snapshot.Secrets, sec)
+	}
+	s.mu.RUnlock()
+
+	if s.vault != nil {
+		for _, sec := range snapshot.Secrets {
 			if sec.SecretString != "" {
 				sealed, err := s.vault.Seal(sec.SecretString)
 				if err != nil {
-					log.Printf("[secrets] ERROR: failed to seal secret %s, aborting persist: %v", name, err)
+					log.Printf("[secrets] ERROR: failed to seal secret %s, aborting persist: %v", sec.Name, err)
 					return
 				}
 				sec.SecretString = sealed
@@ -290,16 +319,15 @@ func (s *Store) persistLocked() {
 			if len(sec.SecretBinary) > 0 {
 				sealed, err := s.vault.SealBytes(sec.SecretBinary)
 				if err != nil {
-					log.Printf("[secrets] ERROR: failed to seal secret binary %s, aborting persist: %v", name, err)
+					log.Printf("[secrets] ERROR: failed to seal secret binary %s, aborting persist: %v", sec.Name, err)
 					return
 				}
 				sec.SecretBinary = []byte(sealed)
 			}
 		}
-		snapshot.Secrets = append(snapshot.Secrets, sec)
 	}
 
-	data, err := json.MarshalIndent(snapshot, "", "  ")
+	data, err := json.Marshal(snapshot)
 	if err != nil {
 		return
 	}

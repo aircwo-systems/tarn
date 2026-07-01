@@ -328,6 +328,7 @@ func TestStoreMutationsPersistWithoutDeadlock(t *testing.T) {
 		return err
 	})
 
+	store.Flush()
 	if _, err := os.Stat(cfg.DynamoDBStatePath()); err != nil {
 		t.Fatalf("expected persisted state file: %v", err)
 	}

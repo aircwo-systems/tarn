@@ -34,6 +34,9 @@ func (s *Service) Init() error {
 	return s.store.Init()
 }
 
+// Flush forces an immediate synchronous disk write (for tests).
+func (s *Service) Flush() { s.store.Flush() }
+
 // CreateSecret creates a new secret with generated ARN and version ID.
 func (s *Service) CreateSecret(name, description, secretString string, secretBinary []byte, tags []types.SecretTag) (*types.Secret, error) {
 	now := time.Now()
@@ -52,10 +55,11 @@ func (s *Service) CreateSecret(name, description, secretString string, secretBin
 		LastAccessedDate: now,
 	}
 
-	if err := s.store.CreateSecret(secret); err != nil {
+	stored, err := s.store.CreateSecret(secret)
+	if err != nil {
 		return nil, err
 	}
-	return secret, nil
+	return stored, nil
 }
 
 // GetSecretValue retrieves a secret value by name or ARN.

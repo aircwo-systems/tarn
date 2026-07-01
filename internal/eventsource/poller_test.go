@@ -534,6 +534,7 @@ func TestServiceRestartStartsPollers(t *testing.T) {
 	if err := store1.Save(mapping); err != nil {
 		t.Fatalf("save mapping: %v", err)
 	}
+	store1.Flush()
 
 	// --- Second "boot": new service instance reads the same state.json.
 	store2 := NewStore(cfg)

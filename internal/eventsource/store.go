@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/pkg/types"
@@ -14,10 +16,10 @@ import (
 
 // Store is an in-memory store for event source mappings with optional JSON persistence.
 type Store struct {
-	mu        sync.RWMutex
-	persistMu sync.Mutex
-	cfg       *config.Config
-	mappings  map[string]*types.EventSourceMapping
+	mu       sync.RWMutex
+	dirty    atomic.Bool
+	cfg      *config.Config
+	mappings map[string]*types.EventSourceMapping
 }
 
 // NewStore creates a new event source mapping store.
@@ -33,6 +35,7 @@ func (store *Store) Init() error {
 	if !store.cfg.PersistenceEnabled {
 		return nil
 	}
+	go store.startFlusher()
 
 	dir := store.cfg.EventSourceDir()
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -118,12 +121,26 @@ func (store *Store) Delete(uuid string) error {
 }
 
 func (store *Store) persist() error {
-	if !store.cfg.PersistenceEnabled {
-		return nil
-	}
+	store.dirty.Store(true)
+	return nil
+}
 
-	store.persistMu.Lock()
-	defer store.persistMu.Unlock()
+func (store *Store) Flush() { store.flushToDisk() }
+
+func (store *Store) startFlusher() {
+	t := time.NewTicker(250 * time.Millisecond)
+	defer t.Stop()
+	for range t.C {
+		if store.dirty.Swap(false) {
+			store.flushToDisk()
+		}
+	}
+}
+
+func (store *Store) flushToDisk() {
+	if !store.cfg.PersistenceEnabled {
+		return
+	}
 
 	store.mu.RLock()
 	mappings := make([]*types.EventSourceMapping, 0, len(store.mappings))
@@ -132,37 +149,34 @@ func (store *Store) persist() error {
 	}
 	store.mu.RUnlock()
 
-	data, err := json.MarshalIndent(mappings, "", "  ")
+	data, err := json.Marshal(mappings)
 	if err != nil {
-		return fmt.Errorf("marshal eventsource state: %w", err)
+		return
 	}
 
 	dir := store.cfg.EventSourceDir()
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("create eventsource dir: %w", err)
+		return
 	}
 
 	tmpFile, err := os.CreateTemp(dir, "state-*.json.tmp")
 	if err != nil {
-		return fmt.Errorf("create eventsource temp state: %w", err)
+		return
 	}
 	tmpPath := tmpFile.Name()
 
 	if _, err := tmpFile.Write(data); err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("write eventsource temp state: %w", err)
+		return
 	}
 	if err := tmpFile.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close eventsource temp state: %w", err)
+		return
 	}
 
 	statePath := filepath.Join(dir, "state.json")
 	if err := os.Rename(tmpPath, statePath); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("rename eventsource temp state: %w", err)
 	}
-
-	return nil
 }
