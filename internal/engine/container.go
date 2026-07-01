@@ -34,13 +34,23 @@ type ContainerInfo struct {
 	LastInvoked  time.Time
 	HostPort     string // host port mapped to container's 8080
 	State        string
+	// Busy is true while a container is servicing an invocation. The AWS RIE
+	// handles one invocation at a time, so each container (an "execution
+	// environment") is held exclusively for the duration of an invoke. Guarded
+	// by Engine.mu.
+	Busy bool
 }
 
 // Engine manages Docker containers for Lambda execution.
+//
+// To mirror AWS Lambda concurrency (and therefore Step Functions Map / parallel
+// fan-out), each function is backed by a POOL of containers rather than a single
+// one: every concurrent invocation gets its own warm container ("execution
+// environment"), created on demand up to a per-function cap and reused when idle.
 type Engine struct {
 	client     *client.Client
 	cfg        *config.Config
-	containers map[string]*ContainerInfo // functionName -> container
+	containers map[string][]*ContainerInfo // functionName -> pool of containers
 	mu         sync.RWMutex
 	// imageKnown caches runtimes confirmed to have their image present locally,
 	// avoiding a Docker ImageList call on every EnsureImage invocation.
@@ -60,7 +70,7 @@ func New(cfg *config.Config) (*Engine, error) {
 	return &Engine{
 		client:     cli,
 		cfg:        cfg,
-		containers: make(map[string]*ContainerInfo),
+		containers: make(map[string][]*ContainerInfo),
 	}, nil
 }
 
@@ -301,13 +311,52 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 		CreatedAt:    time.Now(),
 		LastInvoked:  time.Now(),
 		State:        "created",
+		// Created on the cold-start path of an invoke, so it belongs to that
+		// invocation until released. Counting it (Busy) immediately also makes it
+		// part of the pool size for concurrency-cap checks.
+		Busy: true,
 	}
 
 	e.mu.Lock()
-	e.containers[fn.FunctionName] = info
+	e.containers[fn.FunctionName] = append(e.containers[fn.FunctionName], info)
 	e.mu.Unlock()
 
 	return info, nil
+}
+
+// AcquireIdle returns a ready, idle container for the function and marks it Busy,
+// so the caller has exclusive use of it for one invocation. Returns ok=false when
+// every existing container is busy (or none exist).
+func (e *Engine) AcquireIdle(functionName string) (*ContainerInfo, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, info := range e.containers[functionName] {
+		if !info.Busy && info.State == "running" {
+			info.Busy = true
+			info.LastInvoked = time.Now()
+			return info, true
+		}
+	}
+	return nil, false
+}
+
+// Release returns a container to the pool so another invocation can reuse it.
+func (e *Engine) Release(info *ContainerInfo) {
+	if info == nil {
+		return
+	}
+	e.mu.Lock()
+	info.Busy = false
+	info.LastInvoked = time.Now()
+	e.mu.Unlock()
+}
+
+// CountContainers returns the current pool size for a function (running plus
+// just-created). Used to enforce the per-function concurrency cap.
+func (e *Engine) CountContainers(functionName string) int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return len(e.containers[functionName])
 }
 
 // StartContainer starts a container and resolves its mapped host port.
@@ -366,13 +415,19 @@ func (e *Engine) StopContainer(ctx context.Context, containerID string) error {
 	return e.client.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout})
 }
 
-// RemoveContainer removes a container and clears it from the tracked map.
+// RemoveContainer removes a single container (by ID) and drops it from its
+// function's pool.
 func (e *Engine) RemoveContainer(ctx context.Context, containerID string) error {
 	e.mu.Lock()
-	for name, info := range e.containers {
-		if info.ID == containerID {
-			delete(e.containers, name)
-			break
+	for name, pool := range e.containers {
+		for i, info := range pool {
+			if info.ID == containerID {
+				e.containers[name] = append(pool[:i], pool[i+1:]...)
+				if len(e.containers[name]) == 0 {
+					delete(e.containers, name)
+				}
+				break
+			}
 		}
 	}
 	e.mu.Unlock()
@@ -380,24 +435,51 @@ func (e *Engine) RemoveContainer(ctx context.Context, containerID string) error 
 	return e.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
 }
 
-// EvictContainer stops and removes a function's warm container.
+// EvictContainer stops and removes ALL of a function's containers synchronously.
 func (e *Engine) EvictContainer(ctx context.Context, functionName string) {
-	e.mu.RLock()
-	info, ok := e.containers[functionName]
-	e.mu.RUnlock()
-	if !ok {
-		return
+	e.mu.Lock()
+	pool := e.containers[functionName]
+	delete(e.containers, functionName)
+	e.mu.Unlock()
+	for _, info := range pool {
+		_ = e.StopContainer(ctx, info.ID)
+		_ = e.client.ContainerRemove(ctx, info.ID, container.RemoveOptions{Force: true})
 	}
-	_ = e.StopContainer(ctx, info.ID)
-	_ = e.RemoveContainer(ctx, info.ID)
 }
 
-// GetContainer returns info about a function's container if it exists.
+// EvictContainerAsync drops a function's whole pool from tracking immediately (so
+// no subsequent invoke reuses it), then stops and removes the Docker containers in
+// the background. Use on the API handler path to avoid blocking Terraform
+// operations while Docker performs graceful container shutdown.
+func (e *Engine) EvictContainerAsync(functionName string) {
+	e.mu.Lock()
+	pool := e.containers[functionName]
+	delete(e.containers, functionName)
+	e.mu.Unlock()
+	if len(pool) == 0 {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		stopTimeout := 5
+		for _, info := range pool {
+			_ = e.client.ContainerStop(ctx, info.ID, container.StopOptions{Timeout: &stopTimeout})
+			_ = e.client.ContainerRemove(ctx, info.ID, container.RemoveOptions{Force: true})
+		}
+	}()
+}
+
+// GetContainer returns any one container from a function's pool, if any exist.
+// Used for log/trace lookups that just need a representative container.
 func (e *Engine) GetContainer(functionName string) (*ContainerInfo, bool) {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	info, ok := e.containers[functionName]
-	return info, ok
+	pool := e.containers[functionName]
+	if len(pool) == 0 {
+		return nil, false
+	}
+	return pool[0], true
 }
 
 // ContainerLogs retrieves stdout/stderr logs from a container.
@@ -442,14 +524,16 @@ func readContainerLogStream(reader io.Reader) (string, error) {
 	return combined.String(), nil
 }
 
-// Cleanup stops and removes all managed containers.
+// Cleanup stops and removes all managed containers across every function pool.
 func (e *Engine) Cleanup(ctx context.Context) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	for name, info := range e.containers {
-		_ = e.client.ContainerStop(ctx, info.ID, container.StopOptions{})
-		_ = e.client.ContainerRemove(ctx, info.ID, container.RemoveOptions{Force: true})
+	for name, pool := range e.containers {
+		for _, info := range pool {
+			_ = e.client.ContainerStop(ctx, info.ID, container.StopOptions{})
+			_ = e.client.ContainerRemove(ctx, info.ID, container.RemoveOptions{Force: true})
+		}
 		delete(e.containers, name)
 	}
 }

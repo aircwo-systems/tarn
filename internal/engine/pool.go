@@ -34,7 +34,9 @@ func (wp *WarmPool) Stop() {
 	close(wp.stopCh)
 }
 
-// Touch updates the last invoked time for a function's container.
+// Touch updates the last-invoked time for a function's containers, keeping the
+// whole pool warm. (Per-container LastInvoked is also maintained on acquire and
+// release; this is a coarse keep-alive bump.)
 func (wp *WarmPool) Touch(functionName string) {
 	wp.mu.Lock()
 	defer wp.mu.Unlock()
@@ -42,8 +44,9 @@ func (wp *WarmPool) Touch(functionName string) {
 	wp.engine.mu.Lock()
 	defer wp.engine.mu.Unlock()
 
-	if info, ok := wp.engine.containers[functionName]; ok {
-		info.LastInvoked = time.Now()
+	now := time.Now()
+	for _, info := range wp.engine.containers[functionName] {
+		info.LastInvoked = now
 	}
 }
 
@@ -66,11 +69,15 @@ func (wp *WarmPool) evictIdle() {
 	wp.mu.Lock()
 	defer wp.mu.Unlock()
 
+	// Collect only idle (not Busy) containers past the keep-alive window. Busy
+	// containers are mid-invocation and must never be reaped.
 	wp.engine.mu.Lock()
 	toEvict := make([]*ContainerInfo, 0)
-	for _, info := range wp.engine.containers {
-		if time.Since(info.LastInvoked) > wp.keepAlive {
-			toEvict = append(toEvict, info)
+	for _, pool := range wp.engine.containers {
+		for _, info := range pool {
+			if !info.Busy && time.Since(info.LastInvoked) > wp.keepAlive {
+				toEvict = append(toEvict, info)
+			}
 		}
 	}
 	wp.engine.mu.Unlock()
@@ -81,12 +88,9 @@ func (wp *WarmPool) evictIdle() {
 		if err := wp.engine.StopContainer(ctx, info.ID); err != nil {
 			log.Printf("[warm-pool] error stopping container %s: %v", info.ID[:12], err)
 		}
+		// RemoveContainer drops it from its function's pool slice.
 		if err := wp.engine.RemoveContainer(ctx, info.ID); err != nil {
 			log.Printf("[warm-pool] error removing container %s: %v", info.ID[:12], err)
 		}
-
-		wp.engine.mu.Lock()
-		delete(wp.engine.containers, info.FunctionName)
-		wp.engine.mu.Unlock()
 	}
 }

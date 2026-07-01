@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/internal/engine"
 	logssvc "github.com/aircwo-systems/tarn/internal/logs"
@@ -44,6 +46,12 @@ type FunctionMetrics struct {
 const (
 	coldStartInvokeRetryAttempts = 4
 	coldStartInvokeRetryBackoff  = 150 * time.Millisecond
+
+	// containerAcquireTimeout bounds how long an invoke waits for a free
+	// execution environment when the function is at its concurrency cap.
+	containerAcquireTimeout = 60 * time.Second
+	// containerAcquirePoll is how often to re-check for a freed environment.
+	containerAcquirePoll = 25 * time.Millisecond
 )
 
 // NewService creates a new Lambda service.
@@ -69,7 +77,7 @@ func NewService(cfg *config.Config, store *Store, eng *engine.Engine, pool *engi
 func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, code []byte) (*types.FunctionConfig, error) {
 	// Evict any warm container for a pre-existing function so the next invoke
 	// picks up the new code and config.
-	s.evictWarmContainer(ctx, fn.FunctionName)
+	s.evictWarmContainer(fn.FunctionName)
 
 	if fn.Timeout == 0 {
 		fn.Timeout = s.cfg.LambdaDefaultTimeout
@@ -211,7 +219,7 @@ func (s *Service) ListFunctions() ([]*types.FunctionConfig, error) {
 
 // DeleteFunction removes a function and its container.
 func (s *Service) DeleteFunction(ctx context.Context, name string) error {
-	s.evictWarmContainer(ctx, name)
+	s.evictWarmContainer(name)
 	if err := s.store.DeleteFunction(name); err != nil {
 		return err
 	}
@@ -275,7 +283,7 @@ func (s *Service) UpdateFunctionCode(ctx context.Context, name string, code []by
 	}
 
 	// Evict warm container so next invoke uses new code
-	s.evictWarmContainer(ctx, name)
+	s.evictWarmContainer(name)
 
 	if err := s.store.SaveFunction(fn); err != nil {
 		return nil, err
@@ -459,7 +467,7 @@ func (s *Service) UpdateFunctionConfiguration(ctx context.Context, name string, 
 	fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
 
 	// Evict warm container since config changed
-	s.evictWarmContainer(ctx, name)
+	s.evictWarmContainer(name)
 
 	if err := s.store.SaveFunction(fn); err != nil {
 		return nil, err
@@ -531,67 +539,53 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 		return nil, wrapped
 	}
 
-	// Per-function mutex prevents duplicate cold starts from concurrent invokes
-	fnMu := s.getFunctionMutex(fn.FunctionName)
-	fnMu.Lock()
-	info, warm := s.engine.GetContainer(fn.FunctionName)
-	coldStart := !warm
-	if !warm {
-		log.Printf("[lambda] cold start for %s", fn.FunctionName)
-		if s.logsSvc != nil {
-			s.logsSvc.LogSystemEvent(logssvc.LevelINFO, fmt.Sprintf("Cold start: %s", fn.FunctionName))
-		}
-
-		info, err = s.engine.CreateContainer(ctx, fn, codeDir, layerDirs)
-		if err != nil {
-			fnMu.Unlock()
-			wrapped := fmt.Errorf("failed to create container: %w", err)
-			s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
-			return nil, wrapped
-		}
-
-		if err := s.engine.StartContainer(ctx, info); err != nil {
-			_ = s.engine.RemoveContainer(ctx, info.ID)
-			fnMu.Unlock()
-			wrapped := fmt.Errorf("failed to start container: %w", err)
-			s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
-			return nil, wrapped
-		}
-
-		// Wait for the RIE to be ready
-		if err := s.invoker.WaitForReady(ctx, info.HostPort); err != nil {
-			// Capture whatever startup logs exist before evicting the container.
-			// This is especially important for Java/Spring Boot where the JVM may
-			// fail to initialize and all crash output would otherwise be lost.
-			s.ingestContainerLogs(fn.FunctionName, info)
-			s.engine.EvictContainer(ctx, fn.FunctionName)
-			fnMu.Unlock()
-			if s.logsSvc != nil {
-				s.logsSvc.LogSystemEvent(logssvc.LevelERROR, fmt.Sprintf("Container failed to start: %s: %v", fn.FunctionName, err))
-			}
-			wrapped := fmt.Errorf("container not ready: %w", err)
-			s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
-			return nil, wrapped
-		}
-	} else {
-		log.Printf("[lambda] warm invoke for %s (container %s)", fn.FunctionName, info.ID[:12])
+	// Acquire a dedicated execution environment for this invocation. Concurrent
+	// invokes each get their own warm container (created on demand up to the
+	// per-function concurrency cap), mirroring AWS Lambda — so a Step Functions
+	// Map / parallel fan-out runs truly in parallel instead of serializing on a
+	// single container.
+	info, coldStart, err := s.acquireContainer(ctx, fn, codeDir, layerDirs)
+	if err != nil {
+		return nil, err
 	}
-	fnMu.Unlock()
+	// Return the environment to the pool when this invocation finishes.
+	defer s.engine.Release(info)
 
 	s.pool.Touch(fn.FunctionName)
+
+	// Identify this invocation: a fresh request id plus the log group/stream the
+	// container's output is ingested into (the stream name mirrors the truncated
+	// container id used by ingestContainerLogs). These let callers deep-link to
+	// the exact logs for this call.
+	requestID := uuid.NewString()
+	logGroup := fmt.Sprintf("/aws/lambda/%s", fn.FunctionName)
+	logStream := info.ID
+	if len(logStream) > 12 {
+		logStream = logStream[:12]
+	}
 
 	// Set timeout deadline for the invocation
 	invokeCtx, cancel := context.WithTimeout(ctx, time.Duration(fn.Timeout)*time.Second)
 	defer cancel()
 
+	invokeStart := time.Now()
+	s.logInvocationBoundary(logGroup, logStream, fmt.Sprintf("START RequestId: %s Version: %s", requestID, fn.Version))
+
 	output, err := s.invokeWithRetry(invokeCtx, info, input, coldStart)
 	if err != nil {
+		s.logInvocationBoundary(logGroup, logStream, fmt.Sprintf("END RequestId: %s", requestID))
 		wrapped := fmt.Errorf("invocation failed: %w", err)
 		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
 		return nil, wrapped
 	}
 
+	s.logInvocationBoundary(logGroup, logStream, fmt.Sprintf("END RequestId: %s", requestID))
+	s.logInvocationBoundary(logGroup, logStream, fmt.Sprintf("REPORT RequestId: %s\tDuration: %.2f ms", requestID, float64(time.Since(invokeStart).Microseconds())/1000.0))
+
 	output.ExecutedVersion = fn.Version
+	output.RequestID = requestID
+	output.LogGroup = logGroup
+	output.LogStream = logStream
 	s.recordInvocation(fn.FunctionName, input.Payload)
 
 	// For async invocations, return 202 immediately
@@ -599,10 +593,122 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 		return &types.InvokeOutput{
 			StatusCode:      202,
 			ExecutedVersion: fn.Version,
+			RequestID:       requestID,
+			LogGroup:        logGroup,
+			LogStream:       logStream,
 		}, nil
 	}
 
 	return output, nil
+}
+
+// logInvocationBoundary writes an AWS-style START/END/REPORT marker line into a
+// function's log stream so a deep-linked invocation can be located precisely
+// within a (warm-reused) stream. It is best-effort and a no-op without logs.
+func (s *Service) logInvocationBoundary(logGroup, logStream, message string) {
+	if s.logsSvc == nil {
+		return
+	}
+	s.logsSvc.CreateLogGroup(logGroup)
+	s.logsSvc.PutLogEvents(logGroup, logStream, []logssvc.LogEvent{{
+		Timestamp: time.Now().UTC(),
+		Message:   message,
+		Level:     logssvc.LevelINFO,
+		Source:    logssvc.SourceRuntime,
+	}})
+}
+
+// acquireContainer returns a ready, exclusively-held execution environment for
+// the function. It first reuses any idle warm container; otherwise it cold-starts
+// a new one, up to LambdaMaxConcurrency per function; if the cap is reached and
+// all environments are busy, it waits (up to containerAcquireTimeout) for one to
+// free up. Cold starts are serialized per function so the cap is enforced and
+// Docker isn't stampeded, while invocations themselves run concurrently. The
+// returned container is Busy and must be returned via engine.Release.
+func (s *Service) acquireContainer(ctx context.Context, fn *types.FunctionConfig, codeDir string, layerDirs []string) (*engine.ContainerInfo, bool, error) {
+	maxConc := s.cfg.LambdaMaxConcurrency
+	if maxConc < 1 {
+		maxConc = 1
+	}
+	fnMu := s.getFunctionMutex(fn.FunctionName)
+	deadline := time.Now().Add(containerAcquireTimeout)
+
+	for {
+		// Fast path: reuse an idle warm container.
+		if info, ok := s.engine.AcquireIdle(fn.FunctionName); ok {
+			log.Printf("[lambda] warm invoke for %s (container %s)", fn.FunctionName, info.ID[:12])
+			return info, false, nil
+		}
+
+		// Decide whether to cold-start, serialized per function so the cap holds.
+		fnMu.Lock()
+		// Re-check: another invoke may have released an environment meanwhile.
+		if info, ok := s.engine.AcquireIdle(fn.FunctionName); ok {
+			fnMu.Unlock()
+			log.Printf("[lambda] warm invoke for %s (container %s)", fn.FunctionName, info.ID[:12])
+			return info, false, nil
+		}
+		if s.engine.CountContainers(fn.FunctionName) < maxConc {
+			info, cerr := s.coldStart(ctx, fn, codeDir, layerDirs)
+			fnMu.Unlock()
+			if cerr != nil {
+				return nil, false, cerr
+			}
+			return info, true, nil
+		}
+		fnMu.Unlock()
+
+		// At the concurrency cap with everything busy — wait for a release.
+		if time.Now().After(deadline) {
+			err := fmt.Errorf("no execution environment available for %s within %s (concurrency cap %d reached)", fn.FunctionName, containerAcquireTimeout, maxConc)
+			s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, err.Error())
+			return nil, false, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, false, ctx.Err()
+		case <-time.After(containerAcquirePoll):
+		}
+	}
+}
+
+// coldStart creates, starts and readies a new container for the function and
+// returns it Busy (already counted in the pool). Caller must hold the
+// per-function mutex.
+func (s *Service) coldStart(ctx context.Context, fn *types.FunctionConfig, codeDir string, layerDirs []string) (*engine.ContainerInfo, error) {
+	log.Printf("[lambda] cold start for %s", fn.FunctionName)
+	if s.logsSvc != nil {
+		s.logsSvc.LogSystemEvent(logssvc.LevelINFO, fmt.Sprintf("Cold start: %s", fn.FunctionName))
+	}
+
+	info, err := s.engine.CreateContainer(ctx, fn, codeDir, layerDirs)
+	if err != nil {
+		wrapped := fmt.Errorf("failed to create container: %w", err)
+		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
+		return nil, wrapped
+	}
+
+	if err := s.engine.StartContainer(ctx, info); err != nil {
+		_ = s.engine.RemoveContainer(ctx, info.ID)
+		wrapped := fmt.Errorf("failed to start container: %w", err)
+		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
+		return nil, wrapped
+	}
+
+	// Wait for the RIE to be ready. Capture startup logs before removing a failed
+	// container (important for runtimes like Java/Spring Boot whose crash output
+	// would otherwise be lost). Only this container is removed, not the pool.
+	if err := s.invoker.WaitForReady(ctx, info.HostPort); err != nil {
+		s.ingestContainerLogs(fn.FunctionName, info)
+		_ = s.engine.RemoveContainer(ctx, info.ID)
+		if s.logsSvc != nil {
+			s.logsSvc.LogSystemEvent(logssvc.LevelERROR, fmt.Sprintf("Container failed to start: %s: %v", fn.FunctionName, err))
+		}
+		wrapped := fmt.Errorf("container not ready: %w", err)
+		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
+		return nil, wrapped
+	}
+	return info, nil
 }
 
 func (s *Service) invokeWithRetry(ctx context.Context, info *engine.ContainerInfo, input *types.InvokeInput, coldStart bool) (*types.InvokeOutput, error) {
@@ -722,14 +828,14 @@ func countProcessedMessages(payload []byte) int64 {
 	return 1
 }
 
-func (s *Service) evictWarmContainer(ctx context.Context, functionName string) {
+func (s *Service) evictWarmContainer(functionName string) {
 	if s.engine == nil {
 		return
 	}
 	if info, ok := s.engine.GetContainer(functionName); ok && info != nil {
 		s.clearLogCursor(info.ID)
 	}
-	s.engine.EvictContainer(ctx, functionName)
+	s.engine.EvictContainerAsync(functionName)
 }
 
 func (s *Service) ingestContainerLogs(functionName string, info *engine.ContainerInfo) {

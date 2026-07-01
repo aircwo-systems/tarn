@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -218,17 +219,98 @@ func TestGetByARN(t *testing.T) {
 	}
 }
 
-func TestDuplicateNameError(t *testing.T) {
+func TestDuplicateCreateRejected(t *testing.T) {
 	svc := newTestService()
 
-	_, err := svc.CreateSecret("dupe", "", "val1", nil, nil)
+	first, err := svc.CreateSecret("dupe", "desc1", "val1", nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = svc.CreateSecret("dupe", "", "val2", nil, nil)
-	if err == nil {
-		t.Fatal("expected error for duplicate name")
+	// A second create with the same name must fail, matching AWS's
+	// ResourceExistsException, and must not modify the existing secret.
+	if _, err := svc.CreateSecret("dupe", "desc2", "val2", nil, nil); !errors.Is(err, ErrSecretExists) {
+		t.Fatalf("duplicate create should return ErrSecretExists, got %v", err)
+	}
+
+	got, err := svc.GetSecretValue("dupe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.SecretString != "val1" {
+		t.Fatalf("value = %q, want %q (must be unchanged)", got.SecretString, "val1")
+	}
+	if got.ARN != first.ARN {
+		t.Fatalf("ARN changed: got %q, want %q", got.ARN, first.ARN)
+	}
+}
+
+// TestSameNameDifferentAccounts verifies that the same secret name can coexist
+// across two accounts without colliding. This mirrors the production wiring in
+// initAccountBundle, which builds one secrets.Service per account from a config
+// derived via cfg.ForAccount(accountID). Each account therefore gets its own
+// store (and its own on-disk state path), so "test" in the default account is
+// independent of "test" in 111111111111.
+func TestSameNameDifferentAccounts(t *testing.T) {
+	base := config.Default()
+	base.DataDir = t.TempDir()
+
+	const otherAccount = "111111111111"
+	if base.AccountID == otherAccount {
+		t.Fatalf("test assumes default account differs from %s", otherAccount)
+	}
+
+	defCfg := base.ForAccount(base.AccountID)
+	otherCfg := base.ForAccount(otherAccount)
+
+	defSvc := NewService(defCfg)
+	otherSvc := NewService(otherCfg)
+
+	// Same name, different value, in each account.
+	defSecret, err := defSvc.CreateSecret("test", "default account", "default-val", nil, nil)
+	if err != nil {
+		t.Fatalf("create in default account: %v", err)
+	}
+	otherSecret, err := otherSvc.CreateSecret("test", "other account", "other-val", nil, nil)
+	if err != nil {
+		t.Fatalf("create same name in %s must succeed, got: %v", otherAccount, err)
+	}
+
+	// Values stay independent.
+	gotDef, err := defSvc.GetSecretValue("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotOther, err := otherSvc.GetSecretValue("test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotDef.SecretString != "default-val" {
+		t.Fatalf("default account value = %q, want %q", gotDef.SecretString, "default-val")
+	}
+	if gotOther.SecretString != "other-val" {
+		t.Fatalf("%s value = %q, want %q", otherAccount, gotOther.SecretString, "other-val")
+	}
+
+	// ARNs are namespaced to their respective account IDs.
+	if !strings.Contains(defSecret.ARN, ":"+base.AccountID+":") {
+		t.Fatalf("default ARN %q missing account %s", defSecret.ARN, base.AccountID)
+	}
+	if !strings.Contains(otherSecret.ARN, ":"+otherAccount+":") {
+		t.Fatalf("other ARN %q missing account %s", otherSecret.ARN, otherAccount)
+	}
+
+	// Each account persists to its own state path.
+	if defCfg.SecretsStatePath() == otherCfg.SecretsStatePath() {
+		t.Fatalf("accounts share a state path: %s", defCfg.SecretsStatePath())
+	}
+
+	// Deleting one account's secret must not affect the other.
+	if err := defSvc.DeleteSecret("test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := otherSvc.GetSecretValue("test"); err != nil {
+		t.Fatalf("%s secret should survive default-account delete: %v", otherAccount, err)
 	}
 }
 
@@ -253,6 +335,7 @@ func TestVaultEncryptsPersistAndDecryptsOnLoad(t *testing.T) {
 	if _, err := svc.CreateSecret("vault-test", "test", "my-api-key", nil, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	svc.Flush()
 
 	// Read raw state file — value must be sealed, not plaintext
 	raw, err := os.ReadFile(cfg.SecretsStatePath())
@@ -304,6 +387,7 @@ func TestVaultEncryptsBinarySecrets(t *testing.T) {
 	if _, err := svc.CreateSecret("binary-vault", "", "", binaryData, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	svc.Flush()
 
 	// Reload and verify
 	svc2 := NewService(cfg)
@@ -334,6 +418,7 @@ func TestNoVaultPersistsPlaintext(t *testing.T) {
 	if _, err := svc.CreateSecret("plain-test", "", "visible-value", nil, nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	svc.Flush()
 
 	raw, err := os.ReadFile(cfg.SecretsStatePath())
 	if err != nil {
@@ -358,6 +443,7 @@ func TestSecretsPersistAcrossServiceInit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create secret: %v", err)
 	}
+	svc.Flush()
 
 	reloaded := NewService(cfg)
 	if err := reloaded.Init(); err != nil {
