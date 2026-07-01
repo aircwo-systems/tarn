@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
@@ -26,10 +27,10 @@ const defaultStaleReceiveCount = 5
 
 // Store is an in-memory store for SQS queues and messages.
 type Store struct {
-	mu        sync.RWMutex
-	persistMu sync.Mutex
-	queues    map[string]*queue
-	cfg       *config.Config
+	mu     sync.RWMutex
+	dirty  atomic.Bool
+	queues map[string]*queue
+	cfg    *config.Config
 }
 
 type queue struct {
@@ -52,6 +53,7 @@ func (s *Store) Init() error {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return nil
 	}
+	go s.startFlusher()
 
 	if err := os.MkdirAll(s.cfg.QueuesDir(), 0755); err != nil {
 		return fmt.Errorf("create queues dir: %w", err)
@@ -143,7 +145,7 @@ func (s *Store) CreateQueue(name string, attrs map[string]string, tags map[strin
 		messages: nil,
 		dedup:    make(map[string]int64),
 	}
-	s.persistLocked()
+	s.dirty.Store(true)
 
 	return qCfg, nil
 }
@@ -192,7 +194,7 @@ func (s *Store) DeleteQueue(name string) error {
 		return fmt.Errorf("queue %s not found", name)
 	}
 	delete(s.queues, name)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -209,7 +211,7 @@ func (s *Store) SetQueueAttributes(name string, attrs map[string]string) error {
 	applyQueueAttributes(q.config, attrs)
 	q.config.LastModifiedTimestamp = time.Now().Unix()
 	q.mu.Unlock()
-	s.persist()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -377,7 +379,7 @@ func (s *Store) SendMessage(name string, body string, delaySec int, attrs map[st
 
 	q.messages = append(q.messages, msg)
 	q.mu.Unlock()
-	s.persist()
+	s.dirty.Store(true)
 	return msg, nil
 }
 
@@ -443,7 +445,7 @@ func (s *Store) ReceiveMessage(name string, maxCount, visTimeout int) ([]*types.
 		}
 	}
 	q.mu.Unlock()
-	s.persist()
+	s.dirty.Store(true)
 	return result, nil
 }
 
@@ -492,7 +494,7 @@ func (s *Store) DeleteMessage(name string, receiptHandle string) error {
 		if m.ReceiptHandle == receiptHandle && !m.Deleted {
 			m.Deleted = true
 			q.mu.Unlock()
-			s.persist()
+			s.dirty.Store(true)
 			return nil
 		}
 	}
@@ -516,7 +518,7 @@ func (s *Store) IncrementProcessedCount(name string, delta int64) error {
 	q.mu.Lock()
 	q.config.ProcessedCount += delta
 	q.mu.Unlock()
-	s.persist()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -534,7 +536,7 @@ func (s *Store) ChangeMessageVisibility(name string, receiptHandle string, timeo
 		if m.ReceiptHandle == receiptHandle && !m.Deleted {
 			m.VisibleAt = nowMs() + int64(timeout)*1000
 			q.mu.Unlock()
-			s.persist()
+			s.dirty.Store(true)
 			return nil
 		}
 	}
@@ -564,7 +566,7 @@ func (s *Store) ReleaseMessage(name string, receiptHandle string) error {
 				}
 			}
 			q.mu.Unlock()
-			s.persist()
+			s.dirty.Store(true)
 			return nil
 		}
 	}
@@ -584,7 +586,7 @@ func (s *Store) PurgeQueue(name string) error {
 	q.mu.Lock()
 	q.messages = nil
 	q.mu.Unlock()
-	s.persist()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -605,7 +607,7 @@ func (s *Store) TagQueue(name string, tags map[string]string) error {
 		q.config.Tags[k] = v
 	}
 	q.mu.Unlock()
-	s.persist()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -625,7 +627,7 @@ func (s *Store) UntagQueue(name string, tagKeys []string) error {
 		}
 	}
 	q.mu.Unlock()
-	s.persist()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -743,7 +745,7 @@ func (s *Store) Reap() {
 	}
 
 	if changed {
-		s.persist()
+		s.dirty.Store(true)
 	}
 }
 
@@ -921,23 +923,26 @@ func fromMessageSnapshot(src messageSnapshot) *types.SQSMessage {
 	}
 }
 
-func (s *Store) persist() {
-	if s.cfg == nil || !s.cfg.PersistenceEnabled {
-		return
-	}
+func (s *Store) Flush() { s.flushToDisk() }
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	s.persistLocked()
+func (s *Store) startFlusher() {
+	t := time.NewTicker(250 * time.Millisecond)
+	defer t.Stop()
+	for range t.C {
+		if s.dirty.Swap(false) {
+			s.flushToDisk()
+		}
+	}
 }
 
-func (s *Store) persistLocked() {
+func (s *Store) flushToDisk() {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return
 	}
-	s.persistMu.Lock()
-	defer s.persistMu.Unlock()
 
+	now := nowMs()
+
+	s.mu.RLock()
 	names := make([]string, 0, len(s.queues))
 	for name := range s.queues {
 		names = append(names, name)
@@ -959,8 +964,12 @@ func (s *Store) persistLocked() {
 			Messages: make([]messageSnapshot, 0, len(q.messages)),
 			Dedup:    make(map[string]int64, len(q.dedup)),
 		}
-		for _, message := range q.messages {
-			item.Messages = append(item.Messages, toMessageSnapshot(message))
+		for _, msg := range q.messages {
+			// skip fully dead messages — they have no recovery value
+			if msg.Deleted && msg.ExpiresAt <= now {
+				continue
+			}
+			item.Messages = append(item.Messages, toMessageSnapshot(msg))
 		}
 		for key, value := range q.dedup {
 			item.Dedup[key] = value
@@ -969,8 +978,9 @@ func (s *Store) persistLocked() {
 		q.mu.Unlock()
 		snapshot.Queues = append(snapshot.Queues, item)
 	}
+	s.mu.RUnlock()
 
-	data, err := json.MarshalIndent(snapshot, "", "  ")
+	data, err := json.Marshal(snapshot)
 	if err != nil {
 		return
 	}

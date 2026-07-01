@@ -117,6 +117,7 @@ func TestStorePersistenceRoundTrip(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
+	s1.Flush()
 
 	// Create a new store instance to verify it loads from disk
 	s2 := NewStore(cfg)
@@ -172,6 +173,7 @@ func TestStoreConcurrentSavesPersistAllMappings(t *testing.T) {
 	for err := range errCh {
 		t.Fatalf("save failed: %v", err)
 	}
+	s.Flush()
 
 	// Reload from disk and ensure all mappings were persisted.
 	s2 := NewStore(cfg)

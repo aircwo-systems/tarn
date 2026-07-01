@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,7 +19,7 @@ import (
 // Store is an in-memory store for SNS topics and subscriptions.
 type Store struct {
 	mu            sync.RWMutex
-	persistMu     sync.Mutex
+	dirty         atomic.Bool
 	cfg           *config.Config
 	topics        map[string]*types.SNSTopic        // key: topic ARN
 	topicByName   map[string]string                 // key: topic name, value: ARN
@@ -40,6 +41,7 @@ func (s *Store) Init() error {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return nil
 	}
+	go s.startFlusher()
 
 	if err := os.MkdirAll(s.cfg.SNSDir(), 0755); err != nil {
 		return fmt.Errorf("create sns dir: %w", err)
@@ -139,7 +141,7 @@ func (s *Store) CreateTopic(name string, attrs map[string]string, tags map[strin
 
 	s.topics[topicArn] = topic
 	s.topicByName[name] = topicArn
-	s.persistLocked()
+	s.dirty.Store(true)
 	return cloneTopic(topic), nil
 }
 
@@ -165,7 +167,7 @@ func (s *Store) DeleteTopic(topicArn string) error {
 		}
 	}
 
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -279,7 +281,7 @@ func (s *Store) SetTopicAttribute(topicArn, name, value string) error {
 	}
 
 	topic.LastModifiedTimestamp = time.Now().Unix()
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -298,7 +300,7 @@ func (s *Store) TagTopic(topicArn string, tags map[string]string) error {
 		topic.Tags[k] = v
 	}
 	topic.LastModifiedTimestamp = time.Now().Unix()
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -316,7 +318,7 @@ func (s *Store) UntagTopic(topicArn string, tagKeys []string) error {
 		}
 	}
 	topic.LastModifiedTimestamp = time.Now().Unix()
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -358,7 +360,7 @@ func (s *Store) Subscribe(topicArn, protocol, endpoint string, attrs map[string]
 			if sub.LastModifiedTimestamp == 0 {
 				sub.LastModifiedTimestamp = time.Now().Unix()
 			}
-			s.persistLocked()
+			s.dirty.Store(true)
 			return cloneSubscription(sub), nil
 		}
 	}
@@ -377,7 +379,7 @@ func (s *Store) Subscribe(topicArn, protocol, endpoint string, attrs map[string]
 	}
 	s.applySubscriptionAttributesLocked(sub, attrs)
 	s.subscriptions[subArn] = sub
-	s.persistLocked()
+	s.dirty.Store(true)
 	return cloneSubscription(sub), nil
 }
 
@@ -394,7 +396,7 @@ func (s *Store) Unsubscribe(subscriptionArn string) error {
 		return fmt.Errorf("subscription %s not found", subscriptionArn)
 	}
 	delete(s.subscriptions, subscriptionArn)
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -465,7 +467,7 @@ func (s *Store) SetSubscriptionAttribute(subscriptionArn, name, value string) er
 	}
 
 	sub.LastModifiedTimestamp = time.Now().Unix()
-	s.persistLocked()
+	s.dirty.Store(true)
 	return nil
 }
 
@@ -508,21 +510,33 @@ func (s *Store) ListSubscriptionsByTopic(topicArn string) ([]*types.SNSSubscript
 	return out, nil
 }
 
-func (s *Store) persistLocked() {
+func (s *Store) startFlusher() {
+	t := time.NewTicker(250 * time.Millisecond)
+	defer t.Stop()
+	for range t.C {
+		if s.dirty.Swap(false) {
+			s.flushToDisk()
+		}
+	}
+}
+
+func (s *Store) flushToDisk() {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return
 	}
 
+	s.mu.RLock()
 	topics := make([]*types.SNSTopic, 0, len(s.topics))
 	for _, topic := range s.topics {
 		topics = append(topics, cloneTopic(topic))
 	}
-	sort.Slice(topics, func(i, j int) bool { return topics[i].Name < topics[j].Name })
-
 	subs := make([]*types.SNSSubscription, 0, len(s.subscriptions))
 	for _, sub := range s.subscriptions {
 		subs = append(subs, cloneSubscription(sub))
 	}
+	s.mu.RUnlock()
+
+	sort.Slice(topics, func(i, j int) bool { return topics[i].Name < topics[j].Name })
 	sort.Slice(subs, func(i, j int) bool { return subs[i].SubscriptionArn < subs[j].SubscriptionArn })
 
 	snapshot := struct {
@@ -533,13 +547,10 @@ func (s *Store) persistLocked() {
 		Subscriptions: subs,
 	}
 
-	data, err := json.MarshalIndent(snapshot, "", "  ")
+	data, err := json.Marshal(snapshot)
 	if err != nil {
 		return
 	}
-
-	s.persistMu.Lock()
-	defer s.persistMu.Unlock()
 
 	if err := os.MkdirAll(s.cfg.SNSDir(), 0755); err != nil {
 		return

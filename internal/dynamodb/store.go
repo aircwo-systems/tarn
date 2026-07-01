@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
@@ -22,10 +23,10 @@ const (
 )
 
 type Store struct {
-	mu        sync.RWMutex
-	persistMu sync.Mutex
-	cfg       *config.Config
-	tables    map[string]*tableState
+	mu     sync.RWMutex
+	dirty  atomic.Bool
+	cfg    *config.Config
+	tables map[string]*tableState
 }
 
 type tableState struct {
@@ -119,6 +120,7 @@ func (s *Store) Init() error {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return nil
 	}
+	go s.startFlusher()
 
 	if err := os.MkdirAll(s.cfg.DynamoDBDir(), 0o755); err != nil {
 		return fmt.Errorf("create dynamodb dir: %w", err)
@@ -154,46 +156,54 @@ func (s *Store) Init() error {
 }
 
 func (s *Store) persist() error {
-	if s.cfg == nil || !s.cfg.PersistenceEnabled {
-		return nil
-	}
+	s.dirty.Store(true)
+	return nil
+}
 
-	s.persistMu.Lock()
-	defer s.persistMu.Unlock()
+func (s *Store) Flush() { s.flushToDisk() }
+
+func (s *Store) startFlusher() {
+	t := time.NewTicker(250 * time.Millisecond)
+	defer t.Stop()
+	for range t.C {
+		if s.dirty.Swap(false) {
+			s.flushToDisk()
+		}
+	}
+}
+
+func (s *Store) flushToDisk() {
+	if s.cfg == nil || !s.cfg.PersistenceEnabled {
+		return
+	}
 
 	s.mu.RLock()
-	snapshot := tableSnapshot{Tables: make(map[string]*tableState, len(s.tables))}
-	for name, state := range s.tables {
-		snapshot.Tables[name] = cloneTableState(state)
-	}
+	data, err := json.Marshal(tableSnapshot{Tables: s.tables})
 	s.mu.RUnlock()
 
-	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
-		return fmt.Errorf("marshal dynamodb state: %w", err)
+		return
 	}
 	if err := os.MkdirAll(s.cfg.DynamoDBDir(), 0o755); err != nil {
-		return fmt.Errorf("create dynamodb dir: %w", err)
+		return
 	}
 	tmpFile, err := os.CreateTemp(s.cfg.DynamoDBDir(), "state-*.json.tmp")
 	if err != nil {
-		return fmt.Errorf("create temp dynamodb state: %w", err)
+		return
 	}
 	tmpPath := tmpFile.Name()
 	if _, err := tmpFile.Write(data); err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("write temp dynamodb state: %w", err)
+		return
 	}
 	if err := tmpFile.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close temp dynamodb state: %w", err)
+		return
 	}
 	if err := os.Rename(tmpPath, s.cfg.DynamoDBStatePath()); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("rename temp dynamodb state: %w", err)
 	}
-	return nil
 }
 
 func (s *Store) CreateTable(input *types.DynamoDBTable) (*types.DynamoDBTable, error) {
@@ -1543,14 +1553,6 @@ func cloneTable(table *types.DynamoDBTable) *types.DynamoDBTable {
 	return &out
 }
 
-func cloneTableState(state *tableState) *tableState {
-	if state == nil {
-		return nil
-	}
-	var out tableState
-	roundTripClone(state, &out)
-	return &out
-}
 
 func cloneTags(tags []types.DynamoDBTag) []types.DynamoDBTag {
 	if len(tags) == 0 {

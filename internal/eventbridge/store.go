@@ -7,6 +7,8 @@ import (
 	"os"
 	"sort"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/pkg/types"
@@ -14,10 +16,10 @@ import (
 
 // Store is an in-memory rule store with optional JSON persistence.
 type Store struct {
-	mu        sync.RWMutex
-	persistMu sync.Mutex
-	cfg       *config.Config
-	rules     map[string]*types.EventBridgeRule // key: rule name
+	mu    sync.RWMutex
+	dirty atomic.Bool
+	cfg   *config.Config
+	rules map[string]*types.EventBridgeRule // key: rule name
 }
 
 func NewStore(cfg *config.Config) *Store {
@@ -31,6 +33,7 @@ func (s *Store) Init() error {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return nil
 	}
+	go s.startFlusher()
 
 	if err := os.MkdirAll(s.cfg.EventBridgeDir(), 0o755); err != nil {
 		return fmt.Errorf("create eventbridge dir: %w", err)
@@ -109,12 +112,24 @@ func (s *Store) ListRules() []*types.EventBridgeRule {
 }
 
 func (s *Store) persist() error {
-	if s.cfg == nil || !s.cfg.PersistenceEnabled {
-		return nil
-	}
+	s.dirty.Store(true)
+	return nil
+}
 
-	s.persistMu.Lock()
-	defer s.persistMu.Unlock()
+func (s *Store) startFlusher() {
+	t := time.NewTicker(250 * time.Millisecond)
+	defer t.Stop()
+	for range t.C {
+		if s.dirty.Swap(false) {
+			s.flushToDisk()
+		}
+	}
+}
+
+func (s *Store) flushToDisk() {
+	if s.cfg == nil || !s.cfg.PersistenceEnabled {
+		return
+	}
 
 	s.mu.RLock()
 	rules := make([]*types.EventBridgeRule, 0, len(s.rules))
@@ -129,35 +144,32 @@ func (s *Store) persist() error {
 		Rules []*types.EventBridgeRule `json:"rules"`
 	}{Rules: rules}
 
-	data, err := json.MarshalIndent(payload, "", "  ")
+	data, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("marshal eventbridge state: %w", err)
+		return
 	}
 
 	if err := os.MkdirAll(s.cfg.EventBridgeDir(), 0o755); err != nil {
-		return fmt.Errorf("create eventbridge dir: %w", err)
+		return
 	}
 
 	tmp, err := os.CreateTemp(s.cfg.EventBridgeDir(), "state-*.json.tmp")
 	if err != nil {
-		return fmt.Errorf("create eventbridge temp state: %w", err)
+		return
 	}
 	tmpPath := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("write eventbridge temp state: %w", err)
+		return
 	}
 	if err := tmp.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("close eventbridge temp state: %w", err)
+		return
 	}
 	if err := os.Rename(tmpPath, s.cfg.EventBridgeStatePath()); err != nil {
 		_ = os.Remove(tmpPath)
-		return fmt.Errorf("rename eventbridge temp state: %w", err)
 	}
-
-	return nil
 }
 
 func cloneRule(src *types.EventBridgeRule) *types.EventBridgeRule {

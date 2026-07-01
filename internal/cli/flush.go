@@ -18,6 +18,7 @@ var cliHTTPClient = http.DefaultClient
 
 type flushOptions struct {
 	TagFilter string
+	Group     string
 	DryRun    bool
 	Storage   bool
 	AccountID string
@@ -76,6 +77,11 @@ type flushOverview struct {
 		TotalSize        int64  `json:"totalSize"`
 		HasNotifications bool   `json:"hasNotifications"`
 	} `json:"buckets"`
+	StateMachines []struct {
+		Name string            `json:"name"`
+		Arn  string            `json:"arn"`
+		Tags map[string]string `json:"tags"`
+	} `json:"stateMachines"`
 }
 
 func newFlushCmd() *cobra.Command {
@@ -88,18 +94,23 @@ func newFlushCmd() *cobra.Command {
 from the current Tarn instance.
 
 Use --tag to scope deletion to a feature slice such as feature=r10.
+Use --group to scope deletion to resources whose NAME matches a prefix/substring
+(e.g. a Terraform name_prefix like cert-delete), independent of tags.
+--tag and --group combine (a resource must match both when both are given).
 Use --storage to also purge S3 bucket contents and delete buckets.`,
 		Example: `  tarn flush
   tarn flush --storage
   tarn flush --tag feature=r10
-  tarn flush --tag r10 --dry-run
-  tarn flush --tag develop-mvp --storage`,
+  tarn flush --group cert-delete
+  tarn flush --group multi-delete --storage
+  tarn flush --tag r10 --dry-run`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runFlush(cmd, os.Stdout, opts)
 		},
 	}
 
 	cmd.Flags().StringVar(&opts.TagFilter, "tag", "", "Filter resources by tag query, e.g. feature=r10 or r10")
+	cmd.Flags().StringVar(&opts.Group, "group", "", "Filter resources by name prefix/substring, e.g. cert-delete")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Print resources that would be deleted without deleting them")
 	cmd.Flags().BoolVar(&opts.Storage, "storage", false, "Also flush S3 buckets and objects")
 	cmd.Flags().StringVar(&opts.AccountID, "account", "", "12-digit account ID to flush (overrides TARN_ACCOUNT_ID)")
@@ -124,12 +135,18 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		return err
 	}
 
-	filteredGateways := filterGateways(overview.Gateways, opts.TagFilter)
-	filteredFunctions := filterFunctions(overview.Functions, opts.TagFilter)
-	filteredQueues := filterQueues(overview.Queues, opts.TagFilter)
-	filteredTopics := filterTopics(overview.Topics, opts.TagFilter)
-	filteredSubscriptions := filterSubscriptions(overview.Subscriptions, opts.TagFilter, filteredTopics, filteredQueues, filteredFunctions)
-	filteredSecrets := filterSecrets(overview.Secrets, opts.TagFilter)
+	// A resource is in scope when it matches the tag query (if any) AND the group
+	// name filter (if any). Associations (mappings/rules/subscriptions) are
+	// narrowed to the selected queues/functions/topics whenever either selector
+	// is active; with no selector, everything is flushed.
+	narrow := strings.TrimSpace(opts.TagFilter) != "" || strings.TrimSpace(opts.Group) != ""
+
+	filteredGateways := filterGateways(overview.Gateways, opts.TagFilter, opts.Group)
+	filteredFunctions := filterFunctions(overview.Functions, opts.TagFilter, opts.Group)
+	filteredQueues := filterQueues(overview.Queues, opts.TagFilter, opts.Group)
+	filteredTopics := filterTopics(overview.Topics, opts.TagFilter, opts.Group)
+	filteredSubscriptions := filterSubscriptions(overview.Subscriptions, narrow, filteredTopics, filteredQueues, filteredFunctions)
+	filteredSecrets := filterSecrets(overview.Secrets, opts.TagFilter, opts.Group)
 	allQueueNames := make(map[string]struct{}, len(overview.Queues))
 	for _, queue := range overview.Queues {
 		allQueueNames[queue.Name] = struct{}{}
@@ -139,8 +156,8 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		allFunctionNames[fn.Name] = struct{}{}
 		allFunctionNames[normalizeLambdaRef(fn.Name)] = struct{}{}
 	}
-	filteredMappings := filterEventSourceMappings(overview.EventSourceMappings, opts.TagFilter, filteredQueues, filteredFunctions, allQueueNames, allFunctionNames)
-	filteredEventBridgeRules := filterEventBridgeRules(overview.EventBridgeRules, opts.TagFilter, filteredFunctions)
+	filteredMappings := filterEventSourceMappings(overview.EventSourceMappings, narrow, filteredQueues, filteredFunctions, allQueueNames, allFunctionNames)
+	filteredEventBridgeRules := filterEventBridgeRules(overview.EventBridgeRules, narrow, filteredFunctions)
 	filteredNotificationBuckets := []struct {
 		Name      string
 		Objects   int
@@ -159,7 +176,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 			if !b.HasNotifications {
 				continue
 			}
-			if matchesBucketSelector(b.Name, opts.TagFilter) {
+			if matchesBucketSelector(b.Name, opts.TagFilter) && matchesGroupName(b.Name, opts.Group) {
 				filteredNotificationBuckets = append(filteredNotificationBuckets, struct {
 					Name      string
 					Objects   int
@@ -169,13 +186,16 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		}
 	}
 	if opts.Storage {
-		filteredBuckets = filterBuckets(overview.Buckets, opts.TagFilter)
+		filteredBuckets = filterBuckets(overview.Buckets, opts.TagFilter, opts.Group)
 	}
 
-	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredEventBridgeRules) + len(filteredNotificationBuckets) + len(filteredBuckets)
+	filteredStateMachines := filterStateMachines(overview.StateMachines, opts.TagFilter, opts.Group)
+
+	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredEventBridgeRules) + len(filteredNotificationBuckets) + len(filteredBuckets) + len(filteredStateMachines)
+	selectorDesc := flushSelectorDescription(opts)
 	if total == 0 {
-		if opts.TagFilter != "" {
-			_, _ = fmt.Fprintf(out, "No resources matched tag filter %q\n", opts.TagFilter)
+		if selectorDesc != "" {
+			_, _ = fmt.Fprintf(out, "No resources matched %s\n", selectorDesc)
 		} else {
 			_, _ = fmt.Fprintln(out, "No resources found.")
 		}
@@ -183,13 +203,23 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	}
 
 	_, _ = fmt.Fprintf(out, "Matched %d resources", total)
-	if opts.TagFilter != "" {
-		_, _ = fmt.Fprintf(out, " for tag filter %q", opts.TagFilter)
+	if selectorDesc != "" {
+		_, _ = fmt.Fprintf(out, " for %s", selectorDesc)
 	}
 	_, _ = fmt.Fprintln(out)
 
 	if err := printFlushPlan(out, filteredGateways, filteredFunctions, filteredQueues, filteredTopics, filteredSubscriptions, filteredSecrets, filteredMappings, filteredEventBridgeRules, filteredNotificationBuckets, filteredBuckets); err != nil {
 		return err
+	}
+	if len(filteredStateMachines) > 0 {
+		if _, err := fmt.Fprintln(out, "Step Functions State Machines:"); err != nil {
+			return err
+		}
+		for _, sm := range filteredStateMachines {
+			if _, err := fmt.Fprintf(out, "  - %s\n", sm.Name); err != nil {
+				return err
+			}
+		}
 	}
 	if opts.DryRun {
 		_, _ = fmt.Fprintln(out, "Dry run only. No resources were deleted.")
@@ -203,6 +233,15 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		_, _ = fmt.Fprintf(out, "Warning: failed to delete %s %s: %v\n", kind, name, err)
 	}
 
+	// Delete state machines first so the orchestration is torn down before the
+	// Lambdas it targets.
+	for _, sm := range filteredStateMachines {
+		if err := deleteStateMachine(endpoint, sm.Arn); err != nil {
+			recordFailure("state machine", sm.Name, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Deleted State Machine: %s\n", sm.Name)
+	}
 	for _, mapping := range filteredMappings {
 		if err := deleteEventSourceMapping(endpoint, mapping.UUID); err != nil {
 			recordFailure("trigger", mapping.UUID, err)
@@ -462,7 +501,7 @@ func filterGateways(items []struct {
 	Name    string            `json:"name"`
 	Tags    map[string]string `json:"tags"`
 	Version string            `json:"version"`
-}, query string) []struct {
+}, query, group string) []struct {
 	APIID   string
 	Name    string
 	Tags    map[string]string
@@ -475,7 +514,7 @@ func filterGateways(items []struct {
 		Version string
 	}
 	for _, item := range items {
-		if matchesTagSelector(item.Tags, query) {
+		if matchesTagSelector(item.Tags, query) && matchesGroupName(item.Name, group) {
 			out = append(out, struct {
 				APIID   string
 				Name    string
@@ -490,7 +529,7 @@ func filterGateways(items []struct {
 func filterFunctions(items []struct {
 	Name string            `json:"name"`
 	Tags map[string]string `json:"tags"`
-}, query string) []struct {
+}, query, group string) []struct {
 	Name string
 	Tags map[string]string
 } {
@@ -499,7 +538,7 @@ func filterFunctions(items []struct {
 		Tags map[string]string
 	}
 	for _, item := range items {
-		if matchesTagSelector(item.Tags, query) {
+		if matchesTagSelector(item.Tags, query) && matchesGroupName(item.Name, group) {
 			out = append(out, struct {
 				Name string
 				Tags map[string]string
@@ -513,7 +552,7 @@ func filterQueues(items []struct {
 	Name string            `json:"name"`
 	URL  string            `json:"url"`
 	Tags map[string]string `json:"tags"`
-}, query string) []struct {
+}, query, group string) []struct {
 	Name string
 	URL  string
 	Tags map[string]string
@@ -524,7 +563,7 @@ func filterQueues(items []struct {
 		Tags map[string]string
 	}
 	for _, item := range items {
-		if matchesTagSelector(item.Tags, query) {
+		if matchesTagSelector(item.Tags, query) && matchesGroupName(item.Name, group) {
 			out = append(out, struct {
 				Name string
 				URL  string
@@ -539,7 +578,7 @@ func filterTopics(items []struct {
 	Name string            `json:"name"`
 	Arn  string            `json:"arn"`
 	Tags map[string]string `json:"tags"`
-}, query string) []struct {
+}, query, group string) []struct {
 	Name string
 	Arn  string
 	Tags map[string]string
@@ -550,7 +589,7 @@ func filterTopics(items []struct {
 		Tags map[string]string
 	}
 	for _, item := range items {
-		if matchesTagSelector(item.Tags, query) {
+		if matchesTagSelector(item.Tags, query) && matchesGroupName(item.Name, group) {
 			out = append(out, struct {
 				Name string
 				Arn  string
@@ -567,7 +606,7 @@ func filterSubscriptions(items []struct {
 	TopicName       string `json:"topicName"`
 	Protocol        string `json:"protocol"`
 	Endpoint        string `json:"endpoint"`
-}, query string, topics []struct {
+}, narrow bool, topics []struct {
 	Name string
 	Arn  string
 	Tags map[string]string
@@ -593,7 +632,7 @@ func filterSubscriptions(items []struct {
 		Endpoint        string
 	}
 
-	if strings.TrimSpace(query) == "" {
+	if !narrow {
 		for _, item := range items {
 			out = append(out, struct {
 				SubscriptionArn string
@@ -653,7 +692,7 @@ func filterSubscriptions(items []struct {
 func filterSecrets(items []struct {
 	Name string            `json:"name"`
 	Tags map[string]string `json:"tags"`
-}, query string) []struct {
+}, query, group string) []struct {
 	Name string
 	Tags map[string]string
 } {
@@ -662,11 +701,37 @@ func filterSecrets(items []struct {
 		Tags map[string]string
 	}
 	for _, item := range items {
-		if matchesTagSelector(item.Tags, query) {
+		if matchesTagSelector(item.Tags, query) && matchesGroupName(item.Name, group) {
 			out = append(out, struct {
 				Name string
 				Tags map[string]string
 			}{Name: item.Name, Tags: item.Tags})
+		}
+	}
+	return out
+}
+
+func filterStateMachines(items []struct {
+	Name string            `json:"name"`
+	Arn  string            `json:"arn"`
+	Tags map[string]string `json:"tags"`
+}, query, group string) []struct {
+	Name string
+	Arn  string
+	Tags map[string]string
+} {
+	var out []struct {
+		Name string
+		Arn  string
+		Tags map[string]string
+	}
+	for _, item := range items {
+		if matchesTagSelector(item.Tags, query) && matchesGroupName(item.Name, group) {
+			out = append(out, struct {
+				Name string
+				Arn  string
+				Tags map[string]string
+			}{Name: item.Name, Arn: item.Arn, Tags: item.Tags})
 		}
 	}
 	return out
@@ -677,7 +742,7 @@ func filterBuckets(items []struct {
 	Objects          int    `json:"objects"`
 	TotalSize        int64  `json:"totalSize"`
 	HasNotifications bool   `json:"hasNotifications"`
-}, query string) []struct {
+}, query, group string) []struct {
 	Name      string
 	Objects   int
 	TotalSize int64
@@ -688,7 +753,7 @@ func filterBuckets(items []struct {
 		TotalSize int64
 	}
 	for _, item := range items {
-		if matchesBucketSelector(item.Name, query) {
+		if matchesBucketSelector(item.Name, query) && matchesGroupName(item.Name, group) {
 			out = append(out, struct {
 				Name      string
 				Objects   int
@@ -747,7 +812,7 @@ func filterEventSourceMappings(items []struct {
 	UUID         string `json:"uuid"`
 	QueueName    string `json:"queueName"`
 	FunctionName string `json:"functionName"`
-}, query string, queues []struct {
+}, narrow bool, queues []struct {
 	Name string
 	URL  string
 	Tags map[string]string
@@ -766,7 +831,7 @@ func filterEventSourceMappings(items []struct {
 	}
 
 	// Without a tag filter, flush all mappings.
-	if strings.TrimSpace(query) == "" {
+	if !narrow {
 		for _, item := range items {
 			out = append(out, struct {
 				UUID         string
@@ -830,7 +895,7 @@ func filterEventBridgeRules(items []struct {
 		ID  string `json:"id"`
 		Arn string `json:"arn"`
 	} `json:"targets"`
-}, query string, functions []struct {
+}, narrow bool, functions []struct {
 	Name string
 	Tags map[string]string
 }) []struct {
@@ -849,7 +914,7 @@ func filterEventBridgeRules(items []struct {
 	}
 
 	// Without tag filters, flush all rules.
-	if strings.TrimSpace(query) == "" {
+	if !narrow {
 		for _, item := range items {
 			targets := make([]struct {
 				ID  string
@@ -914,6 +979,29 @@ func filterEventBridgeRules(items []struct {
 		}
 	}
 	return out
+}
+
+// matchesGroupName reports whether a resource name matches the --group filter
+// (case-insensitive substring). An empty group matches everything.
+func matchesGroupName(name, group string) bool {
+	group = strings.TrimSpace(strings.ToLower(group))
+	if group == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(name), group)
+}
+
+// flushSelectorDescription renders a short human description of the active
+// tag/group selectors for status messages.
+func flushSelectorDescription(opts flushOptions) string {
+	var parts []string
+	if strings.TrimSpace(opts.TagFilter) != "" {
+		parts = append(parts, fmt.Sprintf("tag filter %q", opts.TagFilter))
+	}
+	if strings.TrimSpace(opts.Group) != "" {
+		parts = append(parts, fmt.Sprintf("group %q", opts.Group))
+	}
+	return strings.Join(parts, " and ")
 }
 
 func matchesTagSelector(tags map[string]string, query string) bool {
@@ -1219,6 +1307,40 @@ func deleteEventBridgeRule(endpoint, ruleName string) error {
 		return fmt.Errorf("error (%d): %s", resp.StatusCode, string(body))
 	}
 	return nil
+}
+
+func deleteStateMachine(endpoint, arn string) error {
+	reqBody, _ := json.Marshal(map[string]any{"stateMachineArn": arn})
+	req, err := http.NewRequest(http.MethodPost, endpoint+"/", bytes.NewReader(reqBody))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	req.Header.Set("X-Amz-Target", "AWSStepFunctions.DeleteStateMachine")
+
+	resp, err := cliHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+
+	// Idempotent: treat an already-deleted / unknown state machine as success.
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusBadRequest {
+		bodyText := string(body)
+		if strings.Contains(bodyText, "StateMachineDoesNotExist") ||
+			strings.Contains(bodyText, "NotFound") ||
+			strings.Contains(bodyText, "does not exist") ||
+			strings.Contains(bodyText, "not found") {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("error (%d): %s", resp.StatusCode, string(body))
 }
 
 func normalizeLambdaRef(ref string) string {

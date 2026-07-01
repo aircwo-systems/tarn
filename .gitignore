@@ -9,6 +9,7 @@ docs/.vitepress/dist/
 docs/.vitepress/cache/
 /examples/
 /compatibility-test/node
+/docs/design/
 
 # Go
 *.exe
