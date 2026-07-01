@@ -76,15 +76,21 @@ func (store *Store) Init() error {
 	return nil
 }
 
-// Save stores or updates a mapping.
+// Save stores or updates a mapping. The mapping is copied so the caller's
+// pointer (which may still be mutated by a poller goroutine) is never
+// aliased with the store's internal state or shared with other callers.
 func (store *Store) Save(mapping *types.EventSourceMapping) error {
+	cp := *mapping
 	store.mu.Lock()
-	store.mappings[mapping.UUID] = mapping
+	store.mappings[mapping.UUID] = &cp
 	store.mu.Unlock()
 	return store.persist()
 }
 
-// Get returns a mapping by UUID.
+// Get returns a copy of the mapping for the given UUID. Returning a copy
+// keeps the store's internal object free of external mutation, since
+// callers (e.g. pollers) write directly to mapping fields without going
+// through the store's lock.
 func (store *Store) Get(uuid string) (*types.EventSourceMapping, error) {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
@@ -93,17 +99,19 @@ func (store *Store) Get(uuid string) (*types.EventSourceMapping, error) {
 	if !exists {
 		return nil, fmt.Errorf("event source mapping %s not found", uuid)
 	}
-	return m, nil
+	cp := *m
+	return &cp, nil
 }
 
-// List returns all mappings.
+// List returns copies of all mappings. See Get for why copies are returned.
 func (store *Store) List() []*types.EventSourceMapping {
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 
 	result := make([]*types.EventSourceMapping, 0, len(store.mappings))
 	for _, m := range store.mappings {
-		result = append(result, m)
+		cp := *m
+		result = append(result, &cp)
 	}
 	return result
 }
