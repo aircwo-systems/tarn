@@ -19,6 +19,11 @@ type Config struct {
 	DockerHost string
 	// LambdaKeepAliveMS is how long warm containers stay alive (milliseconds).
 	LambdaKeepAliveMS int
+	// LambdaMaxConcurrency is the maximum number of concurrent execution
+	// environments (containers) per function — the local analogue of AWS Lambda
+	// function concurrency. Concurrent invocations beyond this wait for a free
+	// environment. Must be >= 1.
+	LambdaMaxConcurrency int
 	// LambdaDefaultTimeout is the default function timeout in seconds.
 	LambdaDefaultTimeout int
 	// LambdaDefaultMemory is the default function memory in MB.
@@ -66,6 +71,7 @@ func Default() *Config {
 		DataDir:                  filepath.Join(home, ".tarn", "data"),
 		DockerHost:               "unix:///var/run/docker.sock",
 		LambdaKeepAliveMS:        600000, // 10 minutes
+		LambdaMaxConcurrency:     10,     // concurrent containers per function
 		LambdaDefaultTimeout:     3,
 		LambdaDefaultMemory:      128,
 		Region:                   "us-east-1",
@@ -105,6 +111,11 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("TARN_LAMBDA_KEEPALIVE_MS"); v != "" {
 		if ms, err := strconv.Atoi(v); err == nil {
 			c.LambdaKeepAliveMS = ms
+		}
+	}
+	if v := os.Getenv("TARN_LAMBDA_MAX_CONCURRENCY"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 1 {
+			c.LambdaMaxConcurrency = n
 		}
 	}
 	if v := os.Getenv("TARN_REGION"); v != "" {
@@ -253,6 +264,16 @@ func (c *Config) EventBridgeDir() string {
 // EventBridgeStatePath returns the state snapshot path for EventBridge resources.
 func (c *Config) EventBridgeStatePath() string {
 	return filepath.Join(c.EventBridgeDir(), "state.json")
+}
+
+// StepFunctionsDir returns the path where Step Functions state is stored.
+func (c *Config) StepFunctionsDir() string {
+	return filepath.Join(c.DataDir, "stepfunctions")
+}
+
+// StepFunctionsStatePath returns the state snapshot path for Step Functions resources.
+func (c *Config) StepFunctionsStatePath() string {
+	return filepath.Join(c.StepFunctionsDir(), "state.json")
 }
 
 // DynamoDBDir returns the path where DynamoDB state is stored.

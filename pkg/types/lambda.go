@@ -158,4 +158,10 @@ type InvokeOutput struct {
 	FunctionError   string `json:"FunctionError,omitempty"`
 	LogResult       string `json:"LogResult,omitempty"`
 	ExecutedVersion string `json:"ExecutedVersion,omitempty"`
+	// RequestID is the per-invocation identifier (aws_request_id) generated for
+	// this call. LogGroup/LogStream locate the CloudWatch-style log stream the
+	// invocation wrote to, so callers can deep-link to the exact logs.
+	RequestID string `json:"RequestId,omitempty"`
+	LogGroup  string `json:"LogGroup,omitempty"`
+	LogStream string `json:"LogStream,omitempty"`
 }
