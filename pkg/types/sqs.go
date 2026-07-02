@@ -12,6 +12,11 @@ type QueueConfig struct {
 	ReceiveMessageWaitTimeSeconds int               `json:"ReceiveMessageWaitTimeSeconds"`
 	FifoQueue                     bool              `json:"FifoQueue"`
 	ContentBasedDeduplication     bool              `json:"ContentBasedDeduplication"`
+	// FIFO-only throughput/dedup mode (Terraform: deduplication_scope,
+	// fifo_throughput_limit). Empty for standard queues; defaulted to AWS's
+	// "queue"/"perQueue" for FIFO queues that don't set them explicitly.
+	DeduplicationScope            string            `json:"DeduplicationScope,omitempty"`
+	FifoThroughputLimit           string            `json:"FifoThroughputLimit,omitempty"`
 	CreatedTimestamp              int64             `json:"CreatedTimestamp"`
 	LastModifiedTimestamp         int64             `json:"LastModifiedTimestamp"`
 	ProcessedCount                int64             `json:"ProcessedCount,omitempty"`

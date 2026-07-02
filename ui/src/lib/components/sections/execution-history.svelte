@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import { ArrowUpRightIcon, CaretDownIcon } from "phosphor-svelte";
   import { Badge } from "$lib/components/ui/badge";
   import LedDot from "$lib/components/common/led-dot.svelte";
@@ -100,11 +101,22 @@
   let openGroups = $state<Set<number>>(new Set());
 
   // Reset per execution: default collapsed, but auto-open failed items.
+  //
+  // Depend only on the execution's ARN (a primitive), not the `execution`
+  // object itself. The dashboard replaces `execution` with a freshly cloned
+  // object on every poll (default every 5s) even when nothing changed, and
+  // reading `execution.arn` directly here would re-track the whole object,
+  // re-running this effect — and collapsing every open group / resetting the
+  // view — on every poll tick instead of only when the user picks a
+  // different execution. `model.groups` is read via `untrack` for the same
+  // reason: it's recomputed from a new `events` array reference each poll,
+  // and we don't want that recomputation to retrigger the reset either.
+  const executionArn = $derived(execution.arn);
   $effect(() => {
-    execution.arn;
+    executionArn;
     viewMode = "grouped";
     const failed = new Set<number>();
-    for (const g of model.groups) if (g.status === "failed") failed.add(g.index);
+    for (const g of untrack(() => model.groups)) if (g.status === "failed") failed.add(g.index);
     openGroups = failed;
   });
 
