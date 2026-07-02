@@ -75,6 +75,140 @@ func TestCreateFIFOQueue(t *testing.T) {
 	}
 }
 
+// TestFIFOThroughputAttributesDefaults verifies that FIFO queues default to
+// standard throughput mode (DeduplicationScope=queue, FifoThroughputLimit=
+// perQueue) matching real AWS, and that those defaults round-trip through
+// GetQueueAttributes. Terraform's queue-attribute waiter polls
+// GetQueueAttributes until the returned value matches what it asked for (or
+// the default it expects) — if these were never returned, the waiter would
+// spin until timeout on every FIFO queue, regardless of whether the caller
+// set the high-throughput attributes at all.
+func TestFIFOThroughputAttributesDefaults(t *testing.T) {
+	s := newTestStore()
+
+	q, err := s.CreateQueue("defaults.fifo", map[string]string{"FifoQueue": "true"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.DeduplicationScope != "queue" {
+		t.Fatalf("expected default DeduplicationScope=queue, got %q", q.DeduplicationScope)
+	}
+	if q.FifoThroughputLimit != "perQueue" {
+		t.Fatalf("expected default FifoThroughputLimit=perQueue, got %q", q.FifoThroughputLimit)
+	}
+
+	attrs, err := s.GetQueueAttributes("defaults.fifo", []string{"All"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs["DeduplicationScope"] != "queue" {
+		t.Fatalf("expected DeduplicationScope=queue in GetQueueAttributes, got %q", attrs["DeduplicationScope"])
+	}
+	if attrs["FifoThroughputLimit"] != "perQueue" {
+		t.Fatalf("expected FifoThroughputLimit=perQueue in GetQueueAttributes, got %q", attrs["FifoThroughputLimit"])
+	}
+
+	// Standard (non-FIFO) queues don't have these attributes at all.
+	if _, err := s.CreateQueue("standard-queue", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	stdAttrs, err := s.GetQueueAttributes("standard-queue", []string{"All"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := stdAttrs["DeduplicationScope"]; ok {
+		t.Fatal("standard queue should not report DeduplicationScope")
+	}
+	if _, ok := stdAttrs["FifoThroughputLimit"]; ok {
+		t.Fatal("standard queue should not report FifoThroughputLimit")
+	}
+}
+
+// TestFIFOHighThroughputAttributes verifies that setting deduplication_scope
+// (Terraform: deduplication_scope) and fifo_throughput_limit (Terraform:
+// fifo_throughput_limit) to enable FIFO high-throughput mode is accepted on
+// create, persisted, and echoed back — this is the exact combination
+// Terraform's aws_sqs_queue resource sends and then polls for, so if tarn
+// silently dropped it, terraform apply would hang waiting for it to appear.
+func TestFIFOHighThroughputAttributes(t *testing.T) {
+	s := newTestStore()
+
+	q, err := s.CreateQueue("high-throughput.fifo", map[string]string{
+		"FifoQueue":           "true",
+		"DeduplicationScope":  "messageGroup",
+		"FifoThroughputLimit": "perMessageGroupId",
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.DeduplicationScope != "messageGroup" {
+		t.Fatalf("expected DeduplicationScope=messageGroup, got %q", q.DeduplicationScope)
+	}
+	if q.FifoThroughputLimit != "perMessageGroupId" {
+		t.Fatalf("expected FifoThroughputLimit=perMessageGroupId, got %q", q.FifoThroughputLimit)
+	}
+
+	attrs, err := s.GetQueueAttributes("high-throughput.fifo", []string{"DeduplicationScope", "FifoThroughputLimit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs["DeduplicationScope"] != "messageGroup" || attrs["FifoThroughputLimit"] != "perMessageGroupId" {
+		t.Fatalf("unexpected attrs: %+v", attrs)
+	}
+}
+
+// TestFIFOThroughputAttributesInvalidCombo mirrors AWS's own validation:
+// perMessageGroupId throughput requires messageGroup-scoped dedup. Rejecting
+// this combination up front (rather than silently accepting a config the
+// queue can't actually honor) prevents a downstream attribute waiter from
+// polling forever for a value that would never be produced.
+func TestFIFOThroughputAttributesInvalidCombo(t *testing.T) {
+	s := newTestStore()
+
+	_, err := s.CreateQueue("bad-combo.fifo", map[string]string{
+		"FifoQueue":           "true",
+		"FifoThroughputLimit": "perMessageGroupId",
+		// DeduplicationScope intentionally left at its "queue" default.
+	}, nil)
+	if err == nil {
+		t.Fatal("expected error for perMessageGroupId throughput without messageGroup dedup scope")
+	}
+
+	_, err = s.CreateQueue("bad-value.fifo", map[string]string{
+		"FifoQueue":          "true",
+		"DeduplicationScope": "not-a-real-value",
+	}, nil)
+	if err == nil {
+		t.Fatal("expected error for invalid DeduplicationScope value")
+	}
+}
+
+// TestFIFOThroughputAttributesSetAfterCreate verifies SetQueueAttributes can
+// upgrade an existing FIFO queue to high-throughput mode across two calls
+// (as Terraform's SDK does when both attributes are set together), relying
+// on the previously-applied value being retained on the config between calls.
+func TestFIFOThroughputAttributesSetAfterCreate(t *testing.T) {
+	s := newTestStore()
+	if _, err := s.CreateQueue("upgrade.fifo", map[string]string{"FifoQueue": "true"}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.SetQueueAttributes("upgrade.fifo", map[string]string{"DeduplicationScope": "messageGroup"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetQueueAttributes("upgrade.fifo", map[string]string{"FifoThroughputLimit": "perMessageGroupId"}); err != nil {
+		t.Fatal(err)
+	}
+
+	attrs, err := s.GetQueueAttributes("upgrade.fifo", []string{"All"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if attrs["DeduplicationScope"] != "messageGroup" || attrs["FifoThroughputLimit"] != "perMessageGroupId" {
+		t.Fatalf("unexpected attrs after upgrade: %+v", attrs)
+	}
+}
+
 func TestSendAndReceive(t *testing.T) {
 	s := newTestStore()
 	if _, err := s.CreateQueue("q1", nil, nil); err != nil {

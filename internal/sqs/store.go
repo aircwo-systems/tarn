@@ -137,8 +137,15 @@ func (s *Store) CreateQueue(name string, attrs map[string]string, tags map[strin
 		LastModifiedTimestamp:         now,
 		Tags:                          tags,
 	}
+	if isFIFO {
+		// AWS defaults for FIFO queues that don't set these explicitly.
+		qCfg.DeduplicationScope = "queue"
+		qCfg.FifoThroughputLimit = "perQueue"
+	}
 
-	applyQueueAttributes(qCfg, attrs)
+	if err := applyQueueAttributes(qCfg, attrs); err != nil {
+		return nil, err
+	}
 
 	s.queues[name] = &queue{
 		config:   qCfg,
@@ -208,9 +215,14 @@ func (s *Store) SetQueueAttributes(name string, attrs map[string]string) error {
 	}
 
 	q.mu.Lock()
-	applyQueueAttributes(q.config, attrs)
-	q.config.LastModifiedTimestamp = time.Now().Unix()
+	err := applyQueueAttributes(q.config, attrs)
+	if err == nil {
+		q.config.LastModifiedTimestamp = time.Now().Unix()
+	}
 	q.mu.Unlock()
+	if err != nil {
+		return err
+	}
 	s.dirty.Store(true)
 	return nil
 }
@@ -267,6 +279,19 @@ func (s *Store) GetQueueAttributes(name string, attrNames []string) (map[string]
 			result["ContentBasedDeduplication"] = "true"
 		} else {
 			result["ContentBasedDeduplication"] = "false"
+		}
+	}
+	// DeduplicationScope / FifoThroughputLimit — FIFO-only. Like
+	// SqsManagedSseEnabled below, Terraform's queue-attribute waiter polls
+	// GetQueueAttributes after create/update and never converges (i.e. tarn
+	// "hangs" from the caller's perspective) if a requested attribute never
+	// shows up in the response, so these must always be echoed back once set.
+	if q.config.FifoQueue {
+		if (all || contains(attrNames, "DeduplicationScope")) && q.config.DeduplicationScope != "" {
+			result["DeduplicationScope"] = q.config.DeduplicationScope
+		}
+		if (all || contains(attrNames, "FifoThroughputLimit")) && q.config.FifoThroughputLimit != "" {
+			result["FifoThroughputLimit"] = q.config.FifoThroughputLimit
 		}
 	}
 	// SqsManagedSseEnabled — always "true" (stub); TF v6 polls this via the
@@ -751,7 +776,27 @@ func (s *Store) Reap() {
 
 // --- Helpers ---
 
-func applyQueueAttributes(cfg *types.QueueConfig, attrs map[string]string) {
+func applyQueueAttributes(cfg *types.QueueConfig, attrs map[string]string) error {
+	if v, ok := attrs["DeduplicationScope"]; ok && v != "" {
+		if v != "queue" && v != "messageGroup" {
+			return fmt.Errorf("invalid DeduplicationScope %q: must be \"queue\" or \"messageGroup\"", v)
+		}
+		cfg.DeduplicationScope = v
+	}
+	if v, ok := attrs["FifoThroughputLimit"]; ok && v != "" {
+		if v != "perQueue" && v != "perMessageGroupId" {
+			return fmt.Errorf("invalid FifoThroughputLimit %q: must be \"perQueue\" or \"perMessageGroupId\"", v)
+		}
+		cfg.FifoThroughputLimit = v
+	}
+	// High-throughput mode requires per-message-group dedup; matches AWS's own
+	// validation so misconfigured Terraform fails fast here instead of the
+	// queue silently falling back to standard throughput (and the attribute
+	// waiter spinning forever on a value that will never match what was asked for).
+	if cfg.FifoThroughputLimit == "perMessageGroupId" && cfg.DeduplicationScope != "messageGroup" {
+		return fmt.Errorf("FifoThroughputLimit=perMessageGroupId requires DeduplicationScope=messageGroup")
+	}
+
 	if v, ok := attrs["VisibilityTimeout"]; ok {
 		_, _ = fmt.Sscanf(v, "%d", &cfg.VisibilityTimeout)
 	}
@@ -793,6 +838,7 @@ func applyQueueAttributes(cfg *types.QueueConfig, attrs map[string]string) {
 			cfg.MaxReceiveCount = policy.MaxReceiveCount
 		}
 	}
+	return nil
 }
 
 // queueNameFromArn extracts the queue name from an SQS ARN.
