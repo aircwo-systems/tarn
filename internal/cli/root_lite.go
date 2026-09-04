@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	mcpcli "github.com/aircwo-systems/tarn/internal/cli/mcp"
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -36,6 +37,7 @@ Start the server:
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newFlushCmd())
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(mcpcli.NewMCPCmd(version))
 
 	root.PersistentFlags().String("host", "0.0.0.0", "API server bind address")
 	root.PersistentFlags().Int("port", 4566, "API server port")

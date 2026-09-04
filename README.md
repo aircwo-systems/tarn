@@ -55,6 +55,7 @@ To use multiple isolated accounts, set `AWS_ACCESS_KEY_ID` to a 12-digit numeric
 - [Installation](docs/guide/installation.md)
 - [Configuration](docs/guide/configuration.md)
 - [Terraform](docs/guide/terraform.md)
+- [MCP](docs/guide/mcp.md)
 - [Services Overview](docs/services/index.md)
 - [API Coverage](docs/reference/api-coverage.md)
 
