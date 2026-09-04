@@ -410,3 +410,63 @@ func TestFireRuleReportsTargets(t *testing.T) {
 		t.Fatalf("result = %+v", out)
 	}
 }
+
+// TestLogsKeepUnrecognizedRuntimeLines pins the filter as fail-open. A model
+// cannot ask what was withheld, so a runtime-sourced line that matches no known
+// marker has to stay visible.
+func TestLogsKeepUnrecognizedRuntimeLines(t *testing.T) {
+	events := []map[string]any{
+		{"timestamp": "2026-09-04T21:33:20.500Z", "message": "START RequestId: abc", "level": "INFO", "source": "runtime"},
+		{"timestamp": "2026-09-04T21:33:20.501Z", "message": "OOM killed: container exceeded memory limit", "level": "ERROR", "source": "runtime"},
+	}
+	inst := newInstance(t).json("GET /_tarn/admin/logs/events//aws/lambda/f",
+		map[string]any{"events": events, "total": len(events)})
+
+	var out LogsOutput
+	call(t, inst.session(), "tarn_get_logs", map[string]any{"function": "f"}, &out)
+
+	if out.Returned != 1 {
+		t.Fatalf("returned %d events, want the unrecognized one kept: %+v", out.Returned, out.Events)
+	}
+	if !strings.Contains(out.Events[0].Message, "OOM killed") {
+		t.Errorf("kept %q, want the unrecognized runtime line", out.Events[0].Message)
+	}
+}
+
+// TestDeployReportsReplacement pins both branches of the existence check.
+// Reporting "replaced" wrongly would let a model clobber a function it did not
+// create and not say so.
+func TestDeployReportsReplacement(t *testing.T) {
+	created := map[string]any{
+		"FunctionName": "f", "Runtime": "nodejs20.x", "State": "Active",
+	}
+
+	t.Run("new function", func(t *testing.T) {
+		inst := newInstance(t).json("POST /2015-03-31/functions", created)
+		// GET is unregistered, so it 404s the way a missing function does.
+
+		var out DeployOutput
+		call(t, inst.session(), "tarn_deploy_lambda",
+			map[string]any{"name": "f", "files": map[string]any{"index.js": "x"}}, &out)
+
+		if out.Replaced {
+			t.Error("replaced = true for a function that did not exist")
+		}
+	})
+
+	t.Run("existing function", func(t *testing.T) {
+		inst := newInstance(t).
+			json("GET /2015-03-31/functions/f", map[string]any{
+				"Configuration": map[string]any{"FunctionName": "f"},
+			}).
+			json("POST /2015-03-31/functions", created)
+
+		var out DeployOutput
+		call(t, inst.session(), "tarn_deploy_lambda",
+			map[string]any{"name": "f", "files": map[string]any{"index.js": "x"}}, &out)
+
+		if !out.Replaced {
+			t.Error("replaced = false when the function already existed")
+		}
+	})
+}

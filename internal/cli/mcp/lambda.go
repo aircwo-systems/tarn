@@ -191,7 +191,7 @@ type InvokeOutput struct {
 	ErrorMessage string   `json:"errorMessage,omitempty"`
 	Stack        []string `json:"stack,omitempty" jsonschema:"Stack frames from the runtime, usually including the failing file and line."`
 
-	RequestID string `json:"requestId,omitempty"`
+	RequestID string `json:"requestId,omitempty" jsonschema:"Invocation id, when the instance reports one. Older instances omit it."`
 	LogGroup  string `json:"logGroup,omitempty" jsonschema:"Pass this to tarn_get_logs to read what the invocation printed."`
 	DurationM int64  `json:"durationMs,omitempty"`
 }
