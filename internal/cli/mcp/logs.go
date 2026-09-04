@@ -172,6 +172,11 @@ var runtimeNoiseMarkers = []string{
 
 // isRuntimeNoise reports whether an event is container chatter rather than
 // something the function itself produced.
+//
+// Only recognized markers are filtered. Treating every runtime-sourced line as
+// noise would be fail-closed, and the consumer here is a model that cannot ask
+// what was withheld — an unrecognized line is far better shown than silently
+// dropped.
 func isRuntimeNoise(source, message string) bool {
 	if source == "output" {
 		return false
@@ -181,5 +186,5 @@ func isRuntimeNoise(source, message string) bool {
 			return true
 		}
 	}
-	return source == "runtime"
+	return false
 }
