@@ -23,6 +23,16 @@ const (
 	defaultRetention = 24 * time.Hour
 )
 
+// stamp renders t as an RFC3339Nano string in UTC.
+//
+// started_at is stored as TEXT and compared lexicographically by SQLite in
+// range scans, ORDER BY, and pruning. That only matches chronological order
+// when every value shares one offset, so all writes and query bounds must
+// normalize to UTC. Mixing "…+01:00" with "…Z" silently breaks BETWEEN.
+func stamp(t time.Time) string {
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
 // Store is a thread-safe, SQLite-backed trace store.
 type Store struct {
 	mu        sync.RWMutex
@@ -118,6 +128,47 @@ func (s *Store) initDB() {
 		!strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 		log.Printf("[trace] failed to ensure correlation_id column: %v", err)
 	}
+
+	s.normalizeStartedAt()
+}
+
+// normalizeStartedAt rewrites any started_at written with a local UTC offset
+// into UTC. Rows created before this migration sort and compare incorrectly
+// against UTC bounds, which made trace lookups miss on non-UTC machines.
+func (s *Store) normalizeStartedAt() {
+	if s.db == nil {
+		return
+	}
+
+	rows, err := s.db.Query(`SELECT id, started_at FROM traces WHERE started_at NOT LIKE '%Z'`)
+	if err != nil {
+		log.Printf("[trace] failed to scan for non-UTC timestamps: %v", err)
+		return
+	}
+
+	type fix struct{ id, startedAt string }
+	var fixes []fix
+	for rows.Next() {
+		var id, startedAt string
+		if err := rows.Scan(&id, &startedAt); err != nil {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, startedAt)
+		if err != nil {
+			continue
+		}
+		fixes = append(fixes, fix{id: id, startedAt: stamp(parsed)})
+	}
+	rows.Close()
+
+	for _, f := range fixes {
+		if _, err := s.db.Exec(`UPDATE traces SET started_at = ? WHERE id = ?`, f.startedAt, f.id); err != nil {
+			log.Printf("[trace] failed to normalize started_at for %s: %v", f.id, err)
+		}
+	}
+	if len(fixes) > 0 {
+		log.Printf("[trace] normalized %d trace timestamp(s) to UTC", len(fixes))
+	}
 }
 
 // Add records a trace, evicting old entries beyond the retention window.
@@ -142,7 +193,7 @@ func (s *Store) Add(t *Trace) {
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID,
 		t.CorrelationID,
-		t.StartedAt.Format(time.RFC3339Nano),
+		stamp(t.StartedAt),
 		t.DurationMs,
 		t.Status,
 		t.Method,
@@ -165,9 +216,9 @@ func (s *Store) PruneOlderThan(cutoff time.Time) int64 {
 		return 0
 	}
 
-	result, err := s.db.Exec(`DELETE FROM traces WHERE started_at < ?`, cutoff.Format(time.RFC3339Nano))
+	result, err := s.db.Exec(`DELETE FROM traces WHERE started_at < ?`, stamp(cutoff))
 	if err != nil {
-		log.Printf("[trace] failed to prune traces older than %s: %v", cutoff.Format(time.RFC3339Nano), err)
+		log.Printf("[trace] failed to prune traces older than %s: %v", stamp(cutoff), err)
 		return 0
 	}
 
@@ -193,7 +244,7 @@ func scanTrace(rows *sql.Rows) *Trace {
 		t.CorrelationID = t.ID
 	}
 	if parsed, err := time.Parse(time.RFC3339Nano, startedAt); err == nil {
-		t.StartedAt = parsed
+		t.StartedAt = parsed.UTC()
 	}
 	if err := json.Unmarshal([]byte(spansJSON), &t.Spans); err != nil {
 		t.Spans = nil
@@ -242,8 +293,8 @@ func (s *Store) FindNear(functionName string, around time.Time, windowMs int64) 
 
 	// Query traces that started within [around-windowMs, around+windowMs].
 	// The log event T may occur during lambda execution, so startedAt can be before T.
-	lo := around.Add(-time.Duration(windowMs) * time.Millisecond).Format(time.RFC3339Nano)
-	hi := around.Add(time.Duration(windowMs) * time.Millisecond).Format(time.RFC3339Nano)
+	lo := stamp(around.Add(-time.Duration(windowMs) * time.Millisecond))
+	hi := stamp(around.Add(time.Duration(windowMs) * time.Millisecond))
 
 	// Pre-filter on spans_json containing "lambda" to reduce Go-side JSON unmarshaling.
 	// LIMIT is applied after this filter so all matching candidates in the window are found.
@@ -314,7 +365,7 @@ func (s *Store) prune() {
 		return
 	}
 
-	cutoff := time.Now().Add(-s.retention).Format(time.RFC3339Nano)
+	cutoff := stamp(time.Now().Add(-s.retention))
 	result, err := s.db.Exec(`DELETE FROM traces WHERE started_at < ?`, cutoff)
 	if err != nil {
 		log.Printf("[trace] failed to prune old traces: %v", err)
