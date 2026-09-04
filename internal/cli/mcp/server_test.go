@@ -104,19 +104,77 @@ func TestServerAdvertisesToolsAndInstructions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTools failed: %v", err)
 	}
-	if len(tools.Tools) != 1 || tools.Tools[0].Name != "tarn_status" {
-		t.Fatalf("advertised tools = %+v, want just tarn_status", tools.Tools)
+
+	// Clients cap how many tools can be active across all configured servers,
+	// so the size of this surface is a budget worth noticing when it grows.
+	want := map[string]bool{
+		"tarn_status": true, "tarn_deploy_lambda": false, "tarn_invoke_lambda": false,
+		"tarn_get_logs": true, "tarn_peek_queue": true, "tarn_send_message": false,
+		"tarn_publish": false, "tarn_list_objects": true, "tarn_get_object": true,
+		"tarn_fire_rule": false,
+	}
+	if len(tools.Tools) != len(want) {
+		t.Errorf("advertised %d tools, want %d", len(tools.Tools), len(want))
 	}
 
-	tool := tools.Tools[0]
-	if tool.Description == "" {
-		t.Fatal("tarn_status has no description; with no AGENTS.md the description is the only documentation")
+	seen := map[string]bool{}
+	for _, tool := range tools.Tools {
+		readOnly, known := want[tool.Name]
+		if !known {
+			t.Errorf("unexpected tool %q", tool.Name)
+			continue
+		}
+		seen[tool.Name] = true
+
+		// With no AGENTS.md in the project, descriptions are the only
+		// documentation a model gets.
+		if len(tool.Description) < 100 {
+			t.Errorf("%s description is %d bytes; too thin to orient a model that has never heard of Tarn",
+				tool.Name, len(tool.Description))
+		}
+		if tool.InputSchema == nil {
+			t.Errorf("%s has no input schema", tool.Name)
+		}
+		if tool.Annotations == nil {
+			t.Errorf("%s has no annotations, so clients cannot tell whether it mutates state", tool.Name)
+			continue
+		}
+		if tool.Annotations.ReadOnlyHint != readOnly {
+			t.Errorf("%s readOnlyHint = %v, want %v", tool.Name, tool.Annotations.ReadOnlyHint, readOnly)
+		}
 	}
-	if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
-		t.Error("tarn_status is not annotated read-only, so clients cannot skip a confirmation prompt")
+	for name := range want {
+		if !seen[name] {
+			t.Errorf("tool %q was not advertised", name)
+		}
 	}
-	if tool.InputSchema == nil {
-		t.Error("tarn_status has no input schema")
+}
+
+// TestEveryToolTakesAccount guards Tarn's per-account isolation. A tool without
+// the argument silently operates on the default namespace, and a model then
+// reports resources as missing.
+func TestEveryToolTakesAccount(t *testing.T) {
+	session := connect(t, "http://127.0.0.1:1")
+
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("ListTools failed: %v", err)
+	}
+
+	for _, tool := range tools.Tools {
+		schema, ok := tool.InputSchema.(map[string]any)
+		if !ok {
+			t.Errorf("%s input schema is not an object", tool.Name)
+			continue
+		}
+		props, ok := schema["properties"].(map[string]any)
+		if !ok {
+			t.Errorf("%s input schema has no properties", tool.Name)
+			continue
+		}
+		if _, ok := props["account"]; !ok {
+			t.Errorf("%s takes no account argument", tool.Name)
+		}
 	}
 }
 

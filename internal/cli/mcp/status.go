@@ -86,7 +86,7 @@ If Tarn is not running this returns running=false with the command to start it,
 rather than failing.`
 
 // newStatusTool wires tarn_status to an instance client.
-func newStatusTool(c *client) (*mcp.Tool, mcp.ToolHandlerFor[StatusInput, StatusOutput]) {
+func addStatusTool(s *mcp.Server, c *client) {
 	tool := &mcp.Tool{
 		Name:        "tarn_status",
 		Description: statusDescription,
@@ -145,5 +145,5 @@ func newStatusTool(c *client) (*mcp.Tool, mcp.ToolHandlerFor[StatusInput, Status
 		return nil, out, nil
 	}
 
-	return tool, handler
+	mcp.AddTool(s, tool, handler)
 }
