@@ -72,6 +72,7 @@ export default defineConfig({
             { text: 'Installation', link: '/guide/installation' },
             { text: 'Configuration', link: '/guide/configuration' },
             { text: 'Terraform', link: '/guide/terraform' },
+            { text: 'MCP', link: '/guide/mcp' },
           ]
         },
         {

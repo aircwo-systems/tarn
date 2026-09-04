@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/cli/lambda"
+	mcpcli "github.com/aircwo-systems/tarn/internal/cli/mcp"
 	s3cli "github.com/aircwo-systems/tarn/internal/cli/s3"
 	"github.com/aircwo-systems/tarn/internal/cli/secrets"
 	"github.com/aircwo-systems/tarn/internal/cli/sns"
@@ -71,6 +72,9 @@ Manage Secrets Manager:
   tarn secrets update --name my-secret --value "new-value"
   tarn secrets delete --name my-secret
 
+Serve a running instance to LLM tooling over MCP:
+  tarn mcp
+
 Flush provisioned resources:
   tarn flush
   tarn flush --tag feature=r10
@@ -89,6 +93,7 @@ Flush provisioned resources:
 	root.AddCommand(sns.NewSNSCmd())
 	root.AddCommand(secrets.NewSecretsCmd())
 	root.AddCommand(stepfunctions.NewStepFunctionsCmd())
+	root.AddCommand(mcpcli.NewMCPCmd(version))
 
 	root.PersistentFlags().String("host", "0.0.0.0", "API server bind address")
 	root.PersistentFlags().Int("port", 4566, "API server port")
