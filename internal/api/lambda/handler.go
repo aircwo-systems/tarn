@@ -366,12 +366,16 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 		if correlationID == "" {
 			correlationID = tracesvc.NewCorrelationID()
 		}
+		// A function error is an invocation failure even though AWS answers the
+		// HTTP call with 200, so the trace records 500. Leaving it at 200 made
+		// the dashboard report a thrown handler as a healthy invocation.
 		status := 200
 		spanStatus := "ok"
 		if err != nil {
 			status = 500
 			spanStatus = "error"
 		} else if output != nil && output.FunctionError != "" {
+			status = 500
 			spanStatus = "error"
 		}
 		h.traceStore.Add(&tracesvc.Trace{
@@ -391,6 +395,11 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 
 	if output.FunctionError != "" {
 		w.Header().Set("X-Amz-Function-Error", output.FunctionError)
+	}
+	// AWS returns the invocation id on every call. Callers need it to correlate
+	// a response with the log stream the invocation wrote to.
+	if output.RequestID != "" {
+		w.Header().Set("x-amzn-RequestId", output.RequestID)
 	}
 	if output.LogResult != "" {
 		w.Header().Set("X-Amz-Log-Result", output.LogResult)

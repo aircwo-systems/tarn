@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -116,12 +117,34 @@ func (inv *Invoker) Invoke(ctx context.Context, hostPort string, input *types.In
 		Payload:    body,
 	}
 
-	// The RIE sets this header when the function returns an error
+	// The RIE sets this header when the function returns an error. Not every
+	// RIE build does, so fall back to the payload shape: a handler that threw
+	// serializes as {"errorType":...,"errorMessage":...}. Without this fallback
+	// a thrown handler looks like a successful invocation to every caller,
+	// including AWS SDKs reading FunctionError.
 	if fnErr := resp.Header.Get("X-Amz-Function-Error"); fnErr != "" {
 		output.FunctionError = fnErr
+	} else if payloadIsFunctionError(body) {
+		output.FunctionError = "Unhandled"
 	}
 
 	return output, nil
+}
+
+// payloadIsFunctionError reports whether an RIE response body is an error
+// envelope rather than a handler return value.
+func payloadIsFunctionError(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	var envelope struct {
+		ErrorType    string `json:"errorType"`
+		ErrorMessage string `json:"errorMessage"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return false
+	}
+	return envelope.ErrorType != "" || envelope.ErrorMessage != ""
 }
 
 // InvokeWithLogs invokes the function and also captures logs if requested.

@@ -235,3 +235,85 @@ func TestInvokerEmptyPayload(t *testing.T) {
 		t.Fatalf("expected payload %q, got %q", expected, string(output.Payload))
 	}
 }
+
+// TestInvokerFunctionErrorWithoutHeader covers RIE builds that return the error
+// envelope in the body but omit X-Amz-Function-Error. Measured against
+// public.ecr.aws/lambda/nodejs:20, which does exactly that: a thrown handler
+// came back as HTTP 200 with no header, so every caller — the invoke handler,
+// the trace store, and any AWS SDK reading FunctionError — treated a crashed
+// invocation as a success.
+func TestInvokerFunctionErrorWithoutHeader(t *testing.T) {
+	listener := mustListenLocalhost(t)
+	defer func() { _ = listener.Close() }()
+
+	port := fmt.Sprintf("%d", listener.Addr().(*net.TCPAddr).Port)
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(rieInvokePath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, `{"errorType":"TypeError","errorMessage":"Cannot read properties of undefined (reading 'reduce')","trace":["TypeError: ..."]}`)
+	})
+
+	server := &http.Server{Handler: mux}
+	go func() { _ = server.Serve(listener) }()
+	defer func() { _ = server.Close() }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	output, err := NewInvoker().Invoke(context.Background(), port, &types.InvokeInput{
+		FunctionName: "order-processor",
+		Payload:      []byte(`{"orderId":"ord-991"}`),
+	})
+	if err != nil {
+		t.Fatalf("invoke failed: %v", err)
+	}
+	if output.FunctionError != "Unhandled" {
+		t.Fatalf("FunctionError = %q, want %q", output.FunctionError, "Unhandled")
+	}
+}
+
+// TestInvokerSuccessNotFlaggedAsError guards the payload sniff against false
+// positives on ordinary handler return values.
+func TestInvokerSuccessNotFlaggedAsError(t *testing.T) {
+	listener := mustListenLocalhost(t)
+	defer func() { _ = listener.Close() }()
+
+	port := fmt.Sprintf("%d", listener.Addr().(*net.TCPAddr).Port)
+
+	cases := map[string]string{
+		"api gateway response": `{"statusCode":200,"body":"{\"ok\":true}"}`,
+		"bare value":           `"hello"`,
+		"null":                 `null`,
+		"array":                `[1,2,3]`,
+		"unrelated keys":       `{"error":"handled downstream","errorCode":42}`,
+	}
+
+	var body string
+	mux := http.NewServeMux()
+	mux.HandleFunc(rieInvokePath, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, body)
+	})
+
+	server := &http.Server{Handler: mux}
+	go func() { _ = server.Serve(listener) }()
+	defer func() { _ = server.Close() }()
+
+	time.Sleep(50 * time.Millisecond)
+
+	for name, payload := range cases {
+		body = payload
+		output, err := NewInvoker().Invoke(context.Background(), port, &types.InvokeInput{
+			FunctionName: "order-processor",
+			Payload:      []byte(`{}`),
+		})
+		if err != nil {
+			t.Fatalf("%s: invoke failed: %v", name, err)
+		}
+		if output.FunctionError != "" {
+			t.Fatalf("%s: FunctionError = %q, want empty", name, output.FunctionError)
+		}
+	}
+}
