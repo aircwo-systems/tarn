@@ -246,7 +246,7 @@ func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
 
 	groupId := r.FormValue("MessageGroupId")
 	dedupId := r.FormValue("MessageDeduplicationId")
-	msgAttrs := parseMessageAttributes(r)
+	msgAttrs := parseMessageAttributes(r, "")
 
 	msg, err := h.svc.SendMessage(name, msgBody, delaySec, msgAttrs, groupId, dedupId)
 	if err != nil {
@@ -289,8 +289,9 @@ func (h *Handler) sendMessageBatch(w http.ResponseWriter, r *http.Request) {
 		}
 		groupId := r.FormValue(prefix + "MessageGroupId")
 		dedupId := r.FormValue(prefix + "MessageDeduplicationId")
+		msgAttrs := parseMessageAttributes(r, prefix)
 
-		msg, err := h.svc.SendMessage(name, msgBody, delaySec, nil, groupId, dedupId)
+		msg, err := h.svc.SendMessage(name, msgBody, delaySec, msgAttrs, groupId, dedupId)
 		if err != nil {
 			failXML += fmt.Sprintf("    <BatchResultErrorEntry>\n      <Id>%s</Id>\n      <SenderFault>true</SenderFault>\n      <Code>InvalidParameterValue</Code>\n      <Message>%s</Message>\n    </BatchResultErrorEntry>\n", id, err.Error())
 			continue
@@ -612,16 +613,18 @@ func parseTags(r *http.Request) map[string]string {
 	return tags
 }
 
-// parseMessageAttributes extracts MessageAttribute.N.Name/Value pairs from form data.
-func parseMessageAttributes(r *http.Request) map[string]*types.MessageAttribute {
+// parseMessageAttributes extracts MessageAttribute.N.Name/Value pairs from form
+// data. prefix scopes the lookup to a single batch entry, e.g.
+// "SendMessageBatchRequestEntry.1."; pass "" for a non-batch request.
+func parseMessageAttributes(r *http.Request, prefix string) map[string]*types.MessageAttribute {
 	attrs := make(map[string]*types.MessageAttribute)
 	for i := 1; i <= 10; i++ {
-		name := r.FormValue(fmt.Sprintf("MessageAttribute.%d.Name", i))
+		name := r.FormValue(fmt.Sprintf("%sMessageAttribute.%d.Name", prefix, i))
 		if name == "" {
 			break
 		}
-		dataType := r.FormValue(fmt.Sprintf("MessageAttribute.%d.Value.DataType", i))
-		stringValue := r.FormValue(fmt.Sprintf("MessageAttribute.%d.Value.StringValue", i))
+		dataType := r.FormValue(fmt.Sprintf("%sMessageAttribute.%d.Value.DataType", prefix, i))
+		stringValue := r.FormValue(fmt.Sprintf("%sMessageAttribute.%d.Value.StringValue", prefix, i))
 		attrs[name] = &types.MessageAttribute{
 			DataType:    dataType,
 			StringValue: stringValue,
