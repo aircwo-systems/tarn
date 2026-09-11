@@ -1,6 +1,7 @@
 package sqs
 
 import (
+	"encoding/base64"
 	"fmt"
 	"log"
 	"net/http"
@@ -625,9 +626,15 @@ func parseMessageAttributes(r *http.Request, prefix string) map[string]*types.Me
 		}
 		dataType := r.FormValue(fmt.Sprintf("%sMessageAttribute.%d.Value.DataType", prefix, i))
 		stringValue := r.FormValue(fmt.Sprintf("%sMessageAttribute.%d.Value.StringValue", prefix, i))
+		binaryValStr := r.FormValue(fmt.Sprintf("%sMessageAttribute.%d.Value.BinaryValue", prefix, i))
+		var binaryVal []byte
+		if binaryValStr != "" {
+			binaryVal, _ = base64.StdEncoding.DecodeString(binaryValStr)
+		}
 		attrs[name] = &types.MessageAttribute{
 			DataType:    dataType,
 			StringValue: stringValue,
+			BinaryValue: binaryVal,
 		}
 	}
 	if len(attrs) == 0 {

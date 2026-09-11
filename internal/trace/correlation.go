@@ -98,12 +98,14 @@ func correlationIDFromValue(value any) string {
 			}
 		}
 
-		if attrs, ok := current["MessageAttributes"].(map[string]any); ok {
-			for _, key := range []string{"correlationId", "CorrelationId", "x-correlation-id", "X-Correlation-Id"} {
-				if attr, ok := attrs[key].(map[string]any); ok {
-					for _, valueKey := range []string{"StringValue", "Value"} {
-						if text, ok := attr[valueKey].(string); ok && strings.TrimSpace(text) != "" {
-							return strings.TrimSpace(text)
+		for _, attrKey := range []string{"MessageAttributes", "messageAttributes"} {
+			if attrs, ok := current[attrKey].(map[string]any); ok {
+				for _, key := range []string{"correlationId", "CorrelationId", "x-correlation-id", "X-Correlation-Id"} {
+					if attr, ok := attrs[key].(map[string]any); ok {
+						for _, valueKey := range []string{"StringValue", "stringValue", "Value"} {
+							if text, ok := attr[valueKey].(string); ok && strings.TrimSpace(text) != "" {
+								return strings.TrimSpace(text)
+							}
 						}
 					}
 				}

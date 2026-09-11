@@ -105,6 +105,10 @@ func TestBuildSQSEventPayload(t *testing.T) {
 					DataType:    "String",
 					StringValue: "update-event",
 				},
+				"signature": {
+					DataType:    "Binary",
+					BinaryValue: []byte("test-signature"),
+				},
 			},
 		},
 	}
@@ -153,6 +157,27 @@ func TestBuildSQSEventPayload(t *testing.T) {
 	}
 	if eventType["Value"] != "update-event" {
 		t.Fatalf("Value raw = %v, want %q", eventType["Value"], "update-event")
+	}
+
+	sig, ok := attrs["signature"].(map[string]any)
+	if !ok {
+		t.Fatalf("signature attribute missing from payload: %+v", attrs)
+	}
+	wantBin := "dGVzdC1zaWduYXR1cmU="
+	if sig["binaryValue"] != wantBin {
+		t.Fatalf("binaryValue raw = %v, want %q", sig["binaryValue"], wantBin)
+	}
+	if sig["BinaryValue"] != wantBin {
+		t.Fatalf("BinaryValue raw = %v, want %q", sig["BinaryValue"], wantBin)
+	}
+
+	// Verify PascalCase MessageAttributes compatibility on the record
+	compatAttrs, ok := raw["Records"][0]["MessageAttributes"].(map[string]any)
+	if !ok {
+		t.Fatalf("MessageAttributes compat missing from payload: %+v", raw)
+	}
+	if _, ok := compatAttrs["eventType"]; !ok {
+		t.Fatalf("eventType missing from MessageAttributes compat: %+v", compatAttrs)
 	}
 }
 

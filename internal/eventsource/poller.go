@@ -2,6 +2,7 @@ package eventsource
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -631,13 +632,15 @@ func matchesAllowedValues(actual interface{}, allowed []interface{}) bool {
 // SQS message attribute. We emit the AWS SQS event keys plus compatibility
 // aliases used by existing SNS-style consumers.
 type sqsMessageAttribute struct {
-	StringValue           string   `json:"stringValue,omitempty"`
-	StringValueCompat     string   `json:"StringValue,omitempty"`
-	Value                 string   `json:"Value,omitempty"`
-	DataType              string   `json:"dataType"`
-	DataTypeCompat        string   `json:"DataType,omitempty"`
-	StringListValues      []string `json:"stringListValues"`
-	BinaryListValues      []string `json:"binaryListValues"`
+	StringValue            string   `json:"stringValue,omitempty"`
+	StringValueCompat      string   `json:"StringValue,omitempty"`
+	Value                  string   `json:"Value,omitempty"`
+	BinaryValue            string   `json:"binaryValue,omitempty"`
+	BinaryValueCompat      string   `json:"BinaryValue,omitempty"`
+	DataType               string   `json:"dataType"`
+	DataTypeCompat         string   `json:"DataType,omitempty"`
+	StringListValues       []string `json:"stringListValues"`
+	BinaryListValues       []string `json:"binaryListValues"`
 	StringListValuesCompat []string `json:"StringListValues,omitempty"`
 	BinaryListValuesCompat []string `json:"BinaryListValues,omitempty"`
 }
@@ -653,8 +656,9 @@ type sqsEventRecord struct {
 	// Attributes holds SQS system attributes. The AWS Java SDK calls
 	// getAttributes() and NPEs if this field is null/missing in the JSON,
 	// so we always emit it as a non-null object even when it has no entries.
-	Attributes        map[string]string              `json:"attributes"`
-	MessageAttributes map[string]sqsMessageAttribute `json:"messageAttributes"`
+	Attributes              map[string]string              `json:"attributes"`
+	MessageAttributes       map[string]sqsMessageAttribute `json:"messageAttributes"`
+	MessageAttributesCompat map[string]sqsMessageAttribute `json:"MessageAttributes,omitempty"`
 }
 
 func buildSQSEventPayload(msgs []*types.SQSMessage, eventSourceArn, queueName string) []byte {
@@ -680,10 +684,16 @@ func buildSQSEventPayload(msgs []*types.SQSMessage, eventSourceArn, queueName st
 		msgAttrs := make(map[string]sqsMessageAttribute, len(msg.MessageAttributes))
 		for k, v := range msg.MessageAttributes {
 			if v != nil {
+				var binVal string
+				if len(v.BinaryValue) > 0 {
+					binVal = base64.StdEncoding.EncodeToString(v.BinaryValue)
+				}
 				msgAttrs[k] = sqsMessageAttribute{
 					StringValue:            v.StringValue,
 					StringValueCompat:      v.StringValue,
 					Value:                  v.StringValue,
+					BinaryValue:            binVal,
+					BinaryValueCompat:      binVal,
 					DataType:               v.DataType,
 					DataTypeCompat:         v.DataType,
 					StringListValues:       []string{},
@@ -695,15 +705,16 @@ func buildSQSEventPayload(msgs []*types.SQSMessage, eventSourceArn, queueName st
 		}
 
 		records[i] = sqsEventRecord{
-			MessageId:         msg.MessageId,
-			ReceiptHandle:     msg.ReceiptHandle,
-			Body:              msg.Body,
-			Md5OfBody:         msg.MD5OfBody,
-			EventSource:       "aws:sqs",
-			EventSourceARN:    eventSourceArn,
-			AwsRegion:         "us-east-1",
-			Attributes:        attrs,
-			MessageAttributes: msgAttrs,
+			MessageId:               msg.MessageId,
+			ReceiptHandle:           msg.ReceiptHandle,
+			Body:                    msg.Body,
+			Md5OfBody:               msg.MD5OfBody,
+			EventSource:             "aws:sqs",
+			EventSourceARN:          eventSourceArn,
+			AwsRegion:               "us-east-1",
+			Attributes:              attrs,
+			MessageAttributes:       msgAttrs,
+			MessageAttributesCompat: msgAttrs,
 		}
 	}
 	data, _ := json.Marshal(map[string]any{"Records": records})

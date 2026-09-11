@@ -238,11 +238,12 @@ func (h *Handler) jsonSendMessage(w http.ResponseWriter, body []byte) {
 }
 
 type jsonBatchEntry struct {
-	Id                     string `json:"Id"`
-	MessageBody            string `json:"MessageBody"`
-	DelaySeconds           int    `json:"DelaySeconds"`
-	MessageGroupId         string `json:"MessageGroupId"`
-	MessageDeduplicationId string `json:"MessageDeduplicationId"`
+	Id                     string                             `json:"Id"`
+	MessageBody            string                             `json:"MessageBody"`
+	DelaySeconds           int                                `json:"DelaySeconds"`
+	MessageGroupId         string                             `json:"MessageGroupId"`
+	MessageDeduplicationId string                             `json:"MessageDeduplicationId"`
+	MessageAttributes      map[string]*types.MessageAttribute `json:"MessageAttributes"`
 }
 
 func (h *Handler) jsonSendMessageBatch(w http.ResponseWriter, body []byte) {
@@ -276,7 +277,7 @@ func (h *Handler) jsonSendMessageBatch(w http.ResponseWriter, body []byte) {
 	var failures []failEntry
 
 	for _, entry := range req.Entries {
-		msg, err := h.svc.SendMessage(name, entry.MessageBody, entry.DelaySeconds, nil, entry.MessageGroupId, entry.MessageDeduplicationId)
+		msg, err := h.svc.SendMessage(name, entry.MessageBody, entry.DelaySeconds, entry.MessageAttributes, entry.MessageGroupId, entry.MessageDeduplicationId)
 		if err != nil {
 			failures = append(failures, failEntry{Id: entry.Id, Code: "InvalidParameterValue", Message: err.Error(), SenderFault: true})
 			continue
@@ -322,16 +323,17 @@ func (h *Handler) jsonReceiveMessage(w http.ResponseWriter, body []byte) {
 	}
 
 	type jsonMessage struct {
-		MessageId     string            `json:"MessageId"`
-		ReceiptHandle string            `json:"ReceiptHandle"`
-		MD5OfBody     string            `json:"MD5OfBody"`
-		Body          string            `json:"Body"`
-		Attributes    map[string]string `json:"Attributes"`
+		MessageId         string                             `json:"MessageId"`
+		ReceiptHandle     string                             `json:"ReceiptHandle"`
+		MD5OfBody         string                             `json:"MD5OfBody"`
+		Body              string                             `json:"Body"`
+		Attributes        map[string]string                  `json:"Attributes"`
+		MessageAttributes map[string]*types.MessageAttribute `json:"MessageAttributes,omitempty"`
 	}
 
 	out := make([]jsonMessage, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, jsonMessage{
+		item := jsonMessage{
 			MessageId:     m.MessageId,
 			ReceiptHandle: m.ReceiptHandle,
 			MD5OfBody:     m.MD5OfBody,
@@ -342,7 +344,11 @@ func (h *Handler) jsonReceiveMessage(w http.ResponseWriter, body []byte) {
 				"ApproximateReceiveCount":          strconv.Itoa(m.ApproximateReceiveCount),
 				"ApproximateFirstReceiveTimestamp": strconv.FormatInt(m.ApproximateFirstReceiveTimestamp, 10),
 			},
-		})
+		}
+		if len(m.MessageAttributes) > 0 {
+			item.MessageAttributes = m.MessageAttributes
+		}
+		out = append(out, item)
 	}
 	writeJSON(w, 200, map[string]any{"Messages": out})
 }
