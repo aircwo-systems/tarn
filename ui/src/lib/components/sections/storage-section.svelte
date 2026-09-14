@@ -1,46 +1,12 @@
 <script lang="ts">
-  import {
-    Package,
-    HardDrive,
-    ArrowClockwise,
-    Eye,
-    Code,
-    CopySimple,
-    Check,
-  } from "phosphor-svelte";
-  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
-  import LedDot from "$lib/components/common/led-dot.svelte";
-  import { formatJSONForViewer, isJSONContentType } from "$lib/json-format";
+  import { onMount } from "svelte";
+  import { MagnifyingGlassIcon } from "phosphor-svelte";
+  import SectionHeader from "./section-header.svelte";
+  import RcListRow from "$lib/components/rack/rc-list-row.svelte";
+  import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
+  import BucketDetail from "$lib/components/s3/bucket-detail.svelte";
   import { getDashboard } from "$lib/state.svelte";
   import { formatBytes } from "$lib/utils";
-  import {
-    Accordion,
-    AccordionItem,
-    AccordionTrigger,
-    AccordionContent,
-  } from "$lib/components/ui/accordion";
-  import SectionHeader from "./section-header.svelte";
-  import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
-
-  type BucketObject = {
-    key: string;
-    size: number;
-    lastModified: string;
-    etag: string;
-  };
-
-  type ObjectPreviewState = {
-    loading: boolean;
-    error: string;
-    notice: string;
-    content: string;
-    contentType: string;
-    showRaw: boolean;
-    copied: boolean;
-  };
-
-  const MAX_TEXT_PREVIEW_BYTES = 256 * 1024;
-  const MAX_IMAGE_PREVIEW_BYTES = 5 * 1024 * 1024;
 
   let {
     sidebarCollapsed = false,
@@ -53,480 +19,154 @@
   const dashboard = getDashboard();
   const buckets = $derived(dashboard.data?.buckets ?? []);
 
-  let selectedBucket = $state("");
-  let objects = $state<BucketObject[]>([]);
-  let loadingObjects = $state(false);
-  let openObjectKeys = $state<string[]>([]);
-  let previewByKey = $state<Record<string, ObjectPreviewState>>({});
+  // Keyed by name: polling replaces the objects, so holding one would freeze the panel.
+  let selectedName = $state<string | null>(null);
+  let prefix = $state("");
+  let objectKey = $state<string | null>(null);
+  const selected = $derived(buckets.find((b) => b.name === selectedName) ?? buckets[0] ?? null);
 
-  function defaultPreviewState(): ObjectPreviewState {
-    return {
-      loading: false,
-      error: "",
-      notice: "",
-      content: "",
-      contentType: "",
-      showRaw: false,
-      copied: false,
-    };
+  const totalObjects = $derived(buckets.reduce((n, b) => n + b.objects, 0));
+  const totalSize = $derived(buckets.reduce((n, b) => n + b.totalSize, 0));
+
+  let query = $state("");
+  const visible = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    return q ? buckets.filter((b) => b.name.toLowerCase().includes(q)) : buckets;
+  });
+
+  function syncHash() {
+    const qs = new URLSearchParams();
+    if (selectedName) qs.set("bucket", selectedName);
+    if (prefix) qs.set("prefix", prefix);
+    if (objectKey) qs.set("key", objectKey);
+    const s = qs.toString();
+    history.replaceState(null, "", `#storage${s ? `?${s}` : ""}`);
   }
 
-  function ensurePreviewState(key: string): ObjectPreviewState {
-    const existing = previewByKey[key];
-    if (existing) return existing;
-
-    const created = defaultPreviewState();
-    previewByKey = { ...previewByKey, [key]: created };
-    return created;
+  function select(name: string) {
+    selectedName = name;
+    prefix = "";
+    objectKey = null;
+    syncHash();
   }
 
-  function patchPreviewState(key: string, patch: Partial<ObjectPreviewState>) {
-    const current = ensurePreviewState(key);
-    previewByKey = {
-      ...previewByKey,
-      [key]: {
-        ...current,
-        ...patch,
-      },
-    };
+  function navigate(nextPrefix: string, key: string | null) {
+    selectedName = selected?.name ?? null;
+    prefix = nextPrefix;
+    objectKey = key;
+    syncHash();
   }
 
-  function clearAllPreviews() {
-    openObjectKeys = [];
-    previewByKey = {};
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    if (visible.length === 0) return;
+    e.preventDefault();
+    const idx = visible.findIndex((b) => b.name === selected?.name);
+    const next = e.key === "ArrowDown" ? Math.min(visible.length - 1, idx + 1) : Math.max(0, idx - 1);
+    select(visible[next].name);
   }
 
-  function closeBrowser() {
-    selectedBucket = "";
-    objects = [];
-    clearAllPreviews();
-  }
-
-  function isObjectOpen(key: string): boolean {
-    return openObjectKeys.includes(key);
-  }
-
-  function isImageContent(contentType: string): boolean {
-    return contentType.startsWith("image/") || contentType === "image/svg+xml";
-  }
-
-  function isTextPreviewableContent(contentType: string): boolean {
-    const normalized = contentType.toLowerCase();
-    return (
-      normalized.startsWith("text/") ||
-      normalized.includes("/json") ||
-      normalized.includes("+json") ||
-      normalized.includes("/xml") ||
-      normalized.includes("+xml") ||
-      normalized.includes("javascript") ||
-      normalized.includes("typescript") ||
-      normalized.includes("yaml") ||
-      normalized.includes("yml") ||
-      normalized.includes("svg")
-    );
-  }
-
-  function canToggleRawPreview(contentType: string): boolean {
-    return contentType === "image/svg+xml";
-  }
-
-  function encodeS3KeyPath(key: string): string {
-    return key
-      .split("/")
-      .map((part) => encodeURIComponent(part))
-      .join("/");
-  }
-
-  async function browseBucket(name: string) {
-    selectedBucket = name;
-    loadingObjects = true;
-    clearAllPreviews();
-
-    try {
-      const resp = await fetch(`/_s3/${name}?list-type=2`);
-      const text = await resp.text();
-      const parser = new DOMParser();
-      const xml = parser.parseFromString(text, "text/xml");
-      const contents = xml.querySelectorAll("Contents");
-
-      objects = Array.from(contents).map((c) => ({
-        key: c.querySelector("Key")?.textContent ?? "",
-        size: parseInt(c.querySelector("Size")?.textContent ?? "0", 10),
-        lastModified: c.querySelector("LastModified")?.textContent ?? "",
-        etag: c.querySelector("ETag")?.textContent ?? "",
-      }));
-    } catch {
-      objects = [];
-    } finally {
-      loadingObjects = false;
-    }
-  }
-
-  async function loadObjectPreview(bucket: string, key: string, force = false) {
-    const state = ensurePreviewState(key);
-    if (!force && (state.loading || state.content || state.error)) {
-      return;
-    }
-
-    patchPreviewState(key, {
-      loading: true,
-      error: "",
-      notice: "",
-      copied: false,
-      showRaw: false,
-    });
-
-    try {
-      const path = encodeS3KeyPath(key);
-      const objectSize = objects.find((object) => object.key === key)?.size ?? 0;
-      const headResp = await fetch(`/_s3/${bucket}/${path}`, { method: "HEAD" });
-      if (!headResp.ok) {
-        throw new Error(`HTTP ${headResp.status}`);
-      }
-
-      const contentType = headResp.headers.get("content-type") ?? "application/octet-stream";
-      const headerLength = parseInt(headResp.headers.get("content-length") ?? "0", 10);
-      const contentLength = Number.isFinite(headerLength) && headerLength > 0
-        ? headerLength
-        : objectSize;
-
-      if (isImageContent(contentType) && contentType !== "image/svg+xml") {
-        if (contentLength > MAX_IMAGE_PREVIEW_BYTES) {
-          patchPreviewState(key, {
-            loading: false,
-            error: "",
-            notice: `Preview disabled for images over ${formatBytes(MAX_IMAGE_PREVIEW_BYTES)}.`,
-            content: "",
-            contentType,
-          });
-          return;
-        }
-
-        patchPreviewState(key, {
-          loading: false,
-          error: "",
-          notice: "",
-          content: "",
-          contentType,
-        });
-        return;
-      }
-
-      if (!isTextPreviewableContent(contentType)) {
-        patchPreviewState(key, {
-          loading: false,
-          error: "",
-          notice: "Preview unavailable for binary object content.",
-          content: "",
-          contentType,
-        });
-        return;
-      }
-
-      if (contentLength > MAX_TEXT_PREVIEW_BYTES) {
-        patchPreviewState(key, {
-          loading: false,
-          error: "",
-          notice: `Preview disabled for objects over ${formatBytes(MAX_TEXT_PREVIEW_BYTES)}.`,
-          content: "",
-          contentType,
-        });
-        return;
-      }
-
-      const resp = await fetch(`/_s3/${bucket}/${path}`);
-      if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}`);
-      }
-      const text = await resp.text();
-
-      patchPreviewState(key, {
-        loading: false,
-        error: "",
-        notice: "",
-        content: text,
-        contentType,
-      });
-    } catch (error) {
-      patchPreviewState(key, {
-        loading: false,
-        contentType: "",
-        content: "",
-        notice: "",
-        error: error instanceof Error ? error.message : "Failed to load object",
-      });
-    }
-  }
-
-  function handleObjectOpenChange(next: string[] | string) {
-    const nextValues = Array.isArray(next)
-      ? next
-      : next
-          ? [next]
-          : [];
-
-    const newlyOpened = nextValues.filter((key) => !openObjectKeys.includes(key));
-    openObjectKeys = nextValues;
-
-    for (const key of newlyOpened) {
-      void loadObjectPreview(selectedBucket, key);
-    }
-  }
-
-  async function copyToClipboard(key: string) {
-    const preview = ensurePreviewState(key);
-    if (!preview.content) return;
-
-    try {
-      await navigator.clipboard.writeText(preview.content);
-      patchPreviewState(key, { copied: true });
-      setTimeout(() => {
-        const latest = previewByKey[key];
-        if (!latest) return;
-        patchPreviewState(key, { copied: false });
-      }, 2000);
-    } catch (err) {
-      console.error("Failed to copy object preview", err);
-    }
-  }
-
-  function toggleRawPreview(key: string) {
-    const preview = ensurePreviewState(key);
-    const nextShowRaw = !preview.showRaw;
-    patchPreviewState(key, { showRaw: nextShowRaw });
-    if (nextShowRaw && !preview.content && canToggleRawPreview(preview.contentType)) {
-      void loadObjectPreview(selectedBucket, key, true);
-    }
-  }
+  onMount(() => {
+    const qs = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+    selectedName = qs.get("bucket");
+    prefix = qs.get("prefix") ?? "";
+    objectKey = qs.get("key");
+  });
 </script>
 
-<div class="flex min-h-full flex-col gap-4">
+<div class="storage">
   <SectionHeader
-    title="S3 storage"
-    description="Buckets, object previews and direct Tarn storage paths."
-    icon={HardDrive}
+    title="S3 Storage"
+    description="{buckets.length} bucket{buckets.length === 1 ? '' : 's'} · {totalObjects.toLocaleString('en-GB')} objects · {formatBytes(totalSize)}"
     {sidebarCollapsed}
     {onToggleSidebar}
-  >
-    {#snippet stats()}
-      <span class="inline-flex items-center gap-1.5">
-        <span class="font-mono text-foreground">{buckets.length}</span>
-        <span class="text-muted-foreground/70">
-          bucket{buckets.length !== 1 ? "s" : ""}
-        </span>
-      </span>
-    {/snippet}
+  />
 
-    {#snippet actions()}
-      <span class="text-[11px] text-muted-foreground/50 font-mono">
-        /_s3/&lbrace;bucket&rbrace;/&lbrace;key&rbrace;
-      </span>
-    {/snippet}
-  </SectionHeader>
-
-  <PaneGroup direction="horizontal" class="min-h-0 flex-1 rounded-lg border border-border/70" style="height: calc(100vh - 10rem);">
-    <Pane defaultSize={38} minSize={22} class="flex min-h-0 flex-col overflow-hidden bg-background/50">
-      {#if buckets.length === 0 && !dashboard.loading}
-        <div class="flex h-full flex-col items-center justify-center gap-4 px-8">
-          <div class="flex h-12 w-12 items-center justify-center rounded-xl border border-border bg-muted">
-            <Package size={24} class="text-muted-foreground/70" />
+  {#if dashboard.loading && !dashboard.data}
+    <div class="layout">
+      <div class="skeleton-list">
+        {#each Array(5) as _, i (i)}<span style:--i={i}></span>{/each}
+      </div>
+    </div>
+  {:else if buckets.length === 0}
+    <div class="blank">
+      <h2>No buckets yet</h2>
+      <p>Create one with <code>tarn s3 mb --name my-bucket</code>, or deploy through your IaC, and it shows up here.</p>
+    </div>
+  {:else}
+    <div class="layout">
+      <RcResizableAside storageKey="tarn-storage-list-width">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="bucket-list" onkeydown={onKeydown}>
+          <label class="search">
+            <MagnifyingGlassIcon size={12} />
+            <input placeholder="Filter buckets" bind:value={query} aria-label="Filter buckets" />
+            <span class="count">{visible.length}</span>
+          </label>
+          <div class="rows">
+            {#each visible as b (b.name)}
+              <RcListRow
+                mono
+                title={b.name}
+                sub="{b.objects.toLocaleString('en-GB')} object{b.objects === 1 ? '' : 's'}"
+                selected={b.name === selected?.name}
+                onclick={() => select(b.name)}
+              >
+                {#snippet trailing()}<span class="size">{formatBytes(b.totalSize)}</span>{/snippet}
+              </RcListRow>
+            {:else}
+              <p class="none">No match for “{query}”</p>
+            {/each}
           </div>
-          <div class="space-y-1.5 text-center">
-            <p class="text-sm font-semibold text-muted-foreground">No S3 buckets</p>
-            <p class="text-xs leading-relaxed text-muted-foreground/70">
-              Create one with <code class="rounded bg-muted px-1 py-0.5 text-primary">tarn s3 mb --name my-bucket</code>
-            </p>
-          </div>
         </div>
-      {:else}
-        <div class="border-b border-border/70 px-3 py-2.5">
-          <p class="text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Buckets</p>
-          <p class="mt-1 text-[11px] text-muted-foreground/70">Select a bucket to browse its objects.</p>
-        </div>
-        <div class="min-h-0 flex-1 overflow-auto">
-          <table class="w-full text-xs">
-            <thead>
-              <tr class="border-b border-border/70 bg-background/80 sticky top-0 z-10">
-                <th class="text-left px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Bucket</th>
-                <th class="text-right px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Objects</th>
-                <th class="text-right px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Size</th>
-                <th class="text-right px-3 py-2 font-mono text-muted-foreground/70 uppercase tracking-wider">Created</th>
-              </tr>
-            </thead>
-            <tbody>
-              {#each buckets as bucket}
-                <tr
-                  class="cursor-pointer border-b border-border/60 last:border-b-0 transition-colors {bucket.name === selectedBucket ? 'bg-muted/50' : 'hover:bg-muted/30'}"
-                  role="button"
-                  tabindex={0}
-                  onclick={() => void browseBucket(bucket.name)}
-                  onkeydown={(e: KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); void browseBucket(bucket.name); }}}
-                >
-                  <td class="px-3 py-2">
-                    <div class="flex items-center gap-2">
-                      <LedDot color="green" />
-                      <span class="font-mono text-foreground">{bucket.name}</span>
-                    </div>
-                  </td>
-                  <td class="text-right px-3 py-2 text-muted-foreground font-mono">{bucket.objects}</td>
-                  <td class="text-right px-3 py-2 text-muted-foreground font-mono">{formatBytes(bucket.totalSize)}</td>
-                  <td class="text-right px-3 py-2 text-muted-foreground/70 font-mono">
-                    {new Date(bucket.createdDate).toLocaleDateString()}
-                  </td>
-                </tr>
-              {/each}
-            </tbody>
-          </table>
-        </div>
+      </RcResizableAside>
+      {#if selected}
+        {#key selected.name}
+          <BucketDetail bucket={selected} {prefix} selectedKey={objectKey} onnavigate={navigate} />
+        {/key}
       {/if}
-    </Pane>
-    <Handle />
-    <Pane defaultSize={62} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-background/35">
-      {#if selectedBucket}
-        <div class="flex shrink-0 items-center justify-between border-b border-border/70 px-3 py-2">
-          <div class="flex items-center gap-2">
-            <HardDrive size={13} class="text-primary" />
-            <span class="text-xs font-mono text-foreground">s3://{selectedBucket}</span>
-            <span class="text-[10px] text-muted-foreground/70 font-mono">({objects.length} objects)</span>
-          </div>
-          <div class="flex items-center gap-2">
-            <button
-              type="button"
-              onclick={() => void browseBucket(selectedBucket)}
-              class="text-muted-foreground hover:text-foreground transition-colors"
-              aria-label="Refresh objects"
-            >
-              <ArrowClockwise size={12} class={loadingObjects ? "animate-spin" : ""} />
-            </button>
-            <button
-              type="button"
-              onclick={closeBrowser}
-              class="text-xs text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-
-        {#if loadingObjects}
-          <div class="flex flex-1 items-center justify-center text-xs text-muted-foreground/70 font-mono">Loading objects...</div>
-        {:else if objects.length === 0}
-          <div class="flex flex-1 items-center justify-center text-xs text-muted-foreground/70 font-mono">Bucket is empty</div>
-        {:else}
-          <div class="min-h-0 flex-1 overflow-y-auto px-3">
-            <div class="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-3 border-b border-border/70 py-1.5 text-[10px] text-muted-foreground/70 font-mono uppercase tracking-wider sticky top-0 bg-background/95 backdrop-blur z-10">
-              <span>Key</span>
-              <span class="text-right">Size</span>
-              <span class="text-right">Last Modified</span>
-              <span class="text-right">Action</span>
-            </div>
-
-            <Accordion
-              type="multiple"
-              value={openObjectKeys}
-              onValueChange={handleObjectOpenChange}
-              class="w-full"
-            >
-              {#each objects as obj}
-                {@const preview = previewByKey[obj.key]}
-                <AccordionItem value={obj.key}>
-                  <AccordionTrigger class="w-full py-1.5 text-foreground hover:bg-muted/20">
-                    <div class="grid w-full grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-3 pr-2">
-                      <span class="truncate font-mono" title={obj.key}>{obj.key}</span>
-                      <span class="text-right text-muted-foreground font-mono whitespace-nowrap">{formatBytes(obj.size)}</span>
-                      <span class="text-right text-muted-foreground/70 font-mono whitespace-nowrap">{new Date(obj.lastModified).toLocaleString()}</span>
-                      <span class="text-right text-primary text-[11px]">{isObjectOpen(obj.key) ? "Close" : "View"}</span>
-                    </div>
-                  </AccordionTrigger>
-
-                  <AccordionContent class="pt-0">
-                    <div class="rounded-md border border-border bg-muted/20 px-3 py-2 mb-2">
-                      <div class="flex items-center justify-between border-b border-border pb-2 mb-2">
-                        <p class="text-[10px] text-muted-foreground/70 font-mono">{preview?.contentType || "--"}</p>
-
-                        <div class="flex items-center gap-3">
-                          {#if preview && canToggleRawPreview(preview.contentType)}
-                            <button
-                              type="button"
-                              class="flex items-center gap-1.5 text-[11px] {preview.showRaw ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}"
-                              onclick={() => toggleRawPreview(obj.key)}
-                            >
-                              {#if preview.showRaw}
-                                <Eye size={14} />
-                                <span>Preview</span>
-                              {:else}
-                                <Code size={14} />
-                                <span>Raw</span>
-                              {/if}
-                            </button>
-                          {/if}
-
-                          {#if preview && preview.content}
-                            <button
-                              type="button"
-                              class="flex items-center gap-1.5 text-[11px] transition-colors {preview.copied ? 'text-green-400' : 'text-muted-foreground hover:text-foreground'}"
-                              onclick={() => void copyToClipboard(obj.key)}
-                            >
-                              {#if preview.copied}
-                                <Check size={14} />
-                                <span>Copied</span>
-                              {:else}
-                                <CopySimple size={14} />
-                                <span>Copy</span>
-                              {/if}
-                            </button>
-                          {/if}
-                        </div>
-                      </div>
-
-                      {#if !preview || preview.loading}
-                        <div class="py-4 text-center text-xs text-muted-foreground/70 font-mono">Loading object...</div>
-                      {:else if preview.error}
-                        <div class="py-4 text-center text-xs text-destructive-300 font-mono">{preview.error}</div>
-                      {:else if preview.notice}
-                        <div class="py-4 text-center text-xs text-muted-foreground/70 font-mono">{preview.notice}</div>
-                      {:else if isImageContent(preview.contentType) && !preview.showRaw}
-                        <div class="flex justify-center bg-black/5 rounded-md p-4 border border-border/50">
-                          <img
-                            src={`/_s3/${selectedBucket}/${encodeS3KeyPath(obj.key)}`}
-                            alt={obj.key}
-                            class="max-w-full h-auto shadow-sm"
-                          />
-                        </div>
-                      {:else}
-                        {@const formattedPreview = isJSONContentType(preview.contentType)
-                          ? formatJSONForViewer(preview.content)
-                          : formatJSONForViewer(preview.content)}
-                        {#if formattedPreview}
-                          <FormattedMessageViewer
-                            raw={preview.content}
-                            formatted={formattedPreview.formatted}
-                            formattedHtml={formattedPreview.formattedHtml}
-                            formattedLabel="JSON"
-                            rawLabel="Raw Object"
-                            formattedOpenByDefault={true}
-                            rawOpenByDefault={false}
-                            formattedContentClass="text-[11px] text-foreground"
-                            rawContentClass="text-[11px] text-muted-foreground"
-                            formattedMaxHeightClass="max-h-96"
-                            rawMaxHeightClass="max-h-72"
-                          />
-                        {:else}
-                          <pre class="text-xs font-mono text-foreground whitespace-pre-wrap break-words leading-relaxed">{preview.content}</pre>
-                        {/if}
-                      {/if}
-                    </div>
-                  </AccordionContent>
-                </AccordionItem>
-              {/each}
-            </Accordion>
-          </div>
-        {/if}
-      {:else}
-        <div class="flex h-full items-center justify-center px-6 py-12 text-center">
-          <p class="max-w-xs text-sm text-muted-foreground/70">Select a bucket from the left to browse its objects.</p>
-        </div>
-      {/if}
-    </Pane>
-  </PaneGroup>
+    </div>
+  {/if}
 </div>
+
+<style>
+  .storage { display: flex; flex-direction: column; min-height: 100%; }
+  .layout {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 28px; padding: 20px 0 48px;
+    max-width: 1320px; align-items: start;
+  }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  .bucket-list { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  .search {
+    display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border-radius: 8px;
+    border: 1px solid var(--border-subtle); background: var(--bg-app); color: var(--text-tertiary);
+    transition: border-color 120ms ease;
+  }
+  .search:hover { border-color: var(--border-default); }
+  .search:focus-within { border-color: var(--border-focus); }
+  .search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; font-size: 12px; color: var(--text-primary); }
+  .search input::placeholder { color: var(--text-tertiary); }
+  .count { font-size: 10.5px; font-variant-numeric: tabular-nums; }
+  .rows { display: flex; flex-direction: column; gap: 2px; }
+  .size { font: 10.5px var(--font-mono, ui-monospace, monospace); font-variant-numeric: tabular-nums; color: var(--text-tertiary); }
+  .none { padding: 12px 10px; font-size: 11.5px; color: var(--text-tertiary); }
+
+  .blank { padding: 64px 0; text-align: center; animation: fadeUp 320ms var(--ease-snappy) both; }
+  .blank h2 { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+  .blank p { margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+  .blank code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; color: var(--text-primary); }
+
+  .skeleton-list { display: flex; flex-direction: column; gap: 6px; width: 260px; }
+  .skeleton-list span {
+    height: 34px; border-radius: 8px; background: var(--bg-element);
+    animation: pulse 1.4s ease-in-out infinite; animation-delay: calc(var(--i) * 80ms);
+  }
+  @keyframes pulse { 50% { opacity: 0.5; } }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .blank, .skeleton-list span { animation: none; }
+  }
+</style>
