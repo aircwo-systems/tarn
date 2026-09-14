@@ -13,8 +13,6 @@
   }: {
     title: string;
     description?: string;
-    /** @deprecated no longer rendered */
-    icon?: any;
     sidebarCollapsed?: boolean;
     onToggleSidebar?: () => void;
     lead?: Snippet;

@@ -1,6 +1,5 @@
 <script lang="ts">
   import {
-    LightningIcon,
     SpinnerGapIcon,
     DownloadSimpleIcon,
     PlayIcon,
@@ -486,7 +485,6 @@
   <SectionHeader
     title="Chaos probe"
     description="Exhaust validation layers per route and capture the full example set."
-    icon={LightningIcon}
     {sidebarCollapsed}
     {onToggleSidebar}
   >

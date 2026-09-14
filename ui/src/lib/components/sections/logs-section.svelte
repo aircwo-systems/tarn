@@ -776,7 +776,6 @@
         : isMultiGroup
         ? `${selectedGroupList.length} groups in selection · ${pageInfo}`
         : `${selectedGroup} · ${pageInfo}`}
-      icon={ScrollIcon}
       {sidebarCollapsed}
       {onToggleSidebar}
     >
@@ -1118,7 +1117,7 @@
 {:else}
   <!-- ── Groups list ──────────────────────────────────────────────── -->
   <div class="relative flex h-full min-h-0 flex-col gap-3">
-    <SectionHeader title="Log groups" description={groupsCountLabel} icon={ScrollIcon} {sidebarCollapsed} {onToggleSidebar}>
+    <SectionHeader title="Log groups" description={groupsCountLabel} {sidebarCollapsed} {onToggleSidebar}>
       {#snippet actions()}
         {@render toolButton("Refresh", ArrowsClockwiseIcon, loadGroups, { spin: groupsLoading, disabled: groupsLoading })}
       {/snippet}

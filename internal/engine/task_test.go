@@ -197,17 +197,17 @@ func TestBuildTaskContainerConfigMapsResourcesToDocker(t *testing.T) {
 	if containerCfg.Image != "example/task:latest" {
 		t.Fatalf("container image = %q, want example/task:latest", containerCfg.Image)
 	}
-	if hostCfg.Resources.CPUShares != 512 {
-		t.Fatalf("CPU shares = %d, want 512", hostCfg.Resources.CPUShares)
+	if hostCfg.CPUShares != 512 {
+		t.Fatalf("CPU shares = %d, want 512", hostCfg.CPUShares)
 	}
-	if hostCfg.Resources.NanoCPUs != 500_000_000 {
-		t.Fatalf("NanoCPUs = %d, want 500000000", hostCfg.Resources.NanoCPUs)
+	if hostCfg.NanoCPUs != 500_000_000 {
+		t.Fatalf("NanoCPUs = %d, want 500000000", hostCfg.NanoCPUs)
 	}
-	if hostCfg.Resources.Memory != 256*1024*1024 {
-		t.Fatalf("memory = %d, want %d", hostCfg.Resources.Memory, 256*1024*1024)
+	if hostCfg.Memory != 256*1024*1024 {
+		t.Fatalf("memory = %d, want %d", hostCfg.Memory, 256*1024*1024)
 	}
-	if hostCfg.Resources.MemoryReservation != 128*1024*1024 {
-		t.Fatalf("memory reservation = %d, want %d", hostCfg.Resources.MemoryReservation, 128*1024*1024)
+	if hostCfg.MemoryReservation != 128*1024*1024 {
+		t.Fatalf("memory reservation = %d, want %d", hostCfg.MemoryReservation, 128*1024*1024)
 	}
 }
 

@@ -632,10 +632,10 @@ func TestCleanupOrderingReadExitDrainThenRemove(t *testing.T) {
 	if waitDoneIdx < 0 || logsDoneIdx < 0 || removeIdx < 0 {
 		t.Fatalf("missing expected calls in log: %v", calls)
 	}
-	if !(waitDoneIdx < removeIdx) {
+	if waitDoneIdx >= removeIdx {
 		t.Fatalf("expected wait-done before remove, got %v", calls)
 	}
-	if !(logsDoneIdx < removeIdx) {
+	if logsDoneIdx >= removeIdx {
 		t.Fatalf("expected logs-done (drain) before remove, got %v", calls)
 	}
 
@@ -1500,7 +1500,7 @@ func TestStopRecordsRealExitCodeInsteadOfContextCanceled(t *testing.T) {
 	if stopIdx < 0 || removeIdx < 0 {
 		t.Fatalf("missing expected calls: %v", calls)
 	}
-	if !(stopIdx < removeIdx) {
+	if stopIdx >= removeIdx {
 		t.Fatalf("expected graceful stop before force-remove, calls: %v", calls)
 	}
 }
