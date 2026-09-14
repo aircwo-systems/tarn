@@ -1,31 +1,16 @@
 <script lang="ts">
-  import { ChatCircleIcon, CaretDownIcon, CaretUpIcon } from "phosphor-svelte";
-  import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
-  import {
-    Table,
-    TableHeader,
-    TableBody,
-    TableRow,
-    TableHead,
-    TableCell,
-  } from "$lib/components/ui/table";
-  import { Badge } from "$lib/components/ui/badge";
-  import { Skeleton } from "$lib/components/ui/skeleton";
-  import LedDot from "$lib/components/common/led-dot.svelte";
-  import ArnCell from "$lib/components/common/arn-cell.svelte";
-  import EmptyState from "$lib/components/common/empty-state.svelte";
-  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
-  import MetricCard from "$lib/components/common/metric-card.svelte";
+  import { onMount } from "svelte";
   import SectionHeader from "./section-header.svelte";
+  import QueueList from "$lib/components/queues/queue-list.svelte";
+  import QueueDetail from "$lib/components/queues/queue-detail.svelte";
+  import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
   import { fetchQueueMessages } from "$lib/api";
   import {
     getDashboard,
     getDashboardFilters,
     matchesTagFilter,
   } from "$lib/state.svelte";
-  import { formatJSONForViewer } from "$lib/json-format";
   import type { QueueMessageSummary } from "$lib/types";
-  import { formatUnixSeconds } from "$lib/utils";
 
   let {
     sidebarCollapsed = false,
@@ -49,46 +34,57 @@
   const totalInFlight = $derived(
     queues.reduce((total, queue) => total + queue.approxInFlight, 0),
   );
-  const totalDelayed = $derived(
-    queues.reduce((total, queue) => total + queue.approxDelayed, 0),
-  );
   const totalProcessed = $derived(
     queues.reduce((total, queue) => total + (queue.processedCount ?? 0), 0),
   );
-  const totalStale = $derived(
-    queues.reduce((total, queue) => total + (queue.approxStale ?? 0), 0),
+
+  // Keyed by name: polling replaces the objects, so holding one would freeze the panel.
+  let selectedName = $state<string | null>(null);
+  const selected = $derived(
+    queues.find((queue) => queue.name === selectedName) ?? queues[0] ?? null,
   );
 
-  let selectedQueueName = $state("");
   let selectedMessages = $state<QueueMessageSummary[]>([]);
   let selectedLoading = $state(false);
   let selectedError = $state("");
   let requestToken = 0;
-
-  const selectedQueue = $derived(
-    queues.find((queue) => queue.name === selectedQueueName) ?? null,
-  );
+  let loadedFor = $state("");
 
   $effect(() => {
     if (
-      selectedQueueName &&
-      !queues.some((queue) => queue.name === selectedQueueName)
+      selectedName &&
+      !queues.some((queue) => queue.name === selectedName)
     ) {
-      selectedQueueName = "";
+      selectedName = null;
       selectedMessages = [];
       selectedError = "";
+      loadedFor = "";
     }
   });
 
-  async function selectQueue(queueName: string) {
-    selectedQueueName = queueName;
-    expandedMessages = new Set();
-    await loadQueueMessages(queueName);
+  $effect(() => {
+    const name = selected?.name ?? "";
+    if (name && name !== loadedFor) {
+      loadedFor = name;
+      void loadQueueMessages(name);
+    }
+  });
+
+  function select(name: string) {
+    selectedName = name;
+    history.replaceState(null, "", `#queues?queue=${encodeURIComponent(name)}`);
   }
 
+  onMount(() => {
+    const qs = window.location.hash.split("?")[1];
+    const queue = qs ? new URLSearchParams(qs).get("queue") : null;
+    if (queue) selectedName = queue;
+  });
+
   async function refreshSelectedQueueMessages() {
-    if (!selectedQueueName) return;
-    await loadQueueMessages(selectedQueueName);
+    if (!selected) return;
+    loadedFor = "";
+    await loadQueueMessages(selected.name);
   }
 
   async function loadQueueMessages(queueName: string) {
@@ -113,408 +109,82 @@
       }
     }
   }
-
-  function onQueueRowKeydown(event: KeyboardEvent, queueName: string) {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      void selectQueue(queueName);
-    }
-  }
-
-  function formatSentAt(ms: number): string {
-    if (!ms) return "--";
-    return new Date(ms).toLocaleString();
-  }
-
-  function messageStateColor(
-    state: string,
-  ): "green" | "amber" | "red" | "gray" {
-    if (state === "visible") return "green";
-    if (state === "inflight") return "amber";
-    if (state === "stale") return "red";
-    return "gray";
-  }
-
-  function messageBadgeVariant(
-    state: string,
-  ): "default" | "secondary" | "outline" | "destructive" {
-    if (state === "visible") return "default";
-    if (state === "inflight") return "secondary";
-    if (state === "stale") return "destructive";
-    return "outline";
-  }
-
-  const PREVIEW_LENGTH = 280;
-  let expandedMessages = $state(new Set<string>());
-
-  function toggleExpanded(id: string) {
-    const next = new Set(expandedMessages);
-    if (next.has(id)) {
-      next.delete(id);
-    } else {
-      next.add(id);
-    }
-    expandedMessages = next;
-  }
-
-  function isLargeBody(body: string): boolean {
-    return body.length > PREVIEW_LENGTH;
-  }
-
-  function bodyPreview(body: string): string {
-    if (body.length <= PREVIEW_LENGTH) return body;
-    return body.slice(0, PREVIEW_LENGTH) + "…";
-  }
 </script>
 
-<div class="flex min-h-full flex-col gap-4">
+<div class="queues">
   <SectionHeader
     title="SQS Queues"
-    description="Queue depth, delivery pressure and live message inspection."
-    icon={ChatCircleIcon}
+    description="{queues.length} queues · {totalVisible} visible · {totalInFlight} in flight · {totalProcessed.toLocaleString('en-GB')} processed"
     {sidebarCollapsed}
     {onToggleSidebar}
-  />
+  >
+    {#snippet actions()}
+      {#if filters.tagFilter}
+        <span class="filter" title={filters.tagFilter}>Tag <span>{filters.tagFilter}</span></span>
+      {/if}
+    {/snippet}
+  </SectionHeader>
 
-  <!-- Metrics Row -->
-  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-    <MetricCard
-      label="Queues"
-      value={queues.length}
-      sub="{queues.filter(q => q.fifo).length} FIFO · {queues.filter(q => !q.fifo).length} Standard"
-    />
-    <MetricCard
-      label="Queued Messages"
-      value={totalVisible}
-      valueColor={totalVisible > 0 ? "var(--accent-amber)" : "var(--text-primary)"}
-      sub="Available for consumption"
-    />
-    <MetricCard
-      label="In Flight"
-      value={totalInFlight}
-      valueColor={totalInFlight > 0 ? "var(--accent-green)" : "var(--text-primary)"}
-      sub="Currently locked by consumers"
-    />
-    <MetricCard
-      label="Processed"
-      value={totalProcessed}
-      sub="{totalDelayed} delayed · {totalStale} stale"
-    />
-  </div>
-
-  <PaneGroup direction="horizontal" class="min-h-0 flex-1 gap-0 rounded-md border border-border/70" style="height: calc(100vh - 15rem);">
-    <Pane defaultSize={65} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-background/60">
-    <div
-      class="min-h-0 h-full overflow-hidden"
-    >
-      {#if dashboard.loading && !dashboard.data}
-        <div class="space-y-2 p-3">
-          {#each Array(6) as _, index (index)}
-            <Skeleton class="h-11 w-full" />
-          {/each}
-        </div>
-      {:else if queues.length === 0}
-        <div class="flex h-full min-h-[18rem] items-center justify-center">
-          <EmptyState message="No queues created yet." icon={ChatCircleIcon} />
-        </div>
-      {:else}
-        <div class="h-full overflow-auto">
-          <Table>
-            <TableHeader
-              class="sticky top-0 z-10 bg-background/95 backdrop-blur [&_th]:bg-background/95"
-            >
-              <TableRow class="hover:bg-transparent">
-                <TableHead>Queue</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead class="w-16 text-right">Visible</TableHead>
-                <TableHead class="w-18 text-right">In Flight</TableHead>
-                <TableHead>Messages</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {#each queues as queue}
-                <TableRow
-                  class={`cursor-pointer focus-within:bg-muted/60 ${queue.name === selectedQueueName ? "bg-muted/60" : ""}`}
-                  role="button"
-                  tabindex={0}
-                  aria-label={`Open messages for queue ${queue.name}`}
-                  onclick={() => void selectQueue(queue.name)}
-                  onkeydown={(event: KeyboardEvent) =>
-                    onQueueRowKeydown(event, queue.name)}
-                >
-                  <TableCell
-                    ><ArnCell name={queue.name} arn={queue.url} /></TableCell
-                  >
-                  <TableCell
-                    class={`font-mono text-xs ${queue.fifo ? "text-amber" : "text-muted-foreground"}`}
-                  >
-                    {queue.fifo ? "FIFO" : "Standard"}
-                  </TableCell>
-                  <TableCell
-                    class="w-16 text-right font-mono text-muted-foreground"
-                  >
-                    {queue.approxVisible}
-                  </TableCell>
-                  <TableCell
-                    class="w-18 text-right font-mono text-muted-foreground"
-                  >
-                    {queue.approxInFlight}
-                  </TableCell>
-                  <TableCell>
-                    {#if queue.recentMessages?.length}
-                      <span class="inline-flex items-center gap-1.5 rounded-full border border-border/60 px-2 py-0.5 font-mono text-[11px] text-muted-foreground/70">
-                        <LedDot color="green" />
-                        {queue.recentMessages.length}
-                      </span>
-                    {:else}
-                      <span class="text-xs text-muted-foreground/30">—</span>
-                    {/if}
-                  </TableCell>
-                </TableRow>
-              {/each}
-            </TableBody>
-          </Table>
-        </div>
+  {#if dashboard.loading && !dashboard.data}
+    <div class="layout">
+      <div class="skeleton-list">
+        {#each Array(6) as _, i (i)}<span style:--i={i}></span>{/each}
+      </div>
+    </div>
+  {:else if queues.length === 0}
+    <div class="blank">
+      <h2>No queues yet</h2>
+      <p>Create one with <code>aws sqs create-queue</code> or deploy through your IaC, and it appears here.</p>
+    </div>
+  {:else}
+    <div class="layout">
+      <RcResizableAside storageKey="tarn-queues-list-width">
+        <QueueList queues={queues} selectedName={selected?.name ?? null} onselect={select} />
+      </RcResizableAside>
+      {#if selected}
+        {#key selected.name}
+          <QueueDetail
+            queue={selected}
+            messages={selectedMessages}
+            loading={selectedLoading}
+            error={selectedError}
+            onrefresh={() => void refreshSelectedQueueMessages()}
+          />
+        {/key}
       {/if}
     </div>
-    </Pane>
-    <Handle />
-    <Pane defaultSize={35} minSize={20} class="flex min-h-0 flex-col overflow-hidden bg-background/60">
-    <section
-      class="flex min-h-0 flex-col overflow-hidden"
-    >
-      <div
-        class="flex items-center justify-between border-b border-border px-3 py-2"
-      >
-        <div>
-          <h3 class="text-sm font-semibold text-foreground">Queue messages</h3>
-          <p class="text-[11px] text-muted-foreground/70">
-            Select a queue to inspect current message payloads.
-          </p>
-        </div>
-        {#if selectedQueue}
-          <button
-            type="button"
-            class="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-background-subtle hover:text-foreground"
-            onclick={() => void refreshSelectedQueueMessages()}
-            disabled={selectedLoading}
-          >
-            Refresh
-          </button>
-        {/if}
-      </div>
-
-      {#if !selectedQueue}
-        <div
-          class="flex min-h-72 flex-1 items-center justify-center px-6 py-8 text-center text-muted-foreground/55"
-        >
-          <p class="text-sm">Select a queue row to inspect pending messages.</p>
-        </div>
-      {:else}
-        <div class="border-b border-border px-4 py-4">
-          <p
-            class="text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55"
-          >
-            Selected Queue
-          </p>
-          <div class="mt-2 space-y-3">
-            <div>
-              <p class="truncate font-mono text-sm text-foreground">
-                {selectedQueue.name}
-              </p>
-              <p class="mt-1 text-xs text-muted-foreground/72">
-                {selectedQueue.approxVisible} visible, {selectedQueue.approxInFlight}
-                in flight,
-                {selectedQueue.approxDelayed} delayed, {selectedQueue.processedCount ??
-                  0} processed{#if (selectedQueue.approxStale ?? 0) > 0},
-                  <span class="text-destructive"
-                    >{selectedQueue.approxStale} stale</span
-                  >
-                {/if}
-              </p>
-            </div>
-
-            <div class="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
-              <div>
-                <p
-                  class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55"
-                >
-                  Delayed
-                </p>
-                <p class="mt-1 font-mono text-foreground">
-                  {selectedQueue.approxDelayed}
-                </p>
-              </div>
-              <div>
-                <p
-                  class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55"
-                >
-                  Processed
-                </p>
-                <p class="mt-1 font-mono text-foreground">
-                  {selectedQueue.processedCount ?? 0}
-                </p>
-              </div>
-              <div>
-                <p
-                  class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55"
-                >
-                  Stale
-                </p>
-                <p
-                  class={`mt-1 font-mono ${(selectedQueue.approxStale ?? 0) > 0 ? "text-destructive" : "text-foreground"}`}
-                >
-                  {selectedQueue.approxStale ?? 0}
-                </p>
-              </div>
-              <div>
-                <p
-                  class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55"
-                >
-                  Visibility
-                </p>
-                <p class="mt-1 font-mono text-foreground">
-                  {selectedQueue.visibilitySec}s
-                </p>
-              </div>
-              <div>
-                <p
-                  class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55"
-                >
-                  Long Poll
-                </p>
-                <p class="mt-1 font-mono text-foreground">
-                  {selectedQueue.waitTimeSec}s
-                </p>
-              </div>
-              <div>
-                <p
-                  class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55"
-                >
-                  Created
-                </p>
-                <p class="mt-1 font-mono text-foreground">
-                  {formatUnixSeconds(selectedQueue.createdTimestamp)}
-                </p>
-              </div>
-              <div>
-                <p
-                  class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55"
-                >
-                  Redrive
-                </p>
-                {#if selectedQueue.dlqName}
-                  <p class="mt-1 font-mono text-foreground">
-                    {selectedQueue.dlqName}
-                  </p>
-                  <p class="mt-1 text-[11px] text-muted-foreground/70">
-                    max {selectedQueue.maxReceiveCount ?? "?"} receives
-                  </p>
-                {:else}
-                  <p class="mt-1 text-muted-foreground/50">None</p>
-                {/if}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {#if selectedError}
-          <p class="border-b border-border px-3 py-2 text-xs text-destructive">
-            {selectedError}
-          </p>
-        {/if}
-
-        <div class="min-h-0 flex-1 space-y-2 overflow-y-auto px-3 py-3">
-          {#if selectedLoading}
-            <p class="text-sm text-muted-foreground/70">Loading messages...</p>
-          {:else if selectedMessages.length === 0}
-            <p class="text-sm text-muted-foreground/70">
-              No messages available for this queue.
-            </p>
-          {:else}
-            {#each selectedMessages as message}
-              {@const expanded = expandedMessages.has(message.id)}
-              {@const large = isLargeBody(message.body ?? "")}
-              {@const formatted = formatJSONForViewer(message.body ?? "")}
-              {@const canExpand = large || formatted !== null}
-              <div
-                class="rounded-md border border-border bg-background-subtle/70 p-2"
-              >
-                <div
-                  class="mb-1.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground/70"
-                >
-                  <Badge variant={messageBadgeVariant(message.state)}>
-                    {message.state}
-                  </Badge>
-                  <span class="font-mono">{message.id}</span>
-                  {#if message.receiveCount > 0}
-                    <span class="font-mono"
-                      >receives: {message.receiveCount}</span
-                    >
-                  {/if}
-                  {#if (message.retryCount ?? 0) > 0}
-                    <span class="font-mono">retried: {message.retryCount}</span>
-                  {/if}
-                  {#if large}
-                    <span>{(message.body ?? "").length} chars</span>
-                  {/if}
-                </div>
-
-                {#if expanded && formatted}
-                  <FormattedMessageViewer
-                    raw={message.body || "(empty)"}
-                    formatted={formatted.formatted}
-                    formattedHtml={formatted.formattedHtml}
-                    formattedContentClass="text-[11px] text-muted-foreground"
-                    rawContentClass="text-[11px] text-muted-foreground"
-                    formattedMaxHeightClass="max-h-96"
-                    rawMaxHeightClass="max-h-96"
-                  />
-                {:else if expanded}
-                  <p
-                    class="max-h-96 overflow-y-auto break-all whitespace-pre-wrap text-xs text-muted-foreground"
-                  >
-                    {message.body || "(empty)"}
-                  </p>
-                {:else}
-                  <p class="break-all text-xs text-muted-foreground">
-                    {bodyPreview(message.body ?? "") || "(empty)"}
-                  </p>
-                {/if}
-
-                {#if message.state === "stale"}
-                  <p class="mt-1.5 text-[11px] text-destructive/80">
-                    Parked. Failed {message.receiveCount} times with no DLQ. Tarn
-                    halts retries to prevent wasted invocations.
-                  </p>
-                {/if}
-
-                <div class="mt-1.5 flex items-center justify-between">
-                  <p class="text-[11px] text-muted-foreground/70">
-                    {formatSentAt(message.sentAt)}
-                  </p>
-                  {#if canExpand}
-                    <button
-                      type="button"
-                      class="flex items-center gap-1 text-[11px] text-muted-foreground/70 hover:text-foreground"
-                      onclick={() => toggleExpanded(message.id)}
-                    >
-                      {#if expanded}
-                        <CaretUpIcon size={12} />
-                        Collapse
-                      {:else}
-                        <CaretDownIcon size={12} />
-                        Expand
-                      {/if}
-                    </button>
-                  {/if}
-                </div>
-              </div>
-            {/each}
-          {/if}
-        </div>
-      {/if}
-    </section>
-    </Pane>
-  </PaneGroup>
+  {/if}
 </div>
+
+<style>
+  .queues { display: flex; flex-direction: column; min-height: 100%; }
+  .layout {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 28px; padding: 20px 0 48px;
+    max-width: 1320px; align-items: start;
+  }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  .filter {
+    display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 8px;
+    border: 1px solid var(--border-subtle); font-size: 11px; color: var(--text-tertiary);
+  }
+  .filter span { font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-primary); }
+
+  .blank { padding: 64px 0; text-align: center; animation: fadeUp 320ms var(--ease-snappy) both; }
+  .blank h2 { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+  .blank p { margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+  .blank code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; color: var(--text-primary); }
+
+  .skeleton-list { display: flex; flex-direction: column; gap: 6px; }
+  .skeleton-list span {
+    height: 34px; border-radius: 8px; background: var(--bg-element);
+    animation: pulse 1.4s ease-in-out infinite; animation-delay: calc(var(--i) * 80ms);
+  }
+  @keyframes pulse { 50% { opacity: 0.5; } }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .blank, .skeleton-list span { animation: none; }
+  }
+</style>
