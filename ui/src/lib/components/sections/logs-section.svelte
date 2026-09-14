@@ -1045,7 +1045,7 @@
                           {@const lt = logTrace}
                           <button type="button" onclick={() => openInXRay(lt)} class="rc-link inline-flex items-center gap-1 text-[10.5px]">
                             <ArrowUpRightIcon size={10} />
-                            X-Ray
+                            Traces
                           </button>
                         {/if}
                       </div>

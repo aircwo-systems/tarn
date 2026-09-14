@@ -303,10 +303,10 @@
             type="button"
             onclick={() => navigate(traceHash)}
             class="stream-tool accent"
-            title="View this execution in X-Ray"
+            title="View this execution in Traces"
           >
             <ArrowUpRightIcon size={10} />
-            X-Ray
+            Traces
           </button>
         {/if}
       </div>

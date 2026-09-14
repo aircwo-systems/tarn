@@ -529,7 +529,7 @@
   <!-- Header strip -->
   <div class="space-y-3">
     <SectionHeader
-      title="X-Ray traces"
+      title="Traces"
       description="End-to-end request flow visualiser."
       {sidebarCollapsed}
       {onToggleSidebar}
