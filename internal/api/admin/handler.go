@@ -352,6 +352,8 @@ type functionSummary struct {
 	MemoryMB          int               `json:"memoryMB"`
 	CodeSize          int64             `json:"codeSize"`
 	MessagesProcessed int64             `json:"messagesProcessed"`
+	Invocations       int64             `json:"invocations"`
+	LastInvokedAt     *time.Time        `json:"lastInvokedAt,omitempty"`
 	Version           string            `json:"version"`
 	LastModified      time.Time         `json:"lastModified"`
 	Layers            int               `json:"layers"`
@@ -978,6 +980,11 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 
 	for _, fn := range functions {
 		metrics := h.lambda.GetFunctionMetrics(fn.FunctionName)
+		var lastInvokedAt *time.Time
+		if !metrics.LastInvokedAt.IsZero() {
+			t := metrics.LastInvokedAt
+			lastInvokedAt = &t
+		}
 		resp.Functions = append(resp.Functions, functionSummary{
 			Name:              fn.FunctionName,
 			Arn:               fn.FunctionArn,
@@ -987,6 +994,8 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			MemoryMB:          fn.MemorySize,
 			CodeSize:          fn.CodeSize,
 			MessagesProcessed: metrics.MessagesProcessed,
+			Invocations:       metrics.Invocations,
+			LastInvokedAt:     lastInvokedAt,
 			Version:           fn.Version,
 			LastModified:      fn.LastModified,
 			Layers:            len(fn.Layers),
