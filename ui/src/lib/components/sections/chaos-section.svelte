@@ -8,14 +8,15 @@
     CaretDownIcon,
     CheckSquareIcon,
     SquareIcon,
-    FolderOpenIcon,
     MagnifyingGlassIcon,
     CheckCircleIcon,
     WarningIcon,
   } from "phosphor-svelte";
-  import Badge from "$lib/components/ui/badge/badge.svelte";
   import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
   import SectionHeader from "./section-header.svelte";
+  import RcPanel from "$lib/components/rack/rc-panel.svelte";
+  import RcButton from "$lib/components/rack/rc-button.svelte";
+  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
   import { formatJSONForViewer } from "$lib/json-format";
   import type {
     GatewaySummary,
@@ -240,23 +241,19 @@
     [...results.values()].reduce((n, r) => n + (r.examples?.length ?? 1), 0),
   );
 
-  function statusColor(code: number | undefined) {
-    if (!code) return "text-muted-foreground/70";
-    if (code < 300) return "text-green-500";
-    if (code < 400) return "text-yellow-500";
-    if (code < 500) return "text-orange-500";
-    return "text-destructive-500";
+  function statusTone(code: number | undefined): "ok" | "warn" | "err" | "dim" {
+    if (!code) return "dim";
+    if (code < 300) return "ok";
+    if (code < 500) return "warn";
+    return "err";
   }
 
-  function methodVariant(
-    m: string,
-  ): "default" | "secondary" | "amber" | "outline" | "destructive" {
+  function methodTone(m: string): Tone {
     const u = m.toUpperCase();
-    if (u === "GET") return "default";
+    if (u === "GET") return "green";
     if (u === "POST" || u === "PUT" || u === "PATCH") return "amber";
-    if (u === "DELETE") return "destructive";
-    if (u === "$DEFAULT") return "secondary";
-    return "outline";
+    if (u === "DELETE") return "red";
+    return "neutral";
   }
 
   function roundLabel(i: number, total: number, label?: string) {
@@ -480,7 +477,7 @@
   }
 </script>
 
-<div class="space-y-4">
+<div class="chaos">
   <!-- Header -->
   <SectionHeader
     title="Chaos probe"
@@ -500,256 +497,161 @@
     {/snippet}
 
     {#snippet actions()}
-      <div class="flex items-center gap-2 shrink-0">
       {#if probing}
-        <button
-          type="button"
-          onclick={stop}
-          class="inline-flex items-center gap-1.5 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs text-destructive-400 hover:bg-red-500/20 transition-colors"
-        >
+        <RcButton variant="danger" small onclick={stop}>
           <StopIcon size={12} />
           Stop
-        </button>
+        </RcButton>
       {:else}
-        <button
-          type="button"
-          onclick={() => setAll(true)}
-          class="text-[11px] text-muted-foreground/70 hover:text-foreground transition-colors"
-        >
+        <RcButton variant="ghost" small onclick={() => setAll(true)}>
           Select all
-        </button>
-        <button
-          type="button"
-          onclick={() => setAll(false)}
-          class="text-[11px] text-muted-foreground/70 hover:text-foreground transition-colors"
-        >
+        </RcButton>
+        <RcButton variant="ghost" small onclick={() => setAll(false)}>
           Clear
-        </button>
-        <button
-          type="button"
-          onclick={run}
-          disabled={!totalSelected}
-          class="inline-flex items-center gap-1.5 rounded-md border border-primary/50 bg-primary/10 px-3 py-1.5 text-xs text-primary hover:bg-primary/20 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-        >
+        </RcButton>
+        <RcButton variant="primary" small onclick={run} disabled={!totalSelected}>
           <PlayIcon size={12} />
           Probe {totalSelected > 0 ? `(${totalSelected})` : ""}
-        </button>
+        </RcButton>
       {/if}
-      </div>
     {/snippet}
   </SectionHeader>
 
   <!-- Source config panel -->
-  <div class="rounded-lg border border-border bg-card overflow-hidden">
-    <div
-      class="flex items-center gap-2 border-b border-border px-3 py-2 bg-popover/40"
-    >
-      <FolderOpenIcon size={13} class="text-muted-foreground/70 shrink-0" />
-      <span class="text-[11px] font-semibold text-foreground"
-        >Schema Source</span
-      >
-      <span class="ml-1 text-[10px] text-muted-foreground/70"
-        >— provide a local Lambda repo directory to generate schema-driven
-        probes</span
-      >
+  <RcPanel
+    title="Schema source"
+    description="Provide a local Lambda repo directory to generate schema-driven probes."
+    index={0}
+  >
+    <div class="source-row">
+      <input
+        id="chaos-schema-source"
+        type="text"
+        placeholder="/path/to/lambda-repos"
+        value={sourceDir}
+        oninput={(e) =>
+          updateSourceDir((e.currentTarget as HTMLInputElement).value)}
+        onkeydown={(e) => e.key === "Enter" && scanSource()}
+        class="field"
+        aria-label="Schema source directory"
+      />
+      <RcButton small onclick={scanSource} disabled={!sourceDir.trim() || scanning}>
+        {#if scanning}
+          <SpinnerGapIcon size={11} class="animate-spin" />
+          Scanning…
+        {:else}
+          <MagnifyingGlassIcon size={11} />
+          Scan
+        {/if}
+      </RcButton>
     </div>
-    <div class="px-3 py-2.5 space-y-2">
-      <div class="flex items-center gap-2">
-        <input
-          id="chaos-schema-source"
-          type="text"
-          placeholder="/path/to/lambda-repos"
-          value={sourceDir}
-          oninput={(e) =>
-            updateSourceDir((e.currentTarget as HTMLInputElement).value)}
-          onkeydown={(e) => e.key === "Enter" && scanSource()}
-          class="flex-1 min-w-0 rounded-lg border border-border bg-background px-2.5 py-1.5 font-mono text-[11px] text-foreground placeholder:text-muted-foreground/70/40 focus:border-primary/60 focus:outline-none"
-        />
-        <button
-          type="button"
-          onclick={scanSource}
-          disabled={!sourceDir.trim() || scanning}
-          class="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-3 py-1.5 text-[11px] text-foreground hover:bg-popover transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-        >
-          {#if scanning}
-            <SpinnerGapIcon size={11} class="animate-spin" />
-            Scanning…
-          {:else}
-            <MagnifyingGlassIcon size={11} />
-            Scan
-          {/if}
-        </button>
+
+    {#if scanError}
+      <p class="error"><WarningIcon size={11} class="shrink-0" />{scanError}</p>
+    {/if}
+
+    {#if scanResult}
+      {@const matchCount = scanResult.matches.length}
+      {@const withSchema = scanResult.matches.filter(
+        (m) => m.schemasTs,
+      ).length}
+      {@const unmatched = scanResult.unmatched.length}
+      <div class="scan-stats">
+        <span class="scan-ok">
+          <CheckCircleIcon size={11} />
+          {matchCount} matched
+        </span>
+        {#if withSchema > 0}
+          <span class="scan-sub">{withSchema} with schema</span>
+        {/if}
+        {#if unmatched > 0}
+          <span class="scan-sub">{unmatched} unmatched</span>
+        {/if}
       </div>
 
-      {#if scanError}
-        <div
-          class="flex items-center gap-1.5 font-mono text-[10px] text-destructive-400"
-        >
-          <WarningIcon size={11} class="shrink-0" />
-          {scanError}
-        </div>
-      {/if}
-
-      {#if scanResult}
-        {@const matchCount = scanResult.matches.length}
-        {@const withSchema = scanResult.matches.filter(
-          (m) => m.schemasTs,
-        ).length}
-        {@const unmatched = scanResult.unmatched.length}
-        <div class="flex items-center gap-3 font-mono text-[10px]">
-          <span class="flex items-center gap-1 text-primary">
-            <CheckCircleIcon size={11} />
-            {matchCount} matched
-          </span>
-          {#if withSchema > 0}
-            <span class="text-primary/80">{withSchema} with schema</span>
-          {/if}
-          {#if unmatched > 0}
-            <span class="text-muted-foreground/70">{unmatched} unmatched</span>
-          {/if}
-        </div>
-
-        {#if scanResult.matches.length > 0}
-          <div class="space-y-1 max-h-40 overflow-y-auto">
-            {#each scanResult.matches as m (m.functionName)}
-              <div
-                class="flex items-start gap-2 rounded-lg border border-border/50 bg-background px-2.5 py-1.5 text-[10px]"
-              >
-                <div class="flex-1 min-w-0">
-                  <div class="flex items-center gap-2">
-                    <span class="font-mono text-foreground truncate"
-                      >{m.functionName}</span
-                    >
-                    <span
-                      class="font-mono text-[9px] text-muted-foreground/70/60"
-                    >
-                      {Math.round(m.score * 100)}% match
-                    </span>
-                  </div>
-                  <div class="flex items-center gap-2 mt-0.5">
-                    <span
-                      class="font-mono text-[9px] text-muted-foreground/70 truncate"
-                      >{m.dir}</span
-                    >
-                  </div>
+      {#if scanResult.matches.length > 0}
+        <div class="match-list">
+          {#each scanResult.matches as m (m.functionName)}
+            <div class="match">
+              <div class="match-main">
+                <div class="match-title">
+                  <span class="match-name">{m.functionName}</span>
+                  <span class="match-score">{Math.round(m.score * 100)}% match</span>
                 </div>
-                <div class="shrink-0 flex gap-1.5">
-                  {#if m.schemasTs}
-                    <span
-                      class="rounded-lg border border-primary/50 bg-primary/10 px-1 py-0.5 font-mono text-[9px] text-primary"
-                    >
-                      schema
-                    </span>
-                  {/if}
-                  {#if m.eventFiles?.length}
-                    <span
-                      class="rounded-lg border border-border bg-card px-1 py-0.5 font-mono text-[9px] text-muted-foreground/70"
-                    >
-                      {m.eventFiles.length} event{m.eventFiles.length !== 1
-                        ? "s"
-                        : ""}
-                    </span>
-                  {/if}
-                  {#if m.probesByMethod}
-                    {#each Object.entries(m.probesByMethod) as [meth, bodies] (meth)}
-                      <span
-                        class="rounded-lg border border-border bg-card px-1 py-0.5 font-mono text-[9px] text-muted-foreground/70"
-                      >
-                        {meth}
-                        {bodies.length}p
-                      </span>
-                    {/each}
-                  {:else if m.probeBodies?.length}
-                    <span
-                      class="rounded-lg border border-border bg-card px-1 py-0.5 font-mono text-[9px] text-muted-foreground/70"
-                    >
-                      {m.probeBodies.length} probe{m.probeBodies.length !== 1
-                        ? "s"
-                        : ""}
-                    </span>
-                  {/if}
-                </div>
+                <span class="match-dir">{m.dir}</span>
               </div>
-            {/each}
-          </div>
-        {/if}
-
-        {#if scanResult.unmatched.length > 0}
-          <div class="font-mono text-[10px] text-muted-foreground/70/60">
-            Unmatched: {scanResult.unmatched.join(", ")}
-          </div>
-        {/if}
+              <div class="match-tags">
+                {#if m.schemasTs}
+                  <RcTonePill tone="green">schema</RcTonePill>
+                {/if}
+                {#if m.eventFiles?.length}
+                  <span class="mini-tag">
+                    {m.eventFiles.length} event{m.eventFiles.length !== 1 ? "s" : ""}
+                  </span>
+                {/if}
+                {#if m.probesByMethod}
+                  {#each Object.entries(m.probesByMethod) as [meth, bodies] (meth)}
+                    <span class="mini-tag">{meth} {bodies.length}p</span>
+                  {/each}
+                {:else if m.probeBodies?.length}
+                  <span class="mini-tag">
+                    {m.probeBodies.length} probe{m.probeBodies.length !== 1 ? "s" : ""}
+                  </span>
+                {/if}
+              </div>
+            </div>
+          {/each}
+        </div>
       {/if}
-    </div>
-  </div>
+
+      {#if scanResult.unmatched.length > 0}
+        <p class="scan-unmatched">Unmatched: {scanResult.unmatched.join(", ")}</p>
+      {/if}
+    {/if}
+  </RcPanel>
 
   {#if probeableGateways.length === 0}
-    <div class="rounded-lg border border-border bg-card px-4 py-8 text-center">
-      <p class="text-sm text-muted-foreground/70">
-        No gateways with route details available.
-      </p>
-      <p class="mt-1 text-[11px] text-muted-foreground/70">
-        Refresh the dashboard after deploying your API Gateway.
-      </p>
+    <div class="blank">
+      <h2>No probeable gateways</h2>
+      <p>Refresh the dashboard after deploying your API Gateway.</p>
     </div>
   {:else}
-    <div class="space-y-3">
-      {#each probeableGateways as gw (gw.apiId)}
+    <div class="gateway-list">
+      {#each probeableGateways as gw, gi (gw.apiId)}
         {@const gwRoutes = gw.routeDetails ?? []}
         {@const gwIds = gwRoutes.map((d) => rid(gw.apiId, d.routeKey))}
         {@const allChecked = gwIds.every((id) => selected.has(id))}
         {@const gwDone =
           results.size > 0 && gwIds.every((id) => results.has(id))}
 
-        <div class="rounded-lg border border-border bg-card overflow-hidden">
-          <!-- Gateway header -->
-          <div
-            class="flex items-center justify-between gap-3 border-b border-border px-3 py-2 bg-popover/40"
-          >
-            <div class="flex items-center gap-2 min-w-0">
-              <button
-                type="button"
-                onclick={() => toggleGateway(gw)}
-                class="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                aria-label={allChecked
-                  ? "Deselect all routes"
-                  : "Select all routes"}
-              >
-                {#if allChecked}
-                  <CheckSquareIcon size={14} class="text-primary" />
-                {:else}
-                  <SquareIcon size={14} />
-                {/if}
-              </button>
-              <span class="text-xs font-semibold text-foreground truncate"
-                >{gw.name}</span
-              >
-              <span class="shrink-0 text-[10px] font-mono text-muted-foreground"
-                >{gw.protocolType}</span
-              >
-              <span class="shrink-0 text-[10px] font-mono text-muted-foreground/50"
-                >{gw.version}</span
-              >
-              <span
-                class="hidden sm:block font-mono text-[10px] text-muted-foreground/70 truncate"
-              >
-                {normalizeInvokeUrl(gw.invokeUrl)}
-              </span>
-            </div>
+        <RcPanel
+          title={gw.name}
+          description="{gw.protocolType} {gw.version} · {normalizeInvokeUrl(gw.invokeUrl)}"
+          index={gi + 1}
+        >
+          {#snippet actions()}
+            <button
+              type="button"
+              onclick={() => toggleGateway(gw)}
+              class="check-btn"
+              aria-label={allChecked ? "Deselect all routes" : "Select all routes"}
+            >
+              {#if allChecked}
+                <CheckSquareIcon size={14} class="on" />
+              {:else}
+                <SquareIcon size={14} />
+              {/if}
+            </button>
             {#if gwDone}
-              <button
-                type="button"
-                onclick={() => downloadGateway(gw)}
-                class="inline-flex shrink-0 items-center gap-1 rounded-lg border border-primary/50 bg-primary/10 px-2 py-1 text-[11px] text-primary hover:bg-primary/20 transition-colors"
-              >
+              <RcButton small onclick={() => downloadGateway(gw)}>
                 <DownloadSimpleIcon size={11} />
                 Collection
-              </button>
+              </RcButton>
             {/if}
-          </div>
+          {/snippet}
 
           <!-- Route rows -->
-          <div class="divide-y divide-border/50">
+          <div class="route-rows">
             {#each gwRoutes as detail (detail.routeKey)}
               {@const id = rid(gw.apiId, detail.routeKey)}
               {@const round = results.get(id)}
@@ -758,38 +660,35 @@
 
               <div>
                 <!-- Route row -->
-                <div class="flex items-center gap-2 px-3 py-2 text-[11px]">
+                <div class="route-row">
                   <!-- Checkbox -->
                   <button
                     type="button"
                     onclick={() => toggleRoute(id)}
                     disabled={probing}
-                    class="shrink-0 text-muted-foreground hover:text-foreground transition-colors disabled:opacity-40"
+                    class="check-btn"
                     aria-label={selected.has(id) ? "Deselect" : "Select"}
                   >
                     {#if selected.has(id)}
-                      <CheckSquareIcon size={13} class="text-primary" />
+                      <CheckSquareIcon size={13} class="on" />
                     {:else}
                       <SquareIcon size={13} />
                     {/if}
                   </button>
 
                   <!-- Method -->
-                  <Badge
-                    variant={methodVariant(detail.method ?? "GET")}
-                    class="shrink-0 text-[10px] font-mono"
-                  >
+                  <RcTonePill tone={methodTone(detail.method ?? "GET")}>
                     {detail.method ?? "GET"}
-                  </Badge>
+                  </RcTonePill>
 
                   <!-- Path -->
-                  <span class="flex-1 truncate font-mono text-muted-foreground">
+                  <span class="route-path">
                     {detail.path ?? detail.routeKey}
                   </span>
 
                   <!-- Status -->
                   {#if isProbing}
-                    <span class="flex items-center gap-1 text-primary shrink-0">
+                    <span class="probing">
                       <SpinnerGapIcon size={10} class="animate-spin" />
                       probing
                     </span>
@@ -797,26 +696,20 @@
                     {@const codes = round.examples?.map(
                       (e) => e.statusCode,
                     ) ?? [round.statusCode]}
-                    <span
-                      class="font-mono {statusColor(round.statusCode)} shrink-0"
-                    >
+                    <span class="route-code" data-tone={statusTone(round.statusCode)}>
                       {round.statusCode}
                     </span>
                     {#if codes.length > 1}
-                      <span
-                        class="font-mono text-muted-foreground/70/60 text-[10px] shrink-0"
-                      >
+                      <span class="route-codes">
                         {codes.join("→")}
                       </span>
                     {/if}
-                    <span class="text-muted-foreground/70 shrink-0"
-                      >{round.durationMs}ms</span
-                    >
+                    <span class="route-duration">{round.durationMs}ms</span>
                     {#if round.examples?.length}
                       <button
                         type="button"
                         onclick={() => toggleExpand(id)}
-                        class="flex items-center gap-0.5 text-muted-foreground/70 hover:text-foreground transition-colors shrink-0"
+                        class="examples-btn"
                         aria-label={isExpanded
                           ? "Collapse examples"
                           : "Expand examples"}
@@ -826,7 +719,7 @@
                         {:else}
                           <CaretRightIcon size={11} />
                         {/if}
-                        <span class="text-[10px]"
+                        <span
                           >{round.examples.length} example{round.examples
                             .length !== 1
                             ? "s"
@@ -835,22 +728,16 @@
                       </button>
                     {/if}
                   {:else if probing && selected.has(id)}
-                    <span class="text-muted-foreground/70/50 shrink-0"
-                      >queued</span
-                    >
+                    <span class="route-queued">queued</span>
                   {:else if selected.has(id)}
-                    <span class="text-muted-foreground/70/40 shrink-0"
-                      >pending</span
-                    >
+                    <span class="route-pending">pending</span>
                   {/if}
                 </div>
 
                 <!-- Examples expansion -->
                 {#if isExpanded && round?.examples?.length}
                   {@const total = round.examples.length}
-                  <div
-                    class="border-t border-border/40 bg-background divide-y divide-border/30"
-                  >
+                  <div class="examples">
                     {#each round.examples as ex, i (i)}
                       {@const ek = exKey(id, i)}
                       {@const showReq = exShowReq.has(ek)}
@@ -867,30 +754,20 @@
 
                       <div>
                         <!-- Example header row -->
-                        <div
-                          class="flex items-center gap-2 px-3 py-1.5 font-mono text-[10px]"
-                        >
+                        <div class="example-head">
                           <span
-                            class="text-muted-foreground/70/60 shrink-0 max-w-[7rem] truncate"
+                            class="example-label"
                             title={roundLabel(i, total, ex.label)}
                             >{roundLabel(i, total, ex.label)}</span
                           >
-                          <span
-                            class="{statusColor(
-                              ex.statusCode,
-                            )} font-semibold shrink-0">{ex.statusCode}</span
-                          >
-                          <span class="text-muted-foreground/70 shrink-0"
-                            >{ex.durationMs}ms</span
-                          >
+                          <span class="ex-code" data-tone={statusTone(ex.statusCode)}>{ex.statusCode}</span>
+                          <span class="example-duration">{ex.durationMs}ms</span>
                           <span class="flex-1"></span>
                           <button
                             type="button"
                             onclick={() => toggleExReq(id, i)}
-                            class="rounded-lg px-1.5 py-0.5 text-[9px] transition-colors shrink-0
-															{showReq
-                              ? 'bg-popover text-foreground border border-border'
-                              : 'text-muted-foreground/70/60 hover:text-foreground'}"
+                            class="req-btn"
+                            class:on={showReq}
                             title="Show request inputs">req</button
                           >
                         </div>
@@ -1001,10 +878,8 @@
 
                 <!-- Stuck / needs-input panel -->
                 {#if round?.needsInput && !reProbing.has(id)}
-                  <div
-                    class="border-t border-amber-500/20 bg-amber-500/5 px-3 py-2.5"
-                  >
-                    <p class="mb-2 font-mono text-[10px] text-amber-400">
+                  <div class="stuck">
+                    <p class="stuck-title">
                       Enum field{round.stuckFields &&
                       round.stuckFields.length !== 1
                         ? "s"
@@ -1028,7 +903,7 @@
                                   field,
                                   (e.target as HTMLInputElement).value,
                                 )}
-                              class="w-full rounded-lg border border-border bg-background px-2 py-1 font-mono text-[10px] text-foreground placeholder:text-muted-foreground/70/40 focus:border-amber-500/60 focus:outline-none"
+                              class="field small"
                             />
                             {#if round.stuckOptions?.[field]?.length}
                               <p
@@ -1041,14 +916,10 @@
                         </div>
                       {/each}
                     </div>
-                    <button
-                      type="button"
-                      onclick={() => reprobeRoute(gw, detail, id)}
-                      class="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[10px] text-amber-400 hover:bg-amber-500/20 transition-colors"
-                    >
+                    <RcButton small onclick={() => reprobeRoute(gw, detail, id)}>
                       <PlayIcon size={10} />
                       Re-probe with overrides
-                    </button>
+                    </RcButton>
                   </div>
                 {:else if reProbing.has(id)}
                   <div
@@ -1061,26 +932,24 @@
               </div>
             {/each}
           </div>
-        </div>
+        </RcPanel>
       {/each}
     </div>
 
     <!-- Progress bar while probing -->
     {#if probing}
-      <div
-        class="relative h-7 rounded-lg border border-border overflow-hidden bg-background"
-      >
+      <div class="progress">
         <div
-          class="absolute inset-y-0 left-0 bg-primary/15 transition-all duration-300"
+          class="progress-fill"
           style="width: {totalSelected > 0
             ? Math.round((results.size / totalSelected) * 100)
             : 0}%"
         ></div>
-        <div class="relative flex h-full items-center justify-between px-3">
-          <span class="font-mono text-[10px] text-primary">
+        <div class="progress-labels">
+          <span class="progress-done">
             {results.size} / {totalSelected} probed
           </span>
-          <span class="font-mono text-[10px] text-muted-foreground/70">
+          <span class="progress-sub">
             {totalExamples} example{totalExamples !== 1 ? "s" : ""} captured
           </span>
         </div>
@@ -1089,56 +958,172 @@
 
     <!-- Done: full-width download bar  |  [=== stats ===| ↓ Download All ] -->
     {#if !probing && results.size > 0}
-      <div class="flex rounded-lg border border-border overflow-hidden text-xs">
+      <div class="donebar">
         <!-- left: stats fill -->
-        <div class="flex flex-1 items-center gap-4 bg-card px-4 py-2.5 min-w-0">
-          <span class="font-mono text-muted-foreground/70 shrink-0">
+        <div class="donebar-stats">
+          <span class="donebar-stat">
             {results.size} route{results.size !== 1 ? "s" : ""}
           </span>
-          <span class="text-border select-none">|</span>
-          <span
-            class="font-mono shrink-0 {successCount > 0
-              ? 'text-green-500'
-              : successCount === 0
-                ? 'text-muted-foreground/70'
-                : ''}"
-          >
+          <span class="donebar-sep">|</span>
+          <span class="donebar-stat {successCount > 0 ? 'ok' : 'dim'}">
             {successCount} success
           </span>
-          <span class="text-border select-none">|</span>
-          <span class="font-mono text-muted-foreground/70 shrink-0">
+          <span class="donebar-sep">|</span>
+          <span class="donebar-stat">
             {totalExamples} example{totalExamples !== 1 ? "s" : ""}
           </span>
-          <span class="text-border select-none hidden sm:inline">|</span>
-          <span
-            class="hidden sm:block font-mono text-[10px] text-muted-foreground/70/60 truncate"
-          >
+          <span class="donebar-sep hidden sm:inline">|</span>
+          <span class="donebar-names">
             {probeableGateways.map((g) => g.name).join(" · ")}
           </span>
         </div>
         <!-- right: action buttons -->
-        <div
-          class="flex shrink-0 divide-x divide-border border-l border-border"
-        >
+        <div class="donebar-actions">
           <button
             type="button"
             onclick={run}
-            class="flex items-center gap-1.5 px-3 py-2.5 text-muted-foreground/70 hover:bg-popover hover:text-foreground transition-colors"
+            class="donebar-btn"
             title="Re-run probes"
           >
             <PlayIcon size={11} />
             <span class="hidden sm:inline">Re-run</span>
           </button>
-          <button
-            type="button"
-            onclick={downloadAll}
-            class="flex items-center gap-1.5 px-4 py-2.5 bg-primary/10 text-primary hover:bg-primary/20 transition-colors font-medium"
-          >
+          <RcButton small onclick={downloadAll}>
             <DownloadSimpleIcon size={12} />
             Download All
-          </button>
+          </RcButton>
         </div>
       </div>
     {/if}
   {/if}
 </div>
+
+<style>
+  .chaos { display: flex; flex-direction: column; gap: 14px; min-height: 100%; }
+  .gateway-list { display: flex; flex-direction: column; gap: 14px; }
+
+  .field {
+    height: 30px; width: 100%; min-width: 0; padding: 0 10px; border-radius: 8px;
+    border: 1px solid var(--border-subtle); background: var(--bg-app); color: var(--text-primary);
+    font: 11.5px var(--font-mono, ui-monospace, monospace); outline: none;
+    transition: border-color 120ms ease;
+  }
+  .field::placeholder { color: var(--text-tertiary); }
+  .field:hover { border-color: var(--border-default); }
+  .field:focus { border-color: var(--border-focus); }
+  .field.small { height: 26px; font-size: 10px; }
+
+  .source-row { display: flex; align-items: center; gap: 8px; }
+  .error {
+    display: flex; align-items: center; gap: 6px; margin-top: 8px;
+    font: 10.5px var(--font-mono, ui-monospace, monospace); color: var(--accent-red);
+  }
+  .scan-stats { display: flex; align-items: center; gap: 12px; margin-top: 10px; font: 10.5px var(--font-mono, ui-monospace, monospace); }
+  .scan-ok { display: inline-flex; align-items: center; gap: 4px; color: var(--accent-green); }
+  .scan-sub { color: var(--text-tertiary); }
+  .match-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; max-height: 10rem; overflow-y: auto; }
+  .match {
+    display: flex; align-items: flex-start; gap: 8px; border: 1px solid var(--border-subtle);
+    border-radius: 8px; background: var(--bg-app); padding: 6px 10px;
+  }
+  .match-main { flex: 1; min-width: 0; }
+  .match-title { display: flex; align-items: center; gap: 8px; }
+  .match-name { font: 11px var(--font-mono, ui-monospace, monospace); color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .match-score { font: 9px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); }
+  .match-dir { font: 9px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .match-tags { flex-shrink: 0; display: flex; gap: 6px; }
+  .mini-tag {
+    border: 1px solid var(--border-subtle); border-radius: 6px; padding: 1px 5px;
+    font: 9px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); white-space: nowrap;
+  }
+  .scan-unmatched { margin-top: 6px; font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); }
+
+  .blank { padding: 64px 0; text-align: center; animation: fadeUp 320ms var(--ease-snappy) both; }
+  .blank h2 { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+  .blank p { margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } }
+
+  .check-btn {
+    display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+    color: var(--text-tertiary); transition: color 120ms ease;
+  }
+  .check-btn:hover:not(:disabled) { color: var(--text-primary); }
+  .check-btn:disabled { opacity: 0.4; }
+  .check-btn :global(.on) { color: var(--accent-green); }
+
+  .route-rows { display: flex; flex-direction: column; }
+  .route-row { display: flex; align-items: center; gap: 8px; padding: 7px 2px; font-size: 11px; border-top: 1px solid var(--border-subtle); }
+  .route-row:first-child { border-top: 0; }
+  .route-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-secondary); }
+  .probing { display: inline-flex; align-items: center; gap: 4px; flex-shrink: 0; font-size: 10.5px; color: var(--accent-green); }
+  .route-code { flex-shrink: 0; font-family: var(--font-mono, ui-monospace, monospace); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-tertiary); }
+  .route-code[data-tone="ok"] { color: var(--accent-green); }
+  .route-code[data-tone="warn"] { color: var(--accent-amber); }
+  .route-code[data-tone="err"] { color: var(--accent-red); }
+  .route-codes { flex-shrink: 0; font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); }
+  .route-duration { flex-shrink: 0; font-size: 11px; color: var(--text-tertiary); }
+  .examples-btn {
+    display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0;
+    font-size: 10px; color: var(--text-tertiary); transition: color 120ms ease;
+  }
+  .examples-btn:hover { color: var(--text-primary); }
+  .route-queued, .route-pending { flex-shrink: 0; font-size: 10.5px; color: var(--text-tertiary); opacity: 0.6; }
+
+  .examples { border-top: 1px solid var(--border-subtle); background: var(--bg-app); border-radius: 0 0 8px 8px; }
+  .example-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font: 10px var(--font-mono, ui-monospace, monospace); }
+  .example-label { flex-shrink: 0; max-width: 7rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-tertiary); }
+  .ex-code { flex-shrink: 0; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-tertiary); }
+  .ex-code[data-tone="ok"] { color: var(--accent-green); }
+  .ex-code[data-tone="warn"] { color: var(--accent-amber); }
+  .ex-code[data-tone="err"] { color: var(--accent-red); }
+  .example-duration { flex-shrink: 0; color: var(--text-tertiary); }
+  .req-btn {
+    flex-shrink: 0; border-radius: 6px; padding: 2px 6px; font-size: 9px; color: var(--text-tertiary);
+    transition: color 120ms ease, background 120ms ease;
+  }
+  .req-btn:hover { color: var(--text-primary); }
+  .req-btn.on { background: var(--bg-element); color: var(--text-primary); border: 1px solid var(--border-subtle); }
+
+  .stuck {
+    border-top: 1px solid color-mix(in srgb, var(--accent-amber) 25%, transparent);
+    background: color-mix(in srgb, var(--accent-amber) 6%, transparent);
+    padding: 10px 12px;
+  }
+  .stuck-title { margin-bottom: 8px; font: 10.5px var(--font-mono, ui-monospace, monospace); color: var(--accent-amber); }
+
+  .progress {
+    position: relative; height: 28px; border-radius: 8px; border: 1px solid var(--border-subtle);
+    overflow: hidden; background: var(--bg-app);
+  }
+  .progress-fill {
+    position: absolute; inset: 0 auto 0 0;
+    background: color-mix(in srgb, var(--accent-green) 12%, transparent);
+    transition: width 300ms ease;
+  }
+  .progress-labels { position: relative; display: flex; height: 100%; align-items: center; justify-content: space-between; padding: 0 12px; }
+  .progress-done { font: 10.5px var(--font-mono, ui-monospace, monospace); color: var(--accent-green); }
+  .progress-sub { font: 10.5px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); }
+
+  .donebar {
+    display: flex; border-radius: 8px; border: 1px solid var(--border-subtle);
+    overflow: hidden; font-size: 12px; background: var(--bg-stage);
+  }
+  .donebar-stats { display: flex; flex: 1; align-items: center; gap: 12px; padding: 8px 14px; min-width: 0; }
+  .donebar-stat { font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+  .donebar-stat.ok { color: var(--accent-green); }
+  .donebar-stat.dim { color: var(--text-tertiary); }
+  .donebar-sep { color: var(--border-default); user-select: none; }
+  .donebar-names { display: none; font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  @media (min-width: 640px) { .donebar-names { display: block; } }
+  .donebar-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; padding: 6px 10px; border-left: 1px solid var(--border-subtle); }
+  .donebar-btn {
+    display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-tertiary);
+    transition: color 120ms ease;
+  }
+  .donebar-btn:hover { color: var(--text-primary); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .blank { animation: none; }
+    .progress-fill { transition: none; }
+  }
+</style>
