@@ -1,33 +1,12 @@
 <script lang="ts">
-  import {
-    EyeIcon,
-    EyeSlashIcon,
-    KeyIcon,
-    CopyIcon,
-    CheckIcon,
-    XIcon,
-  } from "phosphor-svelte";
-  import {
-    Table,
-    TableHeader,
-    TableBody,
-    TableRow,
-    TableHead,
-    TableCell,
-  } from "$lib/components/ui/table";
-  import { Skeleton } from "$lib/components/ui/skeleton";
-  import EmptyState from "$lib/components/common/empty-state.svelte";
-  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
+  import { onMount } from "svelte";
+  import { MagnifyingGlassIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
-  import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
-  import { fetchSecretValue } from "$lib/api";
-  import { formatJSONForViewer } from "$lib/json-format";
-  import {
-    getDashboard,
-    getDashboardFilters,
-    matchesTagFilter,
-  } from "$lib/state.svelte";
-  import { formatDate } from "$lib/utils";
+  import RcListRow from "$lib/components/rack/rc-list-row.svelte";
+  import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
+  import SecretDetail from "$lib/components/secrets/secret-detail.svelte";
+  import { getDashboard, getDashboardFilters, matchesTagFilter } from "$lib/state.svelte";
+  import { timeAgo } from "$lib/utils";
 
   let {
     sidebarCollapsed = false,
@@ -40,379 +19,139 @@
   const dashboard = getDashboard();
   const filters = getDashboardFilters();
   const secrets = $derived(
-    (dashboard.data?.secrets ?? []).filter((secret) =>
-      matchesTagFilter(secret.tags, filters.tagFilter),
-    ),
+    (dashboard.data?.secrets ?? []).filter((s) => matchesTagFilter(s.tags, filters.tagFilter)),
   );
 
-  const revealedCount = $derived(
-    secrets.filter((secret) => secretVisible[secret.name]).length,
-  );
-  const failedLoads = $derived(
-    secrets.filter((secret) => Boolean(secretErrors[secret.name])).length,
-  );
+  // Keyed by name: polling replaces the objects, so holding one would freeze the panel.
+  let selectedName = $state<string | null>(null);
+  const selected = $derived(secrets.find((s) => s.name === selectedName) ?? secrets[0] ?? null);
 
-  let secretValues = $state<Record<string, string>>({});
-  let secretValueTypes = $state<Record<string, string>>({});
-  let secretVisible = $state<Record<string, boolean>>({});
-  let secretLoading = $state<Record<string, boolean>>({});
-  let secretErrors = $state<Record<string, string>>({});
-
-  let selectedSecretName = $state<string | null>(null);
-  let copiedField = $state<string | null>(null);
-
-  $effect(() => {
-    if (selectedSecretName && !secrets.some((s) => s.name === selectedSecretName)) {
-      selectedSecretName = null;
-    }
+  let query = $state("");
+  const visible = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return secrets;
+    return secrets.filter(
+      (s) => s.name.toLowerCase().includes(q) || (s.description ?? "").toLowerCase().includes(q),
+    );
   });
 
-  const selectedSecret = $derived(
-    secrets.find((s) => s.name === selectedSecretName) ?? null,
-  );
-
-  function selectSecret(name: string) {
-    selectedSecretName = name;
+  function select(name: string) {
+    selectedName = name;
+    history.replaceState(null, "", `#secrets?${new URLSearchParams({ name })}`);
   }
 
-  function hasLoadedSecretValue(name: string): boolean {
-    return Object.prototype.hasOwnProperty.call(secretValues, name);
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    if (visible.length === 0) return;
+    e.preventDefault();
+    const idx = visible.findIndex((s) => s.name === selected?.name);
+    const next = e.key === "ArrowDown" ? Math.min(visible.length - 1, idx + 1) : Math.max(0, idx - 1);
+    select(visible[next].name);
   }
 
-  async function toggleSecretValue(name: string) {
-    if (secretVisible[name]) {
-      secretVisible = { ...secretVisible, [name]: false };
-      return;
-    }
-    if (!hasLoadedSecretValue(name) && !secretLoading[name]) {
-      await loadSecretValue(name);
-    }
-    if (!secretErrors[name]) {
-      secretVisible = { ...secretVisible, [name]: true };
-    }
-  }
-
-  async function loadSecretValue(name: string) {
-    secretLoading = { ...secretLoading, [name]: true };
-    secretErrors = { ...secretErrors, [name]: "" };
-    try {
-      const secret = await fetchSecretValue(name);
-      secretValues = { ...secretValues, [name]: secret.value };
-      secretValueTypes = { ...secretValueTypes, [name]: secret.valueType };
-    } catch (error) {
-      secretErrors = {
-        ...secretErrors,
-        [name]: error instanceof Error ? error.message : "Failed to load secret value",
-      };
-    } finally {
-      secretLoading = { ...secretLoading, [name]: false };
-    }
-  }
-
-  function renderSecretValue(name: string): string {
-    if (secretLoading[name]) return "Loading...";
-    if (secretErrors[name]) return "Load failed";
-    if (!secretVisible[name]) return "••••••••";
-    const value = secretValues[name] ?? "";
-    const valueType = secretValueTypes[name] ?? "string";
-    if (valueType === "binary") return value ? `${value} (base64)` : "(empty binary)";
-    return value || "(empty)";
-  }
-
-  function secretFormattedValue(
-    name: string,
-  ): { formatted: string; formattedHtml: string } | null {
-    const valueType = secretValueTypes[name] ?? "string";
-    if (valueType !== "string") return null;
-    return formatJSONForViewer(secretValues[name] ?? "");
-  }
-
-  async function copyToClipboard(text: string, field: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      copiedField = field;
-      setTimeout(() => { copiedField = null; }, 1400);
-    } catch {}
-  }
+  onMount(() => {
+    selectedName = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("name");
+  });
 </script>
 
-<div class="flex min-h-full flex-col gap-4">
+<div class="secrets">
   <SectionHeader
     title="Secrets Manager"
-    description="Inventory, versions and guarded value inspection."
-    icon={KeyIcon}
+    description="{secrets.length} secret{secrets.length === 1 ? '' : 's'} · values stay hidden until revealed"
     {sidebarCollapsed}
     {onToggleSidebar}
-  >
-    {#snippet actions()}
-      <div class="flex flex-wrap items-center gap-4 text-xs font-mono text-muted-foreground">
-        <span class="inline-flex items-center gap-1.5">
-          <span class="font-mono text-foreground">{secrets.length}</span>
-          <span class="text-muted-foreground/70">visible</span>
-        </span>
-        <span class="inline-flex items-center gap-1.5">
-          <span class="font-mono text-foreground">{revealedCount}</span>
-          <span class="text-muted-foreground/70">revealed</span>
-        </span>
-        {#if failedLoads > 0}
-          <span class="inline-flex items-center gap-1.5 text-destructive">
-            <span class="font-mono">{failedLoads}</span>
-            <span>load errors</span>
-          </span>
-        {/if}
+  />
+
+  {#if dashboard.loading && !dashboard.data}
+    <div class="layout">
+      <div class="skeleton-list">
+        {#each Array(5) as _, i (i)}<span style:--i={i}></span>{/each}
       </div>
-    {/snippet}
-  </SectionHeader>
-
-  <PaneGroup direction="horizontal" class="min-h-0 flex-1 rounded-lg border border-border/70" style="height: calc(100vh - 10rem);">
-    <Pane defaultSize={60} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-background/50">
-      {#if dashboard.loading && !dashboard.data}
-        <div class="space-y-2 p-3">
-          {#each Array(6) as _, index (index)}
-            <Skeleton class="h-11 w-full" />
-          {/each}
+    </div>
+  {:else if secrets.length === 0}
+    <div class="blank">
+      <h2>{filters.tagFilter ? "No secrets match this tag filter" : "No secrets yet"}</h2>
+      <p>Create one from your terminal, or deploy through your IaC, and it shows up here.</p>
+      <pre>tarn secrets create --name my-secret --value '&#123;"password":"hunter2"&#125;'</pre>
+    </div>
+  {:else}
+    <div class="layout">
+      <RcResizableAside storageKey="tarn-secrets-list-width">
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div class="secret-list" onkeydown={onKeydown}>
+          <label class="search">
+            <MagnifyingGlassIcon size={12} />
+            <input placeholder="Filter secrets" bind:value={query} aria-label="Filter secrets" />
+            <span class="count">{visible.length}</span>
+          </label>
+          <div class="rows">
+            {#each visible as s (s.name)}
+              <RcListRow
+                mono
+                title={s.name}
+                sub={s.description || `${s.tagCount} tag${s.tagCount === 1 ? "" : "s"}`}
+                selected={s.name === selected?.name}
+                onclick={() => select(s.name)}
+              >
+                {#snippet trailing()}<span class="age">{timeAgo(s.lastChangedDate)}</span>{/snippet}
+              </RcListRow>
+            {:else}
+              <p class="none">No match for “{query}”</p>
+            {/each}
+          </div>
         </div>
-      {:else if secrets.length === 0}
-        <div class="flex h-full min-h-[18rem] items-center justify-center">
-          <EmptyState message="No secrets created yet." icon={KeyIcon} />
-        </div>
-      {:else}
-        <div class="h-full overflow-auto">
-          <Table class="table-fixed">
-            <TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur [&_th]:bg-background/95">
-              <TableRow class="hover:bg-transparent">
-                <TableHead class="w-[28%]">Name</TableHead>
-                <TableHead class="w-[20%]">Description</TableHead>
-                <TableHead class="w-[52%]">Value</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {#each secrets as secret}
-                <TableRow
-                  class="cursor-pointer {secret.name === selectedSecretName ? 'bg-muted/50' : ''}"
-                  role="button"
-                  tabindex={0}
-                  onclick={() => selectSecret(secret.name)}
-                  onkeydown={(e: KeyboardEvent) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      selectSecret(secret.name);
-                    }
-                  }}
-                >
-                  <TableCell class="align-top overflow-visible">
-                    <div class="flex min-w-0 flex-col gap-0.5">
-                      <span class="truncate font-medium text-foreground text-xs">{secret.name}</span>
-                      <span class="block min-w-0 truncate font-mono text-[11px] text-muted-foreground/60">{secret.arn}</span>
-                    </div>
-                  </TableCell>
-                  <TableCell class="text-xs text-muted-foreground whitespace-normal break-words align-top">
-                    {secret.description || "--"}
-                  </TableCell>
-                  <TableCell class="align-top">
-                    <div class="flex items-center gap-2">
-                      <span class={`break-all font-mono text-xs ${secretErrors[secret.name] ? "text-destructive" : "text-muted-foreground/70"}`}>
-                        {renderSecretValue(secret.name)}
-                      </span>
-                      <button
-                        type="button"
-                        class="ml-auto shrink-0 rounded border border-border p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
-                        onclick={(e: MouseEvent) => { e.stopPropagation(); void toggleSecretValue(secret.name); }}
-                        disabled={secretLoading[secret.name]}
-                        title={secretVisible[secret.name] ? "Hide" : "Reveal"}
-                        aria-label={secretVisible[secret.name] ? `Hide ${secret.name}` : `Reveal ${secret.name}`}
-                      >
-                        {#if secretVisible[secret.name]}
-                          <EyeSlashIcon size={13} />
-                        {:else}
-                          <EyeIcon size={13} />
-                        {/if}
-                      </button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              {/each}
-            </TableBody>
-          </Table>
-        </div>
+      </RcResizableAside>
+      {#if selected}
+        {#key selected.name}
+          <SecretDetail secret={selected} />
+        {/key}
       {/if}
-    </Pane>
-    <Handle />
-    <Pane defaultSize={40} minSize={25} class="flex min-h-0 flex-col overflow-hidden bg-background/35">
-      {#if selectedSecret}
-        {@const name = selectedSecret.name}
-        <div class="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4 py-2.5">
-          <div class="min-w-0">
-            <p class="truncate font-mono text-sm text-foreground">{selectedSecret.name}</p>
-            <p class="mt-0.5 text-[11px] text-muted-foreground/70">Secret detail</p>
-          </div>
-          <button
-            type="button"
-            onclick={() => (selectedSecretName = null)}
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
-            aria-label="Close detail panel"
-          >
-            <XIcon size={14} />
-          </button>
-        </div>
-        <div class="flex-1 space-y-4 overflow-y-auto p-4">
-
-          <!-- Identity -->
-          <div>
-            <p class="mb-2.5 text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Identity</p>
-            <div class="rounded-md border border-border overflow-hidden divide-y divide-border/60">
-              <div class="flex items-start gap-4 px-3 py-2.5">
-                <span class="w-20 shrink-0 pt-px text-[10px] uppercase tracking-wider text-muted-foreground/60">Name</span>
-                <div class="flex min-w-0 flex-1 items-center gap-2">
-                  <span class="min-w-0 break-all font-mono text-[12px] leading-snug text-foreground">{name}</span>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded p-0.5 text-muted-foreground/40 transition-colors hover:text-foreground"
-                    onclick={() => void copyToClipboard(name, "name")}
-                    title={copiedField === "name" ? "Copied" : "Copy name"}
-                  >
-                    {#if copiedField === "name"}
-                      <CheckIcon size={11} />
-                    {:else}
-                      <CopyIcon size={11} />
-                    {/if}
-                  </button>
-                </div>
-              </div>
-              <div class="flex items-start gap-4 px-3 py-2.5">
-                <span class="w-20 shrink-0 pt-px text-[10px] uppercase tracking-wider text-muted-foreground/60">ARN</span>
-                <div class="flex min-w-0 flex-1 items-start gap-2">
-                  <span class="min-w-0 break-all font-mono text-[11px] leading-snug text-muted-foreground">{selectedSecret.arn}</span>
-                  <button
-                    type="button"
-                    class="mt-px shrink-0 rounded p-0.5 text-muted-foreground/40 transition-colors hover:text-foreground"
-                    onclick={() => void copyToClipboard(selectedSecret.arn, "arn")}
-                    title={copiedField === "arn" ? "Copied" : "Copy ARN"}
-                  >
-                    {#if copiedField === "arn"}
-                      <CheckIcon size={11} />
-                    {:else}
-                      <CopyIcon size={11} />
-                    {/if}
-                  </button>
-                </div>
-              </div>
-              {#if selectedSecret.description}
-                <div class="flex items-start gap-4 px-3 py-2.5">
-                  <span class="w-20 shrink-0 pt-px text-[10px] uppercase tracking-wider text-muted-foreground/60">Desc</span>
-                  <span class="break-words text-[12px] leading-snug text-muted-foreground">{selectedSecret.description}</span>
-                </div>
-              {/if}
-            </div>
-          </div>
-
-          <!-- Value -->
-          <div>
-            <p class="mb-2.5 text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Value</p>
-            <div class="rounded-md border border-border overflow-hidden">
-              <div class="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-2">
-                <span class="text-[10px] uppercase tracking-wider text-muted-foreground/60">
-                  {secretValueTypes[name] ?? "string"}
-                </span>
-                <div class="flex items-center gap-2">
-                  {#if secretVisible[name] && secretValues[name]}
-                    <button
-                      type="button"
-                      class="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
-                      onclick={() => void copyToClipboard(secretValues[name], "value")}
-                    >
-                      {#if copiedField === "value"}
-                        <CheckIcon size={11} />
-                        <span>Copied</span>
-                      {:else}
-                        <CopyIcon size={11} />
-                        <span>Copy</span>
-                      {/if}
-                    </button>
-                  {/if}
-                  <button
-                    type="button"
-                    class="flex items-center gap-1.5 rounded border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
-                    onclick={() => void toggleSecretValue(name)}
-                    disabled={secretLoading[name]}
-                  >
-                    {#if secretVisible[name]}
-                      <EyeSlashIcon size={12} />
-                      <span>Hide</span>
-                    {:else}
-                      <EyeIcon size={12} />
-                      <span>Reveal</span>
-                    {/if}
-                  </button>
-                </div>
-              </div>
-              <div class="px-3 py-2.5">
-                {#if !secretVisible[name] || secretLoading[name]}
-                  <span class="font-mono text-sm text-muted-foreground/50">
-                    {renderSecretValue(name)}
-                  </span>
-                {:else if secretErrors[name]}
-                  <span class="text-xs text-destructive">{secretErrors[name]}</span>
-                {:else if secretFormattedValue(name)}
-                  <FormattedMessageViewer
-                    raw={secretValues[name] ?? ""}
-                    formatted={secretFormattedValue(name)?.formatted}
-                    formattedHtml={secretFormattedValue(name)?.formattedHtml}
-                    formattedLabel="JSON"
-                    rawLabel="Raw Value"
-                    formattedOpenByDefault={true}
-                    rawOpenByDefault={false}
-                    formattedContentClass="text-[11px] text-foreground"
-                    rawContentClass="text-[11px] text-muted-foreground"
-                    formattedMaxHeightClass="max-h-[18rem]"
-                    rawMaxHeightClass="max-h-[14rem]"
-                  />
-                {:else}
-                  <div class="max-h-[18rem] overflow-y-auto">
-                    <span class="break-all font-mono text-[12px] leading-relaxed text-muted-foreground">
-                      {renderSecretValue(name)}
-                    </span>
-                  </div>
-                {/if}
-              </div>
-            </div>
-          </div>
-
-          <!-- Metadata -->
-          <div>
-            <p class="mb-2.5 text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Metadata</p>
-            <div class="rounded-md border border-border overflow-hidden divide-y divide-border/60">
-              <div class="flex items-start gap-4 px-3 py-2.5">
-                <span class="w-20 shrink-0 pt-px text-[10px] uppercase tracking-wider text-muted-foreground/60">Version</span>
-                <span class="break-all font-mono text-[12px] leading-snug text-muted-foreground">{selectedSecret.versionId}</span>
-              </div>
-              <div class="flex items-start gap-4 px-3 py-2.5">
-                <span class="w-20 shrink-0 pt-px text-[10px] uppercase tracking-wider text-muted-foreground/60">Tags</span>
-                <span class="font-mono text-[12px] leading-snug text-muted-foreground">
-                  {selectedSecret.tagCount}
-                  {#if selectedSecret.tags && Object.keys(selectedSecret.tags).length > 0}
-                    <span class="ml-2 text-muted-foreground/60">
-                      ({Object.entries(selectedSecret.tags).map(([k, v]) => `${k}=${v}`).join(", ")})
-                    </span>
-                  {/if}
-                </span>
-              </div>
-              <div class="flex items-start gap-4 px-3 py-2.5">
-                <span class="w-20 shrink-0 pt-px text-[10px] uppercase tracking-wider text-muted-foreground/60">Created</span>
-                <span class="font-mono text-[12px] leading-snug text-muted-foreground">{formatDate(selectedSecret.createdDate)}</span>
-              </div>
-              <div class="flex items-start gap-4 px-3 py-2.5">
-                <span class="w-20 shrink-0 pt-px text-[10px] uppercase tracking-wider text-muted-foreground/60">Changed</span>
-                <span class="font-mono text-[12px] leading-snug text-muted-foreground">{formatDate(selectedSecret.lastChangedDate)}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      {:else}
-        <div class="flex h-full items-center justify-center px-6 py-12 text-center">
-          <p class="max-w-xs text-sm text-muted-foreground/70">Select a secret to inspect its value and metadata.</p>
-        </div>
-      {/if}
-    </Pane>
-  </PaneGroup>
+    </div>
+  {/if}
 </div>
+
+<style>
+  .secrets { display: flex; flex-direction: column; min-height: 100%; }
+  .layout {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 28px; padding: 20px 0 48px;
+    max-width: 1320px; align-items: start;
+  }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  .secret-list { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  .search {
+    display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border-radius: 8px;
+    border: 1px solid var(--border-subtle); background: var(--bg-app); color: var(--text-tertiary);
+    transition: border-color 120ms ease;
+  }
+  .search:hover { border-color: var(--border-default); }
+  .search:focus-within { border-color: var(--border-focus); }
+  .search input { flex: 1; min-width: 0; background: transparent; border: 0; outline: none; font-size: 12px; color: var(--text-primary); }
+  .search input::placeholder { color: var(--text-tertiary); }
+  .count { font-size: 10.5px; font-variant-numeric: tabular-nums; }
+  .rows { display: flex; flex-direction: column; gap: 2px; }
+  .age { font-size: 10.5px; white-space: nowrap; color: var(--text-tertiary); }
+  .none { padding: 12px 10px; font-size: 11.5px; color: var(--text-tertiary); }
+
+  .blank { padding: 64px 0; text-align: center; animation: fadeUp 320ms var(--ease-snappy) both; }
+  .blank h2 { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+  .blank p { margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+  .blank pre {
+    display: inline-block; margin-top: 12px; padding: 8px 12px; border-radius: 8px; background: var(--bg-app);
+    border: 1px solid var(--border-subtle); font: 11.5px var(--font-mono, ui-monospace, monospace);
+    color: var(--text-primary); user-select: all;
+  }
+
+  .skeleton-list { display: flex; flex-direction: column; gap: 6px; width: 260px; }
+  .skeleton-list span {
+    height: 34px; border-radius: 8px; background: var(--bg-element);
+    animation: pulse 1.4s ease-in-out infinite; animation-delay: calc(var(--i) * 80ms);
+  }
+  @keyframes pulse { 50% { opacity: 0.5; } }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .blank, .skeleton-list span { animation: none; }
+  }
+</style>
