@@ -147,7 +147,7 @@ func classifyLambdaLogEvent(msg string) (string, LogLevel, LogSource) {
 	if level, ok := extractLeadingLevel(msg); ok {
 		return msg, level, SourceOutput
 	}
-	return msg, detectLevel(msg), SourceRuntime
+	return msg, DetectLevel(msg), SourceRuntime
 }
 
 // extractLeadingLevel checks if the message starts with (optional whitespace +) a log level
@@ -301,8 +301,8 @@ func parseTimestamp(line string) (time.Time, string) {
 	return time.Now().UTC(), line
 }
 
-// detectLevel infers the log level from the message content.
-func detectLevel(msg string) LogLevel {
+// DetectLevel infers the log level from the message content.
+func DetectLevel(msg string) LogLevel {
 	upper := strings.ToUpper(msg)
 
 	// Lambda lifecycle events

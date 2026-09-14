@@ -352,9 +352,9 @@ func TestDetectLevel(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got := detectLevel(tt.msg)
+		got := DetectLevel(tt.msg)
 		if got != tt.level {
-			t.Errorf("detectLevel(%q) = %s, want %s", tt.msg, got, tt.level)
+			t.Errorf("DetectLevel(%q) = %s, want %s", tt.msg, got, tt.level)
 		}
 	}
 }

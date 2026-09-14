@@ -1408,7 +1408,7 @@ func (r *Runner) pumpLogs(ctx context.Context, logGroup, streamName, containerID
 		r.logs.PutLogEvents(logGroup, streamName, []logs.LogEvent{{
 			Timestamp:  time.Now().UTC(),
 			Message:    line,
-			Level:      logs.LevelINFO,
+			Level:      logs.DetectLevel(line),
 			Source:     logs.SourceOutput,
 			StreamName: streamName,
 		}})
