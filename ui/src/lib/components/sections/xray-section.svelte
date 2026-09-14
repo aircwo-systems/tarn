@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { DetectiveIcon, ArrowUpRightIcon } from "phosphor-svelte";
+  import { DetectiveIcon, ArrowUpRightIcon, FlaskIcon, CaretRightIcon } from "phosphor-svelte";
+  import { slide } from "svelte/transition";
   import { runEventBridgeRace } from "$lib/api";
   import { getDashboard, refresh } from "$lib/state.svelte";
   import type { RequestTrace, TraceSpan } from "$lib/types";
@@ -34,19 +35,127 @@
   }
 
   let selectedTraceId = $state<string | null>(null);
+  // Open span in the details list (also highlighted in the timeline).
+  let openSpan = $state<number | null>(null);
+  $effect(() => {
+    selectedTraceId;
+    openSpan = null;
+  });
+
+  function focusSpan(i: number) {
+    openSpan = i;
+    requestAnimationFrame(() =>
+      document.getElementById(`span-row-${i}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }),
+    );
+  }
   let searchQuery = $state("");
   let raceRuleName = $state("");
   let raceRuns = $state(20);
-  let raceConcurrency = $state(4);
   let raceRunning = $state(false);
   let raceSessionFilter = $state("");
   let raceMessage = $state("");
+  let racePanelOpen = $state(false);
+
+  // ─── Trace list column: resizable / collapsible ───
+  const LIST_MIN = 220;
+  const LIST_MAX = 440;
+  const LIST_DEFAULT = 288;
+  const LIST_COLLAPSE_THRESHOLD = 140;
+  let traceListWidth = $state(LIST_DEFAULT);
+  let traceListCollapsed = $state(false);
+  let listResizing = $state(false);
+  let releaseToCollapseList = $state(false);
+  let listHandleY = $state<number | null>(null);
+  let listDragMoved = false;
+  let listDragStartX = 0;
+  let listDragStartWidth = 0;
+
+  function startListResize(e: PointerEvent) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    listResizing = true;
+    releaseToCollapseList = false;
+    listDragMoved = false;
+    listDragStartX = e.clientX;
+    listDragStartWidth = traceListCollapsed ? 0 : traceListWidth;
+    document.body.classList.add("is-resizing");
+    window.addEventListener("pointermove", onListResizeMove);
+    window.addEventListener("pointerup", stopListResize);
+  }
+
+  function onListResizeMove(e: PointerEvent) {
+    const next = listDragStartWidth + (e.clientX - listDragStartX);
+    if (Math.abs(e.clientX - listDragStartX) > 3) listDragMoved = true;
+    releaseToCollapseList = next < LIST_COLLAPSE_THRESHOLD;
+    if (releaseToCollapseList) return;
+    if (traceListCollapsed) traceListCollapsed = false;
+    traceListWidth = Math.round(Math.max(LIST_MIN, Math.min(LIST_MAX, next)));
+  }
+
+  function stopListResize() {
+    listResizing = false;
+    document.body.classList.remove("is-resizing");
+    window.removeEventListener("pointermove", onListResizeMove);
+    window.removeEventListener("pointerup", stopListResize);
+    if (releaseToCollapseList) {
+      traceListCollapsed = true;
+    } else if (!listDragMoved) {
+      traceListCollapsed = !traceListCollapsed;
+    }
+    releaseToCollapseList = false;
+  }
+
+  function trackListHandle(e: PointerEvent) {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    listHandleY = Math.max(28, Math.min(rect.height - 28, e.clientY - rect.top));
+  }
+
+  function resetListWidth() {
+    traceListWidth = LIST_DEFAULT;
+    traceListCollapsed = false;
+  }
+
+  $effect(() => {
+    return () => {
+      window.removeEventListener("pointermove", onListResizeMove);
+      window.removeEventListener("pointerup", stopListResize);
+      document.body.classList.remove("is-resizing");
+    };
+  });
+
+  const RACE_PRESETS = [10, 20, 50];
 
   const raceSessions = $derived(
     [...new Set(traces.map((trace) => traceRaceSession(trace)).filter(Boolean))] as string[],
   );
 
   const traceFlows = $derived(chainTraceFlows(traces));
+
+  interface RaceSessionSummary {
+    session: string;
+    count: number;
+    successCount: number;
+    p95Ms: number;
+  }
+
+  const raceSessionSummaries = $derived(
+    raceSessions
+      .map((session): RaceSessionSummary => {
+        const sessionFlows = traceFlows.filter((flow) => traceRaceSession(flow) === session);
+        const durations = sessionFlows.map((flow) => flow.durationMs).sort((a, b) => a - b);
+        const p95 =
+          durations.length > 0
+            ? durations[Math.min(durations.length - 1, Math.floor(durations.length * 0.95))]
+            : 0;
+        return {
+          session,
+          count: sessionFlows.length,
+          successCount: sessionFlows.filter((flow) => flow.status < 400).length,
+          p95Ms: p95,
+        };
+      })
+      .sort((a, b) => b.count - a.count),
+  );
 
   $effect(() => {
     if (!raceRuleName && eventBridgeRules.length > 0) {
@@ -219,21 +328,31 @@
     return Number.isFinite(parsed) ? parsed : 0;
   }
 
-  function lambdaSpanName(trace: RequestTrace): string {
-    return trace.spans.find((span) => span.kind.toLowerCase() === "lambda")?.name ?? "";
-  }
-
   function queueRetryAttempt(trace: RequestTrace): boolean {
     return queueReceiveCount(trace) > 1;
+  }
+
+  const COMPUTE_SPAN_KINDS = ["lambda", "ecs"];
+
+  // Returns "" when no compute span is present, so the retry-dedup check below can decline
+  // to merge traces it has no compute identity to compare (see sameQueueLambdaAttempt).
+  // The trace list's *display* name comes from traceTitle (trace-utils.ts), which already
+  // has its own kind-priority fallback chain and an "ecs" branch.
+  function traceComputeName(trace: RequestTrace): string {
+    for (const kind of COMPUTE_SPAN_KINDS) {
+      const match = trace.spans.find((span) => span.kind.toLowerCase() === kind);
+      if (match) return match.name;
+    }
+    return "";
   }
 
   function sameQueueLambdaAttempt(a: RequestTrace, b: RequestTrace): boolean {
     const aQueue = a.spans.find((span) => span.kind.toLowerCase() === "queue")?.name ?? "";
     const bQueue = b.spans.find((span) => span.kind.toLowerCase() === "queue")?.name ?? "";
     if (!aQueue || !bQueue || aQueue !== bQueue) return false;
-    const aLambda = lambdaSpanName(a);
-    const bLambda = lambdaSpanName(b);
-    return !!aLambda && aLambda === bLambda;
+    const aCompute = traceComputeName(a);
+    const bCompute = traceComputeName(b);
+    return !!aCompute && aCompute === bCompute;
   }
 
   function isRepeatedQueueRetry(flow: TraceFlow, candidate: RequestTrace): boolean {
@@ -328,10 +447,11 @@
     raceRunning = true;
     raceMessage = "";
     try {
+      const runs = Math.max(1, Math.min(500, raceRuns));
       const result = await runEventBridgeRace(
         raceRuleName,
-        Math.max(1, Math.min(500, raceRuns)),
-        Math.max(1, Math.min(100, raceConcurrency)),
+        runs,
+        Math.max(1, Math.min(100, Math.ceil(runs / 5))),
       );
       raceSessionFilter = result.sessionId;
       raceMessage = `Race ${result.sessionId}: ${result.successful}/${result.runs} successful`;
@@ -343,8 +463,22 @@
     }
   }
 
+  function logGroupForSpan(span: TraceSpan): string | null {
+    switch (span.kind.toLowerCase()) {
+      case "lambda":
+        return `/aws/lambda/${span.name}`;
+      case "ecs":
+        // Log group defaults to the task definition family, not the ECS
+        // service/target name span.name holds — they only match by
+        // coincidence (see resolveLogGroup in internal/ecs/runner.go).
+        return `/ecs/${span.meta?.taskDefinitionFamily || span.name}`;
+      default:
+        return null;
+    }
+  }
+
   function viewInLogs(span: TraceSpan, traceStartedAt?: string) {
-    const group = span.kind === "lambda" ? `/aws/lambda/${span.name}` : null;
+    const group = logGroupForSpan(span);
     if (group) {
       let hash = `logs?group=${encodeURIComponent(group)}`;
       if (traceStartedAt) {
@@ -354,22 +488,22 @@
     }
   }
 
-  function statusDotClass(s: number): string {
-    return s >= 500 ? "fill-red" : s >= 400 ? "fill-amber" : "fill-accent";
+  function traceAccentColor(s: number): string {
+    return s >= 500 ? "var(--accent-red)" : s >= 400 ? "var(--accent-amber)" : "var(--text-primary)";
   }
 
   function statusBadgeClass(s: number): string {
-    if (s >= 500) return "text-destructive border-red/40 bg-red/8";
-    if (s >= 400) return "text-amber border-amber/40 bg-amber/8";
-    return "text-primary border-primary/50 bg-primary/10";
+    if (s >= 500) return "status-error";
+    if (s >= 400) return "status-warn";
+    return "status-ok";
   }
 
   function spanBadge(span: TraceSpan): { label: string; colorClass: string } {
     if (span.status === "error")
-      return { label: "✕ error", colorClass: "text-destructive" };
+      return { label: "✕ error", colorClass: "tx-error" };
     if (span.status === "client_error")
-      return { label: "⚠ warn", colorClass: "text-amber" };
-    return { label: "✓ ok", colorClass: "text-primary" };
+      return { label: "⚠ warn", colorClass: "tx-warn" };
+    return { label: "✓ ok", colorClass: "tx-ok" };
   }
 
   // ─── Flow SVG geometry ───
@@ -391,208 +525,167 @@
   // ─── Waterfall ───
 </script>
 
-<div class="space-y-4">
+<div class="xray space-y-4">
   <!-- Header strip -->
   <div class="space-y-3">
     <SectionHeader
       title="X-Ray traces"
       description="End-to-end request flow visualiser."
-      icon={DetectiveIcon}
       {sidebarCollapsed}
       {onToggleSidebar}
     >
       {#snippet actions()}
-        <div class="flex flex-wrap items-center gap-4 text-xs font-mono text-muted-foreground">
-        <span class="text-muted-foreground/70"
+        <div class="flex flex-wrap items-center gap-4 font-mono text-[11px] tx-tertiary">
+        <span class="tx-tertiary"
           >{traceFlows.length} flow{traceFlows.length !== 1 ? "s" : ""}</span
         >
         {#if traceFlows.length !== traces.length}
-          <span class="text-muted-foreground/55">from {traces.length} traces</span>
+          <span class="tx-tertiary opacity-70">from {traces.length} traces</span>
         {/if}
         {#if errorCount > 0}
-          <span class="text-destructive">{errorCount} 5xx</span>
+          <span class="tx-error">{errorCount} 5xx</span>
         {/if}
         {#if clientErrorCount > 0}
-          <span class="text-amber">{clientErrorCount} 4xx</span>
+          <span class="tx-warn">{clientErrorCount} 4xx</span>
         {/if}
         {#if traces.length > 0}
-          <span class="text-muted-foreground/70">avg {formatMs(avgMs)}</span>
+          <span class="tx-tertiary">avg {formatMs(avgMs)}</span>
         {/if}
         {#if p95Ms > 0}
-          <span class="text-muted-foreground/70">p95 {formatMs(p95Ms)}</span>
+          <span class="tx-tertiary">p95 {formatMs(p95Ms)}</span>
         {/if}
+        <button
+          type="button"
+          class="pill pill-btn race-toggle"
+          class:is-active={racePanelOpen}
+          onclick={() => (racePanelOpen = !racePanelOpen)}
+        >
+          <FlaskIcon size={11} />
+          Race
+        </button>
         </div>
       {/snippet}
     </SectionHeader>
 
-    <div class="flex flex-wrap items-center gap-2">
-      <select
-        bind:value={raceRuleName}
-        class="h-8 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary min-w-48"
-      >
-        <option value="">Select EventBridge rule</option>
-        {#each eventBridgeRules as rule (rule.name)}
-          <option value={rule.name}>{rule.name}</option>
-        {/each}
-      </select>
-      <input
-        type="number"
-        min="1"
-        max="500"
-        bind:value={raceRuns}
-        class="h-8 w-24 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
-        title="Runs"
-      />
-      <input
-        type="number"
-        min="1"
-        max="100"
-        bind:value={raceConcurrency}
-        class="h-8 w-24 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary"
-        title="Concurrency"
-      />
-      <button
-        type="button"
-        disabled={raceRunning || !raceRuleName}
-        onclick={launchRace}
-        class="inline-flex items-center gap-1 rounded border border-primary/50 bg-primary/10 px-2 py-1 text-xs text-primary transition-colors hover:bg-primary/20 disabled:opacity-50"
-      >
-        {raceRunning ? "Running race..." : "Run race"}
-      </button>
-      <select
-        bind:value={raceSessionFilter}
-        class="h-8 rounded border border-border bg-background px-2 text-xs text-foreground outline-none focus:ring-1 focus:ring-primary min-w-40"
-      >
-        <option value="">All sessions</option>
-        {#each raceSessions as session (session)}
-          <option value={session}>{session}</option>
-        {/each}
-      </select>
-    </div>
-    {#if raceMessage}
-      <p class="text-xs text-muted-foreground">{raceMessage}</p>
+    {#if racePanelOpen}
+      <div transition:slide={{ duration: 200 }}>
+        <div class="race-bar">
+          <select bind:value={raceRuleName} class="field min-w-48">
+            <option value="">Select EventBridge rule</option>
+            {#each eventBridgeRules as rule (rule.name)}
+              <option value={rule.name}>{rule.name}</option>
+            {/each}
+          </select>
+          <div class="segmented" role="group" aria-label="Run count">
+            {#each RACE_PRESETS as preset (preset)}
+              <button
+                type="button"
+                class="segmented-opt"
+                class:is-active={raceRuns === preset}
+                onclick={() => (raceRuns = preset)}
+              >
+                ×{preset}
+              </button>
+            {/each}
+          </div>
+          <button
+            type="button"
+            disabled={raceRunning || !raceRuleName}
+            onclick={launchRace}
+            class="pill pill-btn accent"
+          >
+            {raceRunning ? "Running race..." : "Run race"}
+          </button>
+        </div>
+        {#if raceMessage}
+          <p class="text-[11px] tx-tertiary mt-2">{raceMessage}</p>
+        {/if}
+        {#if raceSessionSummaries.length > 0}
+          <div class="race-sessions">
+            {#each raceSessionSummaries as summary (summary.session)}
+              {@const active = raceSessionFilter === summary.session}
+              <button
+                type="button"
+                class="race-session-item"
+                class:is-active={active}
+                onclick={() => (raceSessionFilter = active ? "" : summary.session)}
+              >
+                <span class="mono race-session-id">{summary.session}</span>
+                <span class="race-session-stat">{summary.successCount}/{summary.count} ok</span>
+                <span class="race-session-stat tx-tertiary">p95 {formatMs(summary.p95Ms)}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      </div>
     {/if}
   </div>
 
   {#if traces.length === 0}
     <!-- Empty state -->
-    <div
-      class="flex flex-col items-center gap-4 px-8 py-16"
-    >
-      <div
-        class="flex items-center justify-center h-12 w-12 rounded-xl border border-border bg-muted"
-      >
-        <DetectiveIcon size={24} class="text-muted-foreground/70" />
+    <div class="empty-state panel">
+      <div class="empty-icon">
+        <DetectiveIcon size={22} weight="regular" />
       </div>
       <div class="text-center space-y-1.5">
-        <p class="text-sm font-semibold text-muted-foreground">
+        <p class="text-[13px] font-semibold tx-secondary">
           No traces recorded yet
         </p>
-        <p class="text-xs text-muted-foreground/70 max-w-sm leading-relaxed">
+        <p class="text-[11.5px] tx-tertiary max-w-sm leading-relaxed">
           Make HTTP requests through an API Gateway or trigger SQS event source
           mappings. Traces will appear here showing the full request flow
           through each component.
         </p>
       </div>
-      <div
-        class="flex items-center gap-5 mt-1 text-[10px] font-mono text-muted-foreground/70"
-      >
-        <span class="flex items-center gap-1.5">
-          <span
-            class="h-2 w-2 rounded-sm inline-block"
-            style="background:var(--color-red);opacity:0.6"
-          ></span>
-          API Gateway
-        </span>
-        <span class="flex items-center gap-1.5">
-          <span
-            class="h-2 w-2 rounded-sm inline-block"
-            style="background:var(--color-accent);opacity:0.6"
-          ></span>
-          Lambda
-        </span>
-        <span class="flex items-center gap-1.5">
-          <span
-            class="h-2 w-2 rounded-sm inline-block"
-            style="background:var(--color-amber);opacity:0.6"
-          ></span>
-          SQS / DLQ
-        </span>
-        <span class="flex items-center gap-1.5">
-          <span
-            class="h-2 w-2 rounded-sm inline-block"
-            style="background:var(--color-primary);opacity:0.6"
-          ></span>
-          SNS
-        </span>
-        <span class="flex items-center gap-1.5">
-          <span
-            class="h-2 w-2 rounded-sm inline-block"
-            style="background:var(--color-blue);opacity:0.6"
-          ></span>
-          EventBridge
-        </span>
-        <span class="flex items-center gap-1.5">
-          <span
-            class="h-2 w-2 rounded-sm inline-block"
-            style="background:var(--color-blue);opacity:0.6"
-          ></span>
-          Secrets / DB
-        </span>
+      <div class="empty-legend">
+        <span class="legend-item" style="color:var(--color-red)">API Gateway</span>
+        <span class="legend-item" style="color:var(--color-accent)">Lambda</span>
+        <span class="legend-item" style="color:var(--color-amber)">SQS / DLQ</span>
+        <span class="legend-item" style="color:var(--color-primary)">SNS</span>
+        <span class="legend-item" style="color:var(--color-blue)">EventBridge</span>
+        <span class="legend-item" style="color:var(--color-blue)">Secrets / DB</span>
       </div>
     </div>
   {:else}
-    <div class="flex items-start">
+    <div class="trace-split">
       <!-- ─── Trace list ─── -->
       <div
-        class="w-72 shrink-0 border-r border-border overflow-hidden flex flex-col"
+        class="trace-list-col"
+        class:collapsed={traceListCollapsed}
+        class:no-transition={listResizing}
+        style:width={traceListCollapsed ? "0px" : `${traceListWidth}px`}
       >
-        <div class="px-2.5 py-2 border-b border-border">
+        <div class="trace-search">
           <input
             type="text"
             bind:value={searchQuery}
             placeholder="Filter by path, method..."
-            class="w-full rounded border border-border bg-muted px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground/70 outline-none focus:ring-1 focus:ring-primary"
+            class="field w-full"
           />
         </div>
-        <div
-          class="overflow-y-auto max-h-[calc(100vh-18rem)] divide-y divide-border/60"
-        >
+        <div class="trace-list">
           {#each filteredTraces as trace (trace.id)}
-            {@const lambdaSpan = trace.spans.find((s) => s.kind === "lambda")}
-            <div
-              class="border-l-2 {effectiveId === trace.id
-                ? 'bg-muted border-primary'
-                : 'border-transparent'}"
-            >
+            {@const logSpan = trace.spans.find((s) => logGroupForSpan(s) !== null)}
+            {@const isActive = effectiveId === trace.id}
+            <div class="trace-item" class:is-active={isActive} style="--accent:{traceAccentColor(trace.status)}">
               <button
                 type="button"
-                class="w-full text-left px-3 py-2.5 transition-colors hover:bg-muted/60"
+                class="trace-row"
                 onclick={() => (selectedTraceId = trace.id)}
               >
                 <div class="flex items-center gap-2 mb-1 min-w-0">
-                  <svg width="6" height="6" viewBox="0 0 6 6" class="shrink-0">
-                    <circle
-                      cx="3"
-                      cy="3"
-                      r="3"
-                      class={statusDotClass(trace.status)}
-                    />
-                  </svg>
                   <span
-                    class="text-[11px] font-mono text-foreground truncate flex-1"
+                    class="text-[11px] font-mono tx-primary truncate flex-1"
                     >{traceTitle(trace)}</span
                   >
                 </div>
-                <div
-                  class="flex items-center gap-1.5 pl-3.5 text-[10px] font-mono text-muted-foreground/70"
-                >
+                <div class="flex items-center gap-1.5 text-[10px] font-mono tx-tertiary">
                   <span
                     class={trace.status >= 500
-                      ? "text-destructive"
+                      ? "tx-error"
                       : trace.status >= 400
-                        ? "text-amber"
-                        : "text-muted-foreground/70"}>{trace.status}</span
+                        ? "tx-warn"
+                        : "tx-tertiary"}>{trace.status}</span
                   >
                   <span>·</span>
                   <span>{formatMs(trace.durationMs)}</span>
@@ -607,30 +700,22 @@
                   <span class="ml-auto">{timeAgo(trace.startedAt)}</span>
                 </div>
                 {#if traceRaceSession(trace)}
-                  <div class="pl-3.5 mt-1">
-                    <span
-                      class="inline-flex items-center rounded border border-blue/30 bg-blue/10 px-1.5 py-0.5 text-[10px] font-mono text-blue"
-                    >
-                      race {traceRaceSession(trace)}
-                    </span>
+                  <div class="mt-1">
+                    <span class="pill pill-blue">race {traceRaceSession(trace)}</span>
                   </div>
                 {/if}
                 {#if trace.traceCount > 1}
-                  <div class="pl-3.5 mt-1">
-                    <span
-                      class="inline-flex items-center rounded border border-primary/20 bg-primary/8 px-1.5 py-0.5 text-[10px] font-mono text-primary/85"
-                    >
-                      chained flow
-                    </span>
+                  <div class="mt-1">
+                    <span class="pill pill-accent">chained flow</span>
                   </div>
                 {/if}
               </button>
-              {#if trace.status >= 500 && lambdaSpan}
-                <div class="px-3 pb-2">
+              {#if trace.status >= 500 && logSpan}
+                <div class="trace-context">
                   <button
                     type="button"
-                    onclick={() => viewInLogs(lambdaSpan, trace.startedAt)}
-                    class="inline-flex items-center gap-1 text-[10px] font-mono text-destructive/70 hover:text-destructive transition-colors"
+                    onclick={() => viewInLogs(logSpan, trace.startedAt)}
+                    class="context-link"
                   >
                     <ArrowUpRightIcon size={9} />
                     View in context
@@ -639,27 +724,55 @@
               {/if}
             </div>
           {:else}
-            <div class="px-3 py-8 text-center text-xs text-muted-foreground/70">
+            <div class="px-3 py-8 text-center text-[11px] tx-tertiary">
               No matching traces
             </div>
           {/each}
         </div>
       </div>
 
+      <!-- ─── List resizer / collapse handle ─── -->
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div
+        class="list-resizer"
+        class:resizing={listResizing}
+        class:collapsed={traceListCollapsed}
+        style:left={traceListCollapsed ? "-3px" : `${traceListWidth - 3}px`}
+        title={traceListCollapsed
+          ? "Show trace list"
+          : "Drag to resize trace list (click to collapse, double-click to reset)"}
+        onpointerdown={startListResize}
+        onpointermove={trackListHandle}
+        ondblclick={resetListWidth}
+      >
+        <div class="resizer-line"></div>
+        <div class="resizer-pill-handle" style:top={listHandleY === null ? undefined : `${listHandleY}px`}>
+          {#if traceListCollapsed}
+            <CaretRightIcon size={9} />
+          {/if}
+        </div>
+        {#if listResizing}
+          <div
+            class="resizer-width-badge"
+            class:collapse-hint={releaseToCollapseList}
+            style:top={listHandleY === null ? undefined : `${listHandleY}px`}
+          >
+            {releaseToCollapseList ? "Release to collapse" : `${traceListWidth}px`}
+          </div>
+        {/if}
+      </div>
+
       <!-- ─── Trace detail panel ─── -->
       {#if selectedTrace}
-        <div class="flex-1 min-w-0 space-y-5 pl-4">
+        <div class="flex-1 min-w-0 space-y-5" class:pl-4={!traceListCollapsed} class:pl-2={traceListCollapsed}>
           <!-- Trace header -->
-          <div class="pb-3 border-b border-border/40">
+          <div class="pb-3 border-b bd-subtle">
             <div class="flex items-center gap-3 flex-wrap min-w-0">
               {#if selectedTrace.method}
-                <span
-                  class="shrink-0 font-mono text-[11px] px-1.5 py-0.5 rounded border border-border text-muted-foreground"
-                  >{selectedTrace.method}</span
-                >
+                <span class="pill mono">{selectedTrace.method}</span>
               {/if}
               <span
-                class="font-mono text-sm text-foreground truncate flex-1 min-w-0"
+                class="font-mono text-[13px] tx-primary truncate flex-1 min-w-0"
               >
                 {selectedTrace.path ??
                   (selectedTrace.gatewayName
@@ -667,43 +780,27 @@
                     : "Event trigger")}
               </span>
               {#if traceRaceSession(selectedTrace)}
-                <span
-                  class="shrink-0 inline-flex items-center rounded border border-blue/30 bg-blue/10 px-2 py-0.5 text-[10px] font-mono text-blue"
-                >
-                  race {traceRaceSession(selectedTrace)}
-                </span>
+                <span class="pill pill-blue shrink-0">race {traceRaceSession(selectedTrace)}</span>
               {/if}
               {#if selectedTrace.traceCount > 1}
-                <span
-                  class="shrink-0 inline-flex items-center rounded border border-primary/20 bg-primary/8 px-2 py-0.5 text-[10px] font-mono text-primary/85"
-                >
-                  chained {selectedTrace.traceCount} traces
-                </span>
+                <span class="pill pill-accent shrink-0">chained {selectedTrace.traceCount} traces</span>
               {/if}
               {#if traceSourceLabel(selectedTrace)}
-                <span
-                  class="shrink-0 inline-flex items-center rounded border border-border/50 bg-background/60 px-2 py-0.5 text-[10px] font-mono text-muted-foreground"
-                >
-                  from {traceSourceLabel(selectedTrace)}
-                </span>
+                <span class="pill shrink-0">from {traceSourceLabel(selectedTrace)}</span>
               {/if}
-              <span
-                class="shrink-0 inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-mono {statusBadgeClass(
-                  selectedTrace.status,
-                )}">{selectedTrace.status}</span
+              <span class="pill status-pill {statusBadgeClass(selectedTrace.status)} shrink-0"
+                >{selectedTrace.status}</span
               >
-              <span
-                class="shrink-0 text-[11px] font-mono text-muted-foreground/70"
+              <span class="shrink-0 text-[11px] font-mono tx-tertiary"
                 >{formatMs(selectedTrace.durationMs)} total</span
               >
-              <span
-                class="shrink-0 text-[11px] font-mono text-muted-foreground/70"
+              <span class="shrink-0 text-[11px] font-mono tx-tertiary"
                 >{timeAgo(selectedTrace.startedAt)}</span
               >
             </div>
             {#if selectedTrace.spans.length > 0}
               <div
-                class="mt-2 text-[10px] font-mono text-muted-foreground/70 flex items-center gap-1 flex-wrap"
+                class="mt-2 text-[10px] font-mono tx-tertiary flex items-center gap-1 flex-wrap"
               >
                 {#each selectedTrace.spans as span, i (i)}
                   {#if i > 0}
@@ -726,10 +823,8 @@
             )}
 
             <!-- ─── Flow diagram ─── -->
-            <div>
-              <p
-                class="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70 mb-3"
-              >
+            <div class="panel">
+              <p class="section-label">
                 Request Flow
               </p>
               <div class="overflow-x-auto">
@@ -891,155 +986,102 @@
             </div>
 
             <!-- ─── Waterfall timeline ─── -->
-            <div>
-              <p
-                class="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70 mb-3"
-              >
-                Timeline
-              </p>
-              <div class="space-y-1.5">
+            <div class="flat-block">
+              <p class="section-label">Timeline</p>
+              <div class="tl-rows">
                 {#each rows as { span, offsetPct, widthPct, nested }, i (i)}
-                  <div class="flex items-center gap-3 {nested ? 'pl-4' : ''}">
-                    <!-- Step / nesting indicator -->
-                    {#if nested}
+                  {@const hasErr = span.status === "error" || span.status === "client_error"}
+                  <button
+                    type="button"
+                    class="tl-row"
+                    class:selected={openSpan === i}
+                    class:nested
+                    style="--accent:{hasErr ? (span.status === 'error' ? 'var(--accent-red)' : 'var(--accent-amber)') : 'var(--text-primary)'}"
+                    onclick={() => (openSpan === i ? (openSpan = null) : focusSpan(i))}
+                  >
+                    <span class="tl-step">{nested ? "└" : i + 1}</span>
+                    <span class="tl-kind" title={spanKindLabel(span.kind)} style="color:{spanColor(span.kind)}">
+                      {spanKindLabel(span.kind)}
+                    </span>
+                    <span class="tl-name" class:tx-error={span.status === "error"} title={span.name}>{span.name}</span>
+                    <span class="tl-track">
                       <span
-                        class="w-4 text-[10px] font-mono text-muted-foreground/70 text-right shrink-0 select-none"
-                        >└</span
-                      >
-                    {:else}
-                      <span
-                        class="w-4 text-[10px] font-mono text-muted-foreground/70 text-right shrink-0"
-                        >{i + 1}</span
-                      >
-                    {/if}
-                    <!-- Kind badge -->
-                    <div class="w-[6.75rem] shrink-0">
-                      <span
-                        class="block whitespace-nowrap text-right text-[10px] font-mono px-1.5 py-0.5 rounded"
-                        title={spanKindLabel(span.kind)}
-                        style="color:{spanColor(span.kind)};background:{spanColor(
-                          span.kind,
-                        )}18;border:1px solid {spanColor(span.kind)}30"
-                      >
-                        {spanKindLabel(span.kind)}
-                      </span>
-                    </div>
-                    <!-- Name -->
-                    <div class="w-40 shrink-0 min-w-0">
-                      <span
-                        class="block overflow-hidden text-ellipsis whitespace-nowrap text-[11px] font-mono text-muted-foreground"
-                        title={span.name}
-                        >{span.name}</span
-                      >
-                    </div>
-                    <!-- Bar track -->
-                    <div
-                      class="flex-1 {nested
-                        ? 'h-3'
-                        : 'h-4'} rounded bg-muted relative overflow-hidden"
-                    >
-                      <div
-                        class="absolute top-0 h-full rounded"
-                        style="left:{offsetPct}%;width:{widthPct}%;background:{spanColor(
-                          span.kind,
-                        )};opacity:{span.status === 'error'
-                          ? 0.85
-                          : nested
-                            ? 0.45
-                            : 0.55};min-width:2px"
-                      ></div>
-                    </div>
-                    <!-- Duration -->
-                    <span
-                      class="w-12 text-right text-[10px] font-mono text-muted-foreground/70 shrink-0"
-                      >{formatMs(span.durationMs)}</span
-                    >
-                  </div>
+                        class="tl-bar"
+                        style="left:{offsetPct}%;width:{widthPct}%;background:{spanColor(span.kind)};opacity:{hasErr ? 0.85 : nested ? 0.45 : 0.6}"
+                      ></span>
+                    </span>
+                    <span class="tl-dur">{formatMs(span.durationMs)}</span>
+                  </button>
                 {/each}
               </div>
-              <!-- Ruler -->
-              <div
-                class="flex items-center justify-between mt-2 pt-1.5 border-t border-border text-[10px] font-mono text-muted-foreground/70"
-              >
+              <div class="tl-ruler">
                 <span>0ms</span>
-                <span>{formatMs(Math.round(selectedTrace.durationMs / 2))}</span
-                >
+                <span>{formatMs(Math.round(selectedTrace.durationMs / 2))}</span>
                 <span>{formatMs(selectedTrace.durationMs)}</span>
               </div>
             </div>
 
             <!-- ─── Span details ─── -->
-            <div>
-              <p
-                class="text-[10px] font-mono uppercase tracking-wider text-muted-foreground/70 mb-3"
-              >
-                Span Details
-              </p>
-              <div class="divide-y divide-border/50">
+            <div class="flat-block">
+              <p class="section-label">Span Details</p>
+              <div class="span-rows">
                 {#each selectedTrace.spans as span, i (i)}
                   {@const badge = spanBadge(span)}
-                  {@const hasErr =
-                    span.status === "error" || span.status === "client_error"}
+                  {@const hasErr = span.status === "error" || span.status === "client_error"}
+                  {@const hasMeta = !!span.meta && Object.keys(span.meta).length > 0}
                   <div
-                    class="flex items-start gap-3 py-2.5 {hasErr
-                      ? 'bg-red/5'
-                      : ''}"
+                    id="span-row-{i}"
+                    class="span-row"
+                    class:open={openSpan === i}
+                    class:err={hasErr}
+                    style="--accent:{hasErr ? (span.status === 'error' ? 'var(--accent-red)' : 'var(--accent-amber)') : 'var(--text-primary)'}"
                   >
-                    <!-- Step number -->
-                    <span
-                      class="mt-0.5 shrink-0 text-[10px] font-mono w-4 text-right"
-                      style="color:{spanColor(span.kind)}"
-                    >
-                      {i + 1}
-                    </span>
-                    <div class="flex-1 min-w-0">
-                      <div class="flex items-center gap-2 flex-wrap mb-0.5">
-                        <span
-                          class="text-[11px] font-semibold text-foreground truncate"
-                          >{span.name}</span
+                    <div class="span-head">
+                      <button
+                        type="button"
+                        class="span-toggle"
+                        aria-expanded={openSpan === i}
+                        onclick={() => (openSpan = openSpan === i ? null : i)}
+                      >
+                        <CaretRightIcon size={9} class="span-caret" />
+                        <span class="span-step">{i + 1}</span>
+                        <span class="span-name">{span.name}</span>
+                        <span class="span-kind" style="color:{spanColor(span.kind)}">{spanKindLabel(span.kind)}</span>
+                        <span class="span-badge {badge.colorClass}">{badge.label}</span>
+                        <span class="span-dur">{formatMs(span.durationMs)}</span>
+                      </button>
+                      {#if hasErr && logGroupForSpan(span)}
+                        <button
+                          type="button"
+                          onclick={() => viewInLogs(span, selectedTrace?.startedAt)}
+                          class="context-link context-link--badge shrink-0"
                         >
-                        <span
-                          class="text-[10px] font-mono"
-                          style="color:{spanColor(span.kind)}"
-                          >{spanKindLabel(span.kind)}</span
-                        >
-                        <span class="text-[10px] font-mono {badge.colorClass}"
-                          >{badge.label}</span
-                        >
-                        <span
-                          class="ml-auto text-[10px] font-mono text-muted-foreground/70"
-                          >{formatMs(span.durationMs)}</span
-                        >
-                        {#if hasErr && span.kind === "lambda"}
-                          <button
-                            type="button"
-                            onclick={() => viewInLogs(span, selectedTrace?.startedAt)}
-                            class="inline-flex items-center gap-1 rounded border border-red/30 bg-red/8 px-1.5 py-0.5 text-[10px] font-mono text-destructive hover:bg-red/14 transition-colors shrink-0"
-                          >
-                            <ArrowUpRightIcon size={10} />
-                            View in context
-                          </button>
-                        {/if}
-                      </div>
-                      {#if span.meta && Object.keys(span.meta).length > 0}
-                        <div class="flex flex-wrap gap-x-3 gap-y-0.5 mt-1">
-                          {#each Object.entries(span.meta) as [k, v] (k)}
-                            <span
-                              class="text-[10px] font-mono text-muted-foreground/70"
-                            >
-                              <span class="text-muted-foreground">{k}</span>={v}
-                            </span>
-                          {/each}
-                        </div>
+                          <ArrowUpRightIcon size={10} />
+                          View in context
+                        </button>
                       {/if}
                     </div>
+                    {#if openSpan === i}
+                      <div class="span-meta" transition:slide={{ duration: 200 }}>
+                        {#if hasMeta}
+                          {#each Object.entries(span.meta ?? {}) as [k, v] (k)}
+                            <div class="meta-line">
+                              <span class="meta-k">{k}</span>
+                              <span class="meta-v">{v === "" ? "—" : v}</span>
+                            </div>
+                          {/each}
+                        {:else}
+                          <div class="meta-line"><span class="meta-v">No attributes</span></div>
+                        {/if}
+                      </div>
+                    {/if}
                   </div>
                 {/each}
               </div>
             </div>
           {:else}
             <div class="py-10 text-center">
-              <p class="text-xs text-muted-foreground/70">
+              <p class="text-[11px] tx-tertiary">
                 No span data available for this trace
               </p>
             </div>
@@ -1047,7 +1089,7 @@
         </div>
       {:else if filteredTraces.length === 0 && searchQuery}
         <div class="flex-1 pl-4 py-12 text-center">
-          <p class="text-xs text-muted-foreground/70">
+          <p class="text-[11px] tx-tertiary">
             No traces match "{searchQuery}"
           </p>
         </div>
@@ -1068,5 +1110,489 @@
     to {
       stroke-dashoffset: 0;
     }
+  }
+
+  /* ─── Tokens ─── */
+  .xray :global(.tx-primary) { color: var(--text-primary); }
+  .xray :global(.tx-secondary) { color: var(--text-secondary); }
+  .xray :global(.tx-tertiary) { color: var(--text-tertiary); }
+  .xray :global(.tx-error) { color: var(--accent-red); }
+  .xray :global(.tx-warn) { color: var(--accent-amber); }
+  .xray :global(.tx-ok) { color: var(--accent-green); }
+  .xray :global(.bd-subtle) { border-color: var(--border-subtle); }
+  .xray :global(.bg-el) { background: var(--bg-element); }
+  .xray :global(.mono) { font-family: var(--font-mono, ui-monospace, monospace); }
+
+  /* ─── Panels ─── */
+  .panel {
+    border: 1px solid var(--border-subtle);
+    border-radius: 12px;
+    background: var(--bg-stage);
+    padding: 14px 16px;
+    animation: panelIn 320ms var(--ease-snappy) both;
+  }
+  @keyframes panelIn {
+    from { opacity: 0; transform: translateY(6px); }
+  }
+  .section-label {
+    font-size: 10px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-tertiary);
+    margin-bottom: 12px;
+  }
+
+  /* ─── Race controls ─── */
+  .race-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .field {
+    appearance: none;
+    -webkit-appearance: none;
+    height: 30px;
+    padding: 0 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-app);
+    color: var(--text-primary);
+    font-size: 12px;
+    outline: none;
+    transition: border-color 120ms ease, background 120ms ease;
+  }
+  select.field {
+    appearance: none;
+    -webkit-appearance: none;
+    padding-right: 26px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6' fill='none'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%23888' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+  }
+  .field::placeholder { color: var(--text-tertiary); }
+  .field:hover { border-color: var(--border-default); }
+  .field:focus { border-color: var(--border-focus); }
+
+  /* ─── Segmented control ─── */
+  .segmented {
+    display: inline-flex;
+    height: 30px;
+    padding: 2px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-app);
+    gap: 2px;
+  }
+  .segmented-opt {
+    cursor: pointer;
+    padding: 0 10px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    color: var(--text-tertiary);
+    background: transparent;
+    transition: color 120ms ease, background 120ms ease;
+  }
+  .segmented-opt:hover { color: var(--text-secondary); background: var(--bg-element-hover); }
+  .segmented-opt.is-active { color: var(--text-primary); background: var(--bg-element); }
+
+  /* ─── Race session summary strip ─── */
+  .race-sessions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 2px;
+  }
+  .race-session-item {
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+    background: transparent;
+    font-size: 11px;
+    color: var(--text-secondary);
+    transition: border-color 120ms ease, background 120ms ease, color 120ms ease;
+  }
+  .race-session-item:hover { border-color: var(--border-default); background: var(--bg-element-hover); }
+  .race-session-item.is-active {
+    border-color: var(--border-default);
+    background: var(--bg-element);
+    color: var(--text-primary);
+  }
+  .race-session-id { color: var(--text-primary); }
+  .race-session-stat { color: var(--text-tertiary); }
+  .race-session-item.is-active .race-session-stat { color: var(--text-secondary); }
+
+  /* ─── Pills / buttons ─── */
+  .pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 22px;
+    padding: 0 9px;
+    border-radius: 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    border: 1px solid var(--border-subtle);
+    white-space: nowrap;
+    background: transparent;
+  }
+  .pill-btn {
+    cursor: pointer;
+    height: 26px;
+    padding: 0 12px;
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease, transform 120ms ease;
+  }
+  .pill-btn:hover { color: var(--text-primary); border-color: var(--border-default); background: var(--bg-element-hover); }
+  .pill-btn:active { transform: scale(0.96); }
+  .pill-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+  .pill-btn.accent {
+    color: var(--accent-green);
+    border-color: color-mix(in srgb, var(--accent-green) 45%, transparent);
+    background: color-mix(in srgb, var(--accent-green) 10%, transparent);
+  }
+  .pill-btn.accent:hover { background: color-mix(in srgb, var(--accent-green) 16%, transparent); }
+  .race-toggle.is-active {
+    color: var(--text-primary);
+    border-color: var(--border-default);
+    background: var(--bg-element);
+  }
+  .pill-accent {
+    color: var(--accent-green);
+    border-color: color-mix(in srgb, var(--accent-green) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-green) 10%, transparent);
+  }
+  .pill-blue {
+    color: var(--color-blue, #60a5fa);
+    border-color: color-mix(in srgb, var(--color-blue, #60a5fa) 35%, transparent);
+    background: color-mix(in srgb, var(--color-blue, #60a5fa) 10%, transparent);
+  }
+  .status-pill { border-radius: 8px; padding: 0 10px; }
+  .status-pill.status-error {
+    color: var(--accent-red);
+    border-color: color-mix(in srgb, var(--accent-red) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-red) 8%, transparent);
+  }
+  .status-pill.status-warn {
+    color: var(--accent-amber);
+    border-color: color-mix(in srgb, var(--accent-amber) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-amber) 8%, transparent);
+  }
+  .status-pill.status-ok {
+    color: var(--accent-green);
+    border-color: color-mix(in srgb, var(--accent-green) 50%, transparent);
+    background: color-mix(in srgb, var(--accent-green) 10%, transparent);
+  }
+
+  :global(body.is-resizing) {
+    cursor: col-resize !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+  }
+
+  /* ─── Trace list ─── */
+  .trace-split {
+    position: relative;
+    display: flex;
+    align-items: flex-start;
+  }
+  .trace-list-col {
+    flex-shrink: 0;
+    border-right: 1px solid var(--border-subtle);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    transition: width 180ms var(--ease-snappy), opacity 180ms var(--ease-snappy);
+  }
+  .trace-list-col.no-transition { transition: none; }
+  .trace-list-col.collapsed {
+    border-right: none;
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* ─── List resizer / collapse handle ─── */
+  .list-resizer {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 22px;
+    margin-left: -11px;
+    cursor: col-resize;
+    z-index: 10;
+    touch-action: none;
+    transition: left 180ms var(--ease-snappy);
+  }
+  .list-resizer.resizing { transition: none; }
+  .list-resizer .resizer-line {
+    position: absolute;
+    top: 8px;
+    bottom: 8px;
+    left: 14px;
+    width: 1px;
+    background: transparent;
+    pointer-events: none;
+    transition: background 140ms ease;
+  }
+  .list-resizer:hover .resizer-line { background: var(--border-default); }
+  .list-resizer.resizing .resizer-line { background: var(--text-tertiary); }
+  .resizer-pill-handle {
+    position: absolute;
+    left: 7px;
+    top: 50%;
+    transform: translateY(-50%) scale(0.95);
+    width: 4px;
+    height: 44px;
+    border-radius: 9999px;
+    background: var(--text-tertiary);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 140ms ease, transform 140ms ease, background 100ms ease;
+  }
+  .list-resizer:hover .resizer-pill-handle,
+  .list-resizer.resizing .resizer-pill-handle {
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+  }
+  .list-resizer:hover .resizer-pill-handle { background: var(--text-secondary); }
+  .list-resizer.resizing .resizer-pill-handle { background: var(--text-primary); }
+  .list-resizer.collapsed .resizer-pill-handle {
+    opacity: 1;
+    pointer-events: none;
+    width: 16px;
+    height: 28px;
+    border-radius: 6px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-element);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transform: translateY(-50%) scale(1);
+  }
+  .list-resizer.collapsed:hover .resizer-pill-handle {
+    background: var(--bg-element-hover);
+    color: var(--text-primary);
+    border-color: var(--border-focus);
+  }
+  .resizer-width-badge {
+    position: absolute;
+    left: 24px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--bg-element);
+    border: 1px solid var(--border-default);
+    color: var(--text-primary);
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 10.5px;
+    padding: 2px 7px;
+    border-radius: 6px;
+    pointer-events: none;
+    white-space: nowrap;
+    z-index: 10;
+  }
+  .resizer-width-badge.collapse-hint { color: var(--accent-red); }
+  .trace-search {
+    padding: 10px;
+  }
+  .trace-list {
+    overflow-y: auto;
+    max-height: calc(100vh - 18rem);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .trace-item {
+    position: relative;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+  .trace-item:hover { background: var(--bg-element-hover); }
+  .trace-item.is-active {
+    background: var(--bg-element);
+    border-color: var(--border-default);
+  }
+  .trace-item.is-active::before {
+    content: "";
+    position: absolute;
+    left: 6px;
+    top: 8px;
+    bottom: 8px;
+    width: 2.5px;
+    border-radius: 2px;
+    background: var(--accent, var(--text-primary));
+    opacity: 0.9;
+  }
+  .trace-row {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 8px 10px 8px 12px;
+    border-radius: 8px;
+    transition: padding-left 200ms var(--ease-snappy);
+  }
+  .trace-item.is-active .trace-row { padding-left: 20px; }
+  .trace-context { padding: 0 12px 8px; }
+  .context-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 10px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    color: color-mix(in srgb, var(--accent-red) 70%, var(--text-tertiary));
+    transition: color 120ms ease;
+  }
+  .context-link:hover { color: var(--accent-red); }
+  .context-link--badge {
+    border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
+    background: color-mix(in srgb, var(--accent-red) 8%, transparent);
+    border-radius: 8px;
+    padding: 2px 6px;
+    color: var(--accent-red);
+  }
+  .context-link--badge:hover { background: color-mix(in srgb, var(--accent-red) 14%, transparent); }
+
+  /* ─── Flat blocks (log-style, no card) ─── */
+  .flat-block { animation: panelIn 320ms var(--ease-snappy) both; }
+  .flat-block + .flat-block { animation-delay: 40ms; }
+
+  /* ─── Timeline rows ─── */
+  .tl-rows { display: flex; flex-direction: column; gap: 1px; margin: 0 -8px; }
+  .tl-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    height: 28px;
+    padding: 0 10px 0 8px;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    text-align: left;
+    transition: background 120ms ease, border-color 120ms ease, padding-left 200ms var(--ease-snappy);
+  }
+  .tl-row:hover { background: var(--bg-element-hover); }
+  .tl-row.selected { background: var(--bg-element); border-color: var(--border-default); padding-left: 16px; }
+  .tl-row.selected::before,
+  .span-row.open::before {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 6px;
+    bottom: 6px;
+    width: 2.5px;
+    border-radius: 2px;
+    background: var(--accent);
+  }
+  .tl-step { width: 16px; flex-shrink: 0; text-align: right; font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); }
+  .tl-row.nested .tl-step { padding-left: 4px; }
+  .tl-kind {
+    width: 96px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font: 10px var(--font-mono, ui-monospace, monospace);
+  }
+  .tl-name {
+    width: 160px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font: 11px var(--font-mono, ui-monospace, monospace); color: var(--text-secondary);
+  }
+  .tl-track { position: relative; flex: 1; height: 6px; border-radius: 3px; background: var(--bg-element); overflow: hidden; }
+  .tl-row.nested .tl-track { height: 4px; }
+  .tl-row:hover .tl-track, .tl-row.selected .tl-track { background: var(--bg-element-hover); }
+  .tl-bar { position: absolute; top: 0; height: 100%; min-width: 2px; border-radius: 3px; }
+  .tl-dur { width: 48px; flex-shrink: 0; text-align: right; font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); }
+  .tl-ruler {
+    display: flex; justify-content: space-between;
+    margin-top: 6px; padding: 0 2px 0 calc(16px + 96px + 160px + 36px);
+    font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary);
+  }
+
+  /* ─── Span rows ─── */
+  .span-rows { display: flex; flex-direction: column; gap: 2px; margin: 0 -8px; }
+  .span-row {
+    position: relative;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    transition: background 120ms ease, border-color 120ms ease;
+  }
+  .span-row:hover { background: var(--bg-element-hover); }
+  .span-row.err { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  .span-row.err:hover { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+  .span-row.open { background: var(--bg-element); border-color: var(--border-default); }
+  .span-row.err.open {
+    background: color-mix(in srgb, var(--accent) 7%, var(--bg-element));
+    border-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  .span-head { display: flex; align-items: center; gap: 8px; padding-right: 8px; }
+  .span-toggle {
+    display: flex; align-items: center; gap: 8px;
+    flex: 1; min-width: 0; height: 32px;
+    padding-left: 8px;
+    text-align: left;
+    transition: padding-left 200ms var(--ease-snappy);
+  }
+  .span-row.open .span-toggle { padding-left: 16px; }
+  .span-toggle :global(.span-caret) {
+    flex-shrink: 0; color: var(--text-tertiary);
+    transition: transform 200ms var(--ease-snappy);
+  }
+  .span-row.open .span-toggle :global(.span-caret) { transform: rotate(90deg); }
+  .span-step { width: 14px; flex-shrink: 0; text-align: right; font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); }
+  .span-name { font-size: 11px; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  .span-kind, .span-badge { flex-shrink: 0; font: 10px var(--font-mono, ui-monospace, monospace); white-space: nowrap; }
+  .span-dur { margin-left: auto; flex-shrink: 0; font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); }
+  .span-meta {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    column-gap: 16px;
+    row-gap: 3px;
+    padding: 2px 12px 12px 55px;
+  }
+  .meta-line { display: contents; }
+  .meta-k { font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-secondary); }
+  .meta-v { font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); word-break: break-all; }
+  .context-link--badge { height: 22px; }
+
+  /* ─── Empty state ─── */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 56px 32px;
+  }
+  .empty-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 44px;
+    width: 44px;
+    border-radius: 10px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-element);
+    color: var(--text-tertiary);
+  }
+  .empty-legend {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    margin-top: 2px;
+    font-size: 10px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .legend-item { opacity: 0.75; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .panel, .flat-block { animation: none; }
+    .tl-row, .span-row, .span-toggle { transition: none; }
+    .trace-row, .trace-item { transition: none; }
   }
 </style>

@@ -93,8 +93,8 @@ export function buildWaterfall(spans: TraceSpan[], total: number): WaterfallRow[
     return spans.map((span) => ({ span, offsetPct: 0, widthPct: 2, nested: false }));
 
   let cum = 0;
-  let lambdaStartMs = 0;
-  let lambdaDurationMs = total;
+  let containerStartMs = 0;
+  let containerDurationMs = total;
   const rows: WaterfallRow[] = [];
 
   for (const span of spans) {
@@ -103,13 +103,13 @@ export function buildWaterfall(spans: TraceSpan[], total: number): WaterfallRow[
 
     let offsetMs: number;
     if (nested) {
-      const lambdaEnd = lambdaStartMs + lambdaDurationMs;
-      offsetMs = Math.max(lambdaStartMs, lambdaEnd - span.durationMs);
+      const containerEnd = containerStartMs + containerDurationMs;
+      offsetMs = Math.max(containerStartMs, containerEnd - span.durationMs);
     } else {
       offsetMs = cum;
-      if (kind === "lambda") {
-        lambdaStartMs = cum;
-        lambdaDurationMs = span.durationMs;
+      if (kind === "lambda" || kind === "ecs") {
+        containerStartMs = cum;
+        containerDurationMs = span.durationMs;
       }
       cum += span.durationMs;
     }
@@ -138,5 +138,7 @@ export function traceTitle(trace: RequestTrace): string {
   if (ext) return `Direct invoke from ${ext.name}`;
   const fn = trace.spans.find((s) => s.kind === "lambda");
   if (fn) return `Invoke: ${fn.name}`;
+  const task = trace.spans.find((s) => s.kind === "ecs");
+  if (task) return `RunTask: ${task.name}`;
   return `trace:${trace.id.slice(0, 8)}`;
 }

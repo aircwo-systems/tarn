@@ -168,6 +168,7 @@ export interface FetchLogEventsParams {
   stream?: string;
   cursor?: string;
   order?: "asc" | "desc";
+  groups?: string[];
 }
 
 export async function fetchLogEvents(
@@ -210,6 +211,7 @@ export async function fetchAllLogEvents(
   if (params.stream) query.set("stream", params.stream);
   if (params.cursor) query.set("cursor", params.cursor);
   if (params.order) query.set("order", params.order);
+  if (params.groups && params.groups.length > 0) query.set("groups", params.groups.join(","));
 
   const qs = query.toString();
   const url = endpoint(`/_tarn/admin/logs/events-all${qs ? "?" + qs : ""}`);
