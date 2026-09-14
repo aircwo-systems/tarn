@@ -285,3 +285,83 @@ func TestCreateFunctionWithLayersReturnsAWSLayerObjects(t *testing.T) {
 		t.Fatalf("unexpected layer arn %q", resp.Layers[0].Arn)
 	}
 }
+
+// TestCreateFunctionDefaultsPackageTypeToZip guards Terraform's
+// aws_lambda_function ForceNew-on-package_type behaviour: CreateFunction's
+// response (and later GetFunction/GetFunctionConfiguration reads) must
+// always carry a PackageType, or a plan sees the attribute go from "Zip" to
+// unset and replaces the function every time.
+func TestCreateFunctionDefaultsPackageTypeToZip(t *testing.T) {
+	h := newLambdaHandler(t)
+
+	body := `{
+		"FunctionName":"zip-fn",
+		"Runtime":"nodejs20.x",
+		"Handler":"index.handler",
+		"Role":"arn:aws:iam::000000000000:role/test"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/2015-03-31/functions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.CreateFunction(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		PackageType string `json:"PackageType"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if resp.PackageType != "Zip" {
+		t.Fatalf("expected PackageType Zip, got %q", resp.PackageType)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/2015-03-31/functions/zip-fn/configuration", nil)
+	getReq.SetPathValue("name", "zip-fn")
+	getRec := httptest.NewRecorder()
+	h.GetFunctionConfiguration(getRec, getReq)
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GetFunctionConfiguration status=%d body=%s", getRec.Code, getRec.Body.String())
+	}
+	var getResp struct {
+		PackageType string `json:"PackageType"`
+	}
+	if err := json.NewDecoder(getRec.Body).Decode(&getResp); err != nil {
+		t.Fatalf("decode GetFunctionConfiguration body: %v", err)
+	}
+	if getResp.PackageType != "Zip" {
+		t.Fatalf("expected GetFunctionConfiguration PackageType Zip, got %q", getResp.PackageType)
+	}
+}
+
+// TestCreateFunctionWithImageUriInfersImagePackageType guards the "Image"
+// half of the default: an explicit Code.ImageUri (no PackageType given)
+// should still report PackageType Image, matching AWS's own inference.
+func TestCreateFunctionWithImageUriInfersImagePackageType(t *testing.T) {
+	h := newLambdaHandler(t)
+
+	body := `{
+		"FunctionName":"image-fn",
+		"Runtime":"nodejs20.x",
+		"Handler":"index.handler",
+		"Role":"arn:aws:iam::000000000000:role/test",
+		"Code":{"ImageUri":"000000000000.dkr.ecr.us-east-1.amazonaws.com/image-fn:latest"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/2015-03-31/functions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	h.CreateFunction(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		PackageType string `json:"PackageType"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if resp.PackageType != "Image" {
+		t.Fatalf("expected PackageType Image, got %q", resp.PackageType)
+	}
+}

@@ -249,3 +249,58 @@ func TestResolveLayerDirsFailsForUnavailableLocalAccountLayer(t *testing.T) {
 		t.Fatalf("expected ResolveLayerDirs to fail for missing local-account layer")
 	}
 }
+
+// TestCreateFunctionDefaultsPackageType guards the service-level default:
+// CreateFunction must set PackageType to "Zip" when unset, or "Image" when
+// an ImageURI was supplied, so Terraform never sees the field flip from set
+// to unset across a plan.
+func TestCreateFunctionDefaultsPackageType(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	store := NewStore(cfg)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init store: %v", err)
+	}
+	svc := NewService(cfg, store, nil, nil, nil)
+
+	zipFn, err := svc.CreateFunction(context.Background(), &types.FunctionConfig{
+		FunctionName: "package-type-zip",
+		Runtime:      types.RuntimeNodeJS20,
+		Handler:      "index.handler",
+		Role:         "arn:aws:iam::000000000000:role/test",
+	}, nil)
+	if err != nil {
+		t.Fatalf("create function: %v", err)
+	}
+	if zipFn.PackageType != "Zip" {
+		t.Fatalf("expected default PackageType Zip, got %q", zipFn.PackageType)
+	}
+
+	imageFn, err := svc.CreateFunction(context.Background(), &types.FunctionConfig{
+		FunctionName: "package-type-image",
+		Runtime:      types.RuntimeNodeJS20,
+		Handler:      "index.handler",
+		Role:         "arn:aws:iam::000000000000:role/test",
+		ImageURI:     "000000000000.dkr.ecr.us-east-1.amazonaws.com/package-type-image:latest",
+	}, nil)
+	if err != nil {
+		t.Fatalf("create function: %v", err)
+	}
+	if imageFn.PackageType != "Image" {
+		t.Fatalf("expected PackageType Image when ImageURI is set, got %q", imageFn.PackageType)
+	}
+
+	explicitFn, err := svc.CreateFunction(context.Background(), &types.FunctionConfig{
+		FunctionName: "package-type-explicit",
+		Runtime:      types.RuntimeNodeJS20,
+		Handler:      "index.handler",
+		Role:         "arn:aws:iam::000000000000:role/test",
+		PackageType:  "Image",
+	}, nil)
+	if err != nil {
+		t.Fatalf("create function: %v", err)
+	}
+	if explicitFn.PackageType != "Image" {
+		t.Fatalf("expected explicit PackageType to be preserved, got %q", explicitFn.PackageType)
+	}
+}

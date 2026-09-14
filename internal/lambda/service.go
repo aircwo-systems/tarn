@@ -88,6 +88,13 @@ func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, 
 	if fn.Version == "" {
 		fn.Version = "$LATEST"
 	}
+	if fn.PackageType == "" {
+		if fn.ImageURI != "" {
+			fn.PackageType = "Image"
+		} else {
+			fn.PackageType = "Zip"
+		}
+	}
 
 	fn.FunctionArn = fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", s.cfg.Region, s.cfg.AccountID, fn.FunctionName)
 	// Skip the Pending→Active transition dance: return Active immediately so

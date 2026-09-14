@@ -111,9 +111,13 @@ func (h *Handler) CreateFunction(w http.ResponseWriter, r *http.Request) {
 		Layers:           req.Layers,
 		Tags:             req.Tags,
 		DeadLetterConfig: req.DeadLetterConfig,
+		PackageType:      req.PackageType,
 	}
 	if req.Environment != nil {
 		fn.Environment = req.Environment.Variables
+	}
+	if req.Code != nil {
+		fn.ImageURI = req.Code.ImageUri
 	}
 
 	var code []byte
@@ -888,12 +892,14 @@ type createFunctionRequest struct {
 	Layers           []string                `json:"Layers,omitempty"`
 	Tags             map[string]string       `json:"Tags,omitempty"`
 	DeadLetterConfig *types.DeadLetterConfig `json:"DeadLetterConfig,omitempty"`
+	PackageType      string                  `json:"PackageType,omitempty"`
 }
 
 type codeInput struct {
 	ZipFile  string `json:"ZipFile,omitempty"`  // base64-encoded zip
 	S3Bucket string `json:"S3Bucket,omitempty"` // S3 bucket containing deployment package
 	S3Key    string `json:"S3Key,omitempty"`    // S3 key of deployment package zip
+	ImageUri string `json:"ImageUri,omitempty"` // container image URI (PackageType Image)
 }
 
 type envInput struct {
@@ -917,6 +923,10 @@ func toFunctionConfigResponse(fn *types.FunctionConfig) map[string]any {
 		return map[string]any{}
 	}
 
+	packageType := fn.PackageType
+	if packageType == "" {
+		packageType = "Zip"
+	}
 	result := map[string]any{
 		"FunctionName": fn.FunctionName,
 		"FunctionArn":  fn.FunctionArn,
@@ -930,6 +940,7 @@ func toFunctionConfigResponse(fn *types.FunctionConfig) map[string]any {
 		"CodeSize":     fn.CodeSize,
 		"Version":      fn.Version,
 		"LastModified": fn.LastModified,
+		"PackageType":  packageType,
 	}
 
 	if fn.Description != "" {
