@@ -3,6 +3,7 @@
   import SectionHeader from "./section-header.svelte";
   import FunctionList from "$lib/components/functions/function-list.svelte";
   import FunctionDetail from "$lib/components/functions/function-detail.svelte";
+  import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
   import {
     getDashboard,
     getDashboardFilters,
@@ -73,9 +74,9 @@
     </div>
   {:else}
     <div class="layout">
-      <aside class="list">
+      <RcResizableAside storageKey="tarn-functions-list-width">
         <FunctionList {functions} selectedName={selected?.name ?? null} onselect={select} />
-      </aside>
+      </RcResizableAside>
       {#if selected}
         {#key selected.name}
           <FunctionDetail fn={selected} data={dashboard.data} />
@@ -88,13 +89,11 @@
 <style>
   .functions { display: flex; flex-direction: column; min-height: 100%; }
   .layout {
-    display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 28px; padding: 20px 0 48px;
-    max-width: 1320px;
+    display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 28px; padding: 20px 0 48px;
+    max-width: 1320px; align-items: start;
   }
-  .list { position: sticky; top: 0; align-self: start; max-height: calc(100vh - 140px); overflow-y: auto; padding-right: 2px; }
   @media (max-width: 900px) {
     .layout { grid-template-columns: minmax(0, 1fr); }
-    .list { position: static; max-height: 260px; }
   }
 
   .filter {

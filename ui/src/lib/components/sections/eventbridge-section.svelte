@@ -5,6 +5,7 @@
   import SectionHeader from "./section-header.svelte";
   import RcButton from "$lib/components/rack/rc-button.svelte";
   import RcPanel from "$lib/components/rack/rc-panel.svelte";
+  import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
   import RuleList from "$lib/components/eventbridge/rule-list.svelte";
   import RuleDetail from "$lib/components/eventbridge/rule-detail.svelte";
   import RuleForm, { type RuleDraft } from "$lib/components/eventbridge/rule-form.svelte";
@@ -175,9 +176,9 @@
     </div>
   {:else}
     <div class="layout">
-      <aside class="list">
+      <RcResizableAside storageKey="tarn-eventbridge-list-width">
         <RuleList {rules} selectedName={creating ? null : (selected?.name ?? null)} onselect={select} />
-      </aside>
+      </RcResizableAside>
       {#if creating}
         <RcPanel title="New rule" description="Schedule first, then add targets once it exists.">
           <RuleForm initial={blankDraft} creating submitLabel="Create rule" onsubmit={create} oncancel={() => (creating = false)} />
@@ -203,13 +204,11 @@
 <style>
   .eventbridge { display: flex; flex-direction: column; min-height: 100%; }
   .layout {
-    display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 28px; padding: 20px 0 48px;
+    display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 28px; padding: 20px 0 48px;
     max-width: 1320px; align-items: start;
   }
-  .list { position: sticky; top: 0; align-self: start; max-height: calc(100vh - 140px); overflow-y: auto; padding-right: 2px; }
   @media (max-width: 900px) {
     .layout { grid-template-columns: minmax(0, 1fr); }
-    .list { position: static; max-height: 260px; }
   }
 
   .error {
