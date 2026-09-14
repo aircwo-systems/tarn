@@ -263,6 +263,48 @@ func TestRootDispatchServesUIForBrowserRequests(t *testing.T) {
 	}
 }
 
+func TestRootDispatchServesReferencedUIAsset(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.UIEnabled = true
+
+	handler := newTestHTTPHandlerWithConfig(t, cfg)
+
+	rootReq := httptest.NewRequest(http.MethodGet, "/", nil)
+	rootReq.Header.Set("Accept", "text/html,application/xhtml+xml")
+	rootRec := httptest.NewRecorder()
+	handler.ServeHTTP(rootRec, rootReq)
+	if rootRec.Code != http.StatusOK {
+		t.Fatalf("root ui status=%d body=%s", rootRec.Code, rootRec.Body.String())
+	}
+
+	const importPrefix = `import("`
+	rootBody := rootRec.Body.String()
+	importStart := strings.Index(rootBody, importPrefix)
+	if importStart < 0 {
+		t.Fatalf("ui shell does not reference a module asset: %q", rootBody)
+	}
+	assetStart := importStart + len(importPrefix)
+	assetEnd := strings.Index(rootBody[assetStart:], `")`)
+	if assetEnd < 0 {
+		t.Fatalf("could not parse module asset from ui shell: %q", rootBody[assetStart:])
+	}
+	assetPath := rootBody[assetStart : assetStart+assetEnd]
+
+	assetReq := httptest.NewRequest(http.MethodGet, assetPath, nil)
+	assetRec := httptest.NewRecorder()
+	handler.ServeHTTP(assetRec, assetReq)
+	if assetRec.Code != http.StatusOK {
+		t.Fatalf("ui asset %s status=%d body=%s", assetPath, assetRec.Code, assetRec.Body.String())
+	}
+	if contentType := assetRec.Header().Get("Content-Type"); !strings.Contains(contentType, "javascript") {
+		t.Fatalf("ui asset %s content type=%q, body=%q", assetPath, contentType, assetRec.Body.String())
+	}
+	if strings.Contains(strings.ToLower(assetRec.Body.String()), "<!doctype html>") {
+		t.Fatalf("ui asset %s unexpectedly served the html shell", assetPath)
+	}
+}
+
 func TestRootDispatchKeepsS3ListBucketsForNonHTMLRequests(t *testing.T) {
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()
