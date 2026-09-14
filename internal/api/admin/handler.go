@@ -1171,6 +1171,168 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+func (h *Handler) listECSOverview() *ecsOverview {
+	if h.ecs == nil {
+		return nil
+	}
+
+	overview := &ecsOverview{
+		Clusters:        make([]ecsClusterSummary, 0),
+		Services:        make([]ecsServiceSummary, 0),
+		Tasks:           make([]ecsTaskSummary, 0),
+		TaskDefinitions: make([]ecsTaskDefinitionSummary, 0),
+	}
+
+	for _, status := range []string{
+		types.TaskDefinitionStatusActive,
+		types.TaskDefinitionStatusInactive,
+		types.TaskDefinitionStatusDeleteInProgress,
+	} {
+		nextToken := ""
+		for {
+			definitions, listErr := h.ecs.ListTaskDefinitions(&types.ListTaskDefinitionsInput{
+				MaxResults: 100,
+				NextToken:  nextToken,
+				Sort:       types.TaskDefinitionSortAscending,
+				Status:     status,
+			})
+			if listErr != nil || definitions == nil {
+				break
+			}
+			for _, arn := range definitions.TaskDefinitionArns {
+				described, describeErr := h.ecs.DescribeTaskDefinition(arn)
+				if describeErr != nil || described == nil || described.TaskDefinition == nil {
+					continue
+				}
+				td := described.TaskDefinition
+				overview.TaskDefinitions = append(overview.TaskDefinitions, ecsTaskDefinitionSummary{
+					Arn:               td.TaskDefinitionArn,
+					TaskDefinitionArn: td.TaskDefinitionArn,
+					Name:              td.Family,
+					Family:            td.Family,
+					Revision:          td.Revision,
+					Status:            td.Status,
+				})
+			}
+			nextToken = definitions.NextToken
+			if nextToken == "" {
+				break
+			}
+		}
+	}
+
+	clusterList, err := h.ecs.ListClusters(&types.ListClustersInput{})
+	if err != nil || clusterList == nil || len(clusterList.ClusterArns) == 0 {
+		return overview
+	}
+
+	clusterDetails, err := h.ecs.DescribeClusters(&types.DescribeClustersInput{
+		Clusters: clusterList.ClusterArns,
+	})
+	if err != nil || clusterDetails == nil {
+		return overview
+	}
+
+	for _, cluster := range clusterDetails.Clusters {
+		overview.Clusters = append(overview.Clusters, ecsClusterSummary{
+			Name:           cluster.ClusterName,
+			Arn:            cluster.ClusterArn,
+			Status:         cluster.Status,
+			RunningTasks:   cluster.RunningTasksCount,
+			PendingTasks:   cluster.PendingTasksCount,
+			ActiveServices: cluster.ActiveServicesCount,
+		})
+
+		serviceList, err := h.ecs.ListServices(&types.ListServicesInput{Cluster: cluster.ClusterArn})
+		if err == nil && serviceList != nil && len(serviceList.ServiceArns) > 0 {
+			serviceDetails, describeErr := h.ecs.DescribeServices(&types.DescribeServicesInput{
+				Cluster:  cluster.ClusterArn,
+				Services: serviceList.ServiceArns,
+			})
+			if describeErr == nil && serviceDetails != nil {
+				for _, service := range serviceDetails.Services {
+					overview.Services = append(overview.Services, ecsServiceSummary{
+						Name:              service.ServiceName,
+						Arn:               service.ServiceArn,
+						ClusterArn:        service.ClusterArn,
+						TaskDefinitionArn: service.TaskDefinitionArn,
+						DesiredCount:      service.DesiredCount,
+						RunningCount:      service.RunningCount,
+						PendingCount:      service.PendingCount,
+						Status:            service.Status,
+						LaunchType:        service.LaunchType,
+					})
+				}
+			}
+		}
+
+		taskList, err := h.ecs.ListTasks(&types.ListTasksInput{Cluster: cluster.ClusterArn})
+		if err == nil && taskList != nil && len(taskList.TaskArns) > 0 {
+			taskDetails, describeErr := h.ecs.DescribeTasks(&types.DescribeTasksInput{
+				Cluster: cluster.ClusterArn,
+				Tasks:   taskList.TaskArns,
+			})
+			if describeErr == nil && taskDetails != nil {
+				for _, task := range taskDetails.Tasks {
+					var containers []ecsTaskContainerSummary
+					for _, c := range task.Containers {
+						var bindings []ecsNetworkBindingSummary
+						for _, nb := range c.NetworkBindings {
+							bindings = append(bindings, ecsNetworkBindingSummary{
+								ContainerPort: nb.ContainerPort,
+								HostPort:      nb.HostPort,
+								Protocol:      nb.Protocol,
+								BindIP:        nb.BindIP,
+							})
+						}
+						containers = append(containers, ecsTaskContainerSummary{
+							Name:            c.Name,
+							LastStatus:      c.LastStatus,
+							ExitCode:        c.ExitCode,
+							Reason:          c.Reason,
+							NetworkBindings: bindings,
+						})
+					}
+					overview.Tasks = append(overview.Tasks, ecsTaskSummary{
+						Arn:               task.TaskArn,
+						ClusterArn:        task.ClusterArn,
+						TaskDefinitionArn: task.TaskDefinitionArn,
+						Group:             task.Group,
+						LaunchType:        task.LaunchType,
+						LastStatus:        task.LastStatus,
+						DesiredStatus:     task.DesiredStatus,
+						StartedAt:         task.StartedAt,
+						StoppedAt:         task.StoppedAt,
+						StoppedReason:     task.StoppedReason,
+						Containers:        containers,
+					})
+				}
+			}
+		}
+	}
+
+	sort.Slice(overview.Clusters, func(i, j int) bool {
+		return overview.Clusters[i].Name < overview.Clusters[j].Name
+	})
+	sort.Slice(overview.Services, func(i, j int) bool {
+		if overview.Services[i].ClusterArn == overview.Services[j].ClusterArn {
+			return overview.Services[i].Name < overview.Services[j].Name
+		}
+		return overview.Services[i].ClusterArn < overview.Services[j].ClusterArn
+	})
+	sort.Slice(overview.Tasks, func(i, j int) bool {
+		return overview.Tasks[i].Arn < overview.Tasks[j].Arn
+	})
+	sort.Slice(overview.TaskDefinitions, func(i, j int) bool {
+		if overview.TaskDefinitions[i].Family == overview.TaskDefinitions[j].Family {
+			return overview.TaskDefinitions[i].Revision < overview.TaskDefinitions[j].Revision
+		}
+		return overview.TaskDefinitions[i].Family < overview.TaskDefinitions[j].Family
+	})
+
+	return overview
+}
+
 func (h *Handler) listDynamoOverview() ([]dynamodbTableSummary, []dynamodbStreamSummary, []*types.DynamoDBTable, []string) {
 	if h.dynamodb == nil {
 		return nil, nil, nil, nil
