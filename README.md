@@ -22,7 +22,7 @@ Open-source AWS cloud emulator for local development and testing. Single binary,
 ⚠️ **Beta Project** — Tarn is under active development. Expect breaking changes and API updates as we finalize the MVP. Not recommended for production workloads yet.
 
 **Known Limitations:**
-- **EventBridge**: Only scheduled rules (no event patterns or `PutEvents`)
+- **EventBridge**: Default-bus rules and custom events; ECS and Lambda targets are local-only
 - **S3**: Path-style only (no virtual-hosted style)
 
 See [GitHub issues](https://github.com/aircwo-systems/tarn/issues) for planned features and roadmap.

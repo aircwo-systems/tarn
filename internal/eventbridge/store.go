@@ -203,6 +203,7 @@ func cloneRule(src *types.EventBridgeRule) *types.EventBridgeRule {
 				}
 				target.InputTransformer = &cloned
 			}
+			target.EcsParameters = cloneECSParameters(target.EcsParameters)
 			dst.Targets[i] = target
 		}
 	}

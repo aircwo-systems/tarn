@@ -2,7 +2,7 @@
 
 Scheduled and event-driven workflows.
 
-<span class="status-badge status-partial">Partial Support</span> — Scheduled rules, event-pattern rules, `PutEvents`, and Lambda targets
+<span class="status-badge status-partial">Partial Support</span> — Scheduled rules, event-pattern rules, `PutEvents`, and local Lambda/ECS targets
 
 ## Supported Operations
 
@@ -14,7 +14,7 @@ Scheduled and event-driven workflows.
 | DeleteRule | Supported | |
 | EnableRule | Supported | |
 | DisableRule | Supported | |
-| PutTargets | Supported | Lambda targets only; `Input`, `InputPath`, and `InputTransformer` are supported |
+| PutTargets | Supported | Lambda and ECS targets; `Input`, `InputPath`, and `InputTransformer` are supported |
 | RemoveTargets | Supported | |
 | ListTargetsByRule | Supported | |
 | ListRuleNamesByTarget | Supported | |
@@ -157,5 +157,5 @@ await events.send(new PutEventsCommand({
 ## Known Limitations
 
 - No dead letter queues
-- No SQS or SNS targets
+- No SQS, SNS, or API destination targets
 - Default event bus only

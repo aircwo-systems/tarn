@@ -11,10 +11,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/aircwo-systems/tarn/internal/config"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	"github.com/google/uuid"
 )
 
 const (
@@ -25,14 +25,22 @@ const (
 	defaultTargetListLimit    = 100
 	maxTargetListLimit        = 100
 	defaultRuleFireTimeout    = 30 * time.Second
+	defaultECSRuleConcurrency = 10
 	schedulerTickInterval     = 1 * time.Second
 	manualInvocationTypeEvent = "Event"
+	ecsEventPayloadEnvName    = "EVENT_PAYLOAD"
+	maxEventPayloadEnvBytes   = types.TaskEventPayloadEnvMaxBytes
 )
 
 // LambdaInterface defines the Lambda behavior required by EventBridge.
 type LambdaInterface interface {
 	Invoke(ctx context.Context, input *types.InvokeInput) (*types.InvokeOutput, error)
 }
+
+// TaskRunner is the ECS behavior required by EventBridge. It is an alias to
+// the shared ECS seam so existing callers can pass the concrete runner or a
+// Docker-free fake without changing NewService's constructor signature.
+type TaskRunner = types.TaskRunner
 
 // ServiceError is returned for AWS-compatible API failures.
 type ServiceError struct {
@@ -94,11 +102,16 @@ type RaceResult struct {
 
 // Service manages EventBridge scheduled rules and target execution.
 type Service struct {
-	cfg        *config.Config
-	store      *Store
-	lambda     LambdaInterface
-	traceStore *tracesvc.Store
-	collector  *tracesvc.Collector
+	cfg          *config.Config
+	store        *Store
+	lambda       LambdaInterface
+	taskRunner   TaskRunner
+	traceStore   *tracesvc.Store
+	collector    *tracesvc.Collector
+	taskRunnerMu sync.RWMutex
+	ecsLimitMu   sync.Mutex
+	ecsInFlight  map[string]int
+	ecsLimit     int
 
 	schedulerDone chan struct{}
 	schedulerWG   sync.WaitGroup
@@ -115,11 +128,22 @@ func NewService(cfg *config.Config, store *Store, lambda LambdaInterface) *Servi
 		store:         store,
 		lambda:        lambda,
 		schedulerDone: make(chan struct{}),
+		ecsInFlight:   make(map[string]int),
+		ecsLimit:      defaultECSRuleConcurrency,
 	}
 }
 
 func (s *Service) SetTraceStore(ts *tracesvc.Store)   { s.traceStore = ts }
 func (s *Service) SetCollector(c *tracesvc.Collector) { s.collector = c }
+
+// SetTaskRunner wires ECS RunTask/StopTask behavior into EventBridge. It is
+// intentionally a setter so the existing NewService(cfg, store, lambda)
+// callers remain source-compatible while account wiring can attach ECS later.
+func (s *Service) SetTaskRunner(runner TaskRunner) {
+	s.taskRunnerMu.Lock()
+	s.taskRunner = runner
+	s.taskRunnerMu.Unlock()
+}
 
 func (s *Service) Init() error {
 	return s.store.Init()
@@ -420,7 +444,7 @@ func (s *Service) PutTargets(ruleName, eventBusName string, targets []types.Even
 		}
 		seenRequestIDs[id] = struct{}{}
 
-		canonicalArn, canonicalErr := canonicalLambdaTargetARN(s.cfg, strings.TrimSpace(target.Arn))
+		canonicalArn, canonicalErr := canonicalEventBridgeTargetARN(s.cfg, &target)
 		if canonicalErr != nil {
 			failed = append(failed, FailedEntry{TargetID: id, ErrorCode: "ValidationException", ErrorMessage: canonicalErr.Error()})
 			continue
@@ -429,6 +453,7 @@ func (s *Service) PutTargets(ruleName, eventBusName string, targets []types.Even
 		next := target
 		next.ID = id
 		next.Arn = canonicalArn
+		next.EcsParameters = cloneECSParameters(target.EcsParameters)
 
 		prev := existingByID[id]
 		next.LastInvokedAt = prev.LastInvokedAt
@@ -555,7 +580,7 @@ func (s *Service) ListRuleNamesByTarget(targetARN, eventBusName string, limit in
 		return nil, "", validationError("Parameter NextToken is invalid")
 	}
 
-	canonical, canonicalErr := canonicalLambdaTargetARN(s.cfg, targetARN)
+	canonical, canonicalErr := canonicalTargetARNReference(s.cfg, targetARN)
 	if canonicalErr != nil {
 		return nil, "", validationError("Parameter TargetArn is invalid: %v", canonicalErr)
 	}
@@ -736,6 +761,516 @@ func (s *Service) dispatchEvent(rules []*types.EventBridgeRule, eventJSON []byte
 	}
 }
 
+// targetDispatchOptions captures the three known behavioral differences between the
+// event-pattern dispatch path (fireTargets) and the scheduled-rule dispatch path
+// (fireRule). They are preserved here rather than silently unified, since they were
+// present before this refactor and are not obviously a bug.
+type targetDispatchOptions struct {
+	// ruleKey identifies the owning rule for ECS in-flight accounting. It is
+	// populated by both dispatch call sites; the target ID is only a fallback
+	// for direct unit calls to dispatchTarget.
+	ruleKey string
+	// invokedAt, when non-nil, is stamped onto target.LastInvokedAt verbatim instead of
+	// the actual post-invoke wall-clock time. fireRule stamps every target with the
+	// rule's fire-start time; fireTargets stamps the real invoke-completion time.
+	invokedAt *time.Time
+	// earlyFailureSpans controls whether a span is recorded for a target that fails
+	// before reaching s.lambda.Invoke (invalid ARN, bad payload, lambda unavailable).
+	// fireRule records these; fireTargets does not.
+	earlyFailureSpans bool
+	// errorDetailMeta adds an "error" Meta key (in addition to "targetId") to a failed
+	// invoke's span. fireRule sets this; fireTargets does not.
+	errorDetailMeta bool
+	// correlationID is the rule-fire's trace correlation ID. dispatchECSTarget
+	// forwards it onto the RunTaskInput so the ECS runner's own trace (RUNNING
+	// and STOPPED) shares it with this EventBridge delivery's trace, instead
+	// of minting an unrelated one.
+	correlationID string
+}
+
+// targetKind classifies a target ARN by delivery mechanism. ECS target ARNs
+// point at a cluster; all other non-ECS values retain the Lambda path for
+// backwards compatibility with bare function names.
+func targetKind(arn string) string {
+	if strings.HasPrefix(strings.TrimSpace(arn), "arn:aws:ecs:") {
+		return "ecs"
+	}
+	return "lambda"
+}
+
+// dispatchTarget delivers one event payload to one rule target and returns the spans
+// describing the delivery, plus whether delivery succeeded. It mutates
+// target.LastResult and target.LastInvokedAt in place; callers are still responsible
+// for persisting the owning rule via s.store.SaveRule. Kind-switching on the target ARN
+// lives here so a new target kind needs no changes at the call sites.
+func (s *Service) dispatchTarget(target *types.EventBridgeTarget, eventPayload []byte, opts targetDispatchOptions) (bool, []tracesvc.Span) {
+	if target == nil {
+		return false, nil
+	}
+	if target.EcsParameters != nil {
+		return s.dispatchECSTarget(target, eventPayload, opts)
+	}
+
+	switch targetKind(target.Arn) {
+	case "lambda":
+		return s.dispatchLambdaTarget(target, eventPayload, opts)
+	case "ecs":
+		return s.dispatchECSTarget(target, eventPayload, opts)
+	default:
+		target.LastResult = "ERROR: unsupported target kind"
+		return false, nil
+	}
+}
+
+func (s *Service) dispatchLambdaTarget(target *types.EventBridgeTarget, eventPayload []byte, opts targetDispatchOptions) (bool, []tracesvc.Span) {
+	var spans []tracesvc.Span
+
+	functionName, fnErr := lambdaNameFromTarget(target.Arn)
+	if fnErr != nil {
+		target.LastResult = "ERROR: invalid target ARN"
+		if opts.earlyFailureSpans {
+			spans = append(spans, tracesvc.Span{Kind: "lambda", Name: target.Arn, Status: "error"})
+		}
+		return false, spans
+	}
+
+	payload, payloadErr := buildTargetPayload(eventPayload, target)
+	if payloadErr != nil {
+		target.LastResult = "ERROR: " + payloadErr.Error()
+		if opts.earlyFailureSpans {
+			spans = append(spans, tracesvc.Span{Kind: "lambda", Name: functionName, Status: "error", Meta: map[string]string{"targetId": target.ID}})
+		}
+		return false, spans
+	}
+
+	if s.lambda == nil {
+		target.LastResult = "ERROR: lambda service unavailable"
+		if opts.earlyFailureSpans {
+			spans = append(spans, tracesvc.Span{Kind: "lambda", Name: functionName, Status: "error", Meta: map[string]string{"targetId": target.ID}})
+		}
+		return false, spans
+	}
+
+	invokeStart := time.Now()
+	if s.collector != nil {
+		s.collector.Begin(functionName)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), defaultRuleFireTimeout)
+	invokeOut, invokeErr := s.lambda.Invoke(ctx, &types.InvokeInput{
+		FunctionName:   functionName,
+		Payload:        payload,
+		InvocationType: manualInvocationTypeEvent,
+	})
+	cancel()
+	duration := time.Since(invokeStart).Milliseconds()
+
+	if opts.invokedAt != nil {
+		target.LastInvokedAt = opts.invokedAt
+	} else {
+		now := time.Now().UTC()
+		target.LastInvokedAt = &now
+	}
+
+	success := true
+	spanStatus := "ok"
+	meta := map[string]string{"targetId": target.ID}
+	if invokeErr != nil || (invokeOut != nil && invokeOut.FunctionError != "") {
+		detail := "invoke failed"
+		if invokeErr != nil {
+			detail = invokeErr.Error()
+		} else if invokeOut != nil && invokeOut.FunctionError != "" {
+			detail = invokeOut.FunctionError
+		}
+		target.LastResult = "ERROR: " + detail
+		spanStatus = "error"
+		success = false
+		if opts.errorDetailMeta {
+			meta["error"] = detail
+		}
+	} else {
+		target.LastResult = "OK"
+	}
+
+	spans = append(spans, tracesvc.Span{Kind: "lambda", Name: functionName, DurationMs: duration, Status: spanStatus, Meta: meta})
+	if s.collector != nil {
+		spans = append(spans, tracesvc.SubSpansToSpans(s.collector.CollectWithFlush(functionName))...)
+	}
+
+	return success, spans
+}
+
+// dispatchECSTarget transforms the event and starts one-shot ECS tasks through
+// the injected TaskRunner. RunTask is intentionally bounded to the dispatch
+// call: the runner owns the task's longer container lifecycle, while this
+// method records the EventBridge delivery span and target result.
+func (s *Service) dispatchECSTarget(target *types.EventBridgeTarget, eventPayload []byte, opts targetDispatchOptions) (bool, []tracesvc.Span) {
+	params := target.EcsParameters
+	family := ""
+	if params != nil {
+		family = taskDefinitionFamily(params.TaskDefinitionArn)
+	}
+
+	spanMeta := map[string]string{
+		"targetId":             target.ID,
+		"taskDefinitionFamily": family,
+	}
+	if target.Arn != "" {
+		spanMeta["clusterArn"] = target.Arn
+	}
+
+	fail := func(detail string) (bool, []tracesvc.Span) {
+		if detail == "" {
+			detail = "ECS target dispatch failed"
+		}
+		target.LastResult = "ERROR: " + detail
+		spanMeta["error"] = detail
+		return false, []tracesvc.Span{{
+			Kind:   "ecs",
+			Name:   family,
+			Status: "error",
+			Meta:   spanMeta,
+		}}
+	}
+
+	if params == nil {
+		return fail("EcsParameters are required for an ECS target")
+	}
+	if err := validateECSParameters(params); err != nil {
+		return fail(err.Error())
+	}
+
+	payload, payloadErr := buildTargetPayload(eventPayload, target)
+	if payloadErr != nil {
+		return fail(payloadErr.Error())
+	}
+	runInput, inputErr := buildECSTaskInput(target, payload, eventPayload)
+	if inputErr != nil {
+		return fail(inputErr.Error())
+	}
+	runInput.CorrelationID = opts.correlationID
+
+	ruleKey := opts.ruleKey
+	if ruleKey == "" {
+		ruleKey = targetRuleKey(target)
+	}
+	if !s.acquireECSRuleSlot(ruleKey) {
+		return fail(fmt.Sprintf("ThrottlingException: ECS target concurrency limit exceeded (limit %d)", s.ecsConcurrencyLimit()))
+	}
+	defer s.releaseECSRuleSlot(ruleKey)
+
+	runner := s.getTaskRunner()
+	if runner == nil {
+		return fail("ECS task runner is not configured")
+	}
+
+	invokeStart := time.Now()
+	ctx, cancel := context.WithTimeout(context.Background(), defaultRuleFireTimeout)
+	runOut, runErr := runner.RunTask(ctx, runInput)
+	cancel()
+	duration := time.Since(invokeStart).Milliseconds()
+	if runOut != nil {
+		duration = ecsTaskDuration(runOut.Tasks, duration)
+	}
+
+	if opts.invokedAt != nil {
+		target.LastInvokedAt = opts.invokedAt
+	} else {
+		now := time.Now().UTC()
+		target.LastInvokedAt = &now
+	}
+
+	spanMeta["taskCount"] = strconv.Itoa(runInput.Count)
+	if runOut != nil {
+		spanMeta["startedTasks"] = strconv.Itoa(len(runOut.Tasks))
+		if len(runOut.Tasks) > 0 {
+			spanMeta["taskArn"] = runOut.Tasks[0].TaskArn
+		}
+	}
+
+	success := runErr == nil
+	spanStatus := "ok"
+	detail := ""
+	if runErr != nil {
+		detail = runErr.Error()
+	} else if runOut == nil {
+		detail = "RunTask returned no output"
+	} else if len(runOut.Failures) > 0 {
+		detail = formatECSRunTaskFailures(runOut.Failures)
+	} else if len(runOut.Tasks) == 0 {
+		detail = "RunTask returned no tasks"
+	} else if stoppedTaskFailure := stoppedTaskFailure(runOut.Tasks); stoppedTaskFailure != "" {
+		detail = stoppedTaskFailure
+	}
+	if detail != "" {
+		success = false
+		spanStatus = "error"
+		target.LastResult = "ERROR: " + detail
+		spanMeta["error"] = detail
+	} else {
+		target.LastResult = "OK"
+	}
+
+	return success, []tracesvc.Span{{
+		Kind:       "ecs",
+		Name:       family,
+		DurationMs: duration,
+		Status:     spanStatus,
+		Meta:       spanMeta,
+	}}
+}
+
+func (s *Service) getTaskRunner() TaskRunner {
+	s.taskRunnerMu.RLock()
+	defer s.taskRunnerMu.RUnlock()
+	return s.taskRunner
+}
+
+func (s *Service) ecsConcurrencyLimit() int {
+	s.ecsLimitMu.Lock()
+	defer s.ecsLimitMu.Unlock()
+	if s.ecsLimit <= 0 {
+		return defaultECSRuleConcurrency
+	}
+	return s.ecsLimit
+}
+
+func (s *Service) acquireECSRuleSlot(ruleKey string) bool {
+	if ruleKey == "" {
+		ruleKey = "<unknown-rule>"
+	}
+	s.ecsLimitMu.Lock()
+	defer s.ecsLimitMu.Unlock()
+	if s.ecsInFlight == nil {
+		s.ecsInFlight = make(map[string]int)
+	}
+	limit := s.ecsLimit
+	if limit <= 0 {
+		limit = defaultECSRuleConcurrency
+	}
+	if s.ecsInFlight[ruleKey] >= limit {
+		return false
+	}
+	s.ecsInFlight[ruleKey]++
+	return true
+}
+
+func (s *Service) releaseECSRuleSlot(ruleKey string) {
+	if ruleKey == "" {
+		ruleKey = "<unknown-rule>"
+	}
+	s.ecsLimitMu.Lock()
+	defer s.ecsLimitMu.Unlock()
+	if s.ecsInFlight[ruleKey] <= 1 {
+		delete(s.ecsInFlight, ruleKey)
+		return
+	}
+	s.ecsInFlight[ruleKey]--
+}
+
+func targetRuleKey(target *types.EventBridgeTarget) string {
+	if target == nil {
+		return ""
+	}
+	if strings.TrimSpace(target.ID) != "" {
+		return target.ID
+	}
+	return strings.TrimSpace(target.Arn)
+}
+
+// buildECSTaskInput assembles the RunTaskInput for an ECS target. payload is
+// the resolved target input (static Input, InputPath, or InputTransformer
+// result); eventPayload is the original matched EventBridge event, before
+// any of those transforms. They usually carry the same document, except
+// when payload is itself an ECS containerOverrides document -- in that case
+// eventPayload is what the container should see as EVENT_PAYLOAD, since
+// payload describes container overrides, not the event.
+func buildECSTaskInput(target *types.EventBridgeTarget, payload, eventPayload []byte) (*types.RunTaskInput, error) {
+	if target == nil || target.EcsParameters == nil {
+		return nil, fmt.Errorf("EcsParameters are required for an ECS target")
+	}
+	params := target.EcsParameters
+	overrideValues, payloadIsOverrideDocument, err := ecsContainerOverridesFromTarget(target, payload)
+	if err != nil {
+		return nil, err
+	}
+
+	deliveredPayload := payload
+	if payloadIsOverrideDocument {
+		deliveredPayload = eventPayload
+	}
+
+	var overrides []types.ContainerOverride
+	if len(overrideValues) > 0 {
+		overrides = make([]types.ContainerOverride, len(overrideValues))
+	}
+	for i, requested := range overrideValues {
+		name := strings.TrimSpace(requested.Name)
+		if name == "" {
+			return nil, fmt.Errorf("ECS container override name is required")
+		}
+		overrides[i] = requested
+		overrides[i].Name = name
+		// Keep the small-payload environment behavior for compatibility with
+		// existing local targets. The runner receives EventPayload separately and
+		// uses a mounted file once the Linux per-value limit would be exceeded.
+		if len(deliveredPayload) <= maxEventPayloadEnvBytes {
+			overrides[i].Environment = upsertContainerEnvironment(requested.Environment, types.KeyValuePair{
+				Name:  ecsEventPayloadEnvName,
+				Value: string(deliveredPayload),
+			})
+		}
+	}
+
+	count := params.TaskCount
+	if count == 0 {
+		count = 1
+	}
+	var taskOverrides *types.TaskOverride
+	if len(overrides) > 0 {
+		taskOverrides = &types.TaskOverride{ContainerOverrides: overrides}
+	}
+	return &types.RunTaskInput{
+		Cluster:        target.Arn,
+		TaskDefinition: params.TaskDefinitionArn,
+		Count:          count,
+		LaunchType:     params.LaunchType,
+		Overrides:      taskOverrides,
+		EventPayload:   append([]byte(nil), deliveredPayload...),
+	}, nil
+}
+
+// ecsContainerOverridesFromTarget follows the AWS target shape. EcsParameters
+// contains task count/launch metadata; container overrides are part of the
+// target input document, normally under containerOverrides in Input or the
+// result of InputTransformer. ContainerOverrides remains a compatibility
+// fallback for older local state written before this matched AWS.
+//
+// The second return value reports whether payload itself was consumed as an
+// ECS override document (i.e. a JSON object with a containerOverrides key),
+// as opposed to the legacy EcsParameters.ContainerOverrides fallback or
+// payload having no overrides at all. Callers use this to decide whether
+// payload is safe to also deliver as EVENT_PAYLOAD, or whether that would
+// hand the container its own override instructions instead of the event.
+func ecsContainerOverridesFromTarget(target *types.EventBridgeTarget, payload []byte) ([]types.ContainerOverride, bool, error) {
+	if target == nil || target.EcsParameters == nil {
+		return nil, false, fmt.Errorf("EcsParameters are required for an ECS target")
+	}
+	if len(target.EcsParameters.ContainerOverrides) > 0 {
+		return append([]types.ContainerOverride(nil), target.EcsParameters.ContainerOverrides...), false, nil
+	}
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(payload, &object); err != nil {
+		// Target input is also the task event payload. Arbitrary non-object
+		// payloads do not contain overrides and should still be delivered.
+		return nil, false, nil
+	}
+	raw, ok := object["containerOverrides"]
+	if !ok {
+		for key, candidate := range object {
+			if strings.EqualFold(key, "containerOverrides") {
+				raw, ok = candidate, true
+				break
+			}
+		}
+	}
+	if !ok {
+		return nil, false, nil
+	}
+	var overrides []types.ContainerOverride
+	if err := json.Unmarshal(raw, &overrides); err != nil {
+		return nil, true, fmt.Errorf("invalid ECS containerOverrides in target input: %w", err)
+	}
+	return overrides, true, nil
+}
+
+func upsertContainerEnvironment(base []types.KeyValuePair, entry types.KeyValuePair) []types.KeyValuePair {
+	env := make([]types.KeyValuePair, 0, len(base)+1)
+	replaced := false
+	for _, current := range base {
+		if current.Name == entry.Name {
+			if !replaced {
+				env = append(env, entry)
+				replaced = true
+			}
+			continue
+		}
+		env = append(env, current)
+	}
+	if !replaced {
+		env = append(env, entry)
+	}
+	return env
+}
+
+func validateECSParameters(params *types.EcsParameters) error {
+	if params == nil {
+		return fmt.Errorf("EcsParameters are required for an ECS target")
+	}
+	if _, err := canonicalECSTaskDefinitionARN(params.TaskDefinitionArn); err != nil {
+		return err
+	}
+	if params.TaskCount < 0 || params.TaskCount > maxTargetBatchSize {
+		return fmt.Errorf("TaskCount must be between 1 and %d when specified", maxTargetBatchSize)
+	}
+	if launchType := strings.ToUpper(strings.TrimSpace(params.LaunchType)); launchType != "" &&
+		launchType != types.LaunchTypeFargate && launchType != types.LaunchTypeEC2 {
+		return fmt.Errorf("unsupported ECS LaunchType %q", params.LaunchType)
+	}
+	for _, override := range params.ContainerOverrides {
+		if strings.TrimSpace(override.Name) == "" {
+			return fmt.Errorf("ECS container override name is required")
+		}
+	}
+	return nil
+}
+
+func formatECSRunTaskFailures(failures []types.Failure) string {
+	if len(failures) == 0 {
+		return ""
+	}
+	details := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		detail := strings.TrimSpace(failure.Detail)
+		if detail == "" {
+			detail = strings.TrimSpace(failure.Reason)
+		}
+		if detail == "" {
+			detail = "task failed to start"
+		}
+		details = append(details, detail)
+	}
+	return "RunTask reported failure: " + strings.Join(details, "; ")
+}
+
+func stoppedTaskFailure(tasks []types.Task) string {
+	for _, task := range tasks {
+		for _, container := range task.Containers {
+			if container.ExitCode == nil || *container.ExitCode == 0 {
+				continue
+			}
+			return fmt.Sprintf("task %s container %s exited with code %d", task.TaskArn, container.Name, *container.ExitCode)
+		}
+	}
+	return ""
+}
+
+func ecsTaskDuration(tasks []types.Task, fallback int64) int64 {
+	var earliest, latest time.Time
+	for _, task := range tasks {
+		if task.StartedAt != nil && (earliest.IsZero() || task.StartedAt.Before(earliest)) {
+			earliest = *task.StartedAt
+		}
+		if task.StoppedAt != nil && (latest.IsZero() || task.StoppedAt.After(latest)) {
+			latest = *task.StoppedAt
+		}
+	}
+	if earliest.IsZero() || latest.IsZero() || latest.Before(earliest) {
+		return fallback
+	}
+	return latest.Sub(earliest).Milliseconds()
+}
+
 // fireTargets invokes all targets on a rule with the given event payload.
 func (s *Service) fireTargets(rule *types.EventBridgeRule, eventPayload []byte) {
 	if len(rule.Targets) == 0 {
@@ -761,59 +1296,11 @@ func (s *Service) fireTargets(rule *types.EventBridgeRule, eventPayload []byte) 
 	failed := 0
 	for i := range rule.Targets {
 		target := &rule.Targets[i]
-		functionName, fnErr := lambdaNameFromTarget(target.Arn)
-		if fnErr != nil {
-			target.LastResult = "ERROR: invalid target ARN"
+		success, targetSpans := s.dispatchTarget(target, eventPayload, targetDispatchOptions{ruleKey: rule.Name, correlationID: correlationID})
+		if !success {
 			failed++
-			continue
 		}
-
-		payload, payloadErr := buildTargetPayload(eventPayload, target)
-		if payloadErr != nil {
-			target.LastResult = "ERROR: " + payloadErr.Error()
-			failed++
-			continue
-		}
-
-		if s.lambda == nil {
-			target.LastResult = "ERROR: lambda service unavailable"
-			failed++
-			continue
-		}
-
-		invokeStart := time.Now()
-		if s.collector != nil {
-			s.collector.Begin(functionName)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), defaultRuleFireTimeout)
-		invokeOut, invokeErr := s.lambda.Invoke(ctx, &types.InvokeInput{
-			FunctionName:   functionName,
-			Payload:        payload,
-			InvocationType: manualInvocationTypeEvent,
-		})
-		cancel()
-		duration := time.Since(invokeStart).Milliseconds()
-
-		now := time.Now().UTC()
-		target.LastInvokedAt = &now
-		spanStatus := "ok"
-		if invokeErr != nil || (invokeOut != nil && invokeOut.FunctionError != "") {
-			detail := "invoke failed"
-			if invokeErr != nil {
-				detail = invokeErr.Error()
-			} else if invokeOut != nil && invokeOut.FunctionError != "" {
-				detail = invokeOut.FunctionError
-			}
-			target.LastResult = "ERROR: " + detail
-			failed++
-			spanStatus = "error"
-		} else {
-			target.LastResult = "OK"
-		}
-		spans = append(spans, tracesvc.Span{Kind: "lambda", Name: functionName, DurationMs: duration, Status: spanStatus, Meta: map[string]string{"targetId": target.ID}})
-		if s.collector != nil {
-			spans = append(spans, tracesvc.SubSpansToSpans(s.collector.CollectWithFlush(functionName))...)
-		}
+		spans = append(spans, targetSpans...)
 	}
 
 	rule.LastRunAt = &started
@@ -881,76 +1368,19 @@ func (s *Service) fireRule(ruleName string, scheduled bool, sessionMeta map[stri
 
 	for i := range rule.Targets {
 		target := &rule.Targets[i]
-		functionName, fnErr := lambdaNameFromTarget(target.Arn)
-		if fnErr != nil {
-			target.LastResult = "ERROR: invalid target ARN"
-			result.Failed++
-			spans = append(spans, tracesvc.Span{Kind: "lambda", Name: target.Arn, Status: "error"})
-			continue
-		}
-
-		payload, payloadErr := buildTargetPayload(eventPayload, target)
-		if payloadErr != nil {
-			target.LastResult = "ERROR: " + payloadErr.Error()
-			result.Failed++
-			spans = append(spans, tracesvc.Span{Kind: "lambda", Name: functionName, Status: "error", Meta: map[string]string{"targetId": target.ID}})
-			continue
-		}
-
-		if s.lambda == nil {
-			target.LastResult = "ERROR: lambda service unavailable"
-			result.Failed++
-			spans = append(spans, tracesvc.Span{Kind: "lambda", Name: functionName, Status: "error", Meta: map[string]string{"targetId": target.ID}})
-			continue
-		}
-
-		invokeStart := time.Now()
-		if s.collector != nil {
-			s.collector.Begin(functionName)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), defaultRuleFireTimeout)
-		invokeOut, invokeErr := s.lambda.Invoke(ctx, &types.InvokeInput{
-			FunctionName:   functionName,
-			Payload:        payload,
-			InvocationType: manualInvocationTypeEvent,
+		success, targetSpans := s.dispatchTarget(target, eventPayload, targetDispatchOptions{
+			ruleKey:           rule.Name,
+			invokedAt:         &started,
+			earlyFailureSpans: true,
+			errorDetailMeta:   true,
+			correlationID:     correlationID,
 		})
-		cancel()
-		duration := time.Since(invokeStart).Milliseconds()
-
-		target.LastInvokedAt = &started
-		spanStatus := "ok"
-		if invokeErr != nil || (invokeOut != nil && invokeOut.FunctionError != "") {
-			detail := "invoke failed"
-			if invokeErr != nil {
-				detail = invokeErr.Error()
-			} else if invokeOut != nil && invokeOut.FunctionError != "" {
-				detail = invokeOut.FunctionError
-			}
-			target.LastResult = "ERROR: " + detail
-			result.Failed++
-			spanStatus = "error"
-			spans = append(spans, tracesvc.Span{
-				Kind:       "lambda",
-				Name:       functionName,
-				DurationMs: duration,
-				Status:     spanStatus,
-				Meta: map[string]string{
-					"targetId": target.ID,
-					"error":    detail,
-				},
-			})
-			if s.collector != nil {
-				spans = append(spans, tracesvc.SubSpansToSpans(s.collector.CollectWithFlush(functionName))...)
-			}
-			continue
-		} else {
-			target.LastResult = "OK"
+		if success {
 			result.Successful++
+		} else {
+			result.Failed++
 		}
-		spans = append(spans, tracesvc.Span{Kind: "lambda", Name: functionName, DurationMs: duration, Status: spanStatus, Meta: map[string]string{"targetId": target.ID}})
-		if s.collector != nil {
-			spans = append(spans, tracesvc.SubSpansToSpans(s.collector.CollectWithFlush(functionName))...)
-		}
+		spans = append(spans, targetSpans...)
 	}
 
 	rule.LastRunAt = &started
@@ -1135,6 +1565,176 @@ func canonicalLambdaTargetARN(cfg *config.Config, target string) (string, error)
 	return fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", cfg.Region, cfg.AccountID, target), nil
 }
 
+func canonicalEventBridgeTargetARN(cfg *config.Config, target *types.EventBridgeTarget) (string, error) {
+	if target == nil {
+		return "", fmt.Errorf("target is required")
+	}
+	if target.EcsParameters != nil || targetKind(target.Arn) == "ecs" {
+		if target.EcsParameters == nil {
+			return "", fmt.Errorf("EcsParameters are required for an ECS target")
+		}
+		canonical, err := canonicalECSClusterARN(target.Arn)
+		if err != nil {
+			return "", err
+		}
+		if err := validateECSParameters(target.EcsParameters); err != nil {
+			return "", err
+		}
+		if err := validateECSInput(target); err != nil {
+			return "", err
+		}
+		return canonical, nil
+	}
+	return canonicalLambdaTargetARN(cfg, target.Arn)
+}
+
+func validateECSInput(target *types.EventBridgeTarget) error {
+	if target == nil || strings.TrimSpace(target.Input) == "" {
+		return nil
+	}
+	var document any
+	if err := json.Unmarshal([]byte(target.Input), &document); err != nil {
+		return fmt.Errorf("ECS target Input must be valid JSON: %w", err)
+	}
+	object, ok := document.(map[string]any)
+	if !ok {
+		return nil
+	}
+	var value any
+	value, ok = object["containerOverrides"]
+	if !ok {
+		for key, candidate := range object {
+			if strings.EqualFold(key, "containerOverrides") {
+				value, ok = candidate, true
+				break
+			}
+		}
+	}
+	if !ok {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return fmt.Errorf("invalid ECS containerOverrides in target input: %w", err)
+	}
+	var overrides []types.ContainerOverride
+	if err := json.Unmarshal(raw, &overrides); err != nil {
+		return fmt.Errorf("invalid ECS containerOverrides in target input: %w", err)
+	}
+	for _, override := range overrides {
+		if strings.TrimSpace(override.Name) == "" {
+			return fmt.Errorf("ECS container override name is required")
+		}
+	}
+	return nil
+}
+
+func canonicalTargetARNReference(cfg *config.Config, target string) (string, error) {
+	if targetKind(target) == "ecs" {
+		return canonicalECSClusterARN(target)
+	}
+	return canonicalLambdaTargetARN(cfg, target)
+}
+
+func canonicalECSClusterARN(target string) (string, error) {
+	target = strings.TrimSpace(target)
+	parts := strings.SplitN(target, ":", 6)
+	if len(parts) != 6 || parts[0] != "arn" || parts[1] != "aws" || parts[2] != "ecs" || parts[3] == "" || parts[4] == "" {
+		return "", fmt.Errorf("target Arn must be an ECS cluster")
+	}
+	const marker = "cluster/"
+	if !strings.HasPrefix(parts[5], marker) {
+		return "", fmt.Errorf("target Arn must be an ECS cluster")
+	}
+	if !validECSName(strings.TrimPrefix(parts[5], marker)) {
+		return "", fmt.Errorf("target Arn must reference a valid ECS cluster")
+	}
+	return target, nil
+}
+
+func canonicalECSTaskDefinitionARN(target string) (string, error) {
+	target = strings.TrimSpace(target)
+	parts := strings.SplitN(target, ":", 6)
+	if len(parts) != 6 || parts[0] != "arn" || parts[1] != "aws" || parts[2] != "ecs" || parts[3] == "" || parts[4] == "" {
+		return "", fmt.Errorf("TaskDefinitionArn must be an ECS task definition ARN")
+	}
+	const marker = "task-definition/"
+	if !strings.HasPrefix(parts[5], marker) {
+		return "", fmt.Errorf("TaskDefinitionArn must be an ECS task definition ARN")
+	}
+	tail := strings.TrimPrefix(parts[5], marker)
+	separator := strings.LastIndexByte(tail, ':')
+	if separator <= 0 || separator == len(tail)-1 {
+		return "", fmt.Errorf("TaskDefinitionArn must include a task definition revision")
+	}
+	family := tail[:separator]
+	revision, err := strconv.Atoi(tail[separator+1:])
+	if err != nil || revision <= 0 || !validECSName(family) {
+		return "", fmt.Errorf("TaskDefinitionArn must include a valid family and revision")
+	}
+	return target, nil
+}
+
+func taskDefinitionFamily(arn string) string {
+	const marker = "task-definition/"
+	idx := strings.Index(arn, marker)
+	if idx < 0 {
+		return ""
+	}
+	tail := arn[idx+len(marker):]
+	if separator := strings.LastIndexByte(tail, ':'); separator >= 0 {
+		tail = tail[:separator]
+	}
+	return tail
+}
+
+func validECSName(value string) bool {
+	if value == "" || len(value) > 255 {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func cloneECSParameters(src *types.EcsParameters) *types.EcsParameters {
+	if src == nil {
+		return nil
+	}
+	dst := *src
+	if src.ContainerOverrides != nil {
+		dst.ContainerOverrides = make([]types.ContainerOverride, len(src.ContainerOverrides))
+		for i, override := range src.ContainerOverrides {
+			dst.ContainerOverrides[i] = override
+			if override.Command != nil {
+				dst.ContainerOverrides[i].Command = append([]string(nil), override.Command...)
+			}
+			if override.Environment != nil {
+				dst.ContainerOverrides[i].Environment = append([]types.KeyValuePair(nil), override.Environment...)
+			}
+		}
+	}
+	dst.NetworkConfiguration = cloneECSNetworkConfiguration(src.NetworkConfiguration)
+	return &dst
+}
+
+func cloneECSNetworkConfiguration(src *types.EcsNetworkConfiguration) *types.EcsNetworkConfiguration {
+	if src == nil {
+		return nil
+	}
+	dst := *src
+	if src.AwsvpcConfiguration != nil {
+		vpc := *src.AwsvpcConfiguration
+		vpc.Subnets = append([]string(nil), src.AwsvpcConfiguration.Subnets...)
+		vpc.SecurityGroups = append([]string(nil), src.AwsvpcConfiguration.SecurityGroups...)
+		dst.AwsvpcConfiguration = &vpc
+	}
+	return &dst
+}
+
 func lambdaNameFromTarget(arn string) (string, error) {
 	arn = strings.TrimSpace(arn)
 	if arn == "" {
@@ -1181,15 +1781,15 @@ func buildScheduledEventPayload(rule *types.EventBridgeRule, at time.Time, sessi
 		region = parseRegionFromRuleARN(rule.Arn)
 	}
 	payload := map[string]any{
-		"version":     "0",
-		"id":          uuid.NewString(),
-		"detail-type": "Scheduled Event",
-		"source":      "aws.events",
-		"account":     account,
-		"time":        at.Format(time.RFC3339),
-		"region":      region,
-		"resources":   []string{ruleARN},
-		"detail":      detail,
+		"version":       "0",
+		"id":            uuid.NewString(),
+		"detail-type":   "Scheduled Event",
+		"source":        "aws.events",
+		"account":       account,
+		"time":          at.Format(time.RFC3339),
+		"region":        region,
+		"resources":     []string{ruleARN},
+		"detail":        detail,
 		"correlationId": correlationID,
 	}
 	body, _ := json.Marshal(payload)
