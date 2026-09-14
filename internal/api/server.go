@@ -215,6 +215,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /_tarn/admin/traces/for-log", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.TracesForLog(w, r)
 	})
+	mux.HandleFunc("GET /_tarn/admin/traces", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.Traces(w, r)
+	})
 	mux.HandleFunc("GET /_tarn/admin/infrastructure", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.Infrastructure(w, r)
 	})

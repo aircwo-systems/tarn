@@ -1854,6 +1854,95 @@ func (h *Handler) TracesForLog(w http.ResponseWriter, r *http.Request) {
 	_ = enc.Encode(matches[0])
 }
 
+// maxTracesQueryScan bounds how many recent traces are pulled from the store
+// before filtering. The store itself caps retention at 2000 records, so this
+// is "the whole store" in practice, not a partial window.
+const maxTracesQueryScan = 2000
+
+// defaultTracesLimit and maxTracesLimit bound the traces query response the
+// same way logs/events does: a small default so a caller exploring gets a
+// readable page, and a hard cap so a wide filter cannot return the whole
+// store in one response.
+const (
+	defaultTracesLimit = 50
+	maxTracesLimit     = 500
+)
+
+// Traces returns recent request traces, optionally filtered by correlation
+// ID, a span resource name (substring match against any span's Name), or a
+// span kind (exact match). Traces are instance-wide, not account-scoped: a
+// single ECS task, SQS poll, or EventBridge fire can cross accounts in ways
+// the admin overview's per-account resources cannot, so trace lookup does not
+// try to bucket by the caller's AKID.
+//
+// Query params: correlationId, resource, kind, limit (default 50, max 500).
+func (h *Handler) Traces(w http.ResponseWriter, r *http.Request) {
+	if h.traceStore == nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"traces": []*tracesvc.Trace{}})
+		return
+	}
+
+	q := r.URL.Query()
+	correlationID := strings.TrimSpace(q.Get("correlationId"))
+	resource := strings.TrimSpace(q.Get("resource"))
+	kind := strings.TrimSpace(q.Get("kind"))
+
+	limit := defaultTracesLimit
+	if raw := q.Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	if limit > maxTracesLimit {
+		limit = maxTracesLimit
+	}
+
+	all := h.traceStore.Recent(maxTracesQueryScan)
+	filtered := make([]*tracesvc.Trace, 0, len(all))
+	for _, t := range all {
+		if correlationID != "" && t.CorrelationID != correlationID {
+			continue
+		}
+		if resource != "" && !traceHasResource(t, resource) {
+			continue
+		}
+		if kind != "" && !traceHasKind(t, kind) {
+			continue
+		}
+		filtered = append(filtered, t)
+		if len(filtered) >= limit {
+			break
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"traces": filtered})
+}
+
+// traceHasResource reports whether any span in t has resource as a substring
+// of its Name.
+func traceHasResource(t *tracesvc.Trace, resource string) bool {
+	for _, sp := range t.Spans {
+		if strings.Contains(sp.Name, resource) {
+			return true
+		}
+	}
+	return false
+}
+
+// traceHasKind reports whether any span in t has kind as its Kind, exactly.
+func traceHasKind(t *tracesvc.Trace, kind string) bool {
+	for _, sp := range t.Spans {
+		if sp.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 // PruneLogs removes events and traces older than the requested retention window.
 func (h *Handler) PruneLogs(w http.ResponseWriter, r *http.Request) {
 	retentionStr := r.URL.Query().Get("retention")

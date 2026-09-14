@@ -111,7 +111,7 @@ func TestServerAdvertisesToolsAndInstructions(t *testing.T) {
 		"tarn_status": true, "tarn_deploy_lambda": false, "tarn_invoke_lambda": false,
 		"tarn_get_logs": true, "tarn_peek_queue": true, "tarn_send_message": false,
 		"tarn_publish": false, "tarn_list_objects": true, "tarn_get_object": true,
-		"tarn_fire_rule": false,
+		"tarn_fire_rule": false, "tarn_get_traces": true,
 	}
 	if len(tools.Tools) != len(want) {
 		t.Errorf("advertised %d tools, want %d", len(tools.Tools), len(want))

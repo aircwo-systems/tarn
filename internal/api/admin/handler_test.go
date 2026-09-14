@@ -26,6 +26,7 @@ import (
 	secretssvc "github.com/aircwo-systems/tarn/internal/secrets"
 	snssvc "github.com/aircwo-systems/tarn/internal/sns"
 	sqssvc "github.com/aircwo-systems/tarn/internal/sqs"
+	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
@@ -785,4 +786,186 @@ func newTestHandler(t *testing.T) *Handler {
 	eventbridgeStore := eventbridgesvc.NewStore(cfg)
 	eventbridge := eventbridgesvc.NewService(cfg, eventbridgeStore, lambda)
 	return NewHandler(cfg, apigw, apigwv1, lambda, logs, sqs, sns, dynamodb, secrets, infra, s3, esm, eventbridge, nil, nil)
+}
+
+// newTestHandlerWithTraces is newTestHandler plus a real (in-memory) trace
+// store, for tests that exercise the traces endpoint. newTestHandler passes
+// nil for the store so unrelated tests don't pay for a sqlite connection.
+func newTestHandlerWithTraces(t *testing.T) (*Handler, *tracesvc.Store) {
+	t.Helper()
+
+	cfg := config.Default()
+	cfg.Host = "127.0.0.1"
+	cfg.DataDir = t.TempDir()
+	cfg.Port = 4566
+
+	store := lambdasvc.NewStore(cfg)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init lambda store: %v", err)
+	}
+	logs := logssvc.NewService(cfg)
+	lambda := lambdasvc.NewService(cfg, store, nil, nil, logs)
+	apigw := apigatewaysvc.NewService(cfg, lambda, nil)
+	apigwv1 := apigatewayv1svc.NewService(cfg, lambda, nil)
+	s3 := s3svc.NewService(cfg)
+	sqs := sqssvc.NewService(cfg)
+	sns := snssvc.NewService(cfg, sqs, lambda)
+	dynamodb := dynamodbsvc.NewService(cfg)
+	if err := dynamodb.Init(); err != nil {
+		t.Fatalf("init dynamodb: %v", err)
+	}
+	secrets := secretssvc.NewService(cfg)
+	infra := infrasvc.NewService("", false)
+	esmStore := eventsourcesvc.NewStore(cfg)
+	esm := eventsourcesvc.NewService(cfg, esmStore, nil, nil, nil)
+	eventbridgeStore := eventbridgesvc.NewStore(cfg)
+	eventbridge := eventbridgesvc.NewService(cfg, eventbridgeStore, lambda)
+	traceStore := tracesvc.NewStore()
+	h := NewHandler(cfg, apigw, apigwv1, lambda, logs, sqs, sns, dynamodb, secrets, infra, s3, esm, eventbridge, nil, traceStore)
+	return h, traceStore
+}
+
+func TestTracesFiltersByCorrelationIdResourceAndKind(t *testing.T) {
+	h, traceStore := newTestHandlerWithTraces(t)
+
+	base := time.Now().UTC()
+	traceStore.Add(&tracesvc.Trace{
+		ID:            "trace-1",
+		CorrelationID: "corr-1",
+		StartedAt:     base,
+		DurationMs:    10,
+		Status:        200,
+		Method:        "POST",
+		Path:          "/",
+		Spans: []tracesvc.Span{
+			{Kind: "queue", Name: "jobs", DurationMs: 5, Status: "ok"},
+			{Kind: "lambda", Name: "worker-fn", DurationMs: 3, Status: "ok"},
+		},
+	})
+	traceStore.Add(&tracesvc.Trace{
+		ID:            "trace-2",
+		CorrelationID: "corr-2",
+		StartedAt:     base.Add(time.Second),
+		DurationMs:    20,
+		Status:        500,
+		Method:        "POST",
+		Path:          "/",
+		Spans: []tracesvc.Span{
+			{Kind: "gateway", Name: "api", DurationMs: 2, Status: "ok"},
+			{Kind: "lambda", Name: "other-fn", DurationMs: 18, Status: "error"},
+		},
+	})
+
+	decode := func(t *testing.T, query string) []*tracesvc.Trace {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/traces"+query, nil)
+		rec := httptest.NewRecorder()
+		h.Traces(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		var payload struct {
+			Traces []*tracesvc.Trace `json:"traces"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		return payload.Traces
+	}
+
+	t.Run("no filter returns newest first", func(t *testing.T) {
+		got := decode(t, "")
+		if len(got) != 2 {
+			t.Fatalf("traces len = %d, want 2", len(got))
+		}
+		if got[0].ID != "trace-2" || got[1].ID != "trace-1" {
+			t.Fatalf("unexpected order: %q, %q", got[0].ID, got[1].ID)
+		}
+	})
+
+	t.Run("correlationId exact match", func(t *testing.T) {
+		got := decode(t, "?correlationId=corr-1")
+		if len(got) != 1 || got[0].ID != "trace-1" {
+			t.Fatalf("unexpected traces for correlationId filter: %+v", got)
+		}
+	})
+
+	t.Run("resource substring match against any span name", func(t *testing.T) {
+		got := decode(t, "?resource=worker")
+		if len(got) != 1 || got[0].ID != "trace-1" {
+			t.Fatalf("unexpected traces for resource filter: %+v", got)
+		}
+	})
+
+	t.Run("kind exact match against any span kind", func(t *testing.T) {
+		got := decode(t, "?kind=gateway")
+		if len(got) != 1 || got[0].ID != "trace-2" {
+			t.Fatalf("unexpected traces for kind filter: %+v", got)
+		}
+	})
+
+	t.Run("limit caps results", func(t *testing.T) {
+		got := decode(t, "?limit=1")
+		if len(got) != 1 || got[0].ID != "trace-2" {
+			t.Fatalf("unexpected traces for limit filter: %+v", got)
+		}
+	})
+
+	t.Run("no matching store returns empty traces", func(t *testing.T) {
+		bare := &Handler{}
+		req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/traces", nil)
+		rec := httptest.NewRecorder()
+		bare.Traces(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		var payload struct {
+			Traces []*tracesvc.Trace `json:"traces"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		if len(payload.Traces) != 0 {
+			t.Fatalf("traces len = %d, want 0", len(payload.Traces))
+		}
+	})
+}
+
+func TestAllLogEventsFilterGroups(t *testing.T) {
+	h := newTestHandler(t)
+
+	h.logs.CreateLogGroup("group-a")
+	h.logs.CreateLogGroup("group-b")
+	h.logs.CreateLogGroup("group-c")
+
+	now := time.Now().UTC()
+	h.logs.PutLogEvents("group-a", "stream-1", []logssvc.LogEvent{
+		{Message: "msg-a", Timestamp: now},
+	})
+	h.logs.PutLogEvents("group-b", "stream-1", []logssvc.LogEvent{
+		{Message: "msg-b", Timestamp: now.Add(time.Second)},
+	})
+	h.logs.PutLogEvents("group-c", "stream-1", []logssvc.LogEvent{
+		{Message: "msg-c", Timestamp: now.Add(2 * time.Second)},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/logs/events-all?groups=group-a,group-c", nil)
+	rec := httptest.NewRecorder()
+	h.AllLogEvents(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var payload struct {
+		Events []logssvc.LogEvent `json:"events"`
+		Total  int                `json:"total"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if payload.Total != 2 || len(payload.Events) != 2 {
+		t.Fatalf("got total %d, events len %d, want 2", payload.Total, len(payload.Events))
+	}
 }

@@ -12,14 +12,18 @@ import (
 // here. Every tool description repeats the facts a caller needs in isolation.
 const instructions = `Tarn is an AWS emulator running on this machine. It answers the AWS APIs
 locally, so Lambda functions, SQS queues, SNS topics, S3 buckets, DynamoDB
-tables, and Secrets Manager secrets reported by these tools exist only on this
-machine.
+tables, ECS clusters/services/tasks, and Secrets Manager secrets reported by
+these tools exist only on this machine.
 
 Nothing here reaches a real AWS account, costs money, or appears in the AWS
 console. Conversely, real AWS resources are not visible through these tools.
 
 Start with tarn_status. It reports whether the instance is up and lists what is
-provisioned; the names it returns are the arguments the other tools expect.
+provisioned, including ECS clusters, services, and tasks; the names it returns
+are the arguments the other tools expect. A task's containers publish their
+ports on 127.0.0.1 at an ephemeral host port, which tarn_status reports as a
+ready-to-dial URL per container. A task's logs live in its awslogs group, by
+convention /ecs/<family>, readable with tarn_get_logs using logGroup.
 
 To diagnose a failing function, invoke it with tarn_invoke_lambda and read the
 result. An unhandled exception comes back with its type, message, and stack
@@ -30,10 +34,15 @@ data, or printed something you need to see.
 Asynchronous paths have no caller to receive a result. When a queue, topic, or
 schedule triggers a function, logs are the only record of what happened. Use
 tarn_send_message, tarn_publish, or tarn_fire_rule to set one off, then read the
-consumer's logs.
+consumer's logs. tarn_get_traces gives the same paths a structural view: one
+record per request with a span per hop (gateway, lambda, queue, ecs, and so
+on), so a queue -> Lambda -> ECS pipeline can be checked end to end by
+correlation ID instead of piecing it together from separate log groups.
 
 Tarn isolates resources per account. Every tool takes an optional twelve-digit
-account argument, and omitting it addresses the default account.`
+account argument, and omitting it addresses the default account. Traces are
+the one exception: they are instance-wide, since a single request path can
+cross accounts.`
 
 // serverName identifies this server to clients.
 const serverName = "tarn"
@@ -72,4 +81,5 @@ func addTools(server *mcp.Server, c *client) {
 	addListObjectsTool(server, c)
 	addGetObjectTool(server, c)
 	addFireRuleTool(server, c)
+	addTracesTool(server, c)
 }
