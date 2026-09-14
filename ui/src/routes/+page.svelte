@@ -8,12 +8,10 @@
     KeyIcon,
     HardDriveIcon,
     ArrowsClockwiseIcon,
-    MagnifyingGlassIcon,
     ShieldWarningIcon,
     BridgeIcon,
     ScrollIcon,
     DetectiveIcon,
-    SidebarSimpleIcon,
     DatabaseIcon,
     FlowArrowIcon,
     CubeIcon,
@@ -25,6 +23,7 @@
   import TagFilter from "$lib/components/layout/tag-filter.svelte";
   import OverviewPulse from "$lib/components/layout/overview-pulse.svelte";
   import ActivityFeed from "$lib/components/layout/activity-feed.svelte";
+  import SectionHeader from "$lib/components/sections/section-header.svelte";
   import type { SparkBar as SparkBarData } from "$lib/components/common/spark-bar.svelte";
   import TopologyCanvas from "$lib/components/topology/topology-canvas.svelte";
   import SettingsSection from "$lib/components/sections/settings-section.svelte";
@@ -279,18 +278,23 @@
     {#if activeTab === "overview"}
     <main class="tab-content-view main-stage flex min-w-0 flex-1 flex-col overflow-hidden" class:sidebar-collapsed={sidebarCollapsed}>
       <div class="flex flex-1 flex-col overflow-hidden {canvasExpanded ? 'px-6 py-5' : 'px-4 py-4'}">
-        <!-- Status bar -->
-        <div class="flex flex-wrap items-center gap-4 {canvasExpanded ? 'pb-2' : 'pb-1'}">
-          <button
-            type="button"
-            onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
-            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-            class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground/50 transition-colors hover:bg-muted/60 hover:text-foreground"
-          >
-            <SidebarSimpleIcon size={14} weight={sidebarCollapsed ? "regular" : "fill"} />
-          </button>
+        <SectionHeader
+          title="Overview"
+          description="{activeServiceCount} services · {recentTraces.length} recent traces"
+          {sidebarCollapsed}
+          onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
+        >
+          {#snippet actions()}
+            <div class="flex shrink-0 items-center gap-1 font-mono text-[11px] text-muted-foreground/50">
+              <span class="inline-block h-[5px] w-[5px] rounded-full bg-primary/70"></span>
+              Poll {uiSettings.pollingIntervalSeconds}s
+            </div>
+          {/snippet}
+        </SectionHeader>
 
-          {#if canvasExpanded}
+        {#if canvasExpanded}
+          <!-- Filter row — only when the canvas has room for it -->
+          <div class="flex items-center gap-4 pt-3">
             <TagFilter onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
 
             <div class="flex flex-1 flex-col gap-[3px]">
@@ -309,13 +313,8 @@
                 </div>
               {/each}
             </div>
-          {/if}
-
-          <div class="ml-auto flex shrink-0 items-center gap-1 font-mono text-[11px] text-muted-foreground/50">
-            <span class="inline-block h-[5px] w-[5px] rounded-full bg-primary/70"></span>
-            Poll {uiSettings.pollingIntervalSeconds}s
           </div>
-        </div>
+        {/if}
 
         {#if !canvasExpanded}
           <OverviewPulse {recentTraces} {activeServiceCount} {infraLegend} />
@@ -334,7 +333,7 @@
           </div>
 
           {#if !canvasExpanded}
-            <ActivityFeed traces={recentTraces} onOpenTrace={openTrace} />
+            <ActivityFeed traces={recentTraces} onOpenTrace={openTrace} onViewAll={() => setTab("xray")} />
           {/if}
         </div>
       </div>

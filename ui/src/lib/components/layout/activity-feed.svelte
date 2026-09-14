@@ -1,12 +1,15 @@
 <script lang="ts">
+  import { ArrowUpRightIcon } from "phosphor-svelte";
   import type { RequestTrace } from "$lib/types";
 
   let {
     traces,
     onOpenTrace,
+    onViewAll,
   }: {
     traces: RequestTrace[];
     onOpenTrace: (traceId: string) => void;
+    onViewAll?: () => void;
   } = $props();
 
   function traceLabel(t: RequestTrace): string {
@@ -15,28 +18,22 @@
     return `${t.method ?? ""} ${t.path ?? ""}`.trim() || `trace:${t.id.slice(0, 8)}`;
   }
 
-  function dotClass(status: number): string {
-    if (status >= 500) return "bg-[var(--color-red)]";
-    if (status >= 400) return "bg-[var(--color-amber)]";
-    return "bg-[var(--color-accent)]";
-  }
-
-  function statusClass(status: number): string {
-    if (status >= 500) return "text-[var(--color-red)]";
-    if (status >= 400) return "text-[var(--color-amber)]";
-    return "text-[var(--color-text-muted)]";
+  function statusTone(status: number): "red" | "amber" | "green" {
+    if (status >= 500) return "red";
+    if (status >= 400) return "amber";
+    return "green";
   }
 
   function spanColor(kind: string): string {
     const map: Record<string, string> = {
-      gateway: "var(--color-red)",
+      gateway: "var(--accent-red)",
       lambda: "var(--color-blue)",
-      queue: "var(--color-amber)",
-      dlq: "var(--color-red)",
-      topic: "var(--color-accent)",
-      eventbridge: "var(--color-accent)",
+      queue: "var(--accent-amber)",
+      dlq: "var(--accent-red)",
+      topic: "var(--accent-green)",
+      eventbridge: "var(--accent-green)",
     };
-    return map[kind] ?? "var(--color-text-muted)";
+    return map[kind] ?? "var(--text-tertiary)";
   }
 
   function chainSegs(t: RequestTrace): { width: number; color: string; title: string }[] {
@@ -60,57 +57,123 @@
   function fmtMs(ms: number): string {
     return ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
   }
+
+  const errorCount = $derived(traces.filter((t) => t.status >= 500).length);
 </script>
 
-<div class="flex min-h-0 flex-col">
-  <div class="mb-2 flex items-center justify-between text-[10px] font-semibold uppercase tracking-[0.06em] text-muted-foreground/50">
-    <span>Activity</span>
+<div class="activity">
+  <div class="activity-head">
+    <span class="activity-title">Activity</span>
+    {#if traces.length > 0}
+      <span class="activity-count">{traces.length}</span>
+      {#if errorCount > 0}
+        <span class="activity-errors">{errorCount} err</span>
+      {/if}
+    {/if}
+    {#if onViewAll}
+      <button type="button" class="activity-all" onclick={onViewAll}>
+        Traces<ArrowUpRightIcon size={10} />
+      </button>
+    {/if}
   </div>
 
-  <div class="flex-1 overflow-y-auto">
+  <div class="activity-list">
     {#if traces.length === 0}
-      <div class="flex h-24 items-center justify-center text-[11px] text-muted-foreground/30">
-        No recent requests
-      </div>
+      <p class="empty">No recent requests</p>
     {:else}
       {#each traces.slice(0, 25) as trace (trace.id)}
         {@const segs = chainSegs(trace)}
+        {@const tone = statusTone(trace.status)}
         <button
           type="button"
-          class="grid w-full cursor-pointer items-center gap-2 border-b border-border/50 py-2 text-left transition-colors hover:bg-white/[0.02]"
-          style="grid-template-columns:6px 30px 1fr auto"
+          class="ev"
+          data-tone={tone}
           onclick={() => onOpenTrace(trace.id)}
+          aria-label="Open trace {traceLabel(trace)}"
         >
-          <span class="inline-block h-[6px] w-[6px] rounded-[1px] {dotClass(trace.status)}"></span>
-
-          <span class="text-right text-[11px] font-medium {statusClass(trace.status)}">{trace.status}</span>
-
-          <div class="min-w-0">
-            <div class="truncate text-[11px] text-muted-foreground/80">{traceLabel(trace)}</div>
+          <span class="ev-tick" aria-hidden="true"></span>
+          <span class="ev-status">{trace.status}</span>
+          <span class="ev-main">
+            <span class="ev-label">{traceLabel(trace)}</span>
             {#if segs.length}
-              <div class="mt-[3px] flex items-center gap-[2px]" style="height:3px">
+              <span class="ev-segs" aria-hidden="true">
                 {#each segs as seg, i (i)}
-                  <div
-                    class="rounded-[1px]"
-                    style="width:{seg.width}px;height:3px;background:{seg.color};opacity:0.5"
-                    title={seg.title}
-                  ></div>
+                  <span style="width:{seg.width}px;background:{seg.color}" title={seg.title}></span>
                 {/each}
-              </div>
+              </span>
             {/if}
             {#if trace.status >= 500}
-              <div class="mt-[2px] text-[10px]" style="color:var(--color-red)">
-                {trace.spans.find((s) => s.status === "error")?.name ?? "error"}
-              </div>
+              <span class="ev-error">{trace.spans.find((s) => s.status === "error")?.name ?? "error"}</span>
             {/if}
-          </div>
-
-          <div class="shrink-0 text-right">
-            <div class="text-[11px] text-muted-foreground/70">{fmtMs(trace.durationMs)}</div>
-            <div class="text-[10px] text-muted-foreground/40">{timeAgo(trace.startedAt)}</div>
-          </div>
+          </span>
+          <span class="ev-right">
+            <span class="ev-duration">{fmtMs(trace.durationMs)}</span>
+            <span class="ev-ago">{timeAgo(trace.startedAt)}</span>
+          </span>
+          <span class="ev-go"><ArrowUpRightIcon size={11} /></span>
         </button>
       {/each}
     {/if}
   </div>
 </div>
+
+<style>
+  .activity { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  .activity-head { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .activity-title {
+    font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-tertiary);
+  }
+  .activity-count {
+    font: 10.5px var(--font-mono, ui-monospace, monospace); font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+  }
+  .activity-errors {
+    font: 10px var(--font-mono, ui-monospace, monospace); color: var(--accent-red);
+    background: color-mix(in srgb, var(--accent-red) 10%, transparent);
+    border-radius: 6px; padding: 1px 6px;
+  }
+  .activity-all {
+    margin-left: auto; display: inline-flex; align-items: center; gap: 3px;
+    font-size: 10.5px; color: var(--text-tertiary); transition: color 100ms ease;
+  }
+  .activity-all:hover { color: var(--text-primary); }
+
+  .activity-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+  .empty { display: flex; height: 6rem; align-items: center; justify-content: center; font-size: 11px; color: var(--text-tertiary); }
+
+  .ev {
+    position: relative; display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 7px 6px 7px 14px; border-radius: 6px; border-bottom: 1px solid var(--border-subtle);
+    font-family: var(--font-ui-mono, var(--font-mono, monospace)); text-align: left;
+    transition: background 100ms ease; cursor: pointer;
+  }
+  .ev:hover { background: var(--bg-element-hover); }
+
+  .ev-tick {
+    position: absolute; left: 5px; top: 50%; transform: translateY(-50%);
+    width: 2px; height: 12px; border-radius: 2px; background: var(--accent-green);
+  }
+  .ev[data-tone="amber"] .ev-tick { background: var(--accent-amber); }
+  .ev[data-tone="red"] .ev-tick { background: var(--accent-red); }
+
+  .ev-status { width: 30px; flex-shrink: 0; font-size: 11px; font-weight: 600; color: var(--accent-green); opacity: 0.85; font-variant-numeric: tabular-nums; }
+  .ev[data-tone="amber"] .ev-status { color: var(--accent-amber); opacity: 1; }
+  .ev[data-tone="red"] .ev-status { color: var(--accent-red); opacity: 1; }
+
+  .ev-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+  .ev-label {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 11.5px; color: var(--text-primary); opacity: 0.85; transition: opacity 100ms ease;
+  }
+  .ev:hover .ev-label { opacity: 1; }
+  .ev-segs { display: flex; align-items: center; gap: 2px; height: 3px; }
+  .ev-segs span { height: 3px; border-radius: 1px; opacity: 0.55; }
+  .ev-error { font-size: 10px; color: var(--accent-red); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  .ev-right { flex-shrink: 0; display: flex; flex-direction: column; align-items: flex-end; gap: 1px; }
+  .ev-duration { font-size: 11px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .ev-ago { font-size: 10px; color: var(--text-tertiary); }
+
+  .ev-go { flex-shrink: 0; display: inline-flex; color: var(--text-tertiary); opacity: 0; transition: opacity 100ms ease; }
+  .ev:hover .ev-go { opacity: 1; }
+</style>
