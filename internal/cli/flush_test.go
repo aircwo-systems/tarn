@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
@@ -346,6 +347,142 @@ func TestClearS3BucketNotificationsTreatsMissingBucketAsSuccess(t *testing.T) {
 
 	if err := clearS3BucketNotifications(endpoint, "missing-bucket"); err != nil {
 		t.Fatalf("clearS3BucketNotifications should ignore missing bucket errors, got: %v", err)
+	}
+}
+
+func TestRunFlushTearsDownECSResourcesInDependencyOrder(t *testing.T) {
+	const endpoint = "http://tarn.test"
+	var actions []string
+	var inputs []map[string]any
+
+	prevClient := cliHTTPClient
+	cliHTTPClient = &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_tarn/admin/overview":
+				return jsonResponse(http.StatusOK, `{
+					"config":{"accountId":"000000000000"},
+					"ecs":{"clusters":[{"name":"demo","arn":"arn:aws:ecs:us-east-1:000000000000:cluster/demo"}],
+					"services":[{"name":"web","cluster":"demo","taskDefinition":"web:1"}],
+					"tasks":[{"arn":"arn:aws:ecs:us-east-1:000000000000:task/demo/task-1","cluster":"demo","taskDefinition":"web:1","lastStatus":"RUNNING"}],
+					"taskDefinitions":[{"family":"web","revision":1}]}
+				}`)
+			case r.Method == http.MethodPost && r.URL.String() == endpoint+"/":
+				target := r.Header.Get("X-Amz-Target")
+				const prefix = "AmazonEC2ContainerServiceV20141113."
+				if !strings.HasPrefix(target, prefix) {
+					return jsonResponse(http.StatusNotFound, `{"Message":"not found"}`)
+				}
+				actions = append(actions, strings.TrimPrefix(target, prefix))
+				body, _ := io.ReadAll(r.Body)
+				var input map[string]any
+				if err := json.Unmarshal(body, &input); err != nil {
+					t.Fatalf("decode ECS %s request: %v", target, err)
+				}
+				inputs = append(inputs, input)
+				return jsonResponse(http.StatusOK, `{}`)
+			}
+			return jsonResponse(http.StatusNotFound, `{"Message":"not found"}`)
+		}),
+	}
+	defer func() { cliHTTPClient = prevClient }()
+
+	cmd := &cobra.Command{Use: "tarn"}
+	t.Setenv("TARN_ENDPOINT", endpoint)
+
+	var out bytes.Buffer
+	if err := runFlush(cmd, &out, flushOptions{}); err != nil {
+		t.Fatalf("runFlush returned error: %v", err)
+	}
+
+	wantActions := []string{"StopTask", "DeleteService", "DeregisterTaskDefinition", "DeleteCluster"}
+	if strings.Join(actions, ",") != strings.Join(wantActions, ",") {
+		t.Fatalf("ECS actions were %v, want %v", actions, wantActions)
+	}
+	if len(inputs) != len(wantActions) {
+		t.Fatalf("expected %d ECS request bodies, got %d", len(wantActions), len(inputs))
+	}
+	if inputs[0]["Task"] != "arn:aws:ecs:us-east-1:000000000000:task/demo/task-1" || inputs[0]["Cluster"] != "demo" {
+		t.Fatalf("unexpected StopTask input: %#v", inputs[0])
+	}
+	if inputs[1]["Service"] != "web" || inputs[1]["Cluster"] != "demo" || inputs[1]["Force"] != true {
+		t.Fatalf("unexpected DeleteService input: %#v", inputs[1])
+	}
+	if inputs[2]["TaskDefinition"] != "web:1" {
+		t.Fatalf("unexpected DeregisterTaskDefinition input: %#v", inputs[2])
+	}
+	if inputs[3]["Cluster"] != "arn:aws:ecs:us-east-1:000000000000:cluster/demo" {
+		t.Fatalf("unexpected DeleteCluster input: %#v", inputs[3])
+	}
+	for _, want := range []string{
+		"Stopped ECS Task: arn:aws:ecs:us-east-1:000000000000:task/demo/task-1",
+		"Deleted ECS Service: web",
+		"Deregistered ECS Task Definition: web:1",
+		"Deleted ECS Cluster: arn:aws:ecs:us-east-1:000000000000:cluster/demo",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("expected output to contain %q, got: %s", want, out.String())
+		}
+	}
+}
+
+func TestRunFlushFiltersECSResourcesByGroupAndKeepsAssociationsTogether(t *testing.T) {
+	const endpoint = "http://tarn.test"
+	var actions []string
+
+	prevClient := cliHTTPClient
+	cliHTTPClient = &http.Client{
+		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			switch {
+			case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_tarn/admin/overview":
+				return jsonResponse(http.StatusOK, `{
+					"config":{"accountId":"000000000000"},
+					"ecs":{"clusters":[{"name":"r10-cluster"},{"name":"r9-cluster"}],
+					"services":[
+						{"name":"r10-service","cluster":"r10-cluster","taskDefinition":"r10:1"},
+						{"name":"r9-service","cluster":"r9-cluster","taskDefinition":"r9:1"}
+					],
+					"tasks":[
+						{"arn":"task-r10","cluster":"r10-cluster","taskDefinition":"r10:1","status":"RUNNING"},
+						{"arn":"task-r9","cluster":"r9-cluster","taskDefinition":"r9:1","status":"RUNNING"}
+					],
+					"taskDefinitions":[{"family":"r10","revision":1},{"family":"r9","revision":1}]}
+				}`)
+			case r.Method == http.MethodPost && r.URL.String() == endpoint+"/":
+				target := r.Header.Get("X-Amz-Target")
+				const prefix = "AmazonEC2ContainerServiceV20141113."
+				if !strings.HasPrefix(target, prefix) {
+					return jsonResponse(http.StatusNotFound, `{"Message":"not found"}`)
+				}
+				body, _ := io.ReadAll(r.Body)
+				var input map[string]any
+				if err := json.Unmarshal(body, &input); err != nil {
+					t.Fatalf("decode ECS %s request: %v", target, err)
+				}
+				for _, key := range []string{"Task", "Service", "TaskDefinition", "Cluster"} {
+					if value, ok := input[key].(string); ok && strings.Contains(value, "r9") {
+						t.Fatalf("unexpected r9 ECS request for %s: %#v", target, input)
+					}
+				}
+				actions = append(actions, strings.TrimPrefix(target, prefix))
+				return jsonResponse(http.StatusOK, `{}`)
+			}
+			return jsonResponse(http.StatusNotFound, `{"Message":"not found"}`)
+		}),
+	}
+	defer func() { cliHTTPClient = prevClient }()
+
+	cmd := &cobra.Command{Use: "tarn"}
+	t.Setenv("TARN_ENDPOINT", endpoint)
+
+	var out bytes.Buffer
+	if err := runFlush(cmd, &out, flushOptions{Group: "r10"}); err != nil {
+		t.Fatalf("runFlush returned error: %v", err)
+	}
+
+	wantActions := []string{"StopTask", "DeleteService", "DeregisterTaskDefinition", "DeleteCluster"}
+	if strings.Join(actions, ",") != strings.Join(wantActions, ",") {
+		t.Fatalf("ECS actions were %v, want %v", actions, wantActions)
 	}
 }
 

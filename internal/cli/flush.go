@@ -24,6 +24,61 @@ type flushOptions struct {
 	AccountID string
 }
 
+type ecsFlushCluster struct {
+	Name        string            `json:"name"`
+	Arn         string            `json:"arn"`
+	ClusterName string            `json:"clusterName"`
+	ClusterArn  string            `json:"clusterArn"`
+	Tags        map[string]string `json:"tags"`
+}
+
+type ecsFlushService struct {
+	Name              string            `json:"name"`
+	Arn               string            `json:"arn"`
+	ServiceName       string            `json:"serviceName"`
+	ServiceArn        string            `json:"serviceArn"`
+	Cluster           string            `json:"cluster"`
+	ClusterName       string            `json:"clusterName"`
+	ClusterArn        string            `json:"clusterArn"`
+	TaskDefinition    string            `json:"taskDefinition"`
+	TaskDefinitionArn string            `json:"taskDefinitionArn"`
+	Tags              map[string]string `json:"tags"`
+}
+
+type ecsFlushTask struct {
+	Name              string            `json:"name"`
+	Arn               string            `json:"arn"`
+	TaskArn           string            `json:"taskArn"`
+	Cluster           string            `json:"cluster"`
+	ClusterName       string            `json:"clusterName"`
+	ClusterArn        string            `json:"clusterArn"`
+	TaskDefinition    string            `json:"taskDefinition"`
+	TaskDefinitionArn string            `json:"taskDefinitionArn"`
+	Status            string            `json:"status"`
+	LastStatus        string            `json:"lastStatus"`
+	DesiredStatus     string            `json:"desiredStatus"`
+	Group             string            `json:"group"`
+	Tags              map[string]string `json:"tags"`
+}
+
+type ecsFlushTaskDefinition struct {
+	Name              string            `json:"name"`
+	Arn               string            `json:"arn"`
+	TaskDefinition    string            `json:"taskDefinition"`
+	TaskDefinitionArn string            `json:"taskDefinitionArn"`
+	Family            string            `json:"family"`
+	Revision          int               `json:"revision"`
+	Status            string            `json:"status"`
+	Tags              map[string]string `json:"tags"`
+}
+
+type ecsFlushOverview struct {
+	Clusters        []ecsFlushCluster        `json:"clusters"`
+	Services        []ecsFlushService        `json:"services"`
+	Tasks           []ecsFlushTask           `json:"tasks"`
+	TaskDefinitions []ecsFlushTaskDefinition `json:"taskDefinitions"`
+}
+
 type flushOverview struct {
 	Config struct {
 		AccountID string `json:"accountId"`
@@ -82,6 +137,11 @@ type flushOverview struct {
 		Arn  string            `json:"arn"`
 		Tags map[string]string `json:"tags"`
 	} `json:"stateMachines"`
+	ECS                *ecsFlushOverview        `json:"ecs,omitempty"`
+	ECSClusters        []ecsFlushCluster        `json:"ecsClusters"`
+	ECSServices        []ecsFlushService        `json:"ecsServices"`
+	ECSTasks           []ecsFlushTask           `json:"ecsTasks"`
+	ECSTaskDefinitions []ecsFlushTaskDefinition `json:"ecsTaskDefinitions"`
 }
 
 func newFlushCmd() *cobra.Command {
@@ -90,7 +150,7 @@ func newFlushCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "flush",
 		Short: "Delete provisioned resources from the current Tarn instance",
-		Long: `Flush deletes provisioned API Gateways, Lambda functions, SQS queues, event source mappings, and Secrets Manager secrets
+		Long: `Flush deletes provisioned API Gateways, Lambda functions, SQS queues, event source mappings, ECS resources, and Secrets Manager secrets
 from the current Tarn instance.
 
 Use --tag to scope deletion to a feature slice such as feature=r10.
@@ -190,8 +250,27 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	}
 
 	filteredStateMachines := filterStateMachines(overview.StateMachines, opts.TagFilter, opts.Group)
+	ecsClusters := overview.ECSClusters
+	ecsServices := overview.ECSServices
+	ecsTasks := overview.ECSTasks
+	ecsTaskDefinitions := overview.ECSTaskDefinitions
+	if overview.ECS != nil {
+		ecsClusters = overview.ECS.Clusters
+		ecsServices = overview.ECS.Services
+		ecsTasks = overview.ECS.Tasks
+		ecsTaskDefinitions = overview.ECS.TaskDefinitions
+	}
+	filteredECSClusters, filteredECSServices, filteredECSTasks, filteredECSTaskDefinitions := selectECSFlushResources(
+		ecsClusters,
+		ecsServices,
+		ecsTasks,
+		ecsTaskDefinitions,
+		narrow,
+		opts.TagFilter,
+		opts.Group,
+	)
 
-	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredEventBridgeRules) + len(filteredNotificationBuckets) + len(filteredBuckets) + len(filteredStateMachines)
+	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredEventBridgeRules) + len(filteredNotificationBuckets) + len(filteredBuckets) + len(filteredStateMachines) + len(filteredECSClusters) + len(filteredECSServices) + len(filteredECSTasks) + len(filteredECSTaskDefinitions)
 	selectorDesc := flushSelectorDescription(opts)
 	if total == 0 {
 		if selectorDesc != "" {
@@ -221,6 +300,9 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 			}
 		}
 	}
+	if err := printECSFlushPlan(out, filteredECSClusters, filteredECSServices, filteredECSTasks, filteredECSTaskDefinitions); err != nil {
+		return err
+	}
 	if opts.DryRun {
 		_, _ = fmt.Fprintln(out, "Dry run only. No resources were deleted.")
 		return nil
@@ -241,6 +323,50 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 			continue
 		}
 		_, _ = fmt.Fprintf(out, "Deleted State Machine: %s\n", sm.Name)
+	}
+	for _, task := range filteredECSTasks {
+		taskRef := ecsTaskRef(task)
+		if taskRef == "" || strings.EqualFold(ecsTaskStatus(task), "STOPPED") {
+			continue
+		}
+		if err := stopECSTask(endpoint, ecsTaskClusterRef(task), taskRef); err != nil {
+			recordFailure("ECS task", taskRef, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Stopped ECS Task: %s\n", taskRef)
+	}
+	for _, svc := range filteredECSServices {
+		serviceRef := ecsServiceRef(svc)
+		if serviceRef == "" {
+			continue
+		}
+		if err := deleteECSService(endpoint, ecsServiceClusterRef(svc), serviceRef); err != nil {
+			recordFailure("ECS service", serviceRef, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Deleted ECS Service: %s\n", serviceRef)
+	}
+	for _, td := range filteredECSTaskDefinitions {
+		taskDefinitionRef := ecsTaskDefinitionRef(td)
+		if taskDefinitionRef == "" {
+			continue
+		}
+		if err := deregisterECSTaskDefinition(endpoint, taskDefinitionRef); err != nil {
+			recordFailure("ECS task definition", taskDefinitionRef, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Deregistered ECS Task Definition: %s\n", taskDefinitionRef)
+	}
+	for _, cluster := range filteredECSClusters {
+		clusterRef := ecsClusterRef(cluster)
+		if clusterRef == "" {
+			continue
+		}
+		if err := deleteECSCluster(endpoint, clusterRef); err != nil {
+			recordFailure("ECS cluster", clusterRef, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Deleted ECS Cluster: %s\n", clusterRef)
 	}
 	for _, mapping := range filteredMappings {
 		if err := deleteEventSourceMapping(endpoint, mapping.UUID); err != nil {
@@ -347,6 +473,343 @@ func fetchFlushOverview(endpoint string) (*flushOverview, error) {
 		return nil, fmt.Errorf("failed to parse overview response: %w", err)
 	}
 	return &overview, nil
+}
+
+func selectECSFlushResources(
+	clusters []ecsFlushCluster,
+	services []ecsFlushService,
+	tasks []ecsFlushTask,
+	taskDefinitions []ecsFlushTaskDefinition,
+	narrow bool,
+	query, group string,
+) ([]ecsFlushCluster, []ecsFlushService, []ecsFlushTask, []ecsFlushTaskDefinition) {
+	if !narrow {
+		return clusters, services, tasks, ecsFlushTaskDefinitions(taskDefinitions, services, tasks)
+	}
+
+	clusterSelected := make([]bool, len(clusters))
+	serviceSelected := make([]bool, len(services))
+	taskSelected := make([]bool, len(tasks))
+	taskDefinitionSelected := make([]bool, len(taskDefinitions))
+
+	clusterRefs := make(map[string]bool)
+	taskDefinitionRefs := make(map[string]bool)
+	serviceNames := make(map[string]bool)
+
+	for i, cluster := range clusters {
+		if matchesECSResource(query, group, cluster.Tags, ecsClusterName(cluster), ecsClusterRef(cluster)) {
+			clusterSelected[i] = true
+			addECSRef(clusterRefs, ecsClusterRef(cluster))
+		}
+	}
+	for i, td := range taskDefinitions {
+		if matchesECSResource(query, group, td.Tags, ecsTaskDefinitionName(td), ecsTaskDefinitionRef(td)) {
+			taskDefinitionSelected[i] = true
+			addECSRef(taskDefinitionRefs, ecsTaskDefinitionRef(td))
+		}
+	}
+	for i, svc := range services {
+		if matchesECSResource(query, group, svc.Tags, ecsServiceName(svc), ecsServiceRef(svc)) {
+			serviceSelected[i] = true
+			serviceNames[strings.ToLower(ecsServiceName(svc))] = true
+		}
+	}
+	for i, task := range tasks {
+		if matchesECSResource(query, group, task.Tags, ecsTaskName(task), ecsTaskRef(task)) {
+			taskSelected[i] = true
+		}
+	}
+
+	// Select associated ECS records together. This makes --tag and --group
+	// useful for untagged tasks whose names are generated ARNs, while keeping
+	// unrelated clusters, services, and tasks out of a targeted flush.
+	changed := true
+	for changed {
+		changed = false
+		for i, svc := range services {
+			if serviceSelected[i] {
+				continue
+			}
+			if hasECSRef(clusterRefs, ecsServiceClusterRef(svc)) ||
+				hasECSRef(taskDefinitionRefs, ecsServiceTaskDefinitionRef(svc)) {
+				serviceSelected[i] = true
+				serviceNames[strings.ToLower(ecsServiceName(svc))] = true
+				changed = true
+			}
+		}
+		for i, task := range tasks {
+			if taskSelected[i] {
+				continue
+			}
+			serviceName := ecsServiceNameFromGroup(task.Group)
+			if hasECSRef(clusterRefs, ecsTaskClusterRef(task)) ||
+				hasECSRef(taskDefinitionRefs, ecsTaskDefinitionRefForTask(task)) ||
+				serviceNames[strings.ToLower(serviceName)] {
+				taskSelected[i] = true
+				changed = true
+			}
+		}
+		for i, svc := range services {
+			if !serviceSelected[i] {
+				continue
+			}
+			if addECSRef(clusterRefs, ecsServiceClusterRef(svc)) {
+				changed = true
+			}
+			if addECSRef(taskDefinitionRefs, ecsServiceTaskDefinitionRef(svc)) {
+				changed = true
+			}
+		}
+		for i, task := range tasks {
+			if !taskSelected[i] {
+				continue
+			}
+			if addECSRef(clusterRefs, ecsTaskClusterRef(task)) {
+				changed = true
+			}
+			if addECSRef(taskDefinitionRefs, ecsTaskDefinitionRefForTask(task)) {
+				changed = true
+			}
+		}
+		for i, cluster := range clusters {
+			if !clusterSelected[i] && hasECSRef(clusterRefs, ecsClusterRef(cluster)) {
+				clusterSelected[i] = true
+				changed = true
+			}
+		}
+		for i, td := range taskDefinitions {
+			if !taskDefinitionSelected[i] && hasECSRef(taskDefinitionRefs, ecsTaskDefinitionRef(td)) {
+				taskDefinitionSelected[i] = true
+				changed = true
+			}
+		}
+	}
+
+	selectedClusters := make([]ecsFlushCluster, 0, len(clusters))
+	for i, cluster := range clusters {
+		if clusterSelected[i] {
+			selectedClusters = append(selectedClusters, cluster)
+		}
+	}
+	selectedServices := make([]ecsFlushService, 0, len(services))
+	for i, svc := range services {
+		if serviceSelected[i] {
+			selectedServices = append(selectedServices, svc)
+		}
+	}
+	selectedTasks := make([]ecsFlushTask, 0, len(tasks))
+	for i, task := range tasks {
+		if taskSelected[i] {
+			selectedTasks = append(selectedTasks, task)
+		}
+	}
+	selectedTaskDefinitions := make([]ecsFlushTaskDefinition, 0, len(taskDefinitions))
+	for i, td := range taskDefinitions {
+		if taskDefinitionSelected[i] {
+			selectedTaskDefinitions = append(selectedTaskDefinitions, td)
+		}
+	}
+	return selectedClusters, selectedServices, selectedTasks, ecsFlushTaskDefinitions(selectedTaskDefinitions, selectedServices, selectedTasks)
+}
+
+func matchesECSResource(query, group string, tags map[string]string, names ...string) bool {
+	matchedName := false
+	for _, name := range names {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		if matchesGroupName(name, group) && (query == "" || matchesTagSelector(tags, query) || matchesBucketSelector(name, query)) {
+			matchedName = true
+			break
+		}
+	}
+	return matchedName
+}
+
+func ecsFlushTaskDefinitions(explicit []ecsFlushTaskDefinition, services []ecsFlushService, tasks []ecsFlushTask) []ecsFlushTaskDefinition {
+	seen := make(map[string]bool)
+	out := make([]ecsFlushTaskDefinition, 0, len(explicit)+len(services)+len(tasks))
+	appendDefinition := func(td ecsFlushTaskDefinition) {
+		ref := ecsTaskDefinitionRef(td)
+		if ref == "" {
+			return
+		}
+		key := strings.ToLower(ref)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		out = append(out, td)
+	}
+	for _, td := range explicit {
+		appendDefinition(td)
+	}
+	for _, svc := range services {
+		if ref := ecsServiceTaskDefinitionRef(svc); ref != "" {
+			appendDefinition(ecsFlushTaskDefinition{TaskDefinitionArn: ref})
+		}
+	}
+	for _, task := range tasks {
+		if ref := ecsTaskDefinitionRefForTask(task); ref != "" {
+			appendDefinition(ecsFlushTaskDefinition{TaskDefinitionArn: ref})
+		}
+	}
+	return out
+}
+
+func ecsClusterName(cluster ecsFlushCluster) string {
+	return firstNonEmpty(cluster.Name, cluster.ClusterName)
+}
+
+func ecsClusterRef(cluster ecsFlushCluster) string {
+	return firstNonEmpty(cluster.Arn, cluster.ClusterArn, cluster.Name, cluster.ClusterName)
+}
+
+func ecsServiceName(service ecsFlushService) string {
+	return firstNonEmpty(service.Name, service.ServiceName)
+}
+
+func ecsServiceRef(service ecsFlushService) string {
+	return firstNonEmpty(service.Arn, service.ServiceArn, service.Name, service.ServiceName)
+}
+
+func ecsServiceClusterRef(service ecsFlushService) string {
+	return firstNonEmpty(service.Cluster, service.ClusterArn, service.ClusterName)
+}
+
+func ecsServiceTaskDefinitionRef(service ecsFlushService) string {
+	return firstNonEmpty(service.TaskDefinition, service.TaskDefinitionArn)
+}
+
+func ecsTaskName(task ecsFlushTask) string {
+	return firstNonEmpty(task.Name, task.Arn, task.TaskArn)
+}
+
+func ecsTaskRef(task ecsFlushTask) string {
+	return firstNonEmpty(task.Arn, task.TaskArn, task.Name)
+}
+
+func ecsTaskClusterRef(task ecsFlushTask) string {
+	return firstNonEmpty(task.Cluster, task.ClusterArn, task.ClusterName)
+}
+
+func ecsTaskDefinitionRefForTask(task ecsFlushTask) string {
+	return firstNonEmpty(task.TaskDefinition, task.TaskDefinitionArn)
+}
+
+func ecsTaskStatus(task ecsFlushTask) string {
+	return firstNonEmpty(task.LastStatus, task.Status)
+}
+
+func ecsTaskDefinitionName(td ecsFlushTaskDefinition) string {
+	return firstNonEmpty(td.Name, td.Family, td.TaskDefinition, td.TaskDefinitionArn, td.Arn)
+}
+
+func ecsTaskDefinitionRef(td ecsFlushTaskDefinition) string {
+	if ref := firstNonEmpty(td.Arn, td.TaskDefinitionArn, td.TaskDefinition); ref != "" {
+		return ref
+	}
+	if td.Family != "" && td.Revision > 0 {
+		return fmt.Sprintf("%s:%d", td.Family, td.Revision)
+	}
+	return td.Family
+}
+
+func ecsServiceNameFromGroup(group string) string {
+	const prefix = "service:"
+	if strings.HasPrefix(strings.ToLower(group), prefix) {
+		return group[len(prefix):]
+	}
+	return ""
+}
+
+func addECSRef(refs map[string]bool, ref string) bool {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return false
+	}
+	changed := false
+	for _, key := range ecsRefKeys(ref) {
+		if !refs[key] {
+			refs[key] = true
+			changed = true
+		}
+	}
+	return changed
+}
+
+func hasECSRef(refs map[string]bool, ref string) bool {
+	for _, key := range ecsRefKeys(ref) {
+		if refs[key] {
+			return true
+		}
+	}
+	return false
+}
+
+func ecsRefKeys(ref string) []string {
+	ref = strings.ToLower(strings.TrimSpace(ref))
+	if ref == "" {
+		return nil
+	}
+	keys := []string{ref}
+	if idx := strings.LastIndexByte(ref, '/'); idx >= 0 && idx+1 < len(ref) {
+		keys = append(keys, ref[idx+1:])
+	}
+	return keys
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func printECSFlushPlan(out io.Writer, clusters []ecsFlushCluster, services []ecsFlushService, tasks []ecsFlushTask, taskDefinitions []ecsFlushTaskDefinition) error {
+	if len(clusters) > 0 {
+		if _, err := fmt.Fprintln(out, "ECS Clusters:"); err != nil {
+			return err
+		}
+		for _, cluster := range clusters {
+			if _, err := fmt.Fprintf(out, "  - %s\n", ecsClusterName(cluster)); err != nil {
+				return err
+			}
+		}
+	}
+	if len(services) > 0 {
+		if _, err := fmt.Fprintln(out, "ECS Services:"); err != nil {
+			return err
+		}
+		for _, service := range services {
+			if _, err := fmt.Fprintf(out, "  - %s\n", ecsServiceName(service)); err != nil {
+				return err
+			}
+		}
+	}
+	if len(tasks) > 0 {
+		if _, err := fmt.Fprintln(out, "ECS Tasks:"); err != nil {
+			return err
+		}
+		for _, task := range tasks {
+			if _, err := fmt.Fprintf(out, "  - %s\n", ecsTaskRef(task)); err != nil {
+				return err
+			}
+		}
+	}
+	if len(taskDefinitions) > 0 {
+		if _, err := fmt.Fprintln(out, "ECS Task Definitions:"); err != nil {
+			return err
+		}
+		for _, td := range taskDefinitions {
+			if _, err := fmt.Fprintf(out, "  - %s\n", ecsTaskDefinitionRef(td)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func printFlushPlan(out io.Writer, gateways []struct {
@@ -1341,6 +1804,97 @@ func deleteStateMachine(endpoint, arn string) error {
 	}
 
 	return fmt.Errorf("error (%d): %s", resp.StatusCode, string(body))
+}
+
+const ecsFlushTargetPrefix = "AmazonEC2ContainerServiceV20141113."
+
+func callECSFlushAction(endpoint, action string, input any) ([]byte, int, error) {
+	body, err := json.Marshal(input)
+	if err != nil {
+		return nil, 0, err
+	}
+	req, err := http.NewRequest(http.MethodPost, endpoint+"/", bytes.NewReader(body))
+	if err != nil {
+		return nil, 0, err
+	}
+	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	req.Header.Set("X-Amz-Target", ecsFlushTargetPrefix+action)
+
+	resp, err := cliHTTPClient.Do(req)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	responseBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return responseBody, resp.StatusCode, fmt.Errorf("error (%d): %s", resp.StatusCode, string(responseBody))
+	}
+	return responseBody, resp.StatusCode, nil
+}
+
+func stopECSTask(endpoint, cluster, task string) error {
+	body, status, err := callECSFlushAction(endpoint, "StopTask", map[string]string{
+		"Cluster": cluster,
+		"Task":    task,
+		"Reason":  "tarn flush",
+	})
+	if err != nil && isMissingECSResource(status, body) {
+		return nil
+	}
+	return err
+}
+
+func deleteECSService(endpoint, cluster, service string) error {
+	body, status, err := callECSFlushAction(endpoint, "DeleteService", map[string]any{
+		"Cluster": cluster,
+		"Service": service,
+		"Force":   true,
+	})
+	if err != nil && isMissingECSResource(status, body) {
+		return nil
+	}
+	return err
+}
+
+func deregisterECSTaskDefinition(endpoint, taskDefinition string) error {
+	body, status, err := callECSFlushAction(endpoint, "DeregisterTaskDefinition", map[string]string{
+		"TaskDefinition": taskDefinition,
+	})
+	if err != nil && isMissingECSResource(status, body) {
+		return nil
+	}
+	return err
+}
+
+func deleteECSCluster(endpoint, cluster string) error {
+	body, status, err := callECSFlushAction(endpoint, "DeleteCluster", map[string]string{
+		"Cluster": cluster,
+	})
+	if err != nil && isMissingECSResource(status, body) {
+		return nil
+	}
+	return err
+}
+
+func isMissingECSResource(status int, body []byte) bool {
+	if status != http.StatusBadRequest && status != http.StatusNotFound {
+		return false
+	}
+	message := strings.ToLower(string(body))
+	for _, marker := range []string{
+		"not found",
+		"does not exist",
+		"resourcenotfound",
+		"clusternotfound",
+		"servicenotfound",
+		"tasknotfound",
+	} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeLambdaRef(ref string) string {
