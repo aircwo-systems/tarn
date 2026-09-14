@@ -352,6 +352,12 @@ export interface EventBridgeTargetSummary {
   arn: string;
   lastResult?: string;
   lastInvokedAt?: string;
+  roleArn?: string;
+  input?: string;
+  inputPath?: string;
+  inputPathsMap?: Record<string, string>;
+  inputTemplate?: string;
+  taskDefinition?: string;
 }
 
 export interface EventBridgeRuleSummary {

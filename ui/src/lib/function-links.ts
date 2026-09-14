@@ -97,7 +97,7 @@ export function configuredCallers(fn: FunctionSummary, data: OverviewResponse | 
         kind: "eventbridge",
         label: rule.name,
         detail: rule.scheduleExpression || "Event pattern",
-        href: "eventbridge",
+        href: `eventbridge?rule=${encodeURIComponent(rule.name)}`,
         state: rule.state !== "ENABLED" ? "off" : resultState(target.lastResult ?? rule.lastResult),
         meta: rule.nextRunAt ? `next ${rule.nextRunAt}` : undefined,
       });
