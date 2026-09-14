@@ -10,6 +10,14 @@
 	}: WithElementRef<HTMLTdAttributes> = $props();
 </script>
 
-<td bind:this={ref} data-slot="table-cell" class={cn("p-2 align-middle whitespace-nowrap overflow-hidden [&:has([role=checkbox])]:pr-0", className)} {...restProps}>
+<td
+	bind:this={ref}
+	data-slot="table-cell"
+	class={cn(
+		"px-3 py-2.5 align-middle text-[12.5px] leading-snug whitespace-nowrap overflow-hidden [&:has([role=checkbox])]:pr-0",
+		className
+	)}
+	{...restProps}
+>
 	{@render children?.()}
 </td>

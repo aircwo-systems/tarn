@@ -33,24 +33,24 @@
   } = $props();
 </script>
 
-<div class="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-border/70 bg-background/60">
+<div class="flex h-full min-h-0 flex-col overflow-hidden rounded-md border border-border/70 bg-card/30">
   <div
-    class="flex items-center justify-between border-b border-border/70 bg-background/35 px-3 py-2"
+    class="flex items-center justify-between border-b border-border/70 bg-card/60 px-3.5 py-2.5"
   >
-    <h3 class="text-sm font-semibold text-foreground">{title}</h3>
+    <h3 class="text-[13px] font-medium text-foreground">{title}</h3>
     <div class="flex items-center gap-2">
-      <span class="text-xs text-muted-foreground/70 font-mono"
+      <span class="font-mono text-[11px] text-muted-foreground/80 tabular-nums"
         >{count} items</span
       >
       {#if onRefresh}
         <button
           type="button"
           onclick={onRefresh}
-          class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-background-subtle hover:text-foreground"
+          class="flex h-6 w-6 items-center justify-center rounded-md border border-border/40 text-muted-foreground transition-colors hover:border-border hover:bg-muted/40 hover:text-foreground"
           aria-label="Refresh"
           title="Refresh"
         >
-          <ArrowClockwiseIcon size={13} />
+          <ArrowClockwiseIcon size={12} />
         </button>
       {/if}
     </div>
@@ -58,28 +58,32 @@
 
   {#if loading}
     <div class="flex-1 p-3 space-y-2">
-      {#each Array(3) as _}
+      {#each Array(5) as _, i (i)}
         <Skeleton class="h-8 w-full" />
       {/each}
     </div>
   {:else if empty}
-    <div class="flex flex-1 items-center justify-center">
+    <div class="flex flex-1 items-center justify-center p-6">
       <EmptyState message={emptyMessage} icon={emptyIcon} />
     </div>
   {:else}
-    <div class="min-h-0 flex-1 overflow-auto">
-      <Table>
-        <TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur [&_th]:bg-background/95">
-          <TableRow>
-            {#each columns as col}
-              <TableHead>{col}</TableHead>
-            {/each}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {@render children?.()}
-        </TableBody>
-      </Table>
+    <div class="flex-1 min-h-0 overflow-auto">
+      {#if children}
+        {@render children()}
+      {:else}
+        <Table>
+          {#if columns.length > 0}
+            <TableHeader>
+              <TableRow>
+                {#each columns as col}
+                  <TableHead>{col}</TableHead>
+                {/each}
+              </TableRow>
+            </TableHeader>
+          {/if}
+          <TableBody />
+        </Table>
+      {/if}
     </div>
   {/if}
 </div>

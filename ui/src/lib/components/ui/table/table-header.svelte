@@ -13,7 +13,7 @@
 <thead
 	bind:this={ref}
 	data-slot="table-header"
-	class={cn("[&_tr]:border-b", className)}
+	class={cn("border-b border-border/70 bg-card/40 backdrop-blur-sm [&_tr]:border-b-0", className)}
 	{...restProps}
 >
 	{@render children?.()}

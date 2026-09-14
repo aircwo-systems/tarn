@@ -15,6 +15,7 @@
   import ArnCell from "$lib/components/common/arn-cell.svelte";
   import EmptyState from "$lib/components/common/empty-state.svelte";
   import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
+  import MetricCard from "$lib/components/common/metric-card.svelte";
   import SectionHeader from "./section-header.svelte";
   import { fetchQueueMessages } from "$lib/api";
   import {
@@ -168,45 +169,40 @@
 
 <div class="flex min-h-full flex-col gap-4">
   <SectionHeader
-    title="SQS queues"
+    title="SQS Queues"
     description="Queue depth, delivery pressure and live message inspection."
     icon={ChatCircleIcon}
     {sidebarCollapsed}
     {onToggleSidebar}
-  >
-    {#snippet actions()}
-      <div class="flex flex-wrap items-center gap-4 text-xs font-mono text-muted-foreground">
-      <span class="inline-flex items-center gap-1.5">
-        <span class="font-mono text-foreground">{queues.length}</span>
-        <span class="text-muted-foreground/70">visible</span>
-      </span>
-      <span class="inline-flex items-center gap-1.5">
-        <span class="font-mono text-foreground">{totalVisible}</span>
-        <span class="text-muted-foreground/70">queued</span>
-      </span>
-      <span class="inline-flex items-center gap-1.5">
-        <span class="font-mono text-foreground">{totalInFlight}</span>
-        <span class="text-muted-foreground/70">in flight</span>
-      </span>
-      <span class="inline-flex items-center gap-1.5">
-        <span class="font-mono text-foreground">{totalDelayed}</span>
-        <span class="text-muted-foreground/70">delayed</span>
-      </span>
-      <span class="inline-flex items-center gap-1.5">
-        <span class="font-mono text-foreground">{totalProcessed}</span>
-        <span class="text-muted-foreground/70">processed</span>
-      </span>
-      {#if totalStale > 0}
-        <span class="inline-flex items-center gap-1.5 text-destructive">
-          <span class="font-mono">{totalStale}</span>
-          <span>stale</span>
-        </span>
-      {/if}
-      </div>
-    {/snippet}
-  </SectionHeader>
+  />
 
-  <PaneGroup direction="horizontal" class="min-h-0 flex-1 gap-0 rounded-lg border border-border/70" style="height: calc(100vh - 10rem);">
+  <!-- Metrics Row -->
+  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+    <MetricCard
+      label="Queues"
+      value={queues.length}
+      sub="{queues.filter(q => q.fifo).length} FIFO · {queues.filter(q => !q.fifo).length} Standard"
+    />
+    <MetricCard
+      label="Queued Messages"
+      value={totalVisible}
+      valueColor={totalVisible > 0 ? "var(--accent-amber)" : "var(--text-primary)"}
+      sub="Available for consumption"
+    />
+    <MetricCard
+      label="In Flight"
+      value={totalInFlight}
+      valueColor={totalInFlight > 0 ? "var(--accent-green)" : "var(--text-primary)"}
+      sub="Currently locked by consumers"
+    />
+    <MetricCard
+      label="Processed"
+      value={totalProcessed}
+      sub="{totalDelayed} delayed · {totalStale} stale"
+    />
+  </div>
+
+  <PaneGroup direction="horizontal" class="min-h-0 flex-1 gap-0 rounded-md border border-border/70" style="height: calc(100vh - 15rem);">
     <Pane defaultSize={65} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-background/60">
     <div
       class="min-h-0 h-full overflow-hidden"

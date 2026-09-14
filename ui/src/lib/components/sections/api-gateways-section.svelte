@@ -10,6 +10,7 @@
   import ResourceTable from "$lib/components/common/resource-table.svelte";
   import ArnCell from "$lib/components/common/arn-cell.svelte";
   import GatewayDetailsPanel from "$lib/components/topology/gateway-details-panel.svelte";
+  import MetricCard from "$lib/components/common/metric-card.svelte";
   import SectionHeader from "./section-header.svelte";
   import {
     getDashboard,
@@ -38,6 +39,8 @@
   const selectedGateway = $derived(
     gateways.find((gateway) => gateway.apiId === selectedGatewayId) ?? null,
   );
+  const totalRoutes = $derived(gateways.reduce((sum, g) => sum + (g.routes ?? 0), 0));
+  const totalIntegrations = $derived(gateways.reduce((sum, g) => sum + (g.integrations ?? 0), 0));
 
   $effect(() => {
     if (
@@ -75,24 +78,48 @@
   class="flex min-h-full flex-col gap-4"
 >
   <SectionHeader
-    title="API gateways"
+    title="API Gateways"
     description="Gateway inventory, stages, routes and integration details."
     icon={GlobeHemisphereWestIcon}
     {sidebarCollapsed}
     {onToggleSidebar}
   >
     {#snippet actions()}
-      <div class="flex flex-wrap items-center gap-4 text-xs font-mono text-muted-foreground">
-      <span class="inline-flex items-center gap-1.5">
-        <span class="font-mono text-foreground">{gateways.length}</span>
-        <span class="text-muted-foreground/70">visible</span>
-      </span>
-      </div>
+      {#if gateways.length > 0}
+        <button
+          type="button"
+          onclick={downloadAll}
+          class="flex items-center gap-1.5 rounded-md border border-border/70 bg-card/60 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-border hover:bg-muted/50"
+        >
+          <DownloadSimpleIcon size={13} />
+          Export Postman
+        </button>
+      {/if}
     {/snippet}
   </SectionHeader>
 
-  <PaneGroup direction="horizontal" class="min-h-0 flex-1 rounded-lg border border-border/70" style="height: calc(100vh - 10rem);">
-    <Pane defaultSize={58} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-background/60">
+  <!-- Metrics Row -->
+  <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+    <MetricCard
+      label="Total Gateways"
+      value={gateways.length}
+      sub="Active HTTP & REST endpoints"
+    />
+    <MetricCard
+      label="Provisioned Routes"
+      value={totalRoutes}
+      sub="Total route handlers"
+    />
+    <MetricCard
+      label="Integrations"
+      value={totalIntegrations}
+      valueColor="var(--accent-green)"
+      sub="Backend targets wired"
+    />
+  </div>
+
+  <PaneGroup direction="horizontal" class="min-h-0 flex-1 rounded-md border border-border/70" style="height: calc(100vh - 15rem);">
+    <Pane defaultSize={58} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-card/30">
   <ResourceTable
     title="API Gateways"
     count={gateways.length}
@@ -131,7 +158,7 @@
   </ResourceTable>
     </Pane>
     <Handle />
-    <Pane defaultSize={42} minSize={25} class="flex min-h-0 flex-col overflow-hidden bg-background/60">
+    <Pane defaultSize={42} minSize={25} class="flex min-h-0 flex-col overflow-hidden bg-card/30">
   {#if selectedGateway}
     <GatewayDetailsPanel
       gateway={selectedGateway}

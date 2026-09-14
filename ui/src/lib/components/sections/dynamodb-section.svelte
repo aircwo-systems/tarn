@@ -12,6 +12,7 @@
   import { Skeleton } from "$lib/components/ui/skeleton";
   import EmptyState from "$lib/components/common/empty-state.svelte";
   import ArnCell from "$lib/components/common/arn-cell.svelte";
+  import MetricCard from "$lib/components/common/metric-card.svelte";
   import SectionHeader from "./section-header.svelte";
   import { getDashboard } from "$lib/state.svelte";
 
@@ -95,29 +96,32 @@
     icon={DatabaseIcon}
     {sidebarCollapsed}
     {onToggleSidebar}
-  >
-    {#snippet actions()}
-      <div class="flex flex-wrap items-center gap-4 text-xs font-mono text-muted-foreground">
-      <span class="inline-flex items-center gap-1.5">
-        <span class="font-mono text-foreground">{tables.length}</span>
-        <span class="text-muted-foreground/70">tables</span>
-      </span>
-      <span class="inline-flex items-center gap-1.5">
-        <span class="font-mono text-foreground">{streams.length}</span>
-        <span class="text-muted-foreground/70">streams</span>
-      </span>
-      <span class="inline-flex items-center gap-1.5">
-        <span class="font-mono text-foreground">{streamEnabledCount}</span>
-        <span class="text-muted-foreground/70">stream-enabled</span>
-      </span>
-      </div>
-    {/snippet}
-  </SectionHeader>
+  />
+
+  <!-- Metrics Row -->
+  <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+    <MetricCard
+      label="Total Tables"
+      value={tables.length}
+      sub="NoSQL document stores"
+    />
+    <MetricCard
+      label="Active Streams"
+      value={streams.length}
+      valueColor="var(--accent-green)"
+      sub="Change data capture channels"
+    />
+    <MetricCard
+      label="Stream Enabled"
+      value={streamEnabledCount}
+      sub="Tables with streaming active"
+    />
+  </div>
 
   {#if dashboard.loading && !dashboard.data}
     <div
-      class="min-h-0 flex-1 overflow-hidden rounded-lg border border-border/70 bg-background/50"
-      style="height: calc(100vh - 10rem);"
+      class="min-h-0 flex-1 overflow-hidden rounded-md border border-border/70 bg-card/30"
+      style="height: calc(100vh - 15rem);"
     >
       <div class="grid gap-0 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
         <div class="space-y-2 border-b border-border/70 p-4 xl:border-b-0 xl:border-r">
@@ -134,13 +138,13 @@
     </div>
   {:else if tables.length === 0 && streams.length === 0}
     <div
-      class="flex min-h-0 flex-1 items-center justify-center rounded-lg border border-border/70 bg-background/50"
-      style="height: calc(100vh - 10rem);"
+      class="flex min-h-0 flex-1 items-center justify-center rounded-md border border-border/70 bg-card/30"
+      style="height: calc(100vh - 15rem);"
     >
       <EmptyState icon={DatabaseIcon} message="No DynamoDB tables created yet." />
     </div>
   {:else}
-    <PaneGroup direction="horizontal" class="min-h-0 flex-1 rounded-lg border border-border/70" style="height: calc(100vh - 10rem);">
+    <PaneGroup direction="horizontal" class="min-h-0 flex-1 rounded-lg border border-border/70" style="height: calc(100vh - 15rem);">
       <Pane defaultSize={62} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-background/50">
           <div class="flex flex-wrap items-end justify-between gap-4 border-b border-border/70 px-4 py-4">
             <div>
