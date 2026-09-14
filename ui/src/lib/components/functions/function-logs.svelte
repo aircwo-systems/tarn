@@ -4,12 +4,14 @@
   import type { LogEvent } from "$lib/types";
 
   let {
-    functionName,
+    functionName = "",
+    logGroup,
     /** bump to refetch (e.g. invocation count) */
     revision = 0,
     limit = 10,
   }: {
-    functionName: string;
+    functionName?: string;
+    logGroup?: string;
     revision?: number;
     limit?: number;
   } = $props();
@@ -17,7 +19,7 @@
   let events = $state<LogEvent[]>([]);
   let loading = $state(true);
 
-  const group = $derived(`/aws/lambda/${functionName}`);
+  const group = $derived(logGroup ?? `/aws/lambda/${functionName}`);
 
   let lastGroup = "";
 

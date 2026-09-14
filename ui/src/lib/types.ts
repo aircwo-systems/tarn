@@ -475,11 +475,6 @@ export interface ECSTaskDefinitionSummary {
   status: string;
 }
 
-export type ECSDetail =
-  | { kind: "cluster"; resource: ECSClusterSummary }
-  | { kind: "service"; resource: ECSServiceSummary }
-  | { kind: "task"; resource: ECSTaskSummary };
-
 export interface LogGroupSummary {
   name: string;
   createdAt: string;
