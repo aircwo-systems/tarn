@@ -278,9 +278,9 @@
   {#key activeTab}
     {#if activeTab === "overview"}
     <main class="tab-content-view main-stage flex min-w-0 flex-1 flex-col overflow-hidden" class:sidebar-collapsed={sidebarCollapsed}>
-      <div class="flex flex-1 flex-col overflow-hidden px-6 py-5">
+      <div class="flex flex-1 flex-col overflow-hidden {canvasExpanded ? 'px-6 py-5' : 'px-4 py-4'}">
         <!-- Status bar -->
-        <div class="flex flex-wrap items-center gap-4 pb-2">
+        <div class="flex flex-wrap items-center gap-4 {canvasExpanded ? 'pb-2' : 'pb-1'}">
           <button
             type="button"
             onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
@@ -290,9 +290,9 @@
             <SidebarSimpleIcon size={14} weight={sidebarCollapsed ? "regular" : "fill"} />
           </button>
 
-          <TagFilter onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
-
           {#if canvasExpanded}
+            <TagFilter onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+
             <div class="flex flex-1 flex-col gap-[3px]">
               {#each flatBars as metric}
                 <div class="flex w-1/2 gap-px">
@@ -322,7 +322,7 @@
         {/if}
 
         <!-- Hero grid: topology + feed -->
-        <div class="mt-4 grid min-h-0 flex-1 gap-4 {canvasExpanded ? 'grid-cols-1' : 'grid-cols-[1fr_300px]'}">
+        <div class="grid min-h-0 flex-1 gap-4 {canvasExpanded ? 'mt-4 grid-cols-1' : 'mt-2 grid-cols-[1fr_300px]'}">
           <div class="flex min-h-0 flex-col">
             <div class="flex-1 overflow-hidden rounded-[5px]">
               <TopologyCanvas
