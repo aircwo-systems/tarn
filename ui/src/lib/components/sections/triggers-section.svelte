@@ -1,29 +1,9 @@
 <script lang="ts">
-  import {
-    ArrowsClockwise,
-    Bell,
-    BridgeIcon,
-    ChatCircle,
-    GlobeHemisphereWest,
-    Lightning,
-    StackIcon,
-    XIcon,
-  } from "phosphor-svelte";
-  import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
-  import {
-    Table,
-    TableBody,
-    TableCell,
-    TableHead,
-    TableHeader,
-    TableRow,
-  } from "$lib/components/ui/table";
-  import { Skeleton } from "$lib/components/ui/skeleton";
-  import LedDot from "$lib/components/common/led-dot.svelte";
-  import ArnCell from "$lib/components/common/arn-cell.svelte";
-  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
+  import { onMount } from "svelte";
   import SectionHeader from "./section-header.svelte";
-  import { formatJSONForViewer } from "$lib/json-format";
+  import TriggerList, { type TriggerRow } from "$lib/components/triggers/trigger-list.svelte";
+  import TriggerDetail from "$lib/components/triggers/trigger-detail.svelte";
+  import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
   import {
     getDashboard,
     getDashboardFilters,
@@ -37,20 +17,6 @@
     sidebarCollapsed?: boolean;
     onToggleSidebar?: () => void;
   } = $props();
-
-  type TriggerRow = {
-    id: string;
-    type: "SQS" | "SNS" | "API" | "EVENTBRIDGE" | "DYNAMODB";
-    sourceName: string;
-    sourceArn: string;
-    targetName: string;
-    targetArn: string;
-    state: string;
-    detail: string;
-    detailLabel: string;
-    detailFields: Array<{ label: string; value: string }>;
-    lastResult?: string;
-  };
 
   const dashboard = getDashboard();
   const filters = getDashboardFilters();
@@ -329,31 +295,30 @@
   const dynamodbCount = $derived(dynamodbTriggers.length);
   const eventBridgeCount = $derived(eventBridgeTriggers.length);
   const apiCount = $derived(apiTriggers.length);
+
+  type TypeFilter = "ALL" | TriggerRow["type"];
+  let typeFilter = $state<TypeFilter>("ALL");
+
+  const typeOptions = $derived<Array<{ id: TypeFilter; label: string; count: number }>>([
+    { id: "ALL", label: "All", count: triggerRows.length },
+    { id: "SQS", label: "SQS", count: sqsCount },
+    { id: "SNS", label: "SNS", count: snsCount },
+    { id: "DYNAMODB", label: "DDB", count: dynamodbCount },
+    { id: "EVENTBRIDGE", label: "EB", count: eventBridgeCount },
+    { id: "API", label: "API", count: apiCount },
+  ]);
+
+  const filteredTriggers = $derived(
+    typeFilter === "ALL" ? triggerRows : triggerRows.filter((t) => t.type === typeFilter),
+  );
+
+  // Keyed by id: polling replaces the objects, so holding one would freeze the panel.
   let selectedTriggerID = $state<string | null>(null);
-
-  $effect(() => {
-    if (selectedTriggerID && !triggerRows.some((trigger) => trigger.id === selectedTriggerID)) {
-      selectedTriggerID = null;
-    }
-  });
-
   const selectedTrigger = $derived(
-    triggerRows.find((trigger) => trigger.id === selectedTriggerID) ?? null,
+    filteredTriggers.find((trigger) => trigger.id === selectedTriggerID) ??
+      filteredTriggers[0] ??
+      null,
   );
-  const selectedTriggerPayload = $derived(
-    selectedTrigger?.lastResult ? formatJSONForViewer(selectedTrigger.lastResult) : null,
-  );
-
-  function stateColor(state: string): "green" | "amber" | "red" | "gray" {
-    const normalized = state.toLowerCase();
-    if (normalized === "enabled" || normalized === "active" || normalized === "configured")
-      return "green";
-    if (normalized === "creating" || normalized === "updating" || normalized === "pending")
-      return "amber";
-    if (normalized.includes("fail") || normalized === "disabled")
-      return "red";
-    return "gray";
-  }
 
   function lambdaNameFromEndpoint(endpoint: string): string {
     const marker = ":function:";
@@ -375,234 +340,125 @@
     return endpoint;
   }
 
-  function selectTrigger(id: string) {
-    selectedTriggerID = selectedTriggerID === id ? null : id;
+  function select(id: string) {
+    selectedTriggerID = id;
+    history.replaceState(null, "", `#triggers?id=${encodeURIComponent(id)}`);
   }
+
+  onMount(() => {
+    const qs = window.location.hash.split("?")[1];
+    const id = qs ? new URLSearchParams(qs).get("id") : null;
+    if (id) selectedTriggerID = id;
+  });
 </script>
 
-<div class="flex min-h-full flex-col gap-4">
+<div class="triggers">
   <SectionHeader
     title="Triggers"
-    description="Event sources wired to functions and APIs."
-    icon={ArrowsClockwise}
+    description="{triggerRows.length} mappings · {sqsCount} sqs · {snsCount} sns · {dynamodbCount} ddb · {eventBridgeCount} eb · {apiCount} api"
     {sidebarCollapsed}
     {onToggleSidebar}
   >
     {#snippet actions()}
-      <div class="flex items-center gap-4 text-xs text-muted-foreground font-mono">
-      <span class="inline-flex items-center gap-1.5">
-        <ChatCircle size={12} class="text-amber" />
-        {sqsCount} SQS
-      </span>
-      <span class="inline-flex items-center gap-1.5">
-        <Bell size={12} class="text-primary" />
-        {snsCount} SNS
-      </span>
-      <span class="inline-flex items-center gap-1.5">
-        <StackIcon size={12} class="text-[var(--topology-dynamodb)]" />
-        {dynamodbCount} DDB
-      </span>
-      <span class="inline-flex items-center gap-1.5">
-        <BridgeIcon size={12} class="text-blue" />
-        {eventBridgeCount} EB
-      </span>
-      <span class="inline-flex items-center gap-1.5">
-        <GlobeHemisphereWest size={12} class="text-blue" />
-        {apiCount} API
-      </span>
-      </div>
+      {#if filters.tagFilter}
+        <span class="filter" title={filters.tagFilter}>Tag <span>{filters.tagFilter}</span></span>
+      {/if}
     {/snippet}
   </SectionHeader>
 
-  <PaneGroup direction="horizontal" class="min-h-0 flex-1 rounded-lg border border-border/70" style="height: calc(100vh - 10rem);">
-    <Pane defaultSize={62} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-background/50">
-        <div class="flex items-center justify-between border-b border-border/70 px-4 py-3">
-          <div>
-            <h3 class="text-sm font-semibold text-foreground">Trigger Mappings</h3>
-            <p class="mt-1 text-[11px] text-muted-foreground/70">
-              Select a mapping row to inspect its source, target, and payload details.
-            </p>
-          </div>
-          <span class="text-xs text-muted-foreground/70 font-mono">{triggerRows.length} items</span>
+  {#if dashboard.loading && !dashboard.data}
+    <div class="layout">
+      <div class="skeleton-list">
+        {#each Array(6) as _, i (i)}<span style:--i={i}></span>{/each}
+      </div>
+    </div>
+  {:else if triggerRows.length === 0}
+    <div class="blank">
+      <h2>No triggers yet</h2>
+      <p>Wire a queue, topic, rule or route to a function and the mapping appears here.</p>
+    </div>
+  {:else}
+    <div class="layout">
+      <RcResizableAside storageKey="tarn-triggers-list-width">
+        <div class="type-filter" role="group" aria-label="Trigger type filter">
+          {#each typeOptions as option (option.id)}
+            <button
+              type="button"
+              class:active={typeFilter === option.id}
+              onclick={() => (typeFilter = option.id)}
+              aria-pressed={typeFilter === option.id}
+            >
+              {option.label}
+              <span>{option.count}</span>
+            </button>
+          {/each}
         </div>
-
-        {#if dashboard.loading && !dashboard.data}
-          <div class="space-y-2 p-4">
-            {#each Array(7) as _, index (index)}
-              <Skeleton class="h-11 w-full" />
-            {/each}
-          </div>
-        {:else if triggerRows.length === 0}
-          <div class="flex min-h-[18rem] items-center justify-center text-sm text-muted-foreground/70">
-            No triggers configured yet.
-          </div>
-        {:else}
-          <div class="min-h-0 flex-1 overflow-auto">
-            <Table>
-              <TableHeader class="sticky top-0 z-10 bg-background/95 backdrop-blur [&_th]:bg-background/95">
-                <TableRow class="hover:bg-transparent">
-                  <TableHead>Type</TableHead>
-                  <TableHead>Source</TableHead>
-                  <TableHead>Target</TableHead>
-                  <TableHead>State</TableHead>
-                  <TableHead>Details</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {#each triggerRows as trigger}
-                  <TableRow
-                    class={`cursor-pointer ${trigger.id === selectedTriggerID ? "bg-muted/50" : ""}`}
-                    role="button"
-                    tabindex={0}
-                    onclick={() => selectTrigger(trigger.id)}
-                    onkeydown={(event: KeyboardEvent) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        selectTrigger(trigger.id);
-                      }
-                    }}
-                  >
-                    <TableCell class="font-mono text-xs text-muted-foreground">
-                      {trigger.type}
-                    </TableCell>
-                    <TableCell>
-                      <ArnCell name={trigger.sourceName} arn={trigger.sourceArn} />
-                    </TableCell>
-                    <TableCell>
-                      {#if trigger.type === "SQS" || trigger.type === "SNS" || trigger.type === "EVENTBRIDGE"}
-                        <div class="flex items-start gap-2">
-                          <Lightning size={13} class="mt-[2px] text-primary" />
-                          <ArnCell name={trigger.targetName} arn={trigger.targetArn} />
-                        </div>
-                      {:else}
-                        <div class="space-y-0.5 max-w-[22rem]">
-                          <p class="text-xs font-medium text-foreground">
-                            {trigger.targetName}
-                          </p>
-                          <p class="font-mono text-[11px] text-muted-foreground/70">
-                            {trigger.targetArn}
-                          </p>
-                        </div>
-                      {/if}
-                    </TableCell>
-                    <TableCell>
-                      <span class="inline-flex items-center gap-1.5 text-xs">
-                        <LedDot color={stateColor(trigger.state)} />
-                        <span class="text-muted-foreground">{trigger.state}</span>
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <div class="space-y-1">
-                        <p class="font-mono text-[10px] uppercase tracking-[0.18em] text-muted-foreground/60">
-                          {trigger.detailLabel}
-                        </p>
-                        <p class="text-xs text-muted-foreground">{trigger.detail}</p>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                {/each}
-              </TableBody>
-            </Table>
-          </div>
-        {/if}
-    </Pane>
-    <Handle />
-    <Pane defaultSize={38} minSize={22} class="flex min-h-0 flex-col overflow-hidden bg-background/35">
+        <TriggerList
+          triggers={filteredTriggers}
+          selectedId={selectedTrigger?.id ?? null}
+          onselect={select}
+        />
+      </RcResizableAside>
       {#if selectedTrigger}
-          <div class="flex h-full flex-col">
-            <div class="flex shrink-0 items-center justify-between gap-3 border-b border-border/70 px-4 py-2.5">
-              <div class="min-w-0">
-                <p class="truncate font-mono text-sm text-foreground">
-                  {selectedTrigger.sourceName} → {selectedTrigger.targetName}
-                </p>
-                <p class="mt-1 text-[11px] text-muted-foreground/70">
-                  {selectedTrigger.type} mapping
-                </p>
-              </div>
-              <button
-                type="button"
-                onclick={() => (selectedTriggerID = null)}
-                class="flex h-6 w-6 items-center justify-center rounded text-muted-foreground/70 transition-colors hover:bg-muted hover:text-foreground shrink-0"
-                aria-label="Close detail panel"
-              >
-                <XIcon size={14} />
-              </button>
-            </div>
-
-            <div class="flex-1 overflow-y-auto p-4 space-y-4">
-              <div>
-                <p class="mb-2 text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Summary</p>
-                <div class="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
-                  <div>
-                    <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Type</p>
-                    <p class="mt-1 font-mono text-foreground">{selectedTrigger.type}</p>
-                  </div>
-                  <div>
-                    <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">State</p>
-                    <p class="mt-1 font-mono text-foreground">{selectedTrigger.state}</p>
-                  </div>
-                  <div class="col-span-2">
-                    <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Source ARN</p>
-                    <p class="mt-1 break-all font-mono text-foreground">{selectedTrigger.sourceArn}</p>
-                  </div>
-                  <div class="col-span-2">
-                    <p class="text-[10px] uppercase tracking-[0.2em] text-muted-foreground/55">Target ARN</p>
-                    <p class="mt-1 break-all font-mono text-foreground">{selectedTrigger.targetArn}</p>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <p class="mb-2 text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Mapping Details</p>
-                <div class="rounded-md border border-border overflow-hidden divide-y divide-border/60">
-                  {#each selectedTrigger.detailFields as field (field.label)}
-                    <div class="flex items-start gap-4 px-3 py-2">
-                      <span class="w-24 shrink-0 pt-px text-[10px] uppercase tracking-wider text-muted-foreground/70">
-                        {field.label}
-                      </span>
-                      <span class="break-all font-mono text-[12px] leading-snug text-muted-foreground">
-                        {field.value}
-                      </span>
-                    </div>
-                  {/each}
-                </div>
-              </div>
-
-              <div>
-                <p class="mb-2 text-[10px] uppercase tracking-[0.24em] text-muted-foreground/55">Payload</p>
-                {#if selectedTrigger.lastResult}
-                  {#if selectedTriggerPayload}
-                    <FormattedMessageViewer
-                      raw={selectedTrigger.lastResult}
-                      formatted={selectedTriggerPayload.formatted}
-                      formattedHtml={selectedTriggerPayload.formattedHtml}
-                      formattedLabel="Formatted"
-                      rawLabel="Raw"
-                      formattedOpenByDefault={true}
-                      rawOpenByDefault={false}
-                      formattedContentClass="text-[11px] text-foreground"
-                      rawContentClass="text-[11px] text-muted-foreground"
-                      formattedMaxHeightClass="max-h-[24rem]"
-                      rawMaxHeightClass="max-h-[20rem]"
-                    />
-                  {:else}
-                    <pre
-                      class="max-h-[24rem] overflow-y-auto rounded-md border border-border bg-[var(--code-bg)] px-3 py-3 font-mono text-[11px] text-muted-foreground whitespace-pre-wrap break-all"
-                    >{selectedTrigger.lastResult}</pre>
-                  {/if}
-                {:else}
-                  <p class="text-xs text-muted-foreground/70">
-                    No payload or result details were captured for this trigger.
-                  </p>
-                {/if}
-              </div>
-            </div>
-          </div>
+        {#key selectedTrigger.id}
+          <TriggerDetail trigger={selectedTrigger} />
+        {/key}
       {:else}
-        <div class="flex h-full items-center justify-center px-6 py-12 text-center">
-          <p class="max-w-sm text-sm text-muted-foreground/70">Select a mapping to inspect its source, target, and payload details.</p>
+        <div class="blank">
+          <h2>Nothing selected</h2>
+          <p>No {typeFilter === "ALL" ? "" : `${typeFilter.toLowerCase()} `}triggers match. Pick another type.</p>
         </div>
       {/if}
-    </Pane>
-  </PaneGroup>
+    </div>
+  {/if}
 </div>
+
+<style>
+  .triggers { display: flex; flex-direction: column; min-height: 100%; }
+  .layout {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 28px; padding: 20px 0 48px;
+    max-width: 1320px; align-items: start;
+  }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  .filter {
+    display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 8px;
+    border: 1px solid var(--border-subtle); font-size: 11px; color: var(--text-tertiary);
+  }
+  .filter span { font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-primary); }
+
+  .type-filter { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+  .type-filter button {
+    display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px;
+    border-radius: 8px; border: 1px solid var(--border-subtle); font-size: 11.5px;
+    color: var(--text-secondary); background: transparent;
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease, transform 120ms ease;
+  }
+  .type-filter button:hover { color: var(--text-primary); border-color: var(--border-default); background: var(--bg-element-hover); }
+  .type-filter button:active { transform: scale(0.96); }
+  .type-filter button.active {
+    color: var(--text-primary); border-color: var(--border-default); background: var(--bg-element);
+  }
+  .type-filter button span {
+    font: 10.5px var(--font-mono, ui-monospace, monospace); font-variant-numeric: tabular-nums;
+    color: var(--text-tertiary);
+  }
+  .type-filter button.active span { color: var(--text-secondary); }
+
+  .blank { padding: 64px 0; text-align: center; animation: fadeUp 320ms var(--ease-snappy) both; }
+  .blank h2 { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+  .blank p { margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+
+  .skeleton-list { display: flex; flex-direction: column; gap: 6px; }
+  .skeleton-list span {
+    height: 34px; border-radius: 8px; background: var(--bg-element);
+    animation: pulse 1.4s ease-in-out infinite; animation-delay: calc(var(--i) * 80ms);
+  }
+  @keyframes pulse { 50% { opacity: 0.5; } }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .blank, .skeleton-list span { animation: none; }
+  }
+</style>
