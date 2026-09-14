@@ -264,6 +264,45 @@ func TestOverviewIncludesGateways(t *testing.T) {
 	}
 }
 
+func TestOverviewIncludesEventBridgeTargetInput(t *testing.T) {
+	h := newTestHandler(t)
+
+	if _, err := h.eventbridge.PutRule("log-burst-rule", "rate(1 minute)", "", "ENABLED", "", "default"); err != nil {
+		t.Fatalf("put eventbridge rule: %v", err)
+	}
+	failed, err := h.eventbridge.PutTargets("log-burst-rule", "default", []types.EventBridgeTarget{{
+		ID:    "target-1",
+		Arn:   "log-burst",
+		Input: `{"shouldFail":true}`,
+	}})
+	if err != nil {
+		t.Fatalf("put eventbridge target: %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("put eventbridge target failures: %+v", failed)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
+	rec := httptest.NewRecorder()
+	h.Overview(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var payload struct {
+		EventBridgeRules []eventBridgeRuleSummary `json:"eventBridgeRules"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.EventBridgeRules) != 1 || len(payload.EventBridgeRules[0].Targets) != 1 {
+		t.Fatalf("unexpected eventbridge overview: %+v", payload.EventBridgeRules)
+	}
+	if got := payload.EventBridgeRules[0].Targets[0].Input; got != `{"shouldFail":true}` {
+		t.Fatalf("target input = %q, want %q", got, `{"shouldFail":true}`)
+	}
+}
+
 func TestOverviewIncludesResourceTags(t *testing.T) {
 	h := newTestHandler(t)
 

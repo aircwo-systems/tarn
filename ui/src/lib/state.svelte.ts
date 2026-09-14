@@ -31,7 +31,8 @@ let error = $state("");
 let lastRefresh = $state("");
 
 let pollHandle: ReturnType<typeof setInterval> | null = null;
-let inFlight = false;
+let refreshPromise: Promise<void> | null = null;
+let refreshQueued = false;
 
 const SETTINGS_COOKIE = "tarn-ui-settings";
 const INFRA_SETTINGS_KEY = "tarn-infra-settings";
@@ -121,20 +122,34 @@ export function getDashboardFilters() {
   };
 }
 
-export async function refresh() {
-  if (inFlight) return;
-  inFlight = true;
-  if (!loading) error = "";
+export function refresh(): Promise<void> {
+  if (refreshPromise) {
+    refreshQueued = true;
+    return refreshPromise;
+  }
 
+  refreshPromise = refreshDashboard();
+  return refreshPromise;
+}
+
+async function refreshDashboard() {
   try {
-    data = await fetchOverview();
-    lastRefresh = new Date().toLocaleTimeString();
-    error = "";
-  } catch (err) {
-    error = err instanceof Error ? err.message : "Failed to load dashboard data";
+    do {
+      refreshQueued = false;
+      if (!loading) error = "";
+
+      try {
+        data = await fetchOverview();
+        lastRefresh = new Date().toLocaleTimeString();
+        error = "";
+      } catch (err) {
+        error = err instanceof Error ? err.message : "Failed to load dashboard data";
+      } finally {
+        loading = false;
+      }
+    } while (refreshQueued);
   } finally {
-    loading = false;
-    inFlight = false;
+    refreshPromise = null;
   }
 }
 
