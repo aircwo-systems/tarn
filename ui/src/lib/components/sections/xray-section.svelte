@@ -11,7 +11,6 @@
     formatMs,
     buildWaterfall,
     traceTitle,
-    type WaterfallRow,
   } from "$lib/trace-utils";
   import SectionHeader from "./section-header.svelte";
 
