@@ -16,6 +16,7 @@
     ShieldWarningIcon,
     BellIcon,
     BridgeIcon,
+    CubeIcon,
   } from "phosphor-svelte";
   import TarnLogo from "$lib/components/common/tarn-logo.svelte";
   import NavRailItem from "./nav-rail-item.svelte";
@@ -76,6 +77,7 @@
     { id: "gateways",     label: "Gateways",     icon: GlobeHemisphereWestIcon },
     { id: "chaos",        label: "Chaos",        icon: ShieldWarningIcon       },
     { id: "functions",    label: "Functions",    icon: LightningIcon           },
+    { id: "ecs",          label: "ECS",          icon: CubeIcon                },
     { id: "queues",       label: "Queues",        icon: ChatCircleIcon          },
     { id: "sns",          label: "SNS",          icon: BellIcon                },
     { id: "secrets",      label: "Secrets",      icon: KeyIcon                 },
@@ -89,6 +91,9 @@
   const tabCounts = $derived<Record<string, number | null>>({
     gateways:    dashboard.data?.gateways.length             ?? null,
     functions:   dashboard.data?.functions.length            ?? null,
+    ecs:         (dashboard.data?.ecs?.clusters?.length ?? 0) +
+                (dashboard.data?.ecs?.services?.length ?? 0) +
+                (dashboard.data?.ecs?.tasks?.length ?? 0),
     queues:      dashboard.data?.queues.length               ?? null,
     sns:         dashboard.data?.topics.length               ?? null,
     secrets:     dashboard.data?.secrets.length              ?? null,

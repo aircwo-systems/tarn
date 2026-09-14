@@ -16,18 +16,21 @@
     SidebarSimpleIcon,
     DatabaseIcon,
     FlowArrowIcon,
+    CubeIcon,
   } from "phosphor-svelte";
   import { onMount } from "svelte";
 
   import AppSidebar from "$lib/components/layout/app-sidebar.svelte";
+  import { getLogPulse, startLogPulse } from "$lib/log-pulse.svelte";
   import TagFilter from "$lib/components/layout/tag-filter.svelte";
   import OverviewPulse from "$lib/components/layout/overview-pulse.svelte";
   import ActivityFeed from "$lib/components/layout/activity-feed.svelte";
   import type { SparkBar as SparkBarData } from "$lib/components/common/spark-bar.svelte";
   import TopologyCanvas from "$lib/components/topology/topology-canvas.svelte";
-  import SettingsDialog from "$lib/components/layout/settings-dialog.svelte";
+  import SettingsSection from "$lib/components/sections/settings-section.svelte";
   import APIGatewaysSection from "$lib/components/sections/api-gateways-section.svelte";
   import FunctionsSection from "$lib/components/sections/functions-section.svelte";
+  import ECSSection from "$lib/components/sections/ecs-section.svelte";
   import QueuesSection from "$lib/components/sections/queues-section.svelte";
   import SNSSection from "$lib/components/sections/sns-section.svelte";
   import SecretsSection from "$lib/components/sections/secrets-section.svelte";
@@ -52,20 +55,6 @@
     getAccountSettings,
     getVisibleInfra,
     matchesTagFilter,
-    setInfraEnabledKinds,
-    setInfraFrontendTargets,
-    setLogRetentionMinutes,
-    setPersistenceEnabled,
-    setPollingIntervalSeconds,
-    setSchemaSourceDir,
-    setThemeMode,
-    switchAccount,
-    addKnownAccount,
-    removeKnownAccount,
-    sanitizeSchemaSourceDir,
-    type ThemeMode,
-    type InfraProbeKind,
-    type FrontendTarget,
   } from "$lib/state.svelte";
 
   import {
@@ -80,7 +69,7 @@
   const accountSettings = getAccountSettings();
 
   // ── Routing ─────────────────────────────────────────────────────
-  const validTabs = ["overview","gateways","chaos","functions","queues","dynamodb","sns","secrets","triggers","eventbridge","stepfunctions","storage","logs","xray"];
+  const validTabs = ["overview","gateways","chaos","functions","ecs","queues","dynamodb","sns","secrets","triggers","eventbridge","stepfunctions","storage","logs","xray","settings"];
   let activeTab = $state("overview");
   let logsInitialGroup = $state("");
   let logsInitialTimestamp = $state("");
@@ -97,7 +86,7 @@
     xrayInitialTraceId = "";
     if (tab === "logs" && qs) {
       const params = new URLSearchParams(qs);
-      logsInitialGroup = params.get("group") ?? "";
+      logsInitialGroup = params.get("groups") ?? params.get("group") ?? "";
       logsInitialTimestamp = params.get("ts") ?? "";
       logsInitialStream = params.get("stream") ?? "";
     }
@@ -118,64 +107,17 @@
     window.location.hash = `xray?trace=${encodeURIComponent(traceId)}`;
   }
 
+  const logPulse = $derived(getLogPulse());
+
   onMount(() => {
+    const stopLogPulse = startLogPulse();
     readHash();
     window.addEventListener("hashchange", readHash);
-    return () => window.removeEventListener("hashchange", readHash);
+    return () => {
+      window.removeEventListener("hashchange", readHash);
+      stopLogPulse();
+    };
   });
-
-  // ── Settings ────────────────────────────────────────────────────
-  const INFRA_KINDS: Array<{ id: InfraProbeKind; label: string; detail: string }> = [
-    { id: "docker",     label: "Docker",     detail: "daemon" },
-    { id: "postgresql", label: "PostgreSQL", detail: ":5432"  },
-    { id: "redis",      label: "Redis",      detail: ":6379"  },
-    { id: "mysql",      label: "MySQL",      detail: ":3306"  },
-    { id: "mongodb",    label: "MongoDB",    detail: ":27017" },
-  ];
-
-  let settingsOpen              = $state(false);
-  let pollingIntervalDraft      = $state(uiSettings.pollingIntervalSeconds);
-  let themeModeDraft            = $state<ThemeMode>(uiSettings.themeMode);
-  let persistenceDraft          = $state(uiSettings.persistenceEnabled);
-  let schemaSourceDirDraft      = $state(uiSettings.schemaSourceDir);
-  let logRetentionMinutesDraft  = $state(uiSettings.logRetentionMinutes);
-  let infraEnabledKindsDraft    = $state<InfraProbeKind[]>([]);
-  let infraFrontendTargetsDraft = $state<FrontendTarget[]>([]);
-  let newTargetName             = $state("");
-  let newTargetPort             = $state("");
-
-  function openSettings() {
-    pollingIntervalDraft      = uiSettings.pollingIntervalSeconds;
-    themeModeDraft            = uiSettings.themeMode;
-    persistenceDraft          = uiSettings.persistenceEnabled;
-    schemaSourceDirDraft      = uiSettings.schemaSourceDir;
-    logRetentionMinutesDraft  = uiSettings.logRetentionMinutes;
-    infraEnabledKindsDraft    = [...infraSettings.enabledKinds];
-    infraFrontendTargetsDraft = infraSettings.frontendTargets.map(t => ({ ...t }));
-    newTargetName = ""; newTargetPort = "";
-    settingsOpen = true;
-  }
-  function closeSettings() { settingsOpen = false; }
-  function applySettings() {
-    setPollingIntervalSeconds(pollingIntervalDraft);
-    setThemeMode(themeModeDraft);
-    setPersistenceEnabled(persistenceDraft);
-    setSchemaSourceDir(schemaSourceDirDraft);
-    setLogRetentionMinutes(logRetentionMinutesDraft);
-    setInfraEnabledKinds(infraEnabledKindsDraft);
-    setInfraFrontendTargets(infraFrontendTargetsDraft);
-    settingsOpen = false;
-  }
-  function addFrontendTarget() {
-    const name = newTargetName.trim();
-    const port = parseInt(newTargetPort, 10);
-    if (!name || isNaN(port) || port < 1 || port > 65535) return;
-    infraFrontendTargetsDraft = [...infraFrontendTargetsDraft, { id: crypto.randomUUID(), name, host: "localhost", port }];
-    newTargetName = ""; newTargetPort = "";
-  }
-  function removeFrontendTarget(id: string) {
-    infraFrontendTargetsDraft = infraFrontendTargetsDraft.filter(t => t.id !== id);
-  }
 
   let canvasExpanded = $state(false);
   let sidebarCollapsed = $state(false);
@@ -204,6 +146,7 @@
 
   const countGateways    = $derived((dashboard.data?.gateways ?? []).filter(g => matchesPrototypeResourceFilter("gateway", g.tags)).length);
   const countFunctions   = $derived((dashboard.data?.functions ?? []).filter(f => matchesPrototypeResourceFilter("function", f.tags)).length);
+  const countECS         = $derived(directPrototypeFilter ? 0 : ((dashboard.data?.ecs?.clusters?.length ?? 0) + (dashboard.data?.ecs?.services?.length ?? 0) + (dashboard.data?.ecs?.tasks?.length ?? 0)));
   const countQueues      = $derived((dashboard.data?.queues ?? []).filter(q => matchesPrototypeResourceFilter("queue", q.tags)).length);
   const countTopics      = $derived((dashboard.data?.topics ?? []).filter(t => matchesPrototypeResourceFilter("topic", t.tags)).length);
   const countDynamoTables = $derived((dashboard.data?.dynamodbTables ?? []).filter(() => matchesPrototypeResourceFilter("dynamodb")).length);
@@ -290,23 +233,24 @@
       id: "infra",
       label: "Infra",
       items: [
-        { id: "gateways",     label: "Gateways",    icon: GlobeHemisphereWestIcon, count: countGateways    },
-        { id: "functions",    label: "Functions",   icon: LightningIcon,            count: countFunctions   },
-        { id: "queues",       label: "Queues",      icon: ChatCircleIcon,           count: countQueues      },
-        { id: "dynamodb",     label: "DynamoDB",    icon: DatabaseIcon,             count: countDynamoTables },
-        { id: "sns",          label: "SNS",         icon: BellIcon,                 count: countTopics      },
-        { id: "secrets",      label: "Secrets",     icon: KeyIcon,                  count: countSecrets     },
-        { id: "triggers",     label: "Triggers",    icon: ArrowsClockwiseIcon,      count: countTriggers    },
-        { id: "eventbridge",  label: "EventBridge", icon: BridgeIcon,               count: countEventBridge },
-        { id: "stepfunctions", label: "Step Functions", icon: FlowArrowIcon,        count: countStateMachines },
-        { id: "storage",      label: "Storage",     icon: HardDriveIcon,            count: countBuckets     },
+        { id: "gateways",     label: "Gateways",       icon: GlobeHemisphereWestIcon, count: countGateways      },
+        { id: "functions",    label: "Functions",      icon: LightningIcon,            count: countFunctions     },
+        { id: "ecs",          label: "ECS",            icon: CubeIcon,                 count: countECS           },
+        { id: "queues",       label: "Queues",         icon: ChatCircleIcon,           count: countQueues        },
+        { id: "dynamodb",     label: "DynamoDB",       icon: DatabaseIcon,             count: countDynamoTables  },
+        { id: "sns",          label: "SNS",            icon: BellIcon,                 count: countTopics        },
+        { id: "secrets",      label: "Secrets",        icon: KeyIcon,                  count: countSecrets       },
+        { id: "triggers",     label: "Triggers",       icon: ArrowsClockwiseIcon,      count: countTriggers      },
+        { id: "eventbridge",  label: "EventBridge",    icon: BridgeIcon,               count: countEventBridge   },
+        { id: "stepfunctions", label: "Step Functions", icon: FlowArrowIcon,           count: countStateMachines },
+        { id: "storage",      label: "Storage",        icon: HardDriveIcon,            count: countBuckets       },
       ],
     },
     {
       id: "observability",
       label: "Observability",
       items: [
-        { id: "logs", label: "Logs",   icon: ScrollIcon,    count: null },
+        { id: "logs", label: "Logs",   icon: ScrollIcon,    count: null, pulse: logPulse },
         { id: "xray", label: "Traces", icon: DetectiveIcon, count: null },
       ],
     },
@@ -318,152 +262,153 @@
   ]);
 </script>
 
-<div class="flex h-svh overflow-hidden bg-background font-mono text-foreground">
+<div class="flex h-svh overflow-hidden bg-[var(--bg-app)] font-sans text-foreground">
   <!-- ══════════════════════════════════════════════ SIDEBAR ══ -->
   <AppSidebar
     {navSections}
     {activeTab}
     bind:sidebarCollapsed
-    {connectionStatus}
-    region={dashboard.data?.config.region}
     pollingIntervalSeconds={uiSettings.pollingIntervalSeconds}
     activeAccountId={accountSettings.activeAccountId}
     onSetTab={setTab}
-    onOpenSettings={openSettings}
+    onOpenSettings={() => setTab("settings")}
   />
 
   <!-- ═══════════════════════════════════════════════════ MAIN ══ -->
-  {#if activeTab === "overview"}
-  <main class="flex min-w-0 flex-1 flex-col overflow-hidden">
-    <div class="flex flex-1 flex-col overflow-hidden px-6 py-5">
-      <!-- Status bar -->
-      <div class="flex flex-wrap items-center gap-4 pb-2">
-        <button
-          type="button"
-          onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
-          aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-          class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground/50 transition-colors hover:bg-muted/60 hover:text-foreground"
-        >
-          <SidebarSimpleIcon size={14} weight={sidebarCollapsed ? "regular" : "fill"} />
-        </button>
+  {#key activeTab}
+    {#if activeTab === "overview"}
+    <main class="tab-content-view main-stage flex min-w-0 flex-1 flex-col overflow-hidden" class:sidebar-collapsed={sidebarCollapsed}>
+      <div class="flex flex-1 flex-col overflow-hidden px-6 py-5">
+        <!-- Status bar -->
+        <div class="flex flex-wrap items-center gap-4 pb-2">
+          <button
+            type="button"
+            onclick={() => (sidebarCollapsed = !sidebarCollapsed)}
+            aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+            class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground/50 transition-colors hover:bg-muted/60 hover:text-foreground"
+          >
+            <SidebarSimpleIcon size={14} weight={sidebarCollapsed ? "regular" : "fill"} />
+          </button>
 
-        <TagFilter onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+          <TagFilter onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
 
-        {#if canvasExpanded}
-          <div class="flex flex-1 flex-col gap-[3px]">
-            {#each flatBars as metric}
-              <div class="flex w-1/2 gap-px">
-                {#each metric.bars as bar, i (i)}
-                  <div
-                    class="h-[2px] flex-1"
-                    style="background:{metric.color};opacity:{bar.current
-                      ? Math.max((bar.h / 100) * 0.5, 0.12)
-                      : bar.h > 0
-                        ? 0.15 + (bar.h / 100) * 0.75
-                        : 0.1}"
-                  ></div>
-                {/each}
-              </div>
-            {/each}
-          </div>
-        {/if}
+          {#if canvasExpanded}
+            <div class="flex flex-1 flex-col gap-[3px]">
+              {#each flatBars as metric}
+                <div class="flex w-1/2 gap-px">
+                  {#each metric.bars as bar, i (i)}
+                    <div
+                      class="h-[2px] flex-1"
+                      style="background:{metric.color};opacity:{bar.current
+                        ? Math.max((bar.h / 100) * 0.5, 0.12)
+                        : bar.h > 0
+                          ? 0.15 + (bar.h / 100) * 0.75
+                          : 0.1}"
+                    ></div>
+                  {/each}
+                </div>
+              {/each}
+            </div>
+          {/if}
 
-        <div class="ml-auto flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground/50">
-          <span class="inline-block h-[5px] w-[5px] rounded-full bg-primary/70"></span>
-          Poll {uiSettings.pollingIntervalSeconds}s
-        </div>
-      </div>
-
-      {#if !canvasExpanded}
-        <OverviewPulse {recentTraces} {activeServiceCount} {infraLegend} />
-      {/if}
-
-      <!-- Hero grid: topology + feed -->
-      <div class="mt-4 grid min-h-0 flex-1 gap-4 {canvasExpanded ? 'grid-cols-1' : 'grid-cols-[1fr_300px]'}">
-        <div class="flex min-h-0 flex-col">
-          <div class="flex-1 overflow-hidden rounded-[5px]">
-            <TopologyCanvas
-              {canvasExpanded}
-              onNavigate={setTab}
-              onExpandedChange={(expanded) => (canvasExpanded = expanded)}
-            />
+          <div class="ml-auto flex shrink-0 items-center gap-1 font-mono text-[11px] text-muted-foreground/50">
+            <span class="inline-block h-[5px] w-[5px] rounded-full bg-primary/70"></span>
+            Poll {uiSettings.pollingIntervalSeconds}s
           </div>
         </div>
 
         {#if !canvasExpanded}
-          <ActivityFeed traces={recentTraces} onOpenTrace={openTrace} />
+          <OverviewPulse {recentTraces} {activeServiceCount} {infraLegend} />
         {/if}
+
+        <!-- Hero grid: topology + feed -->
+        <div class="mt-4 grid min-h-0 flex-1 gap-4 {canvasExpanded ? 'grid-cols-1' : 'grid-cols-[1fr_300px]'}">
+          <div class="flex min-h-0 flex-col">
+            <div class="flex-1 overflow-hidden rounded-[5px]">
+              <TopologyCanvas
+                {canvasExpanded}
+                onNavigate={setTab}
+                onExpandedChange={(expanded) => (canvasExpanded = expanded)}
+              />
+            </div>
+          </div>
+
+          {#if !canvasExpanded}
+            <ActivityFeed traces={recentTraces} onOpenTrace={openTrace} />
+          {/if}
+        </div>
       </div>
-    </div>
-  </main>
-  {:else}
-  <main class="min-w-0 flex-1 overflow-y-auto px-6 py-5">
-    {#if activeTab === "gateways"}
-      <APIGatewaysSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
-    {:else if activeTab === "functions"}
-      <FunctionsSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
-    {:else if activeTab === "queues"}
-      <QueuesSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
-    {:else if activeTab === "dynamodb"}
-      <DynamoDBSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
-    {:else if activeTab === "sns"}
-      <SNSSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
-    {:else if activeTab === "secrets"}
-      <SecretsSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
-    {:else if activeTab === "triggers"}
-      <TriggersSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
-    {:else if activeTab === "eventbridge"}
-      <EventBridgeSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
-    {:else if activeTab === "stepfunctions"}
-      <StepFunctionsSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
-    {:else if activeTab === "storage"}
-      <StorageSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
-    {:else if activeTab === "logs"}
-      <LogsSection
-        initialGroup={logsInitialGroup}
-        initialTimestamp={logsInitialTimestamp}
-        initialStream={logsInitialStream}
-        {sidebarCollapsed}
-        onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
-      />
-    {:else if activeTab === "xray"}
-      <XraySection
-        initialTraceId={xrayInitialTraceId}
-        {sidebarCollapsed}
-        onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
-      />
-    {:else if activeTab === "chaos"}
-      <ChaosSection
-        gateways={dashboard.data?.gateways ?? []}
-        {sidebarCollapsed}
-        onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
-      />
+    </main>
+    {:else}
+    <main class="tab-content-view main-stage min-w-0 flex-1 px-6 py-5 {activeTab === 'logs' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}" class:sidebar-collapsed={sidebarCollapsed}>
+      {#if activeTab === "gateways"}
+        <APIGatewaysSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "functions"}
+        <FunctionsSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "ecs"}
+        <ECSSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "queues"}
+        <QueuesSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "dynamodb"}
+        <DynamoDBSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "sns"}
+        <SNSSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "secrets"}
+        <SecretsSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "triggers"}
+        <TriggersSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "eventbridge"}
+        <EventBridgeSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "stepfunctions"}
+        <StepFunctionsSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "storage"}
+        <StorageSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "logs"}
+        <LogsSection
+          initialGroup={logsInitialGroup}
+          initialTimestamp={logsInitialTimestamp}
+          initialStream={logsInitialStream}
+          {sidebarCollapsed}
+          onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
+        />
+      {:else if activeTab === "xray"}
+        <XraySection
+          initialTraceId={xrayInitialTraceId}
+          {sidebarCollapsed}
+          onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
+        />
+      {:else if activeTab === "settings"}
+        <SettingsSection
+          instanceInfo={dashboard.data?.config ?? null}
+          {sidebarCollapsed}
+          onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
+        />
+      {:else if activeTab === "chaos"}
+        <ChaosSection
+          gateways={dashboard.data?.gateways ?? []}
+          {sidebarCollapsed}
+          onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
+        />
+      {/if}
+    </main>
     {/if}
-  </main>
-  {/if}
+  {/key}
 </div>
 
-<SettingsDialog
-  open={settingsOpen}
-  bind:pollingIntervalDraft
-  bind:themeModeDraft
-  bind:persistenceDraft
-  bind:schemaSourceDirDraft
-  bind:logRetentionMinutesDraft
-  bind:infraEnabledKindsDraft
-  bind:infraFrontendTargetsDraft
-  bind:newTargetName
-  bind:newTargetPort
-  infraKinds={INFRA_KINDS}
-  instanceInfo={dashboard.data?.config ?? null}
-  knownAccounts={accountSettings.knownAccounts}
-  activeAccountId={accountSettings.activeAccountId}
-  {sanitizeSchemaSourceDir}
-  onClose={closeSettings}
-  onSave={applySettings}
-  onAddFrontendTarget={addFrontendTarget}
-  onRemoveFrontendTarget={removeFrontendTarget}
-  onSwitchAccount={switchAccount}
-  onAddAccount={addKnownAccount}
-  onRemoveAccount={removeKnownAccount}
-/>
+
+<style>
+  :global(.tab-content-view) {
+    animation: tabFadeIn 140ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  @keyframes tabFadeIn {
+    from {
+      opacity: 0.85;
+      transform: translateY(2px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+</style>

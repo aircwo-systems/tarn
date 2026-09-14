@@ -6,19 +6,20 @@
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans: "JetBrains Mono Variable", monospace;
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono Variable", ui-monospace, Menlo, monospace;
 
-  /* Rack Console — dark palette */
-  --color-bg: #0a0f14;
-  --color-bg-raised: #111820;
-  --color-bg-surface: #161d26;
-  --color-bg-overlay: #1a2230;
+  /* Pure Pitch Black Palette (Zero Slate) */
+  --color-bg: #000000;
+  --color-bg-raised: #0a0a0a;
+  --color-bg-surface: #111111;
+  --color-bg-overlay: #161616;
 
-  --color-border: rgba(186, 210, 230, 0.12);
+  --color-border: rgba(255, 255, 255, 0.08);
 
-  --color-text: #edf3f8;
-  --color-text-muted: #8a9bb0;
-  --color-text-faint: #5c6e80;
+  --color-text: #ffffff;
+  --color-text-muted: #888888;
+  --color-text-faint: #555555;
 
   --color-accent: #00e5a0;
   --color-accent-muted: rgba(0, 229, 160, 0.15);
@@ -50,24 +51,24 @@
   --color-blue-muted: rgba(96, 165, 250, 0.15);
 
   /* shadcn semantic tokens */
-  --color-background: #0a0f14;
-  --color-foreground: #edf3f8;
-  --color-card: #111820;
-  --color-card-foreground: #edf3f8;
-  --color-popover: #111820;
-  --color-popover-foreground: #edf3f8;
+  --color-background: #000000;
+  --color-foreground: #ffffff;
+  --color-card: #0a0a0a;
+  --color-card-foreground: #ffffff;
+  --color-popover: #0a0a0a;
+  --color-popover-foreground: #ffffff;
   --color-primary: #00e5a0;
-  --color-primary-foreground: #0a0f14;
-  --color-secondary: #161d26;
-  --color-secondary-foreground: #edf3f8;
-  --color-muted: #161d26;
-  --color-muted-foreground: #8a9bb0;
-  --color-accent-shadcn: #1a2230;
-  --color-accent-foreground: #edf3f8;
+  --color-primary-foreground: #000000;
+  --color-secondary: #111111;
+  --color-secondary-foreground: #ffffff;
+  --color-muted: #111111;
+  --color-muted-foreground: #888888;
+  --color-accent-shadcn: #161616;
+  --color-accent-foreground: #ffffff;
   --color-destructive: var(--color-destructive);
-  --color-destructive-foreground: #0a0f14;
-  --color-border-shadcn: rgba(186, 210, 230, 0.12);
-  --color-input: rgba(186, 210, 230, 0.12);
+  --color-destructive-foreground: #000000;
+  --color-border-shadcn: rgba(255, 255, 255, 0.08);
+  --color-input: rgba(255, 255, 255, 0.08);
   --color-ring: rgba(0, 229, 160, 0.35);
 
   --radius-sm: 0.375rem;
@@ -153,7 +154,6 @@
   --color-border-shadcn: rgba(30, 50, 70, 0.12);
   --color-input: rgba(30, 50, 70, 0.12);
   --color-ring: rgba(0, 122, 90, 0.35);
-
 }
 
 * {
@@ -168,6 +168,8 @@ body {
   font-family: var(--font-sans);
   background-color: var(--color-bg);
   color: var(--color-text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 ::selection {
@@ -175,9 +177,7 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
+  * {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
@@ -219,6 +219,33 @@ body {
   --sidebar-border: oklch(0.93 0.007 106.5);
   --sidebar-ring: oklch(0.737 0.021 106.9);
 
+  /* Modern Design System Tokens (Pure Pitch Black — No Slate Tint) */
+  --bg-app: #000000;
+  --bg-sidebar: #000000;
+  --bg-stage: #0a0a0a;
+  --bg-sidebar-subtle: #0a0a0a;
+  --bg-element: #141414;
+  --bg-element-hover: rgba(255, 255, 255, 0.05);
+
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-default: rgba(255, 255, 255, 0.14);
+  --border-focus: rgba(255, 255, 255, 0.35);
+
+  --text-primary: #ffffff;
+  --text-secondary: #888888;
+  --text-tertiary: #555555;
+
+  --accent-green: #34d399;
+  --accent-red: #f87171;
+  --accent-red-bg: #200d0f;
+  --accent-amber: #fbbf24;
+  --accent-amber-bg: #201708;
+
+  --sidebar-w: 256px;
+  --ease-snappy: cubic-bezier(0.16, 1, 0.3, 1);
+  --font-ui-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-ui-mono: "Geist Mono", "JetBrains Mono Variable", ui-monospace, Menlo, monospace;
+
   /* JSON / log syntax highlighting — light theme */
   --code-bg: rgba(30, 50, 70, 0.04);
   --lh-key: #1e5a78;
@@ -232,23 +259,23 @@ body {
 }
 
 .dark {
-  --background: oklch(0.153 0.006 107.1);
-  --foreground: oklch(0.988 0.003 106.5);
-  --card: oklch(0.228 0.013 107.4);
-  --card-foreground: oklch(0.988 0.003 106.5);
-  --popover: oklch(0.228 0.013 107.4);
-  --popover-foreground: oklch(0.988 0.003 106.5);
+  --background: oklch(0 0 0);
+  --foreground: oklch(1 0 0);
+  --card: oklch(0.12 0 0);
+  --card-foreground: oklch(1 0 0);
+  --popover: oklch(0.12 0 0);
+  --popover-foreground: oklch(1 0 0);
   --primary: oklch(0.453 0.124 130.933);
   --primary-foreground: oklch(0.986 0.031 120.757);
-  --secondary: oklch(0.274 0.006 286.033);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.286 0.016 107.4);
-  --muted-foreground: oklch(0.737 0.021 106.9);
+  --secondary: oklch(0.15 0 0);
+  --secondary-foreground: oklch(1 0 0);
+  --muted: oklch(0.15 0 0);
+  --muted-foreground: oklch(0.65 0 0);
   --accent: oklch(0.453 0.124 130.933);
   --accent-foreground: oklch(0.986 0.031 120.757);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
+  --border: oklch(1 0 0 / 8%);
+  --input: oklch(1 0 0 / 12%);
   --ring: oklch(0.58 0.031 107.3);
   --chart-1: oklch(0.897 0.196 126.665);
   --chart-2: oklch(0.768 0.233 130.85);
@@ -256,17 +283,39 @@ body {
   --chart-4: oklch(0.532 0.157 131.589);
   --chart-5: oklch(0.453 0.124 130.933);
   --chart-6: oklch(81.887% 0.11838 227.017);
-  --sidebar: oklch(0.228 0.013 107.4);
-  --sidebar-foreground: oklch(0.988 0.003 106.5);
+  --sidebar: oklch(0 0 0);
+  --sidebar-foreground: oklch(1 0 0);
   --sidebar-primary: oklch(0.768 0.233 130.85);
   --sidebar-primary-foreground: oklch(0.274 0.072 132.109);
-  --sidebar-accent: oklch(0.286 0.016 107.4);
-  --sidebar-accent-foreground: oklch(0.988 0.003 106.5);
-  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-accent: oklch(0.15 0 0);
+  --sidebar-accent-foreground: oklch(1 0 0);
+  --sidebar-border: oklch(1 0 0 / 8%);
   --sidebar-ring: oklch(0.58 0.031 107.3);
 
+  /* Modern Design System Dark Tokens (Pure Pitch Black — No Slate Tint) */
+  --bg-app: #000000;
+  --bg-sidebar: #000000;
+  --bg-stage: #0a0a0a;
+  --bg-sidebar-subtle: #0a0a0a;
+  --bg-element: #141414;
+  --bg-element-hover: rgba(255, 255, 255, 0.05);
+
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-default: rgba(255, 255, 255, 0.14);
+  --border-focus: rgba(255, 255, 255, 0.35);
+
+  --text-primary: #ffffff;
+  --text-secondary: #888888;
+  --text-tertiary: #555555;
+
+  --accent-green: #34d399;
+  --accent-red: #f87171;
+  --accent-red-bg: #200d0f;
+  --accent-amber: #fbbf24;
+  --accent-amber-bg: #201708;
+
   /* JSON / log syntax highlighting — dark theme */
-  --code-bg: rgba(140, 180, 220, 0.06);
+  --code-bg: rgba(255, 255, 255, 0.04);
   --lh-key: #7aa8c0;
   --lh-cls: #7fb5a4;
   --lh-null: rgba(255, 255, 255, 0.22);
@@ -277,8 +326,35 @@ body {
   --lh-punct: rgba(255, 255, 255, 0.18);
 }
 
+/* Light Theme overrides for Modern Design System (from rack_console.html prototype) */
+html.light,
+.light,
+[data-theme="light"] {
+  --bg-app: #e6e9ef;
+  --bg-sidebar: #e6e9ef;
+  --bg-stage: #ffffff;
+  --bg-sidebar-subtle: #f3f4f7;
+  --bg-element: #e2e7ef;
+  --bg-element-hover: rgba(0, 0, 0, 0.04);
+
+  --border-subtle: rgba(0, 0, 0, 0.06);
+  --border-default: rgba(0, 0, 0, 0.12);
+  --border-focus: rgba(0, 0, 0, 0.35);
+
+  --text-primary: #121417;
+  --text-secondary: #576070;
+  --text-tertiary: #8b95a5;
+
+  --accent-green: #059669;
+  --accent-red: #dc2626;
+  --accent-red-bg: #fef2f2;
+  --accent-amber: #d97706;
+  --accent-amber-bg: #fffbeb;
+}
+
 @theme inline {
-  --font-sans: "JetBrains Mono Variable", monospace;
+  --font-sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "Geist Mono", "JetBrains Mono Variable", ui-monospace, Menlo, monospace;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -401,4 +477,17 @@ body {
   &::-webkit-scrollbar {
   	display: none;
   }
+}
+
+/* Inset rounded content stage beside the sidebar */
+.main-stage {
+  background: var(--bg-stage);
+  margin: 8px 8px 8px 0;
+  border-radius: 14px;
+  border: 1px solid var(--border-subtle);
+  transition: margin-left 200ms var(--ease-snappy);
+}
+
+.main-stage.sidebar-collapsed {
+  margin-left: 8px;
 }

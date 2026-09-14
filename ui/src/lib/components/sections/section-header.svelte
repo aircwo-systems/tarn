@@ -5,7 +5,6 @@
   let {
     title,
     description = "",
-    icon: Icon,
     sidebarCollapsed = false,
     onToggleSidebar = () => {},
     lead,
@@ -14,7 +13,8 @@
   }: {
     title: string;
     description?: string;
-    icon: any;
+    /** @deprecated no longer rendered */
+    icon?: any;
     sidebarCollapsed?: boolean;
     onToggleSidebar?: () => void;
     lead?: Snippet;
@@ -23,47 +23,44 @@
   } = $props();
 </script>
 
-<div class="shrink-0 flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-border pb-4">
-  <button
-    type="button"
-    onclick={onToggleSidebar}
-    class="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground/50 transition-colors hover:bg-muted/60 hover:text-foreground"
-    aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-    title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
-  >
-    <SidebarSimpleIcon
-      size={14}
-      weight={sidebarCollapsed ? "regular" : "fill"}
-    />
-  </button>
-
-  {@render lead?.()}
-
-  <div class="inline-flex min-w-0 shrink-0 items-center gap-2.5">
-    <span
-      class="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border bg-muted/40 text-primary"
+<div class="shrink-0 flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-border/80 pb-4">
+  <div class="flex min-w-0 flex-wrap items-center gap-3">
+    <button
+      type="button"
+      onclick={onToggleSidebar}
+      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border/60 bg-background/50 text-muted-foreground/60 transition-colors hover:border-border hover:bg-muted/50 hover:text-foreground"
+      aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+      title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
     >
-      <Icon size={16} weight="fill" />
-    </span>
-    <div class="min-w-0">
-      <h1 class="truncate text-sm font-semibold text-foreground">{title}</h1>
-      {#if description}
-        <p class="truncate text-[11px] text-muted-foreground/70">
-          {description}
-        </p>
-      {/if}
+      <SidebarSimpleIcon
+        size={14}
+        weight={sidebarCollapsed ? "regular" : "fill"}
+      />
+    </button>
+
+    {@render lead?.()}
+
+    <div class="inline-flex min-w-0 items-center gap-2.5">
+      <div class="min-w-0">
+        <h1 class="truncate text-[15px] font-semibold tracking-[-0.01em] text-foreground">{title}</h1>
+        {#if description}
+          <p class="truncate text-[12px] text-muted-foreground">
+            {description}
+          </p>
+        {/if}
+      </div>
     </div>
+
+    {#if stats}
+      <span class="hidden h-4 w-px shrink-0 bg-border/60 sm:block"></span>
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px]">
+        {@render stats()}
+      </div>
+    {/if}
   </div>
 
-  {#if stats}
-    <span class="hidden h-4 w-px shrink-0 bg-border sm:block"></span>
-    <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
-      {@render stats()}
-    </div>
-  {/if}
-
   {#if actions}
-    <div class="ml-auto flex flex-wrap items-center gap-2 text-[11px]">
+    <div class="flex flex-wrap items-center gap-2 text-[12px]">
       {@render actions()}
     </div>
   {/if}

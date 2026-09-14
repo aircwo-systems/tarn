@@ -36,6 +36,7 @@ export interface OverviewResponse {
   eventSourceMappings: EventSourceMappingSummary[];
   eventBridgeRules?: EventBridgeRuleSummary[];
   stateMachines?: StateMachineSummary[];
+  ecs?: ECSOverview;
   infrastructure: InfraProbe[];
   connections?: InfraConnection[];
   recentTraces?: RequestTrace[];
@@ -211,6 +212,8 @@ export interface FunctionSummary {
   memoryMB: number;
   codeSize: number;
   messagesProcessed: number;
+  invocations?: number;
+  lastInvokedAt?: string;
   version: string;
   lastModified: string;
   layers: number;
@@ -414,6 +417,62 @@ export interface StateMachineSummary {
   createdAt?: string;
   executions?: StateMachineExecutionSummary[];
 }
+
+/** ECS resources surfaced by the optional admin overview payload. */
+export interface ECSOverview {
+  clusters?: ECSClusterSummary[];
+  services?: ECSServiceSummary[];
+  tasks?: ECSTaskSummary[];
+  taskDefinitions?: ECSTaskDefinitionSummary[];
+}
+
+export interface ECSClusterSummary {
+  name: string;
+  arn: string;
+  status: string;
+  runningTasks: number;
+  pendingTasks: number;
+  activeServices: number;
+}
+
+export interface ECSServiceSummary {
+  name: string;
+  arn: string;
+  clusterArn: string;
+  taskDefinitionArn: string;
+  desiredCount: number;
+  runningCount: number;
+  pendingCount: number;
+  launchType?: string;
+  status: string;
+}
+
+export interface ECSTaskSummary {
+  arn: string;
+  clusterArn: string;
+  taskDefinitionArn: string;
+  group?: string;
+  launchType?: string;
+  lastStatus: string;
+  desiredStatus: string;
+  startedAt?: string;
+  stoppedAt?: string;
+  stoppedReason?: string;
+}
+
+export interface ECSTaskDefinitionSummary {
+  arn: string;
+  taskDefinitionArn: string;
+  name: string;
+  family: string;
+  revision: number;
+  status: string;
+}
+
+export type ECSDetail =
+  | { kind: "cluster"; resource: ECSClusterSummary }
+  | { kind: "service"; resource: ECSServiceSummary }
+  | { kind: "task"; resource: ECSTaskSummary };
 
 export interface LogGroupSummary {
   name: string;

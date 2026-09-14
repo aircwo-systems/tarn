@@ -2,6 +2,8 @@
   import { SunIcon, MoonIcon } from "phosphor-svelte";
   import { getUISettings, setThemeMode } from "$lib/state.svelte";
 
+  let { class: className = "" }: { class?: string } = $props();
+
   const settings = getUISettings();
   const dark = $derived(settings.resolvedTheme === "dark");
 
@@ -13,12 +15,13 @@
 <button
   type="button"
   onclick={toggle}
-  class="flex items-center justify-center h-8 w-8 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+  class={className || "footer-btn"}
   aria-label={dark ? "Switch to light mode" : "Switch to dark mode"}
+  title={dark ? "Switch to light mode" : "Switch to dark mode"}
 >
   {#if dark}
-    <SunIcon size={15} />
+    <SunIcon size={14} />
   {:else}
-    <MoonIcon size={15} />
+    <MoonIcon size={14} />
   {/if}
 </button>
