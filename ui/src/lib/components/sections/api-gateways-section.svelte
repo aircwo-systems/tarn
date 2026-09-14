@@ -1,22 +1,14 @@
 <script lang="ts">
-  import {
-    GlobeHemisphereWestIcon,
-    DownloadSimpleIcon,
-    StackIcon,
-  } from "phosphor-svelte";
-  import { fly } from "svelte/transition";
-  import { TableRow, TableCell } from "$lib/components/ui/table";
-  import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
-  import ResourceTable from "$lib/components/common/resource-table.svelte";
-  import ArnCell from "$lib/components/common/arn-cell.svelte";
-  import GatewayDetailsPanel from "$lib/components/topology/gateway-details-panel.svelte";
-  import MetricCard from "$lib/components/common/metric-card.svelte";
+  import { onMount } from "svelte";
+  import { DownloadSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
+  import GatewayList from "$lib/components/gateways/gateway-list.svelte";
+  import GatewayDetail from "$lib/components/gateways/gateway-detail.svelte";
+  import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
   import {
     getDashboard,
     getDashboardFilters,
     matchesTagFilter,
-    refresh,
   } from "$lib/state.svelte";
   import { buildCombinedCollection, downloadJSON } from "$lib/postman";
 
@@ -35,36 +27,25 @@
       matchesTagFilter(gateway.tags, filters.tagFilter),
     ),
   );
-  let selectedGatewayId = $state("");
+
+  // Keyed by apiId: polling replaces the objects, so holding one would freeze the panel.
+  let selectedGatewayId = $state<string | null>(null);
   const selectedGateway = $derived(
-    gateways.find((gateway) => gateway.apiId === selectedGatewayId) ?? null,
+    gateways.find((gateway) => gateway.apiId === selectedGatewayId) ?? gateways[0] ?? null,
   );
   const totalRoutes = $derived(gateways.reduce((sum, g) => sum + (g.routes ?? 0), 0));
   const totalIntegrations = $derived(gateways.reduce((sum, g) => sum + (g.integrations ?? 0), 0));
 
-  $effect(() => {
-    if (
-      selectedGatewayId &&
-      !gateways.some((gateway) => gateway.apiId === selectedGatewayId)
-    ) {
-      selectedGatewayId = "";
-    }
-  });
-
-  function selectGateway(apiId: string) {
+  function select(apiId: string) {
     selectedGatewayId = apiId;
+    history.replaceState(null, "", `#gateways?api=${encodeURIComponent(apiId)}`);
   }
 
-  function closeGatewayPanel() {
-    selectedGatewayId = "";
-  }
-
-  function onGatewayRowKeydown(event: KeyboardEvent, apiId: string) {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      selectGateway(apiId);
-    }
-  }
+  onMount(() => {
+    const qs = window.location.hash.split("?")[1];
+    const api = qs ? new URLSearchParams(qs).get("api") : null;
+    if (api) selectedGatewayId = api;
+  });
 
   function downloadAll() {
     downloadJSON(
@@ -74,108 +55,88 @@
   }
 </script>
 
-<div
-  class="flex min-h-full flex-col gap-4"
->
+<div class="gateways">
   <SectionHeader
     title="API Gateways"
-    description="Gateway inventory, stages, routes and integration details."
-    icon={GlobeHemisphereWestIcon}
+    description="{gateways.length} gateways · {totalRoutes} routes · {totalIntegrations} integrations"
     {sidebarCollapsed}
     {onToggleSidebar}
   >
     {#snippet actions()}
+      {#if filters.tagFilter}
+        <span class="filter" title={filters.tagFilter}>Tag <span>{filters.tagFilter}</span></span>
+      {/if}
       {#if gateways.length > 0}
-        <button
-          type="button"
-          onclick={downloadAll}
-          class="flex items-center gap-1.5 rounded-md border border-border/70 bg-card/60 px-3 py-1.5 text-xs font-medium text-foreground transition-colors hover:border-border hover:bg-muted/50"
-        >
-          <DownloadSimpleIcon size={13} />
+        <button type="button" onclick={downloadAll} class="export-btn">
+          <DownloadSimpleIcon size={12} />
           Export Postman
         </button>
       {/if}
     {/snippet}
   </SectionHeader>
 
-  <!-- Metrics Row -->
-  <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-    <MetricCard
-      label="Total Gateways"
-      value={gateways.length}
-      sub="Active HTTP & REST endpoints"
-    />
-    <MetricCard
-      label="Provisioned Routes"
-      value={totalRoutes}
-      sub="Total route handlers"
-    />
-    <MetricCard
-      label="Integrations"
-      value={totalIntegrations}
-      valueColor="var(--accent-green)"
-      sub="Backend targets wired"
-    />
-  </div>
-
-  <PaneGroup direction="horizontal" class="min-h-0 flex-1 rounded-md border border-border/70" style="height: calc(100vh - 15rem);">
-    <Pane defaultSize={58} minSize={35} class="flex min-h-0 flex-col overflow-hidden bg-card/30">
-  <ResourceTable
-    title="API Gateways"
-    count={gateways.length}
-    loading={dashboard.loading && !dashboard.data}
-    empty={gateways.length === 0}
-    emptyMessage="No API Gateways created yet."
-    emptyIcon={GlobeHemisphereWestIcon}
-    columns={["Name", "Type", "Stage", "Routes", "Integrations"]}
-    onRefresh={refresh}
-  >
-    {#each gateways as gateway}
-      <TableRow
-        class={`cursor-pointer focus-within:bg-muted/60 ${gateway.apiId === selectedGatewayId ? "bg-muted/60" : ""}`}
-        role="button"
-        tabindex={0}
-        aria-label={`Open details for API Gateway ${gateway.name}`}
-        onclick={() => selectGateway(gateway.apiId)}
-        onkeydown={(event: KeyboardEvent) =>
-          onGatewayRowKeydown(event, gateway.apiId)}
-      >
-        <TableCell><ArnCell name={gateway.name} arn={gateway.arn} /></TableCell>
-        <TableCell class="font-mono text-xs text-muted-foreground">
-          {gateway.protocolType} <span class="text-muted-foreground/50">{gateway.version}</span>
-        </TableCell>
-        <TableCell class="font-mono text-xs text-muted-foreground">
-          {gateway.defaultStage || "—"}
-        </TableCell>
-        <TableCell class="font-mono text-muted-foreground"
-          >{gateway.routes}</TableCell
-        >
-        <TableCell class="font-mono text-muted-foreground"
-          >{gateway.integrations}</TableCell
-        >
-      </TableRow>
-    {/each}
-  </ResourceTable>
-    </Pane>
-    <Handle />
-    <Pane defaultSize={42} minSize={25} class="flex min-h-0 flex-col overflow-hidden bg-card/30">
-  {#if selectedGateway}
-    <GatewayDetailsPanel
-      gateway={selectedGateway}
-      onClose={closeGatewayPanel}
-    />
+  {#if dashboard.loading && !dashboard.data}
+    <div class="layout">
+      <div class="skeleton-list">
+        {#each Array(6) as _, i (i)}<span style:--i={i}></span>{/each}
+      </div>
+    </div>
+  {:else if gateways.length === 0}
+    <div class="blank">
+      <h2>No gateways yet</h2>
+      <p>Create one with <code>aws apigatewayv2 create-api</code> or deploy through your IaC, and it appears here.</p>
+    </div>
   {:else}
-    <section class="flex h-full min-h-0 flex-col">
-      <div class="border-b border-border/70 bg-background/35 px-3 py-2">
-        <h3 class="text-sm font-semibold text-foreground">Gateway Details</h3>
-      </div>
-      <div class="flex flex-1 items-center justify-center px-6 py-5 text-center">
-        <p class="max-w-sm text-sm text-muted-foreground/70">
-        Select a gateway to inspect routes, integrations, and request templates.
-        </p>
-      </div>
-    </section>
+    <div class="layout">
+      <RcResizableAside storageKey="tarn-gateways-list-width">
+        <GatewayList gateways={gateways} selectedId={selectedGateway?.apiId ?? null} onselect={select} />
+      </RcResizableAside>
+      {#if selectedGateway}
+        {#key selectedGateway.apiId}
+          <GatewayDetail gateway={selectedGateway} />
+        {/key}
+      {/if}
+    </div>
   {/if}
-    </Pane>
-  </PaneGroup>
 </div>
+
+<style>
+  .gateways { display: flex; flex-direction: column; min-height: 100%; }
+  .layout {
+    display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 28px; padding: 20px 0 48px;
+    max-width: 1320px; align-items: start;
+  }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+  }
+
+  .filter {
+    display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 8px;
+    border: 1px solid var(--border-subtle); font-size: 11px; color: var(--text-tertiary);
+  }
+  .filter span { font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-primary); }
+
+  .export-btn {
+    display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 8px;
+    border: 1px solid var(--border-subtle); font-size: 11.5px; color: var(--text-secondary);
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease, transform 120ms ease;
+  }
+  .export-btn:hover { color: var(--text-primary); border-color: var(--border-default); background: var(--bg-element-hover); }
+  .export-btn:active { transform: scale(0.96); }
+
+  .blank { padding: 64px 0; text-align: center; animation: fadeUp 320ms var(--ease-snappy) both; }
+  .blank h2 { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+  .blank p { margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+  .blank code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; color: var(--text-primary); }
+
+  .skeleton-list { display: flex; flex-direction: column; gap: 6px; }
+  .skeleton-list span {
+    height: 34px; border-radius: 8px; background: var(--bg-element);
+    animation: pulse 1.4s ease-in-out infinite; animation-delay: calc(var(--i) * 80ms);
+  }
+  @keyframes pulse { 50% { opacity: 0.5; } }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .blank, .skeleton-list span { animation: none; }
+  }
+</style>
