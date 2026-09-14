@@ -1,35 +1,13 @@
 <script lang="ts">
-  import { LightningIcon } from "phosphor-svelte";
-  import {
-    Table,
-    TableHeader,
-    TableBody,
-    TableRow,
-    TableHead,
-    TableCell,
-  } from "$lib/components/ui/table";
-  import { Skeleton } from "$lib/components/ui/skeleton";
-  import LedDot from "$lib/components/common/led-dot.svelte";
-  import ArnCell from "$lib/components/common/arn-cell.svelte";
-  import EmptyState from "$lib/components/common/empty-state.svelte";
-  import MetricCard from "$lib/components/common/metric-card.svelte";
+  import { onMount } from "svelte";
   import SectionHeader from "./section-header.svelte";
+  import FunctionList from "$lib/components/functions/function-list.svelte";
+  import FunctionDetail from "$lib/components/functions/function-detail.svelte";
   import {
     getDashboard,
     getDashboardFilters,
     matchesTagFilter,
   } from "$lib/state.svelte";
-  import { formatBytes, formatDate } from "$lib/utils";
-  import type { FunctionSummary } from "$lib/types";
-  import LambdaDetailDialog from "./lambda-detail-dialog.svelte";
-
-  let selectedFn = $state<FunctionSummary | null>(null);
-  let dialogOpen = $state(false);
-
-  function openDetail(fn: FunctionSummary) {
-    selectedFn = fn;
-    dialogOpen = true;
-  }
 
   let {
     sidebarCollapsed = false,
@@ -47,151 +25,97 @@
     ),
   );
 
-  const activeFunctions = $derived(
-    functions.filter((fn) => fn.state.toLowerCase() === "active").length,
-  );
-  const runtimeCount = $derived(new Set(functions.map((fn) => fn.runtime)).size);
-  const totalMessagesProcessed = $derived(
-    functions.reduce((total, fn) => total + fn.messagesProcessed, 0),
+  // Keyed by name: polling replaces the objects, so holding one would freeze the panel.
+  let selectedName = $state<string | null>(null);
+  const selected = $derived(
+    functions.find((fn) => fn.name === selectedName) ?? functions[0] ?? null,
   );
 
-  const numberFormatter = new Intl.NumberFormat("en-GB");
+  const activeCount = $derived(functions.filter((fn) => fn.state.toLowerCase() === "active").length);
+  const totalInvocations = $derived(functions.reduce((n, fn) => n + (fn.invocations ?? 0), 0));
 
-  function stateColor(state: string): "green" | "amber" | "red" | "gray" {
-    const normalized = state.toLowerCase();
-    if (normalized === "active") return "green";
-    if (normalized === "pending") return "amber";
-    if (normalized === "failed" || normalized === "inactive") return "red";
-    return "gray";
+  function select(name: string) {
+    selectedName = name;
+    history.replaceState(null, "", `#functions?fn=${encodeURIComponent(name)}`);
   }
+
+  onMount(() => {
+    const qs = window.location.hash.split("?")[1];
+    const fn = qs ? new URLSearchParams(qs).get("fn") : null;
+    if (fn) selectedName = fn;
+  });
 </script>
 
-<div class="flex min-h-full flex-col gap-4">
+<div class="functions">
   <SectionHeader
     title="Lambda Functions"
-    description="Runtime, state, throughput and deployment footprint in one place."
-    icon={LightningIcon}
+    description="{functions.length} functions · {activeCount} active · {totalInvocations.toLocaleString('en-GB')} invocations"
     {sidebarCollapsed}
     {onToggleSidebar}
   >
     {#snippet actions()}
       {#if filters.tagFilter}
-        <div class="flex items-center gap-1.5 rounded-md border border-border/70 bg-card/60 px-2.5 py-1 text-xs">
-          <span class="text-muted-foreground">Filter:</span>
-          <span class="font-mono text-foreground" title={filters.tagFilter}>
-            {filters.tagFilter}
-          </span>
-        </div>
+        <span class="filter" title={filters.tagFilter}>Tag <span>{filters.tagFilter}</span></span>
       {/if}
     {/snippet}
   </SectionHeader>
 
-  <!-- Metric Cards Row -->
-  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-    <MetricCard
-      label="Total Functions"
-      value={functions.length}
-      sub="{runtimeCount} unique runtime{runtimeCount === 1 ? '' : 's'}"
-    />
-    <MetricCard
-      label="Active Functions"
-      value={activeFunctions}
-      valueColor="var(--accent-green)"
-      sub="{functions.length - activeFunctions} pending / inactive"
-    />
-    <MetricCard
-      label="Messages Processed"
-      value={numberFormatter.format(totalMessagesProcessed)}
-      sub="Total cumulative invocations"
-    />
-    <MetricCard
-      label="Runtime Environments"
-      value={runtimeCount}
-      sub="Active engines"
-    />
-  </div>
-
-  <div class="min-h-0 flex-1 overflow-hidden rounded-md border border-border/70 bg-card/30">
-    {#if dashboard.loading && !dashboard.data}
-      <div class="space-y-2 p-3">
-        {#each Array(6) as _, index (index)}
-          <Skeleton class="h-10 w-full" />
-        {/each}
+  {#if dashboard.loading && !dashboard.data}
+    <div class="layout">
+      <div class="skeleton-list">
+        {#each Array(6) as _, i (i)}<span style:--i={i}></span>{/each}
       </div>
-    {:else if functions.length === 0}
-      <div class="flex h-full min-h-[18rem] items-center justify-center">
-        <EmptyState
-          message="No functions created yet."
-          icon={LightningIcon}
-        />
-      </div>
-    {:else}
-      <div class="h-full overflow-auto">
-        <Table>
-          <TableHeader class="sticky top-0 z-10">
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Runtime</TableHead>
-              <TableHead>State</TableHead>
-              <TableHead>Messages Processed</TableHead>
-              <TableHead>Memory</TableHead>
-              <TableHead>Timeout</TableHead>
-              <TableHead>Code</TableHead>
-              <TableHead>Layers</TableHead>
-              <TableHead>Tags</TableHead>
-              <TableHead>Updated</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {#each functions as fn}
-              <TableRow
-                class="cursor-pointer"
-                onclick={() => openDetail(fn)}
-              >
-                <TableCell><ArnCell name={fn.name} arn={fn.arn} /></TableCell>
-                <TableCell class="font-mono text-xs text-muted-foreground">
-                  {fn.runtime}
-                </TableCell>
-                <TableCell>
-                  <span class="inline-flex items-center gap-1.5 text-xs">
-                    <LedDot color={stateColor(fn.state)} />
-                    <span class="text-muted-foreground capitalize">{fn.state}</span>
-                  </span>
-                </TableCell>
-                <TableCell class="font-mono text-xs text-muted-foreground">
-                  {numberFormatter.format(fn.messagesProcessed)}
-                </TableCell>
-                <TableCell class="font-mono text-xs text-muted-foreground">
-                  {fn.memoryMB} MB
-                </TableCell>
-                <TableCell class="font-mono text-xs text-muted-foreground">
-                  {fn.timeoutSec}s
-                </TableCell>
-                <TableCell class="font-mono text-xs text-muted-foreground">
-                  {formatBytes(fn.codeSize)}
-                </TableCell>
-                <TableCell class="font-mono text-xs text-muted-foreground">
-                  {fn.layers > 0 ? fn.layers : "—"}
-                </TableCell>
-                <TableCell>
-                  {#if fn.tags && Object.keys(fn.tags).length > 0}
-                    <span class="font-mono text-xs text-muted-foreground">
-                      {Object.keys(fn.tags).length} tags
-                    </span>
-                  {:else}
-                    <span class="text-xs text-muted-foreground/40">—</span>
-                  {/if}
-                </TableCell>
-                <TableCell class="font-mono text-xs text-muted-foreground">
-                  {formatDate(fn.lastModified)}
-                </TableCell>
-              </TableRow>
-            {/each}
-          </TableBody>
-        </Table>
-      </div>
-    {/if}
-  </div>
+    </div>
+  {:else if functions.length === 0}
+    <div class="blank">
+      <h2>No functions yet</h2>
+      <p>Create one with <code>aws lambda create-function</code> or deploy through your IaC, and it appears here.</p>
+    </div>
+  {:else}
+    <div class="layout">
+      <aside class="list">
+        <FunctionList {functions} selectedName={selected?.name ?? null} onselect={select} />
+      </aside>
+      {#if selected}
+        {#key selected.name}
+          <FunctionDetail fn={selected} data={dashboard.data} />
+        {/key}
+      {/if}
+    </div>
+  {/if}
 </div>
 
-<LambdaDetailDialog bind:open={dialogOpen} fn={selectedFn} />
+<style>
+  .functions { display: flex; flex-direction: column; min-height: 100%; }
+  .layout {
+    display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 28px; padding: 20px 0 48px;
+    max-width: 1320px;
+  }
+  .list { position: sticky; top: 0; align-self: start; max-height: calc(100vh - 140px); overflow-y: auto; padding-right: 2px; }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+    .list { position: static; max-height: 260px; }
+  }
+
+  .filter {
+    display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 8px;
+    border: 1px solid var(--border-subtle); font-size: 11px; color: var(--text-tertiary);
+  }
+  .filter span { font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-primary); }
+
+  .blank { padding: 64px 0; text-align: center; animation: fadeUp 320ms var(--ease-snappy) both; }
+  .blank h2 { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+  .blank p { margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
+  .blank code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; color: var(--text-primary); }
+
+  .skeleton-list { display: flex; flex-direction: column; gap: 6px; }
+  .skeleton-list span {
+    height: 34px; border-radius: 8px; background: var(--bg-element);
+    animation: pulse 1.4s ease-in-out infinite; animation-delay: calc(var(--i) * 80ms);
+  }
+  @keyframes pulse { 50% { opacity: 0.5; } }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) {
+    .blank, .skeleton-list span { animation: none; }
+  }
+</style>

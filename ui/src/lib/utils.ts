@@ -25,6 +25,19 @@ export function formatDate(value: string): string {
   return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`;
 }
 
+/** Compact relative time: "just now", "42s ago", "5m ago", "3h ago", then a date. */
+export function timeAgo(value: string | undefined, now = Date.now()): string {
+  if (!value) return "--";
+  const t = new Date(value).getTime();
+  if (Number.isNaN(t)) return "--";
+  const diff = now - t;
+  if (diff < 2000) return "just now";
+  if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
+  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`;
+  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`;
+  return new Date(t).toLocaleDateString();
+}
+
 export function formatUnixSeconds(value: number): string {
   if (!value) return "--";
   return formatDate(new Date(value * 1000).toISOString());
