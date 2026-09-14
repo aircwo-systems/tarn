@@ -47,11 +47,16 @@
     }
   }
 
-  // Reload when the folder changes, and when the dashboard reports a different object count.
+  // Reload when the folder changes, and when the dashboard reports a different
+  // object count. Guarded by value (not object identity): the dashboard
+  // replaces bucket objects wholesale on every poll, which would otherwise
+  // re-list S3 on each tick.
+  let loadedKey = $state("");
   $effect(() => {
-    void prefix;
-    void bucket.objects;
-    load();
+    const key = `${bucket.name}\n${prefix}\n${bucket.objects ?? 0}`;
+    if (key === loadedKey) return;
+    loadedKey = key;
+    void load();
   });
 
   const crumbs = $derived.by(() => {
