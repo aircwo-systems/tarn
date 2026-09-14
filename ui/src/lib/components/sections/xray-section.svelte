@@ -1,6 +1,6 @@
 <script lang="ts">
-  import { DetectiveIcon, ArrowUpRightIcon, FlaskIcon, CaretRightIcon } from "phosphor-svelte";
-  import { slide } from "svelte/transition";
+  import { DetectiveIcon, ArrowUpRightIcon, FlaskIcon, CaretRightIcon, SidebarSimpleIcon } from "phosphor-svelte";
+  import { fade, slide } from "svelte/transition";
   import { runEventBridgeRace } from "$lib/api";
   import { getDashboard, refresh } from "$lib/state.svelte";
   import type { RequestTrace, TraceSpan } from "$lib/types";
@@ -732,25 +732,19 @@
       </div>
 
       <!-- ─── List resizer / collapse handle ─── -->
+      {#if !traceListCollapsed}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
       <div
         class="list-resizer"
         class:resizing={listResizing}
-        class:collapsed={traceListCollapsed}
-        style:left={traceListCollapsed ? "-3px" : `${traceListWidth - 3}px`}
-        title={traceListCollapsed
-          ? "Show trace list"
-          : "Drag to resize trace list (click to collapse, double-click to reset)"}
+        style:left="{traceListWidth - 3}px"
+        title="Drag to resize trace list (click to collapse, double-click to reset)"
         onpointerdown={startListResize}
         onpointermove={trackListHandle}
         ondblclick={resetListWidth}
       >
         <div class="resizer-line"></div>
-        <div class="resizer-pill-handle" style:top={listHandleY === null ? undefined : `${listHandleY}px`}>
-          {#if traceListCollapsed}
-            <CaretRightIcon size={9} />
-          {/if}
-        </div>
+        <div class="resizer-pill-handle" style:top={listHandleY === null ? undefined : `${listHandleY}px`}></div>
         {#if listResizing}
           <div
             class="resizer-width-badge"
@@ -761,13 +755,26 @@
           </div>
         {/if}
       </div>
+      {/if}
 
       <!-- ─── Trace detail panel ─── -->
       {#if selectedTrace}
-        <div class="flex-1 min-w-0 space-y-5" class:pl-4={!traceListCollapsed} class:pl-2={traceListCollapsed}>
+        <div class="flex-1 min-w-0 space-y-5" class:pl-4={!traceListCollapsed}>
           <!-- Trace header -->
           <div class="pb-3 border-b bd-subtle">
             <div class="flex items-center gap-3 flex-wrap min-w-0">
+              {#if traceListCollapsed}
+                <button
+                  type="button"
+                  class="list-open-btn"
+                  onclick={() => (traceListCollapsed = false)}
+                  title="Show trace list"
+                  aria-label="Show trace list"
+                  in:fade={{ duration: 160 }}
+                >
+                  <SidebarSimpleIcon size={14} />
+                </button>
+              {/if}
               {#if selectedTrace.method}
                 <span class="pill mono">{selectedTrace.method}</span>
               {/if}
@@ -1362,25 +1369,19 @@
   }
   .list-resizer:hover .resizer-pill-handle { background: var(--text-secondary); }
   .list-resizer.resizing .resizer-pill-handle { background: var(--text-primary); }
-  .list-resizer.collapsed .resizer-pill-handle {
-    opacity: 1;
-    pointer-events: none;
-    width: 16px;
-    height: 28px;
-    border-radius: 6px;
-    border: 1px solid var(--border-default);
-    background: var(--bg-element);
-    color: var(--text-secondary);
-    display: flex;
+  .list-open-btn {
+    display: inline-flex;
     align-items: center;
     justify-content: center;
-    transform: translateY(-50%) scale(1);
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    border-radius: 8px;
+    color: var(--text-tertiary);
+    transition: color 120ms ease, background 120ms ease, transform 120ms ease;
   }
-  .list-resizer.collapsed:hover .resizer-pill-handle {
-    background: var(--bg-element-hover);
-    color: var(--text-primary);
-    border-color: var(--border-focus);
-  }
+  .list-open-btn:hover { color: var(--text-primary); background: var(--bg-element-hover); }
+  .list-open-btn:active { transform: scale(0.96); }
   .resizer-width-badge {
     position: absolute;
     left: 24px;
