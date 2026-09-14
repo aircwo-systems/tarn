@@ -8,8 +8,9 @@ import (
 // TaskRequest carries the resource identifier and the post-Parameters payload
 // for a single Task-state invocation.
 type TaskRequest struct {
-	Resource string          // ASL "Resource" ARN
-	Payload  json.RawMessage // effective input after Parameters processing
+	Resource       string          // ASL "Resource" ARN
+	Payload        json.RawMessage // effective input after Parameters processing
+	TimeoutSeconds int             // ASL Task.TimeoutSeconds, when configured
 }
 
 // TaskResult is the outcome of one Task-state invocation. Output holds the raw

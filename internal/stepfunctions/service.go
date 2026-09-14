@@ -29,6 +29,12 @@ type LambdaInterface interface {
 	Invoke(ctx context.Context, input *types.InvokeInput) (*types.InvokeOutput, error)
 }
 
+// ECSTaskLookup is the read-only ECS service seam needed by the Step Functions
+// .sync integration to observe a launched task until it stops.
+type ECSTaskLookup interface {
+	GetTask(taskRef string) (*types.Task, error)
+}
+
 // ServiceError is an AWS-shaped API failure.
 type ServiceError struct {
 	Code       string
@@ -87,6 +93,8 @@ type Service struct {
 	cfg        *config.Config
 	store      *Store
 	lambda     LambdaInterface
+	ecsRunner  types.TaskRunner
+	ecsLookup  ECSTaskLookup
 	traceStore *tracesvc.Store
 
 	mu      sync.Mutex
@@ -109,6 +117,13 @@ func NewService(cfg *config.Config, store *Store, lambda LambdaInterface) *Servi
 
 // SetTraceStore wires the trace store used to record executions.
 func (s *Service) SetTraceStore(ts *tracesvc.Store) { s.traceStore = ts }
+
+// SetECSTaskRunner wires the account-local ECS runner and its task-record
+// lookup into the optimized ecs:runTask.sync integration.
+func (s *Service) SetECSTaskRunner(runner types.TaskRunner, lookup ECSTaskLookup) {
+	s.ecsRunner = runner
+	s.ecsLookup = lookup
+}
 
 // Init restores persisted state.
 func (s *Service) Init() error { return s.store.Init() }
@@ -314,10 +329,16 @@ func (s *Service) runExecution(ctx context.Context, h *runHandle, execArn string
 	}
 
 	run := interpreter.Run{
-		Machine:  machine,
-		Input:    json.RawMessage(input),
-		Executor: &taskExecutor{cfg: s.cfg, lambda: s.lambda},
-		Clock:    interpreter.SystemClock,
+		Machine: machine,
+		Input:   json.RawMessage(input),
+		Executor: &taskExecutor{
+			cfg:           s.cfg,
+			lambda:        s.lambda,
+			ecsRunner:     s.ecsRunner,
+			ecsLookup:     s.ecsLookup,
+			correlationID: correlationID,
+		},
+		Clock: interpreter.SystemClock,
 		Emit: func(ev types.HistoryEvent) {
 			h.mu.Lock()
 			h.events = append(h.events, ev)
@@ -500,10 +521,25 @@ func (s *Service) emitTrace(traceID, correlationID string, sm *types.StateMachin
 // concrete services. Currently supports:
 //   - bare Lambda ARN / :::lambda:invoke → runLambda
 //   - arn:aws:states:::http:invoke       → runHTTP
+//   - arn:aws:states:::ecs:runTask.sync  → runECS
 type taskExecutor struct {
-	cfg    *config.Config
-	lambda LambdaInterface
+	cfg       *config.Config
+	lambda    LambdaInterface
+	ecsRunner types.TaskRunner
+	ecsLookup ECSTaskLookup
+	// correlationID is this execution's trace correlation ID (empty when no
+	// trace store is wired up). runECS forwards it onto the RunTaskInput so
+	// the ECS runner's own RUNNING/STOPPED trace shares it with this
+	// execution's trace instead of minting an unrelated one.
+	correlationID string
 }
+
+const ecsRunTaskSyncResource = "arn:aws:states:::ecs:runTask.sync"
+
+const (
+	ecsTaskPollInterval = 100 * time.Millisecond
+	ecsTaskStopTimeout  = 5 * time.Second
+)
 
 // httpInvokeResource is the AWS optimised-integration ARN for HTTP tasks.
 const httpInvokeResource = "arn:aws:states:::http:invoke"
@@ -522,12 +558,243 @@ func (e *taskExecutor) RunTask(ctx context.Context, req interpreter.TaskRequest)
 		return e.runLambda(ctx, req)
 	case req.Resource == httpInvokeResource:
 		return e.runHTTP(ctx, req)
+	case req.Resource == ecsRunTaskSyncResource:
+		return e.runECS(ctx, req)
 	default:
 		return interpreter.TaskResult{}, &interpreter.StateError{
 			Name:  interpreter.ErrTaskFailed,
 			Cause: "unsupported Task resource: " + req.Resource,
 		}
 	}
+}
+
+// runECS implements the Step Functions optimized ECS integration. It launches
+// the task through the account's existing runner, then reads the task record
+// until every requested task reaches STOPPED.
+func (e *taskExecutor) runECS(ctx context.Context, req interpreter.TaskRequest) (interpreter.TaskResult, error) {
+	var in types.RunTaskInput
+	if err := json.Unmarshal(req.Payload, &in); err != nil {
+		return interpreter.TaskResult{}, &interpreter.StateError{
+			Name:  interpreter.ErrTaskFailed,
+			Cause: "ecs:runTask.sync: invalid Parameters: " + err.Error(),
+		}
+	}
+	if strings.TrimSpace(in.TaskDefinition) == "" {
+		return interpreter.TaskResult{}, &interpreter.StateError{
+			Name:  interpreter.ErrTaskFailed,
+			Cause: "ecs:runTask.sync: TaskDefinition is required",
+		}
+	}
+	if e.ecsRunner == nil || e.ecsLookup == nil {
+		return interpreter.TaskResult{}, &interpreter.StateError{
+			Name:  interpreter.ErrTaskFailed,
+			Cause: "ecs:runTask.sync: ECS service unavailable",
+		}
+	}
+	in.CorrelationID = e.correlationID
+
+	taskCtx, cancel := ecsTaskContext(ctx, req.TimeoutSeconds)
+	defer cancel()
+
+	out, err := e.ecsRunner.RunTask(taskCtx, &in)
+	if err != nil {
+		if contextErr := ecsTaskContextError(ctx, taskCtx, req.TimeoutSeconds); contextErr != nil {
+			if out != nil {
+				e.stopECSTasks(in.Cluster, out.Tasks, "Step Functions ECS task cancelled")
+			}
+			return interpreter.TaskResult{}, contextErr
+		}
+		return interpreter.TaskResult{}, &interpreter.StateError{
+			Name:  interpreter.ErrTaskFailed,
+			Cause: "ecs:runTask.sync: " + err.Error(),
+		}
+	}
+	if contextErr := ecsTaskContextError(ctx, taskCtx, req.TimeoutSeconds); contextErr != nil {
+		if out != nil {
+			e.stopECSTasks(in.Cluster, out.Tasks, "Step Functions ECS task cancelled")
+		}
+		return interpreter.TaskResult{}, contextErr
+	}
+	if out == nil {
+		return interpreter.TaskResult{}, &interpreter.StateError{
+			Name:  interpreter.ErrTaskFailed,
+			Cause: "ecs:runTask.sync: ECS returned no response",
+		}
+	}
+	if len(out.Failures) > 0 {
+		e.stopECSTasks(in.Cluster, out.Tasks, "Step Functions ECS task launch failed")
+		return interpreter.TaskResult{}, &interpreter.StateError{
+			Name:  interpreter.ErrTaskFailed,
+			Cause: "ecs:runTask.sync: " + ecsFailureCause(out.Failures),
+		}
+	}
+	if len(out.Tasks) == 0 {
+		return interpreter.TaskResult{}, &interpreter.StateError{
+			Name:  interpreter.ErrTaskFailed,
+			Cause: "ecs:runTask.sync: ECS returned no tasks",
+		}
+	}
+
+	completed, waitErr := e.waitECSTasks(ctx, taskCtx, in.Cluster, out.Tasks, req.TimeoutSeconds)
+	if waitErr != nil {
+		return interpreter.TaskResult{}, waitErr
+	}
+
+	for _, task := range completed {
+		if cause := ecsTaskFailureCause(&task); cause != "" {
+			return interpreter.TaskResult{}, &interpreter.StateError{
+				Name:  interpreter.ErrTaskFailed,
+				Cause: "ecs:runTask.sync: " + cause,
+			}
+		}
+	}
+
+	result, err := json.Marshal(types.RunTaskOutput{Tasks: completed})
+	if err != nil {
+		return interpreter.TaskResult{}, &interpreter.StateError{
+			Name:  interpreter.ErrRuntime,
+			Cause: "ecs:runTask.sync: cannot marshal result: " + err.Error(),
+		}
+	}
+	return interpreter.TaskResult{Output: result}, nil
+}
+
+// ecsTaskContext derives the context the .sync integration waits on. Real
+// Step Functions imposes no default timeout on ecs:runTask.sync (its
+// effective ceiling is ~99999999s), so an unset TimeoutSeconds must not
+// impose one here either: the wait is then bounded only by the parent
+// (execution stopped / server shutdown), which context.WithCancel still
+// propagates into taskCtx.Done().
+func ecsTaskContext(ctx context.Context, timeoutSeconds int) (context.Context, context.CancelFunc) {
+	if timeoutSeconds > 0 {
+		return context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	}
+	return context.WithCancel(ctx)
+}
+
+func (e *taskExecutor) waitECSTasks(parentCtx, taskCtx context.Context, cluster string, launched []types.Task, timeoutSeconds int) ([]types.Task, error) {
+	completed := append([]types.Task(nil), launched...)
+	for {
+		allStopped := true
+		for i := range completed {
+			if contextErr := ecsTaskContextError(parentCtx, taskCtx, timeoutSeconds); contextErr != nil {
+				e.stopECSTasks(cluster, completed, "Step Functions ECS task cancelled")
+				return nil, contextErr
+			}
+			task, err := e.ecsLookup.GetTask(completed[i].TaskArn)
+			if err != nil {
+				if contextErr := ecsTaskContextError(parentCtx, taskCtx, timeoutSeconds); contextErr != nil {
+					e.stopECSTasks(cluster, completed, "Step Functions ECS task cancelled")
+					return nil, contextErr
+				}
+				e.stopECSTasks(cluster, completed, "Step Functions ECS task status unavailable")
+				return nil, &interpreter.StateError{
+					Name:  interpreter.ErrTaskFailed,
+					Cause: "ecs:runTask.sync: cannot describe task " + completed[i].TaskArn + ": " + err.Error(),
+				}
+			}
+			if task == nil {
+				e.stopECSTasks(cluster, completed, "Step Functions ECS task status unavailable")
+				return nil, &interpreter.StateError{
+					Name:  interpreter.ErrTaskFailed,
+					Cause: "ecs:runTask.sync: cannot describe task " + completed[i].TaskArn + ": empty task response",
+				}
+			}
+			completed[i] = *task
+			if task.LastStatus != types.TaskStatusStopped {
+				allStopped = false
+			}
+		}
+		if allStopped {
+			return completed, nil
+		}
+
+		timer := time.NewTimer(ecsTaskPollInterval)
+		select {
+		case <-taskCtx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			if contextErr := ecsTaskContextError(parentCtx, taskCtx, timeoutSeconds); contextErr != nil {
+				e.stopECSTasks(cluster, completed, "Step Functions ECS task cancelled")
+				return nil, contextErr
+			}
+		case <-timer.C:
+		}
+	}
+}
+
+func (e *taskExecutor) stopECSTasks(cluster string, tasks []types.Task, reason string) {
+	if e.ecsRunner == nil {
+		return
+	}
+	stopCtx, cancel := context.WithTimeout(context.Background(), ecsTaskStopTimeout)
+	defer cancel()
+	for _, task := range tasks {
+		if strings.TrimSpace(task.TaskArn) == "" || task.LastStatus == types.TaskStatusStopped {
+			continue
+		}
+		_ = e.ecsRunner.StopTask(stopCtx, cluster, task.TaskArn, reason)
+	}
+}
+
+func ecsTaskContextError(parentCtx, taskCtx context.Context, timeoutSeconds int) error {
+	if parentCtx.Err() != nil {
+		return interpreter.ErrAborted
+	}
+	if taskCtx.Err() == context.DeadlineExceeded {
+		return &interpreter.StateError{
+			Name:  interpreter.ErrTimeout,
+			Cause: "ecs:runTask.sync: task timed out",
+		}
+	}
+	if taskCtx.Err() != nil {
+		return interpreter.ErrAborted
+	}
+	return nil
+}
+
+func ecsFailureCause(failures []types.Failure) string {
+	parts := make([]string, 0, len(failures))
+	for _, failure := range failures {
+		part := strings.TrimSpace(failure.Reason)
+		if failure.Detail != "" {
+			if part == "" {
+				part = failure.Detail
+			} else {
+				part += ": " + failure.Detail
+			}
+		}
+		if part == "" {
+			part = "task launch failed"
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, "; ")
+}
+
+func ecsTaskFailureCause(task *types.Task) string {
+	if task == nil {
+		return "empty task result"
+	}
+	if len(task.Containers) == 0 && task.StoppedReason != "" {
+		return "task failed: " + task.StoppedReason
+	}
+	for _, container := range task.Containers {
+		if container.ExitCode == nil {
+			if container.Reason != "" {
+				return fmt.Sprintf("container %s failed: %s", container.Name, container.Reason)
+			}
+			return fmt.Sprintf("container %s stopped without an exit code", container.Name)
+		}
+		if *container.ExitCode != 0 {
+			return fmt.Sprintf("container %s exited with code %d", container.Name, *container.ExitCode)
+		}
+	}
+	return ""
 }
 
 // isLambdaResource returns true for bare Lambda function ARNs and the

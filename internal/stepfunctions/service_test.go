@@ -75,6 +75,339 @@ func waitForTerminal(t *testing.T, svc *Service, arn string) *types.Execution {
 	return nil
 }
 
+type fakeECSTaskIntegration struct {
+	mu         sync.Mutex
+	input      *types.RunTaskInput
+	task       types.Task
+	exitCode   *int64
+	stopOnPoll int
+	polls      int
+	stopCalls  []string
+	stopReason []string
+	failures   []types.Failure
+	runErr     error
+	notFound   bool
+}
+
+func (f *fakeECSTaskIntegration) RunTask(ctx context.Context, in *types.RunTaskInput) (*types.RunTaskOutput, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	default:
+	}
+
+	f.mu.Lock()
+	copyInput := *in
+	f.input = &copyInput
+	task := f.task
+	failures := append([]types.Failure(nil), f.failures...)
+	runErr := f.runErr
+	f.mu.Unlock()
+	return &types.RunTaskOutput{Tasks: []types.Task{task}, Failures: failures}, runErr
+}
+
+func (f *fakeECSTaskIntegration) StopTask(_ context.Context, _, taskArn, reason string) error {
+	f.mu.Lock()
+	f.stopCalls = append(f.stopCalls, taskArn)
+	f.stopReason = append(f.stopReason, reason)
+	f.mu.Unlock()
+	return nil
+}
+
+func (f *fakeECSTaskIntegration) GetTask(taskRef string) (*types.Task, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.polls++
+	if f.notFound {
+		return nil, fmt.Errorf("task %s not found", taskRef)
+	}
+	task := f.task
+	if task.TaskArn != taskRef {
+		return nil, fmt.Errorf("unexpected task reference %q", taskRef)
+	}
+	if f.stopOnPoll > 0 && f.polls >= f.stopOnPoll {
+		task.LastStatus = types.TaskStatusStopped
+		for i := range task.Containers {
+			task.Containers[i].LastStatus = types.TaskStatusStopped
+			task.Containers[i].ExitCode = f.exitCode
+		}
+	}
+	return &task, nil
+}
+
+func (f *fakeECSTaskIntegration) recordedInput() *types.RunTaskInput {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.input == nil {
+		return nil
+	}
+	copyInput := *f.input
+	return &copyInput
+}
+
+func (f *fakeECSTaskIntegration) stopCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.stopCalls)
+}
+
+func (f *fakeECSTaskIntegration) pollCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.polls
+}
+
+func ecsFakeTask() types.Task {
+	return types.Task{
+		TaskArn:           "arn:aws:ecs:us-east-1:000000000000:task/default/task-1",
+		ClusterArn:        "arn:aws:ecs:us-east-1:000000000000:cluster/default",
+		TaskDefinitionArn: "arn:aws:ecs:us-east-1:000000000000:task-definition/worker:1",
+		LastStatus:        types.TaskStatusRunning,
+		DesiredStatus:     types.TaskDesiredStatusRunning,
+		Containers: []types.TaskContainer{{
+			Name:         "worker",
+			ContainerArn: "arn:aws:ecs:us-east-1:000000000000:container/default/task-1/worker",
+			LastStatus:   types.TaskStatusRunning,
+		}},
+	}
+}
+
+func TestECSRunTaskSyncReturnsStoppedTask(t *testing.T) {
+	zero := int64(0)
+	fake := &fakeECSTaskIntegration{
+		task:       ecsFakeTask(),
+		exitCode:   &zero,
+		stopOnPoll: 2,
+	}
+	exec := &taskExecutor{ecsRunner: fake, ecsLookup: fake}
+
+	result, err := exec.RunTask(context.Background(), interpreter.TaskRequest{
+		Resource: ecsRunTaskSyncResource,
+		Payload: json.RawMessage(`{
+			"Cluster":"arn:aws:ecs:us-east-1:000000000000:cluster/default",
+			"TaskDefinition":"arn:aws:ecs:us-east-1:000000000000:task-definition/worker:1",
+			"LaunchType":"FARGATE",
+			"Overrides":{"ContainerOverrides":[{"Name":"worker","Command":["hello"]}]}
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("run ECS task: %v", err)
+	}
+
+	var out types.RunTaskOutput
+	if err := json.Unmarshal(result.Output, &out); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if len(out.Tasks) != 1 || out.Tasks[0].LastStatus != types.TaskStatusStopped {
+		t.Fatalf("unexpected completed tasks: %+v", out.Tasks)
+	}
+	if out.Tasks[0].Containers[0].ExitCode == nil || *out.Tasks[0].Containers[0].ExitCode != 0 {
+		t.Fatalf("unexpected exit code: %+v", out.Tasks[0].Containers[0].ExitCode)
+	}
+	input := fake.recordedInput()
+	if input == nil || input.Cluster == "" || input.TaskDefinition == "" || input.LaunchType != types.LaunchTypeFargate {
+		t.Fatalf("ECS input was not forwarded: %+v", input)
+	}
+	if input.Overrides == nil || len(input.Overrides.ContainerOverrides) != 1 {
+		t.Fatalf("ECS overrides were not forwarded: %+v", input.Overrides)
+	}
+}
+
+func TestECSRunTaskSyncFailureReturnsStatesTaskFailed(t *testing.T) {
+	failed := int64(17)
+	fake := &fakeECSTaskIntegration{
+		task:       ecsFakeTask(),
+		exitCode:   &failed,
+		stopOnPoll: 1,
+	}
+	exec := &taskExecutor{ecsRunner: fake, ecsLookup: fake}
+
+	_, err := exec.RunTask(context.Background(), interpreter.TaskRequest{
+		Resource: ecsRunTaskSyncResource,
+		Payload:  json.RawMessage(`{"TaskDefinition":"worker:1"}`),
+	})
+	var stateErr *interpreter.StateError
+	if !errors.As(err, &stateErr) || stateErr.Name != interpreter.ErrTaskFailed {
+		t.Fatalf("expected States.TaskFailed, got %v", err)
+	}
+	if !strings.Contains(stateErr.Cause, "17") {
+		t.Fatalf("failure cause does not include exit code: %q", stateErr.Cause)
+	}
+}
+
+func TestECSRunTaskSyncCancellationStopsTask(t *testing.T) {
+	fake := &fakeECSTaskIntegration{task: ecsFakeTask()}
+	exec := &taskExecutor{ecsRunner: fake, ecsLookup: fake}
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+
+	_, err := exec.RunTask(ctx, interpreter.TaskRequest{
+		Resource: ecsRunTaskSyncResource,
+		Payload:  json.RawMessage(`{"Cluster":"default","TaskDefinition":"worker:1"}`),
+	})
+	if !errors.Is(err, interpreter.ErrAborted) {
+		t.Fatalf("expected cancellation to abort task, got %v", err)
+	}
+	if fake.stopCount() == 0 {
+		t.Fatal("expected cancellation to stop the ECS task")
+	}
+}
+
+func TestECSRunTaskSyncTaskTimeoutStopsTask(t *testing.T) {
+	fake := &fakeECSTaskIntegration{task: ecsFakeTask()}
+	exec := &taskExecutor{ecsRunner: fake, ecsLookup: fake}
+
+	_, err := exec.RunTask(context.Background(), interpreter.TaskRequest{
+		Resource:       ecsRunTaskSyncResource,
+		Payload:        json.RawMessage(`{"Cluster":"default","TaskDefinition":"worker:1"}`),
+		TimeoutSeconds: 1,
+	})
+	var stateErr *interpreter.StateError
+	if !errors.As(err, &stateErr) || stateErr.Name != interpreter.ErrTimeout {
+		t.Fatalf("expected States.Timeout, got %v", err)
+	}
+	if fake.stopCount() == 0 {
+		t.Fatal("expected task timeout to stop the ECS task")
+	}
+}
+
+// TestECSTaskContextNoTimeoutHasNoDeadline pins the fix for the wrong
+// hard-coded 60s default: real Step Functions imposes no ceiling on
+// ecs:runTask.sync when TimeoutSeconds is omitted, so the derived context
+// must not carry a deadline either.
+func TestECSTaskContextNoTimeoutHasNoDeadline(t *testing.T) {
+	ctx, cancel := ecsTaskContext(context.Background(), 0)
+	defer cancel()
+	if _, ok := ctx.Deadline(); ok {
+		t.Fatal("expected no deadline when TimeoutSeconds is unset")
+	}
+}
+
+// TestECSTaskContextNoTimeoutCancelsWithParent confirms the unbounded wait
+// still ends when the execution is aborted (parent context cancelled), the
+// same way the timeout path already does.
+func TestECSTaskContextNoTimeoutCancelsWithParent(t *testing.T) {
+	parent, parentCancel := context.WithCancel(context.Background())
+	ctx, cancel := ecsTaskContext(parent, 0)
+	defer cancel()
+	parentCancel()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("expected the derived context to be cancelled with its parent")
+	}
+}
+
+func TestECSTaskContextWithTimeoutHasDeadline(t *testing.T) {
+	ctx, cancel := ecsTaskContext(context.Background(), 5)
+	defer cancel()
+	if _, ok := ctx.Deadline(); !ok {
+		t.Fatal("expected a deadline when TimeoutSeconds is set")
+	}
+}
+
+// TestECSRunTaskSyncWithoutTimeoutWaitsPastOldDefault confirms a
+// long-running task (several polls beyond what the old 60s default would
+// tolerate in spirit) still succeeds once it stops, with no TimeoutSeconds
+// set on the request.
+func TestECSRunTaskSyncWithoutTimeoutWaitsPastOldDefault(t *testing.T) {
+	zero := int64(0)
+	fake := &fakeECSTaskIntegration{
+		task:       ecsFakeTask(),
+		exitCode:   &zero,
+		stopOnPoll: 5,
+	}
+	exec := &taskExecutor{ecsRunner: fake, ecsLookup: fake}
+
+	result, err := exec.RunTask(context.Background(), interpreter.TaskRequest{
+		Resource: ecsRunTaskSyncResource,
+		Payload:  json.RawMessage(`{"Cluster":"default","TaskDefinition":"worker:1"}`),
+	})
+	if err != nil {
+		t.Fatalf("run ECS task: %v", err)
+	}
+	var out types.RunTaskOutput
+	if err := json.Unmarshal(result.Output, &out); err != nil {
+		t.Fatalf("decode result: %v", err)
+	}
+	if len(out.Tasks) != 1 || out.Tasks[0].LastStatus != types.TaskStatusStopped {
+		t.Fatalf("unexpected completed tasks: %+v", out.Tasks)
+	}
+}
+
+// TestECSRunTaskSyncGetTaskNotFoundIsTerminal pins waitECSTasks' existing
+// (and easy to accidentally regress) behavior: once GetTask reports the
+// task record is gone, e.g. pruned after STOPPED, that is a terminal
+// failure on the first observation, never an infinite poll loop.
+func TestECSRunTaskSyncGetTaskNotFoundIsTerminal(t *testing.T) {
+	fake := &fakeECSTaskIntegration{task: ecsFakeTask(), notFound: true}
+	exec := &taskExecutor{ecsRunner: fake, ecsLookup: fake}
+
+	_, err := exec.RunTask(context.Background(), interpreter.TaskRequest{
+		Resource: ecsRunTaskSyncResource,
+		Payload:  json.RawMessage(`{"Cluster":"default","TaskDefinition":"worker:1"}`),
+	})
+	var stateErr *interpreter.StateError
+	if !errors.As(err, &stateErr) || stateErr.Name != interpreter.ErrTaskFailed {
+		t.Fatalf("expected States.TaskFailed, got %v", err)
+	}
+	if fake.pollCount() != 1 {
+		t.Fatalf("expected exactly one GetTask poll before terminal failure, got %d", fake.pollCount())
+	}
+}
+
+func TestECSRunTaskSyncStateUsesResolvedParameters(t *testing.T) {
+	zero := int64(0)
+	fake := &fakeECSTaskIntegration{
+		task:       ecsFakeTask(),
+		exitCode:   &zero,
+		stopOnPoll: 1,
+	}
+	svc := newService(t, nil)
+	svc.SetECSTaskRunner(fake, fake)
+
+	definition := `{
+		"StartAt":"Run",
+		"States":{
+			"Run":{
+				"Type":"Task",
+				"Resource":"arn:aws:states:::ecs:runTask.sync",
+				"Parameters":{
+					"Cluster.$":"$.cluster",
+					"TaskDefinition.$":"$.taskDefinition"
+				},
+				"End":true
+			}
+		}
+	}`
+	sm, err := svc.CreateStateMachine("ecs-sync", definition, "", "", nil)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	execution, err := svc.StartExecution(sm.Arn, "run1", `{
+		"cluster":"arn:aws:ecs:us-east-1:000000000000:cluster/default",
+		"taskDefinition":"arn:aws:ecs:us-east-1:000000000000:task-definition/worker:1"
+	}`)
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	done := waitForTerminal(t, svc, execution.Arn)
+	if done.Status != types.ExecutionStatusSucceeded {
+		t.Fatalf("status = %q, cause = %q", done.Status, done.Cause)
+	}
+	var out types.RunTaskOutput
+	if err := json.Unmarshal([]byte(done.Output), &out); err != nil {
+		t.Fatalf("decode execution output: %v", err)
+	}
+	if len(out.Tasks) != 1 || out.Tasks[0].LastStatus != types.TaskStatusStopped {
+		t.Fatalf("unexpected execution output: %+v", out.Tasks)
+	}
+	input := fake.recordedInput()
+	if input == nil || input.Cluster == "" || input.TaskDefinition == "" {
+		t.Fatalf("resolved Parameters were not forwarded: %+v", input)
+	}
+}
+
 func TestCreateAndDescribeStateMachine(t *testing.T) {
 	svc := newService(t, nil)
 	def := `{"StartAt":"P","States":{"P":{"Type":"Pass","End":true}}}`

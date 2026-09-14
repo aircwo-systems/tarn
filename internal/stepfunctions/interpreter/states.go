@@ -142,8 +142,9 @@ func (ex *execution) runTask(ctx context.Context, name string, s asl.TaskState, 
 			ex.emit(evStarted, map[string]any{"stateName": name})
 		}
 		res, rerr := ex.run.Executor.RunTask(ctx, TaskRequest{
-			Resource: s.Resource,
-			Payload:  json.RawMessage(payload),
+			Resource:       s.Resource,
+			Payload:        json.RawMessage(payload),
+			TimeoutSeconds: s.TimeoutSeconds,
 		})
 		if rerr != nil {
 			ex.emit(evFailed, withTaskLogRefs(map[string]any{
