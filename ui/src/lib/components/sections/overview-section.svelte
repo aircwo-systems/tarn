@@ -14,7 +14,6 @@
     matchesTagFilter,
     setDashboardTagFilter,
   } from "$lib/state.svelte";
-  import Separator from "$lib/components/ui/separator/separator.svelte";
   import OverviewPulseStrip from "./overview-pulse-strip.svelte";
   import OverviewActivityFeed from "./overview-activity-feed.svelte";
   import TopologyCanvas from "$lib/components/topology/topology-canvas.svelte";

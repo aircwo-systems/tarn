@@ -28,7 +28,7 @@
     <button
       type="button"
       onclick={onToggleSidebar}
-      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-border/60 bg-background/50 text-muted-foreground/60 transition-colors hover:border-border hover:bg-muted/50 hover:text-foreground"
+      class="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:border-border hover:bg-muted/50 hover:text-foreground"
       aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
       title={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
     >
