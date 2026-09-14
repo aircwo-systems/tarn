@@ -1530,6 +1530,21 @@ func (h *Handler) LogEvents(w http.ResponseWriter, r *http.Request) {
 			filter.Cursor = &ts
 		}
 	}
+	if groups := q["groups"]; len(groups) > 0 {
+		for _, g := range groups {
+			for _, part := range strings.Split(g, ",") {
+				if part != "" {
+					filter.Groups = append(filter.Groups, part)
+				}
+			}
+		}
+	} else if v := q.Get("groups"); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			if part != "" {
+				filter.Groups = append(filter.Groups, part)
+			}
+		}
+	}
 
 	events, total, hasMore := h.logs.GetLogEvents(name, filter)
 	if events == nil {
@@ -1573,6 +1588,22 @@ func (h *Handler) ClearLogGroup(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) AllLogEvents(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filter := &logssvc.LogFilter{}
+
+	if groups := q["groups"]; len(groups) > 0 {
+		for _, g := range groups {
+			for _, part := range strings.Split(g, ",") {
+				if part != "" {
+					filter.Groups = append(filter.Groups, part)
+				}
+			}
+		}
+	} else if v := q.Get("groups"); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			if part != "" {
+				filter.Groups = append(filter.Groups, part)
+			}
+		}
+	}
 
 	if v := q.Get("level"); v != "" {
 		filter.Level = logssvc.LogLevel(strings.ToUpper(v))

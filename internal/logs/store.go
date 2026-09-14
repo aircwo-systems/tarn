@@ -64,6 +64,7 @@ type LogFilter struct {
 	Limit      int
 	Offset     int        // Deprecated: use Cursor for pagination
 	Cursor     *time.Time // Asc: after this timestamp. Desc: before this timestamp.
+	Groups     []string   // Optional: filter to specific log group names
 }
 
 // logGroup holds events in a ring buffer.
@@ -323,7 +324,20 @@ func (s *Store) GetAllLogEvents(filter *LogFilter) ([]LogEvent, int, bool) {
 
 	var all []LogEvent
 
+	var allowedGroups map[string]struct{}
+	if filter != nil && len(filter.Groups) > 0 {
+		allowedGroups = make(map[string]struct{}, len(filter.Groups))
+		for _, name := range filter.Groups {
+			allowedGroups[name] = struct{}{}
+		}
+	}
+
 	for _, g := range s.groups {
+		if allowedGroups != nil {
+			if _, ok := allowedGroups[g.name]; !ok {
+				continue
+			}
+		}
 		if g.count == 0 {
 			continue
 		}
@@ -403,11 +417,22 @@ func paginateEvents(events []LogEvent, filter *LogFilter) ([]LogEvent, int, bool
 	return paged, total, hasMore
 }
 
+// levelMatches reports whether level is in want, a single level or a
+// comma-separated set such as "ERROR,WARN".
+func levelMatches(level, want LogLevel) bool {
+	for _, w := range strings.Split(string(want), ",") {
+		if LogLevel(strings.TrimSpace(w)) == level {
+			return true
+		}
+	}
+	return false
+}
+
 func matchesFilter(evt LogEvent, filter *LogFilter) bool {
 	if filter == nil {
 		return true
 	}
-	if filter.Level != "" && evt.Level != filter.Level {
+	if filter.Level != "" && !levelMatches(evt.Level, filter.Level) {
 		return false
 	}
 	if filter.StreamName != "" && evt.StreamName != filter.StreamName {

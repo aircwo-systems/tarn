@@ -446,3 +446,55 @@ func TestGetAllLogEventsPaginationDescending(t *testing.T) {
 		t.Fatalf("unexpected descending all-log page bounds: first=%s last=%s", result[0].Message, result[4].Message)
 	}
 }
+
+func TestGetAllLogEventsWithGroupsFilter(t *testing.T) {
+	s := NewStore(500)
+	s.CreateGroup("/a")
+	s.CreateGroup("/b")
+	s.CreateGroup("/c")
+
+	base := time.Date(2026, 3, 31, 12, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		s.PutLogEvents("/a", "stream-a", []LogEvent{{
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+			Message:   fmt.Sprintf("a-%d", i),
+			Level:     LevelINFO,
+		}})
+		s.PutLogEvents("/b", "stream-b", []LogEvent{{
+			Timestamp: base.Add(time.Duration(i+10) * time.Second),
+			Message:   fmt.Sprintf("b-%d", i),
+			Level:     LevelINFO,
+		}})
+		s.PutLogEvents("/c", "stream-c", []LogEvent{{
+			Timestamp: base.Add(time.Duration(i+20) * time.Second),
+			Message:   fmt.Sprintf("c-%d", i),
+			Level:     LevelINFO,
+		}})
+	}
+
+	// Filter to only groups /a and /c
+	result, total, _ := s.GetAllLogEvents(&LogFilter{Groups: []string{"/a", "/c"}, Order: "asc"})
+	if total != 6 {
+		t.Fatalf("expected total 6, got %d", total)
+	}
+	if len(result) != 6 {
+		t.Fatalf("expected 6 events, got %d", len(result))
+	}
+	for _, ev := range result {
+		if !strings.HasPrefix(ev.StreamName, "/a/") && !strings.HasPrefix(ev.StreamName, "/c/") {
+			t.Fatalf("unexpected stream in filtered groups: %s", ev.StreamName)
+		}
+	}
+}
+
+func TestLevelMatchesCommaSet(t *testing.T) {
+	if !levelMatches(LevelWARN, "ERROR,WARN") {
+		t.Fatal("expected WARN to match ERROR,WARN")
+	}
+	if levelMatches(LevelINFO, "ERROR, WARN") {
+		t.Fatal("expected INFO not to match ERROR, WARN")
+	}
+	if !levelMatches(LevelERROR, "ERROR") {
+		t.Fatal("expected single level match")
+	}
+}
