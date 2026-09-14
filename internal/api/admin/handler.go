@@ -252,10 +252,16 @@ type esmSummary struct {
 }
 
 type eventBridgeTargetSummary struct {
-	ID            string     `json:"id"`
-	Arn           string     `json:"arn"`
-	LastResult    string     `json:"lastResult,omitempty"`
-	LastInvokedAt *time.Time `json:"lastInvokedAt,omitempty"`
+	ID             string            `json:"id"`
+	Arn            string            `json:"arn"`
+	LastResult     string            `json:"lastResult,omitempty"`
+	LastInvokedAt  *time.Time        `json:"lastInvokedAt,omitempty"`
+	RoleArn        string            `json:"roleArn,omitempty"`
+	Input          string            `json:"input,omitempty"`
+	InputPath      string            `json:"inputPath,omitempty"`
+	InputPathsMap  map[string]string `json:"inputPathsMap,omitempty"`
+	InputTemplate  string            `json:"inputTemplate,omitempty"`
+	TaskDefinition string            `json:"taskDefinition,omitempty"`
 }
 
 type eventBridgeRuleSummary struct {
@@ -639,12 +645,23 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	for _, rule := range eventBridgeRules {
 		targets := make([]eventBridgeTargetSummary, 0, len(rule.Targets))
 		for _, target := range rule.Targets {
-			targets = append(targets, eventBridgeTargetSummary{
+			summary := eventBridgeTargetSummary{
 				ID:            target.ID,
 				Arn:           target.Arn,
 				LastResult:    target.LastResult,
 				LastInvokedAt: target.LastInvokedAt,
-			})
+				RoleArn:       target.RoleArn,
+				Input:         target.Input,
+				InputPath:     target.InputPath,
+			}
+			if target.InputTransformer != nil {
+				summary.InputPathsMap = target.InputTransformer.InputPathsMap
+				summary.InputTemplate = target.InputTransformer.InputTemplate
+			}
+			if target.EcsParameters != nil {
+				summary.TaskDefinition = target.EcsParameters.TaskDefinitionArn
+			}
+			targets = append(targets, summary)
 			targetName := lambdaNameFromARNOrName(target.Arn)
 			resp.Connections = append(resp.Connections, infraConnection{
 				SourceFunction: rule.Name,
