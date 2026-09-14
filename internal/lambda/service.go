@@ -688,7 +688,7 @@ func (s *Service) coldStart(ctx context.Context, fn *types.FunctionConfig, codeD
 		s.logsSvc.LogSystemEvent(logssvc.LevelINFO, fmt.Sprintf("Cold start: %s", fn.FunctionName))
 	}
 
-	info, err := s.engine.CreateContainer(ctx, fn, codeDir, layerDirs)
+	info, err := s.engine.CreateContainer(ctx, fn, codeDir, layerDirs, s.cfg.AccountID)
 	if err != nil {
 		wrapped := fmt.Errorf("failed to create container: %w", err)
 		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())

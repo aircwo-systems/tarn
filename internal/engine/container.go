@@ -13,14 +13,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/pkg/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
-	"github.com/aircwo-systems/tarn/internal/config"
-	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 const rieContainerPort = "8080/tcp"
@@ -174,12 +174,55 @@ func (e *Engine) EnsureImage(ctx context.Context, runtime types.Runtime) error {
 	return nil
 }
 
+// buildLambdaContainerEnv assembles the container environment for a Lambda
+// execution container: Lambda runtime metadata, the SDK-endpoint redirect
+// back to Tarn, and AWS_ACCESS_KEY_ID set to accountID (the function's own
+// account) so SDK calls made from inside the container are attributed to
+// that account by Tarn's SigV4 account resolution (internal/account),
+// instead of falling through to the default account. fn.Environment is
+// appended last so a user-set variable (including AWS_ACCESS_KEY_ID itself)
+// overrides any of the above — Docker resolves duplicate env keys by taking
+// the last occurrence.
+func buildLambdaContainerEnv(fn *types.FunctionConfig, accountID, region string, port int, dbURLRewrites map[string]string) []string {
+	env := []string{
+		fmt.Sprintf("AWS_LAMBDA_FUNCTION_NAME=%s", fn.FunctionName),
+		fmt.Sprintf("AWS_LAMBDA_FUNCTION_VERSION=%s", fn.Version),
+		fmt.Sprintf("AWS_LAMBDA_FUNCTION_MEMORY_SIZE=%d", fn.MemorySize),
+		fmt.Sprintf("AWS_REGION=%s", region),
+		fmt.Sprintf("AWS_DEFAULT_REGION=%s", region),
+		fmt.Sprintf("AWS_LAMBDA_LOG_GROUP_NAME=/aws/lambda/%s", fn.FunctionName),
+		fmt.Sprintf("AWS_LAMBDA_LOG_STREAM_NAME=%s", time.Now().Format("2006/01/02")),
+		fmt.Sprintf("_HANDLER=%s", fn.Handler),
+		fmt.Sprintf("AWS_LAMBDA_FUNCTION_TIMEOUT=%d", fn.Timeout),
+		// Point SDK calls back to Tarn
+		fmt.Sprintf("AWS_ENDPOINT_URL=http://host.docker.internal:%d", port),
+		fmt.Sprintf("AWS_ACCESS_KEY_ID=%s", accountID),
+		"AWS_SECRET_ACCESS_KEY=test",
+	}
+
+	for k, v := range fn.Environment {
+		if rewritten, ok := dbURLRewrites[k]; ok {
+			env = append(env, fmt.Sprintf("%s=%s", k, rewritten))
+		} else {
+			env = append(env, fmt.Sprintf("%s=%s", k, v))
+		}
+	}
+	return env
+}
+
 // CreateContainer creates a new Lambda execution container with port mapping
 // so the host can reach the RIE on port 8080 inside the container.
-func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, codeDir string, layerDirs []string) (*ContainerInfo, error) {
+func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, codeDir string, layerDirs []string, accountID string) (*ContainerInfo, error) {
 	img, ok := types.RuntimeImageMap[fn.Runtime]
 	if !ok {
 		return nil, fmt.Errorf("unsupported runtime: %s", fn.Runtime)
+	}
+	if accountID == "" {
+		if e.cfg != nil && e.cfg.AccountID != "" {
+			accountID = e.cfg.AccountID
+		} else {
+			accountID = defaultTaskAccountID
+		}
 	}
 
 	// Scan function environment for PostgreSQL URLs so db-proxy can observe them.
