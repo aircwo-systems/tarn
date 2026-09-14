@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ArrowUpRightIcon } from "phosphor-svelte";
   import RcPanel from "$lib/components/rack/rc-panel.svelte";
   import RcKv from "$lib/components/rack/rc-kv.svelte";
   import RcTonePill from "$lib/components/rack/rc-tone-pill.svelte";
@@ -15,6 +16,14 @@
   const payload = $derived(
     trigger.lastResult ? formatJSONForViewer(trigger.lastResult) : null,
   );
+
+  // Lambda targets link out to the function workspace.
+  const targetFunctionName = $derived.by(() => {
+    const marker = ":function:";
+    const index = trigger.targetArn.indexOf(marker);
+    if (index < 0) return null;
+    return trigger.targetArn.slice(index + marker.length).split(":")[0] || null;
+  });
 
   const summary = $derived([
     { label: "Type", value: trigger.type, mono: true },
@@ -45,6 +54,13 @@
         <span>{trigger.detailLabel}</span><i></i><span>{trigger.detail}</span>
       </p>
     </div>
+    {#if targetFunctionName}
+      <div class="hero-actions">
+        <a class="btn" href="#functions?fn={encodeURIComponent(targetFunctionName)}">
+          Function<ArrowUpRightIcon size={11} />
+        </a>
+      </div>
+    {/if}
   </header>
 
   <RcPanel title="Summary" index={0}>
@@ -98,6 +114,16 @@
   }
   .subline { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 11.5px; color: var(--text-tertiary); }
   .subline i { width: 3px; height: 3px; border-radius: 1px; background: var(--border-default); }
+  .hero-actions { display: flex; gap: 6px; }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 8px;
+    border: 1px solid var(--border-subtle); font-size: 11.5px; color: var(--text-secondary); text-decoration: none;
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease, transform 120ms ease;
+  }
+  .btn:hover { color: var(--text-primary); border-color: var(--border-default); background: var(--bg-element-hover); }
+  .btn:active { transform: scale(0.96); }
+  .btn:focus-visible { outline: 1px solid var(--border-focus); outline-offset: 2px; }
 
   .empty { font-size: 11.5px; color: var(--text-tertiary); }
   .code {
