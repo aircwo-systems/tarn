@@ -266,6 +266,16 @@ func (c *Config) EventBridgeStatePath() string {
 	return filepath.Join(c.EventBridgeDir(), "state.json")
 }
 
+// ECSDir returns the path where ECS state is stored.
+func (c *Config) ECSDir() string {
+	return filepath.Join(c.DataDir, "ecs")
+}
+
+// ECSStatePath returns the state snapshot path for ECS resources.
+func (c *Config) ECSStatePath() string {
+	return filepath.Join(c.ECSDir(), "state.json")
+}
+
 // StepFunctionsDir returns the path where Step Functions state is stored.
 func (c *Config) StepFunctionsDir() string {
 	return filepath.Join(c.DataDir, "stepfunctions")

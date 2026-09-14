@@ -22,6 +22,10 @@ const serverPort = "14566" // use a non-default port to avoid conflicts
 
 var endpoint = "http://127.0.0.1:" + serverPort
 
+// tarnBinary is the binary TestMain builds, so tests can drive its other
+// subcommands (tarn mcp) against the same instance.
+var tarnBinary string
+
 // TestMain starts the Tarn server before running tests and stops it after.
 func TestMain(m *testing.M) {
 	// Check Docker is available
@@ -40,6 +44,7 @@ func TestMain(m *testing.M) {
 	}
 
 	binaryPath := filepath.Join(projectRoot, "build", "tarn-test")
+	tarnBinary = binaryPath
 
 	build := exec.Command("go", "build", "-o", binaryPath, "./cmd/tarn")
 	build.Dir = projectRoot
@@ -109,6 +114,717 @@ func TestHealthCheck(t *testing.T) {
 	if result["status"] != "running" {
 		t.Fatalf("expected status 'running', got %v", result["status"])
 	}
+}
+
+func TestECSDockerTaskE2E(t *testing.T) {
+	const (
+		clusterName = "e2e-ecs-cluster"
+		family      = "e2e-ecs-task"
+		container   = "worker"
+		image       = "alpine:3.19"
+		logGroup    = "/ecs/e2e-ecs-task"
+		logMessage  = "[e2e-ecs] hello from task"
+	)
+
+	type ecsContainer struct {
+		Name       string `json:"Name"`
+		LastStatus string `json:"LastStatus"`
+		ExitCode   *int64 `json:"ExitCode"`
+	}
+	type ecsTask struct {
+		TaskArn           string         `json:"TaskArn"`
+		LastStatus        string         `json:"LastStatus"`
+		DesiredStatus     string         `json:"DesiredStatus"`
+		Containers        []ecsContainer `json:"Containers"`
+		StoppedReason     string         `json:"StoppedReason"`
+		TaskDefinitionArn string         `json:"TaskDefinitionArn"`
+	}
+
+	doECS := func(action string, payload any) (int, []byte, error) {
+		t.Helper()
+
+		body, err := json.Marshal(payload)
+		if err != nil {
+			return 0, nil, err
+		}
+		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			return 0, nil, err
+		}
+		req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+		req.Header.Set("X-Amz-Target", "AmazonEC2ContainerServiceV20141113."+action)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0, nil, err
+		}
+		defer resp.Body.Close()
+		responseBody, err := io.ReadAll(resp.Body)
+		return resp.StatusCode, responseBody, err
+	}
+
+	callECS := func(action string, payload any) []byte {
+		t.Helper()
+		status, body, err := doECS(action, payload)
+		if err != nil {
+			t.Fatalf("ECS %s request failed: %v", action, err)
+		}
+		if status != http.StatusOK {
+			t.Fatalf("ECS %s failed (%d): %s", action, status, string(body))
+		}
+		return body
+	}
+
+	cleanupECS := func(action string, payload any) {
+		t.Helper()
+		status, body, err := doECS(action, payload)
+		if err != nil {
+			t.Errorf("ECS cleanup %s request failed: %v", action, err)
+			return
+		}
+		if status != http.StatusOK {
+			t.Errorf("ECS cleanup %s failed (%d): %s", action, status, string(body))
+		}
+	}
+
+	var clusterARN, taskDefinitionARN, taskARN string
+	t.Cleanup(func() {
+		if taskARN != "" {
+			status, body, err := doECS("DescribeTasks", map[string]any{
+				"Cluster": clusterName,
+				"Tasks":   []string{taskARN},
+			})
+			if err == nil && status == http.StatusOK {
+				var output struct {
+					Tasks []ecsTask `json:"Tasks"`
+				}
+				if json.Unmarshal(body, &output) == nil && len(output.Tasks) > 0 && output.Tasks[0].LastStatus != "STOPPED" {
+					cleanupECS("StopTask", map[string]any{
+						"Cluster": clusterName,
+						"Task":    taskARN,
+						"Reason":  "E2E test cleanup",
+					})
+				}
+			}
+		}
+		if taskDefinitionARN != "" {
+			cleanupECS("DeregisterTaskDefinition", map[string]any{
+				"TaskDefinition": taskDefinitionARN,
+			})
+		}
+		if clusterARN != "" {
+			cleanupECS("DeleteCluster", map[string]any{
+				"Cluster": clusterARN,
+			})
+		}
+	})
+
+	var clusterOutput struct {
+		Cluster struct {
+			ClusterName string `json:"ClusterName"`
+			ClusterArn  string `json:"ClusterArn"`
+			Status      string `json:"Status"`
+		} `json:"Cluster"`
+	}
+	if err := json.Unmarshal(callECS("CreateCluster", map[string]any{
+		"ClusterName": clusterName,
+	}), &clusterOutput); err != nil {
+		t.Fatalf("decode CreateCluster response: %v", err)
+	}
+	clusterARN = clusterOutput.Cluster.ClusterArn
+	if clusterOutput.Cluster.ClusterName != clusterName || clusterOutput.Cluster.Status != "ACTIVE" || clusterARN == "" {
+		t.Fatalf("unexpected created cluster: %+v", clusterOutput.Cluster)
+	}
+
+	var taskDefinitionOutput struct {
+		TaskDefinition struct {
+			TaskDefinitionArn string `json:"TaskDefinitionArn"`
+			Family            string `json:"Family"`
+			Revision          int    `json:"Revision"`
+		} `json:"TaskDefinition"`
+	}
+	if err := json.Unmarshal(callECS("RegisterTaskDefinition", map[string]any{
+		"Family": family,
+		"ContainerDefinitions": []map[string]any{{
+			"Name":      container,
+			"Image":     image,
+			"Command":   []string{"sh", "-c", "printf '%s\\n' '" + logMessage + "'; sleep 1"},
+			"Essential": true,
+			"LogConfiguration": map[string]any{
+				"LogDriver": "awslogs",
+				"Options": map[string]string{
+					"awslogs-group": logGroup,
+				},
+			},
+		}},
+	}), &taskDefinitionOutput); err != nil {
+		t.Fatalf("decode RegisterTaskDefinition response: %v", err)
+	}
+	taskDefinitionARN = taskDefinitionOutput.TaskDefinition.TaskDefinitionArn
+	if taskDefinitionOutput.TaskDefinition.Family != family || taskDefinitionOutput.TaskDefinition.Revision < 1 || taskDefinitionARN == "" {
+		t.Fatalf("unexpected registered task definition: %+v", taskDefinitionOutput.TaskDefinition)
+	}
+
+	var runOutput struct {
+		Tasks    []ecsTask `json:"Tasks"`
+		Failures []struct {
+			Reason string `json:"Reason"`
+			Detail string `json:"Detail"`
+		} `json:"Failures"`
+	}
+	if err := json.Unmarshal(callECS("RunTask", map[string]any{
+		"Cluster":        clusterName,
+		"TaskDefinition": taskDefinitionARN,
+		"Count":          1,
+		"LaunchType":     "FARGATE",
+	}), &runOutput); err != nil {
+		t.Fatalf("decode RunTask response: %v", err)
+	}
+	if len(runOutput.Tasks) != 1 {
+		t.Fatalf("RunTask returned %d tasks, failures=%+v", len(runOutput.Tasks), runOutput.Failures)
+	}
+	taskARN = runOutput.Tasks[0].TaskArn
+	if runOutput.Tasks[0].LastStatus != "RUNNING" || runOutput.Tasks[0].DesiredStatus != "RUNNING" {
+		t.Fatalf("expected task to start RUNNING, got %+v", runOutput.Tasks[0])
+	}
+
+	var stoppedTask ecsTask
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		body := callECS("DescribeTasks", map[string]any{
+			"Cluster": clusterName,
+			"Tasks":   []string{taskARN},
+		})
+		var output struct {
+			Tasks []ecsTask `json:"Tasks"`
+		}
+		if err := json.Unmarshal(body, &output); err != nil {
+			t.Fatalf("decode DescribeTasks response: %v", err)
+		}
+		if len(output.Tasks) != 1 {
+			t.Fatalf("DescribeTasks returned %d tasks", len(output.Tasks))
+		}
+		if output.Tasks[0].LastStatus == "STOPPED" {
+			stoppedTask = output.Tasks[0]
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("task did not reach STOPPED, last status=%s", output.Tasks[0].LastStatus)
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	if stoppedTask.DesiredStatus != "STOPPED" {
+		t.Fatalf("expected DesiredStatus STOPPED, got %+v", stoppedTask)
+	}
+	if len(stoppedTask.Containers) != 1 {
+		t.Fatalf("expected one stopped container, got %+v", stoppedTask.Containers)
+	}
+	if stoppedTask.Containers[0].Name != container || stoppedTask.Containers[0].LastStatus != "STOPPED" {
+		t.Fatalf("unexpected stopped container: %+v", stoppedTask.Containers[0])
+	}
+	if stoppedTask.Containers[0].ExitCode == nil || *stoppedTask.Containers[0].ExitCode != 0 {
+		t.Fatalf("expected container exit code 0, got %+v", stoppedTask.Containers[0].ExitCode)
+	}
+
+	logURL := endpoint + "/_tarn/admin/logs/events/" + url.PathEscape(logGroup) + "?limit=200"
+	for attempt := 0; attempt < 40; attempt++ {
+		resp, err := http.Get(logURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload struct {
+			Events []struct {
+				Message string `json:"message"`
+			} `json:"events"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&payload)
+		_ = resp.Body.Close()
+		if decodeErr != nil {
+			t.Fatalf("decode ECS log events response: %v", decodeErr)
+		}
+		for _, event := range payload.Events {
+			if strings.Contains(event.Message, logMessage) {
+				return
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("expected ECS log event containing %q", logMessage)
+}
+
+func TestECSFullPipelineE2E(t *testing.T) {
+	const (
+		ecsTarget = "AmazonEC2ContainerServiceV20141113."
+		ebTarget  = "AWSEvents."
+		container = "publisher"
+		image     = "node:20-alpine"
+	)
+
+	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
+	queueName := "e2e-full-" + suffix
+	lambdaName := "e2e-full-" + suffix
+	ruleName := "e2e-full-" + suffix
+	family := "e2e-full-" + suffix
+	token := "e2e-token-" + suffix
+	queuePath := "/000000000000/" + queueName
+	queueURL := endpoint + queuePath
+	queueARN := "arn:aws:sqs:us-east-1:000000000000:" + queueName
+	logGroup := "/ecs/" + family
+
+	request := func(method, path, target string, payload any) (int, []byte, error) {
+		t.Helper()
+
+		var body io.Reader
+		if payload != nil {
+			encoded, err := json.Marshal(payload)
+			if err != nil {
+				return 0, nil, err
+			}
+			body = bytes.NewReader(encoded)
+		}
+		req, err := http.NewRequest(method, endpoint+path, body)
+		if err != nil {
+			return 0, nil, err
+		}
+		if target != "" {
+			req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+			req.Header.Set("X-Amz-Target", target)
+		} else {
+			req.Header.Set("Content-Type", "application/json")
+		}
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return 0, nil, err
+		}
+		defer resp.Body.Close()
+		responseBody, err := io.ReadAll(resp.Body)
+		return resp.StatusCode, responseBody, err
+	}
+
+	call := func(method, path, target string, payload any, wantStatus int) []byte {
+		t.Helper()
+		status, body, err := request(method, path, target, payload)
+		if err != nil {
+			t.Fatalf("%s %s request failed: %v", method, path, err)
+		}
+		if status != wantStatus {
+			t.Fatalf("%s %s failed (%d): %s", method, path, status, string(body))
+		}
+		return body
+	}
+
+	cleanup := func(method, path, target string, payload any, wantStatus int) {
+		t.Helper()
+		status, body, err := request(method, path, target, payload)
+		if err != nil {
+			t.Errorf("cleanup %s %s failed: %v", method, path, err)
+			return
+		}
+		if status != wantStatus {
+			t.Errorf("cleanup %s %s returned %d: %s", method, path, status, string(body))
+		}
+	}
+
+	cleanupQueue := func() {
+		resp, err := http.PostForm(queueURL, url.Values{
+			"Action":   {"DeleteQueue"},
+			"QueueUrl": {queueURL},
+		})
+		if err != nil {
+			t.Errorf("cleanup SQS DeleteQueue failed: %v", err)
+			return
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("cleanup SQS DeleteQueue returned %d: %s", resp.StatusCode, string(body))
+		}
+	}
+
+	var mappingUUID string
+	var clusterARN, taskDefinitionARN, taskARN string
+	var ruleCreated, targetCreated, functionCreated, queueCreated bool
+	t.Cleanup(func() {
+		if mappingUUID != "" {
+			cleanup(http.MethodDelete, "/2015-03-31/event-source-mappings/"+mappingUUID, "", nil, http.StatusNoContent)
+		}
+		if targetCreated {
+			cleanup(http.MethodPost, "", ebTarget+"RemoveTargets", map[string]any{
+				"Rule":         ruleName,
+				"Ids":          []string{"publisher"},
+				"EventBusName": "default",
+			}, http.StatusOK)
+		}
+		if ruleCreated {
+			cleanup(http.MethodPost, "", ebTarget+"DeleteRule", map[string]any{
+				"Name":         ruleName,
+				"EventBusName": "default",
+			}, http.StatusOK)
+		}
+
+		if clusterARN != "" {
+			taskRefs := make([]string, 0, 1)
+			if taskARN != "" {
+				taskRefs = append(taskRefs, taskARN)
+			} else if status, body, err := request(http.MethodPost, "", ecsTarget+"ListTasks", map[string]any{
+				"Cluster": clusterARN,
+				"Family":  family,
+			}); err == nil && status == http.StatusOK {
+				var listed struct {
+					TaskArns []string `json:"TaskArns"`
+				}
+				if json.Unmarshal(body, &listed) == nil {
+					taskRefs = append(taskRefs, listed.TaskArns...)
+				}
+			}
+			for _, ref := range taskRefs {
+				status, body, err := request(http.MethodPost, "", ecsTarget+"DescribeTasks", map[string]any{
+					"Cluster": clusterARN,
+					"Tasks":   []string{ref},
+				})
+				if err != nil || status != http.StatusOK {
+					continue
+				}
+				var described struct {
+					Tasks []struct {
+						LastStatus string `json:"LastStatus"`
+					} `json:"Tasks"`
+				}
+				if json.Unmarshal(body, &described) == nil && len(described.Tasks) > 0 && described.Tasks[0].LastStatus != "STOPPED" {
+					cleanup(http.MethodPost, "", ecsTarget+"StopTask", map[string]any{
+						"Cluster": clusterARN,
+						"Task":    ref,
+						"Reason":  "E2E test cleanup",
+					}, http.StatusOK)
+				}
+			}
+		}
+		if taskDefinitionARN != "" {
+			cleanup(http.MethodPost, "", ecsTarget+"DeregisterTaskDefinition", map[string]any{
+				"TaskDefinition": taskDefinitionARN,
+			}, http.StatusOK)
+		}
+		if clusterARN != "" {
+			cleanup(http.MethodPost, "", ecsTarget+"DeleteCluster", map[string]any{
+				"Cluster": clusterARN,
+			}, http.StatusOK)
+		}
+		if functionCreated {
+			cleanup(http.MethodDelete, "/2015-03-31/functions/"+lambdaName, "", nil, http.StatusNoContent)
+		}
+		if queueCreated {
+			cleanupQueue()
+		}
+	})
+
+	sqsRequest(t, url.Values{
+		"Action":    {"CreateQueue"},
+		"QueueName": {queueName},
+	})
+	queueCreated = true
+
+	handlerCode := `exports.handler = async (event) => {
+  for (const record of event.Records || []) {
+    console.log("[e2e-full] processed " + record.body);
+  }
+  return { processed: (event.Records || []).length };
+};`
+	createLambdaBody := map[string]any{
+		"FunctionName": lambdaName,
+		"Runtime":      "nodejs20.x",
+		"Handler":      "index.handler",
+		"Role":         "arn:aws:iam::000000000000:role/e2e-full-role",
+		"Timeout":      30,
+		"MemorySize":   128,
+		"Code": map[string]string{
+			"ZipFile": base64.StdEncoding.EncodeToString(createZip(t, map[string]string{"index.js": handlerCode})),
+		},
+	}
+	call(http.MethodPost, "/2015-03-31/functions", "", createLambdaBody, http.StatusCreated)
+	functionCreated = true
+
+	var mapping struct {
+		UUID string `json:"UUID"`
+	}
+	if err := json.Unmarshal(call(http.MethodPost, "/2015-03-31/event-source-mappings", "", map[string]any{
+		"EventSourceArn":                 queueARN,
+		"FunctionName":                   lambdaName,
+		"BatchSize":                      1,
+		"MaximumBatchingWindowInSeconds": 1,
+		"Enabled":                        true,
+	}, http.StatusCreated), &mapping); err != nil {
+		t.Fatalf("decode event source mapping: %v", err)
+	}
+	mappingUUID = mapping.UUID
+	if mappingUUID == "" {
+		t.Fatal("CreateEventSourceMapping returned no UUID")
+	}
+
+	var clusterOutput struct {
+		Cluster struct {
+			ClusterName string `json:"ClusterName"`
+			ClusterArn  string `json:"ClusterArn"`
+			Status      string `json:"Status"`
+		} `json:"Cluster"`
+	}
+	if err := json.Unmarshal(call(http.MethodPost, "", ecsTarget+"CreateCluster", map[string]any{
+		"ClusterName": family,
+	}, http.StatusOK), &clusterOutput); err != nil {
+		t.Fatalf("decode CreateCluster response: %v", err)
+	}
+	clusterARN = clusterOutput.Cluster.ClusterArn
+	if clusterOutput.Cluster.ClusterName != family || clusterOutput.Cluster.Status != "ACTIVE" || clusterARN == "" {
+		t.Fatalf("unexpected created cluster: %+v", clusterOutput.Cluster)
+	}
+
+	publisherCode := `const http = require("http");
+const event = JSON.parse(process.env.EVENT_PAYLOAD || "{}");
+const token = event.detail && event.detail.token;
+if (typeof token !== "string" || token.length === 0) {
+  throw new Error("EventBridge payload did not contain detail.token");
+}
+const queue = new URL(process.env.AWS_ENDPOINT_URL);
+queue.pathname = process.env.SQS_QUEUE_PATH;
+const body = new URLSearchParams({
+  Action: "SendMessage",
+  QueueUrl: queue.toString(),
+  MessageBody: JSON.stringify({ token, source: "ecs" }),
+}).toString();
+const request = http.request(queue, {
+  method: "POST",
+  headers: {
+    "content-type": "application/x-www-form-urlencoded",
+    "content-length": Buffer.byteLength(body),
+  },
+}, (response) => {
+  let output = "";
+  response.on("data", (chunk) => { output += chunk; });
+  response.on("end", () => {
+    if (response.statusCode !== 200) {
+      console.error("SQS publish failed", response.statusCode, output);
+      process.exitCode = 1;
+      return;
+    }
+    console.log("[e2e-full] published " + token);
+  });
+});
+request.on("error", (error) => {
+  console.error("SQS publish request failed", error);
+  process.exitCode = 1;
+});
+request.end(body);`
+
+	var taskDefinitionOutput struct {
+		TaskDefinition struct {
+			TaskDefinitionArn string `json:"TaskDefinitionArn"`
+			Family            string `json:"Family"`
+			Revision          int    `json:"Revision"`
+		} `json:"TaskDefinition"`
+	}
+	if err := json.Unmarshal(call(http.MethodPost, "", ecsTarget+"RegisterTaskDefinition", map[string]any{
+		"Family": family,
+		"ContainerDefinitions": []map[string]any{{
+			"Name":       container,
+			"Image":      image,
+			"EntryPoint": []string{"node"},
+			"Command":    []string{"-e", publisherCode},
+			"Environment": []map[string]string{{
+				"Name":  "SQS_QUEUE_PATH",
+				"Value": queuePath,
+			}},
+			"Essential": true,
+			"LogConfiguration": map[string]any{
+				"LogDriver": "awslogs",
+				"Options": map[string]string{
+					"awslogs-group": logGroup,
+				},
+			},
+		}},
+	}, http.StatusOK), &taskDefinitionOutput); err != nil {
+		t.Fatalf("decode RegisterTaskDefinition response: %v", err)
+	}
+	taskDefinitionARN = taskDefinitionOutput.TaskDefinition.TaskDefinitionArn
+	if taskDefinitionOutput.TaskDefinition.Family != family || taskDefinitionOutput.TaskDefinition.Revision < 1 || taskDefinitionARN == "" {
+		t.Fatalf("unexpected registered task definition: %+v", taskDefinitionOutput.TaskDefinition)
+	}
+
+	var targetOutput struct {
+		FailedEntryCount int `json:"FailedEntryCount"`
+	}
+	var ruleOutput struct {
+		RuleARN string `json:"RuleArn"`
+	}
+	if err := json.Unmarshal(call(http.MethodPost, "", ebTarget+"PutRule", map[string]any{
+		"Name":         ruleName,
+		"EventPattern": `{"source":["e2e.full"],"detail-type":["E2EMessage"]}`,
+		"State":        "ENABLED",
+		"EventBusName": "default",
+	}, http.StatusOK), &ruleOutput); err != nil {
+		t.Fatalf("decode PutRule response: %v", err)
+	}
+	ruleCreated = true
+	if ruleOutput.RuleARN == "" {
+		t.Fatal("PutRule returned no RuleArn")
+	}
+
+	if err := json.Unmarshal(call(http.MethodPost, "", ebTarget+"PutTargets", map[string]any{
+		"Rule":         ruleName,
+		"EventBusName": "default",
+		"Targets": []map[string]any{{
+			"Id":  "publisher",
+			"Arn": clusterARN,
+			"EcsParameters": map[string]any{
+				"TaskDefinitionArn": taskDefinitionARN,
+				"TaskCount":         1,
+				"LaunchType":        "FARGATE",
+				"ContainerOverrides": []map[string]any{{
+					"Name": container,
+				}},
+			},
+		}},
+	}, http.StatusOK), &targetOutput); err != nil {
+		t.Fatalf("decode PutTargets response: %v", err)
+	}
+	targetCreated = true
+	if targetOutput.FailedEntryCount != 0 {
+		t.Fatalf("PutTargets failed: %+v", targetOutput)
+	}
+
+	detail, _ := json.Marshal(map[string]string{"token": token})
+	var eventOutput struct {
+		FailedEntryCount int `json:"FailedEntryCount"`
+		Entries          []struct {
+			EventID string `json:"EventId"`
+		} `json:"Entries"`
+	}
+	if err := json.Unmarshal(call(http.MethodPost, "", ebTarget+"PutEvents", map[string]any{
+		"Entries": []map[string]any{{
+			"Source":       "e2e.full",
+			"DetailType":   "E2EMessage",
+			"Detail":       string(detail),
+			"EventBusName": "default",
+		}},
+	}, http.StatusOK), &eventOutput); err != nil {
+		t.Fatalf("decode PutEvents response: %v", err)
+	}
+	if eventOutput.FailedEntryCount != 0 || len(eventOutput.Entries) != 1 || eventOutput.Entries[0].EventID == "" {
+		t.Fatalf("PutEvents failed: %+v", eventOutput)
+	}
+
+	type ecsContainer struct {
+		Name       string `json:"Name"`
+		LastStatus string `json:"LastStatus"`
+		ExitCode   *int64 `json:"ExitCode"`
+	}
+	type ecsTask struct {
+		TaskArn       string         `json:"TaskArn"`
+		LastStatus    string         `json:"LastStatus"`
+		DesiredStatus string         `json:"DesiredStatus"`
+		Containers    []ecsContainer `json:"Containers"`
+	}
+
+	deadline := time.Now().Add(45 * time.Second)
+	var stoppedTask ecsTask
+	for {
+		var listed struct {
+			TaskArns []string `json:"TaskArns"`
+		}
+		if err := json.Unmarshal(call(http.MethodPost, "", ecsTarget+"ListTasks", map[string]any{
+			"Cluster": clusterARN,
+			"Family":  family,
+		}, http.StatusOK), &listed); err != nil {
+			t.Fatalf("decode ListTasks response: %v", err)
+		}
+		if len(listed.TaskArns) > 0 {
+			taskARN = listed.TaskArns[len(listed.TaskArns)-1]
+			var described struct {
+				Tasks []ecsTask `json:"Tasks"`
+			}
+			if err := json.Unmarshal(call(http.MethodPost, "", ecsTarget+"DescribeTasks", map[string]any{
+				"Cluster": clusterARN,
+				"Tasks":   []string{taskARN},
+			}, http.StatusOK), &described); err != nil {
+				t.Fatalf("decode DescribeTasks response: %v", err)
+			}
+			if len(described.Tasks) != 1 {
+				t.Fatalf("DescribeTasks returned %d tasks", len(described.Tasks))
+			}
+			if described.Tasks[0].LastStatus == "STOPPED" {
+				stoppedTask = described.Tasks[0]
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("ECS task did not reach STOPPED")
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+
+	if stoppedTask.DesiredStatus != "STOPPED" || len(stoppedTask.Containers) != 1 || stoppedTask.Containers[0].Name != container || stoppedTask.Containers[0].LastStatus != "STOPPED" {
+		t.Fatalf("unexpected stopped ECS task: %+v", stoppedTask)
+	}
+	if stoppedTask.Containers[0].ExitCode == nil || *stoppedTask.Containers[0].ExitCode != 0 {
+		t.Fatalf("expected ECS publisher exit code 0, got %+v", stoppedTask.Containers[0].ExitCode)
+	}
+
+	logURL := endpoint + "/_tarn/admin/logs/events/" + url.PathEscape(logGroup) + "?limit=200"
+	ecsLogFound := false
+	for attempt := 0; attempt < 40; attempt++ {
+		resp, err := http.Get(logURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload struct {
+			Events []struct {
+				Message string `json:"message"`
+			} `json:"events"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&payload)
+		_ = resp.Body.Close()
+		if decodeErr != nil {
+			t.Fatalf("decode ECS publisher logs: %v", decodeErr)
+		}
+		for _, event := range payload.Events {
+			if strings.Contains(event.Message, "[e2e-full] published "+token) {
+				ecsLogFound = true
+				break
+			}
+		}
+		if ecsLogFound {
+			break
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if !ecsLogFound {
+		t.Fatalf("expected ECS publisher log containing token %q", token)
+	}
+
+	lambdaLogURL := endpoint + "/_tarn/admin/logs/events/" + url.PathEscape("/aws/lambda/"+lambdaName) + "?limit=200"
+	for attempt := 0; attempt < 45; attempt++ {
+		resp, err := http.Get(lambdaLogURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload struct {
+			Events []struct {
+				Message string `json:"message"`
+			} `json:"events"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&payload)
+		_ = resp.Body.Close()
+		if decodeErr != nil {
+			t.Fatalf("decode Lambda logs: %v", decodeErr)
+		}
+		for _, event := range payload.Events {
+			if strings.Contains(event.Message, "[e2e-full] processed") && strings.Contains(event.Message, token) {
+				return
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	t.Fatalf("expected Lambda processing log containing token %q", token)
 }
 
 func TestListFunctionsEmpty(t *testing.T) {

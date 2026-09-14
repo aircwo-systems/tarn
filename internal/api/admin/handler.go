@@ -18,6 +18,7 @@ import (
 	"github.com/aircwo-systems/tarn/internal/collection"
 	"github.com/aircwo-systems/tarn/internal/config"
 	dynamodbsvc "github.com/aircwo-systems/tarn/internal/dynamodb"
+	ecssvc "github.com/aircwo-systems/tarn/internal/ecs"
 	eventbridgesvc "github.com/aircwo-systems/tarn/internal/eventbridge"
 	eventsourcesvc "github.com/aircwo-systems/tarn/internal/eventsource"
 	infrasvc "github.com/aircwo-systems/tarn/internal/infrastructure"
@@ -34,41 +35,49 @@ import (
 
 // Handler serves JSON endpoints used by the dashboard UI.
 type Handler struct {
-	cfg         *config.Config
-	apigw       *apigatewaysvc.Service
-	apigwv1     *apigatewayv1svc.Service
-	lambda      *lambdasvc.Service
-	logs        *logssvc.Service
-	s3          *s3svc.Service
-	sqs         *sqssvc.Service
-	sns         *snssvc.Service
-	dynamodb    *dynamodbsvc.Service
-	secrets     *secretssvc.Service
-	infra       *infrasvc.Service
-	esm         *eventsourcesvc.Service
-	eventbridge *eventbridgesvc.Service
+	cfg           *config.Config
+	apigw         *apigatewaysvc.Service
+	apigwv1       *apigatewayv1svc.Service
+	lambda        *lambdasvc.Service
+	logs          *logssvc.Service
+	s3            *s3svc.Service
+	sqs           *sqssvc.Service
+	sns           *snssvc.Service
+	dynamodb      *dynamodbsvc.Service
+	secrets       *secretssvc.Service
+	infra         *infrasvc.Service
+	esm           *eventsourcesvc.Service
+	eventbridge   *eventbridgesvc.Service
 	stepfunctions *stepfunctionssvc.Service
-	traceStore  *tracesvc.Store
+	ecs           *ecssvc.Service
+	traceStore    *tracesvc.Store
 }
 
 func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apigatewayv1svc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, sns *snssvc.Service, dynamodb *dynamodbsvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, eventbridge *eventbridgesvc.Service, stepfunctions *stepfunctionssvc.Service, traceStore *tracesvc.Store) *Handler {
 	return &Handler{
-		cfg:         cfg,
-		apigw:       apigw,
-		apigwv1:     apigwv1,
-		lambda:      lambda,
-		logs:        logs,
-		s3:          s3,
-		sqs:         sqs,
-		sns:         sns,
-		dynamodb:    dynamodb,
-		secrets:     secrets,
-		infra:       infra,
-		esm:         esm,
-		eventbridge: eventbridge,
+		cfg:           cfg,
+		apigw:         apigw,
+		apigwv1:       apigwv1,
+		lambda:        lambda,
+		logs:          logs,
+		s3:            s3,
+		sqs:           sqs,
+		sns:           sns,
+		dynamodb:      dynamodb,
+		secrets:       secrets,
+		infra:         infra,
+		esm:           esm,
+		eventbridge:   eventbridge,
 		stepfunctions: stepfunctions,
-		traceStore:  traceStore,
+		traceStore:    traceStore,
 	}
+}
+
+// SetECSService wires the account-local ECS service into the admin overview.
+// The service owns the persisted ECS records, so the overview reads through
+// this seam instead of keeping a second copy of ECS state.
+func (h *Handler) SetECSService(svc *ecssvc.Service) {
+	h.ecs = svc
 }
 
 type overviewResponse struct {
@@ -89,10 +98,84 @@ type overviewResponse struct {
 	EventSourceMappings []esmSummary             `json:"eventSourceMappings"`
 	EventBridgeRules    []eventBridgeRuleSummary `json:"eventBridgeRules,omitempty"`
 	StateMachines       []stateMachineSummary    `json:"stateMachines,omitempty"`
+	ECS                 *ecsOverview             `json:"ecs,omitempty"`
 	Infrastructure      []infrasvc.ProbeResult   `json:"infrastructure"`
 	Connections         []infraConnection        `json:"connections,omitempty"`
 	RecentTraces        []*tracesvc.Trace        `json:"recentTraces,omitempty"`
 	Warnings            []string                 `json:"warnings,omitempty"`
+}
+
+type ecsOverview struct {
+	Clusters        []ecsClusterSummary        `json:"clusters"`
+	Services        []ecsServiceSummary        `json:"services"`
+	Tasks           []ecsTaskSummary           `json:"tasks"`
+	TaskDefinitions []ecsTaskDefinitionSummary `json:"taskDefinitions"`
+}
+
+type ecsClusterSummary struct {
+	Name           string `json:"name"`
+	Arn            string `json:"arn"`
+	Status         string `json:"status"`
+	RunningTasks   int    `json:"runningTasks"`
+	PendingTasks   int    `json:"pendingTasks"`
+	ActiveServices int    `json:"activeServices"`
+}
+
+type ecsServiceSummary struct {
+	Name              string `json:"name"`
+	Arn               string `json:"arn"`
+	ClusterArn        string `json:"clusterArn"`
+	TaskDefinitionArn string `json:"taskDefinitionArn"`
+	DesiredCount      int    `json:"desiredCount"`
+	RunningCount      int    `json:"runningCount"`
+	PendingCount      int    `json:"pendingCount"`
+	Status            string `json:"status"`
+	LaunchType        string `json:"launchType,omitempty"`
+}
+
+type ecsTaskSummary struct {
+	Arn               string                    `json:"arn"`
+	ClusterArn        string                    `json:"clusterArn"`
+	TaskDefinitionArn string                    `json:"taskDefinitionArn"`
+	Group             string                    `json:"group,omitempty"`
+	LaunchType        string                    `json:"launchType,omitempty"`
+	LastStatus        string                    `json:"lastStatus"`
+	DesiredStatus     string                    `json:"desiredStatus"`
+	StartedAt         *time.Time                `json:"startedAt,omitempty"`
+	StoppedAt         *time.Time                `json:"stoppedAt,omitempty"`
+	StoppedReason     string                    `json:"stoppedReason,omitempty"`
+	Containers        []ecsTaskContainerSummary `json:"containers,omitempty"`
+}
+
+// ecsTaskContainerSummary is the per-container view of a running task: which
+// image is up, whether it exited, and which host ports it published. The host
+// port is what an operator (or an MCP caller verifying a pipeline) actually
+// dials — ContainerPort alone does not say where it landed on the loopback
+// interface.
+type ecsTaskContainerSummary struct {
+	Name            string                     `json:"name"`
+	LastStatus      string                     `json:"lastStatus"`
+	ExitCode        *int64                     `json:"exitCode,omitempty"`
+	Reason          string                     `json:"reason,omitempty"`
+	NetworkBindings []ecsNetworkBindingSummary `json:"networkBindings,omitempty"`
+}
+
+// ecsNetworkBindingSummary mirrors types.NetworkBinding with lowerCamel JSON
+// field names, matching the convention the rest of the overview payload uses.
+type ecsNetworkBindingSummary struct {
+	ContainerPort int    `json:"containerPort"`
+	HostPort      int    `json:"hostPort"`
+	Protocol      string `json:"protocol,omitempty"`
+	BindIP        string `json:"bindIP,omitempty"`
+}
+
+type ecsTaskDefinitionSummary struct {
+	Arn               string `json:"arn"`
+	TaskDefinitionArn string `json:"taskDefinitionArn"`
+	Name              string `json:"name"`
+	Family            string `json:"family"`
+	Revision          int    `json:"revision"`
+	Status            string `json:"status"`
 }
 
 type overviewConfig struct {
@@ -464,11 +547,16 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	if h.stepfunctions != nil {
 		stateMachines = h.stepfunctions.ListStateMachines()
 	}
+	ecsData := h.listECSOverview()
+	services := []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "sns", "dynamodb", "secretsmanager", "eventsource", "eventbridge", "stepfunctions"}
+	if ecsData != nil {
+		services = append(services, "ecs")
+	}
 
 	resp := overviewResponse{
 		Status:    "running",
 		Timestamp: time.Now().UTC(),
-		Services:  []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "sns", "dynamodb", "secretsmanager", "eventsource", "eventbridge", "stepfunctions"},
+		Services:  services,
 		Config: overviewConfig{
 			Region:    h.cfg.Region,
 			AccountID: h.cfg.AccountID,
@@ -503,6 +591,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		EventSourceMappings: make([]esmSummary, 0, len(esmMappings)),
 		EventBridgeRules:    make([]eventBridgeRuleSummary, 0, len(eventBridgeRules)),
 		StateMachines:       make([]stateMachineSummary, 0, len(stateMachines)),
+		ECS:                 ecsData,
 		Infrastructure:      infraResults,
 		Connections:         inferInfraConnections(functions, infraResults),
 		RecentTraces:        h.recentTraces(),

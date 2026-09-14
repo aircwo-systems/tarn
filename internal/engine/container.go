@@ -58,6 +58,16 @@ type Engine struct {
 	// pullMus holds a per-runtime mutex so concurrent EnsureImage calls for the
 	// same runtime serialise rather than spawning duplicate Docker pulls.
 	pullMus sync.Map // types.Runtime → *sync.Mutex
+
+	// imageRefKnown and refPullMus mirror imageKnown/pullMus but key on an
+	// arbitrary image reference rather than a types.Runtime. ECS task
+	// containers name arbitrary images, which don't fit the closed runtime
+	// set EnsureImage assumes. See EnsureImageRef in task.go.
+	imageRefKnown sync.Map // string (image ref) → struct{}
+	refPullMus    sync.Map // string (image ref) → *sync.Mutex
+	// taskPayloadFiles tracks host-side files mounted into ECS task
+	// containers for event payloads larger than one environment value.
+	taskPayloadFiles sync.Map // container ID -> host path
 }
 
 // New creates a new container engine.
@@ -193,29 +203,7 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 		}
 	}
 
-	env := []string{
-		fmt.Sprintf("AWS_LAMBDA_FUNCTION_NAME=%s", fn.FunctionName),
-		fmt.Sprintf("AWS_LAMBDA_FUNCTION_VERSION=%s", fn.Version),
-		fmt.Sprintf("AWS_LAMBDA_FUNCTION_MEMORY_SIZE=%d", fn.MemorySize),
-		fmt.Sprintf("AWS_REGION=%s", e.cfg.Region),
-		fmt.Sprintf("AWS_DEFAULT_REGION=%s", e.cfg.Region),
-		fmt.Sprintf("AWS_LAMBDA_LOG_GROUP_NAME=/aws/lambda/%s", fn.FunctionName),
-		fmt.Sprintf("AWS_LAMBDA_LOG_STREAM_NAME=%s", time.Now().Format("2006/01/02")),
-		fmt.Sprintf("_HANDLER=%s", fn.Handler),
-		fmt.Sprintf("AWS_LAMBDA_FUNCTION_TIMEOUT=%d", fn.Timeout),
-		// Point SDK calls back to Tarn
-		fmt.Sprintf("AWS_ENDPOINT_URL=http://host.docker.internal:%d", e.cfg.Port),
-		"AWS_ACCESS_KEY_ID=test",
-		"AWS_SECRET_ACCESS_KEY=test",
-	}
-
-	for k, v := range fn.Environment {
-		if rewritten, ok := dbURLRewrites[k]; ok {
-			env = append(env, fmt.Sprintf("%s=%s", k, rewritten))
-		} else {
-			env = append(env, fmt.Sprintf("%s=%s", k, v))
-		}
-	}
+	env := buildLambdaContainerEnv(fn, accountID, e.cfg.Region, e.cfg.Port, dbURLRewrites)
 
 	binds := []string{
 		fmt.Sprintf("%s:/var/task:ro", codeDir),
@@ -536,11 +524,21 @@ func (e *Engine) Cleanup(ctx context.Context) {
 		}
 		delete(e.containers, name)
 	}
+	e.cleanupTaskPayloadFiles()
 }
 
 // Close releases the Docker client resources.
 func (e *Engine) Close() error {
+	e.cleanupTaskPayloadFiles()
 	return e.client.Close()
+}
+
+func (e *Engine) cleanupTaskPayloadFiles() {
+	e.taskPayloadFiles.Range(func(key, value any) bool {
+		e.taskPayloadFiles.Delete(key)
+		_ = os.Remove(value.(string))
+		return true
+	})
 }
 
 // findSecretsProxy locates the secrets-proxy-linux binary.

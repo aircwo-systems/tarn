@@ -21,6 +21,7 @@ import (
 	apigatewayhandler "github.com/aircwo-systems/tarn/internal/api/apigateway"
 	apigatewayv1handler "github.com/aircwo-systems/tarn/internal/api/apigatewayv1"
 	dynamodbhandler "github.com/aircwo-systems/tarn/internal/api/dynamodb"
+	ecshandler "github.com/aircwo-systems/tarn/internal/api/ecs"
 	eventbridgehandler "github.com/aircwo-systems/tarn/internal/api/eventbridge"
 	eventsourcehandler "github.com/aircwo-systems/tarn/internal/api/eventsource"
 	iamhandler "github.com/aircwo-systems/tarn/internal/api/iam"
@@ -34,6 +35,7 @@ import (
 	"github.com/aircwo-systems/tarn/internal/apigatewayv1"
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/internal/dynamodb"
+	ecsservice "github.com/aircwo-systems/tarn/internal/ecs"
 	"github.com/aircwo-systems/tarn/internal/engine"
 	"github.com/aircwo-systems/tarn/internal/eventbridge"
 	"github.com/aircwo-systems/tarn/internal/eventsource"
@@ -157,6 +159,18 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	lambdaSvc := lambda.NewService(acctCfg, lambdaStore, shared.eng, shared.pool, logsSvc)
 	lambdaSvc.ActivatePendingFunctions()
 
+	// ECS
+	ecsStore := ecsservice.NewStore(acctCfg)
+	if err := ecsStore.Init(); err != nil {
+		return nil, fmt.Errorf("ecs store: %w", err)
+	}
+	ecsSvc := ecsservice.NewService(acctCfg, ecsStore)
+	ecsRunner := ecsservice.NewRunner(acctCfg, ecsSvc, shared.eng, logsSvc)
+	ecsRunner.SetTraceStore(shared.traceStore)
+	ecsSvc.SetTaskDrainer(ecsRunner.DrainService)
+	ecsHandler := ecshandler.NewHandler(ecsSvc)
+	ecsHandler.SetTaskRunner(ecsRunner)
+
 	// SQS
 	sqsSvc := sqs.NewService(acctCfg)
 	if err := sqsSvc.Init(); err != nil {
@@ -234,6 +248,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	}
 	eventbridgeSvc.SetTraceStore(shared.traceStore)
 	eventbridgeSvc.SetCollector(shared.collector)
+	eventbridgeSvc.SetTaskRunner(ecsRunner)
 
 	// Step Functions
 	stepFunctionsStore := stepfunctionssvc.NewStore(acctCfg)
@@ -241,6 +256,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	if err := stepFunctionsSvc.Init(); err != nil {
 		return nil, fmt.Errorf("stepfunctions store: %w", err)
 	}
+	stepFunctionsSvc.SetECSTaskRunner(ecsRunner, ecsSvc)
 	stepFunctionsSvc.SetTraceStore(shared.traceStore)
 
 	// S3 event callback — routes object events to this account's Lambda functions.
@@ -289,6 +305,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	})
 
 	// Start background workers
+	ecsRunner.Start()
 	eventbridgeSvc.Start()
 	esmSvc.Start()
 	stepFunctionsSvc.Start()
@@ -301,28 +318,36 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	sh := secretshandler.NewHandler(acctCfg, secretsSvc)
 	sh.SetCollector(shared.collector)
 
+	adminHandler := adminhandler.NewHandler(
+		acctCfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc,
+		sqsSvc, snsSvc, dynamoSvc, secretsSvc, shared.infraSvc,
+		s3Svc, esmSvc, eventbridgeSvc, stepFunctionsSvc, shared.traceStore,
+	)
+	adminHandler.SetECSService(ecsSvc)
+
 	hs := &api.HandlerSet{
-		APIGateway:  apigatewayhandler.NewHandler(gatewaySvc),
-		APIGatewayV1: apigatewayv1handler.NewHandler(gatewayV1Svc),
-		Lambda:      lh,
-		S3:          s3handler.NewHandler(s3Svc),
-		SQS:         sqshandler.NewHandler(sqsSvc),
-		SNS:         snshandler.NewHandler(snsSvc),
-		DynamoDB:    dynamodbhandler.NewHandler(dynamoSvc),
-		Secrets:     sh,
-		EventSource: eventsourcehandler.NewHandler(esmSvc),
-		EventBridge: eventbridgehandler.NewHandler(eventbridgeSvc),
+		APIGateway:    apigatewayhandler.NewHandler(gatewaySvc),
+		APIGatewayV1:  apigatewayv1handler.NewHandler(gatewayV1Svc),
+		Lambda:        lh,
+		S3:            s3handler.NewHandler(s3Svc),
+		SQS:           sqshandler.NewHandler(sqsSvc),
+		SNS:           snshandler.NewHandler(snsSvc),
+		DynamoDB:      dynamodbhandler.NewHandler(dynamoSvc),
+		Secrets:       sh,
+		EventSource:   eventsourcehandler.NewHandler(esmSvc),
+		EventBridge:   eventbridgehandler.NewHandler(eventbridgeSvc),
+		ECS:           ecsHandler,
 		StepFunctions: stepfunctionshandler.NewHandler(stepFunctionsSvc),
-		IAM:         iamhandler.NewHandler(acctCfg.AccountID),
-		Admin: adminhandler.NewHandler(
-			acctCfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc,
-			sqsSvc, snsSvc, dynamoSvc, secretsSvc, shared.infraSvc,
-			s3Svc, esmSvc, eventbridgeSvc, stepFunctionsSvc, shared.traceStore,
-		),
-		Logs: logsSvc,
+		IAM:           iamhandler.NewHandler(acctCfg.AccountID),
+		Admin:         adminHandler,
+		Logs:          logsSvc,
 	}
 
 	stop := func() {
+		// Runner.Stop halts reconciliation before stopping task containers. It
+		// must run before any account shutdown can remove ECS containers, or the
+		// reconcile loop can recreate them to satisfy DesiredCount.
+		ecsRunner.Stop()
 		sqsSvc.Stop()
 		esmSvc.Stop()
 		eventbridgeSvc.Stop()
@@ -421,6 +446,9 @@ func startServer(cfg *config.Config) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize default account: %w", err)
 	}
+	if err := preInitPersistedAccounts(cfg, registry); err != nil {
+		return err
+	}
 	// The secrets proxy and server-level request logging are single-account
 	// (default) concerns, so they use the default account's logs service.
 	logsSvc := defaultBundle.Handlers().Logs
@@ -482,13 +510,13 @@ func startServer(cfg *config.Config) error {
 	go func() {
 		<-sigCh
 		log.Println("\nShutting down Tarn...")
-		eng.Cleanup(ctx)
 		if secretsProxyServer != nil {
 			if err := secretsProxyServer.Shutdown(ctx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Printf("[secrets-proxy] shutdown error: %v", err)
 			}
 		}
 		server.Shutdown(ctx)
+		eng.Cleanup(ctx)
 		cancel()
 	}()
 
@@ -497,6 +525,38 @@ func startServer(cfg *config.Config) error {
 		return nil
 	}
 	return err
+}
+
+func preInitPersistedAccounts(cfg *config.Config, registry *api.HandlerRegistry) error {
+	accountsDir := filepath.Join(cfg.DataDir, "accounts")
+	entries, err := os.ReadDir(accountsDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("list persisted accounts: %w", err)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !validAccountDirectoryName(entry.Name()) || entry.Name() == cfg.AccountID {
+			continue
+		}
+		if _, err := registry.PreInit(entry.Name()); err != nil {
+			return fmt.Errorf("failed to initialize account %s: %w", entry.Name(), err)
+		}
+	}
+	return nil
+}
+
+func validAccountDirectoryName(name string) bool {
+	if len(name) != 12 {
+		return false
+	}
+	for _, r := range name {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func recordSecretsProxyTelemetry(logsSvc *logs.Service, traceStore *trace.Store, event secretsproxy.RequestEvent) {

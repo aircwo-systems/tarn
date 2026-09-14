@@ -16,6 +16,7 @@ import (
 	apigatewayv1svc "github.com/aircwo-systems/tarn/internal/apigatewayv1"
 	"github.com/aircwo-systems/tarn/internal/config"
 	dynamodbsvc "github.com/aircwo-systems/tarn/internal/dynamodb"
+	ecssvc "github.com/aircwo-systems/tarn/internal/ecs"
 	eventbridgesvc "github.com/aircwo-systems/tarn/internal/eventbridge"
 	eventsourcesvc "github.com/aircwo-systems/tarn/internal/eventsource"
 	infrasvc "github.com/aircwo-systems/tarn/internal/infrastructure"
@@ -409,6 +410,171 @@ func TestOverviewIncludesDynamoDBTablesAndStreams(t *testing.T) {
 	}
 	if len(payload.DynamoDBStreams) != 1 || payload.DynamoDBStreams[0].TableName != "orders" {
 		t.Fatalf("unexpected dynamodb streams: %+v", payload.DynamoDBStreams)
+	}
+}
+
+func TestOverviewIncludesECSState(t *testing.T) {
+	h := newTestHandler(t)
+
+	ecsStore := ecssvc.NewStore(h.cfg)
+	ecsService := ecssvc.NewService(h.cfg, ecsStore)
+	if err := ecsService.Init(); err != nil {
+		t.Fatalf("init ecs service: %v", err)
+	}
+	h.SetECSService(ecsService)
+
+	clusterOut, err := ecsService.CreateCluster(&types.CreateClusterInput{ClusterName: "workers"})
+	if err != nil {
+		t.Fatalf("create ecs cluster: %v", err)
+	}
+	taskDefinitionOut, err := ecsService.RegisterTaskDefinition(&types.RegisterTaskDefinitionInput{
+		Family: "worker",
+		ContainerDefinitions: []types.ContainerDefinition{
+			{Name: "worker", Image: "worker:latest"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("register ecs task definition: %v", err)
+	}
+	serviceOut, err := ecsService.CreateService(&types.CreateServiceInput{
+		Cluster:        clusterOut.Cluster.ClusterArn,
+		ServiceName:    "worker-service",
+		TaskDefinition: taskDefinitionOut.TaskDefinition.TaskDefinitionArn,
+		DesiredCount:   2,
+		LaunchType:     types.LaunchTypeFargate,
+	})
+	if err != nil {
+		t.Fatalf("create ecs service: %v", err)
+	}
+	if _, err := ecsService.SetServiceCounts(clusterOut.Cluster, serviceOut.Service.ServiceName, 1, 1); err != nil {
+		t.Fatalf("set ecs service counts: %v", err)
+	}
+	task, err := ecsService.NewTaskRecord(
+		clusterOut.Cluster,
+		taskDefinitionOut.TaskDefinition,
+		nil,
+		types.LaunchTypeFargate,
+		"service:"+serviceOut.Service.ServiceName,
+	)
+	if err != nil {
+		t.Fatalf("create ecs task record: %v", err)
+	}
+	if _, err := ecsService.SetTaskStatus(task.TaskArn, types.TaskStatusRunning); err != nil {
+		t.Fatalf("set ecs task status: %v", err)
+	}
+	if _, err := ecsService.SetContainerStatus(task.TaskArn, "worker", types.TaskStatusRunning); err != nil {
+		t.Fatalf("set ecs container status: %v", err)
+	}
+	if _, err := ecsService.SetContainerNetworkBindings(task.TaskArn, "worker", []types.NetworkBinding{
+		{ContainerPort: 8080, HostPort: 32768, Protocol: "tcp", BindIP: "127.0.0.1"},
+	}); err != nil {
+		t.Fatalf("set ecs container network bindings: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
+	rec := httptest.NewRecorder()
+	h.Overview(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var payload struct {
+		Services []string     `json:"services"`
+		ECS      *ecsOverview `json:"ecs"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.ECS == nil {
+		t.Fatal("ecs overview is nil")
+	}
+	if len(payload.ECS.Clusters) != 2 {
+		t.Fatalf("ecs clusters len = %d, want 2 including default: %+v", len(payload.ECS.Clusters), payload.ECS.Clusters)
+	}
+	var cluster ecsClusterSummary
+	for _, candidate := range payload.ECS.Clusters {
+		if candidate.Name == "workers" {
+			cluster = candidate
+			break
+		}
+	}
+	if cluster.Arn != clusterOut.Cluster.ClusterArn {
+		t.Fatalf("ecs cluster arn = %q, want %q", cluster.Arn, clusterOut.Cluster.ClusterArn)
+	}
+	if cluster.Status != types.ClusterStatusActive || cluster.RunningTasks != 1 || cluster.PendingTasks != 0 || cluster.ActiveServices != 1 {
+		t.Fatalf("unexpected ecs cluster summary: %+v", cluster)
+	}
+
+	if len(payload.ECS.Services) != 1 {
+		t.Fatalf("ecs services len = %d, want 1", len(payload.ECS.Services))
+	}
+	service := payload.ECS.Services[0]
+	if service.Name != serviceOut.Service.ServiceName || service.Arn != serviceOut.Service.ServiceArn {
+		t.Fatalf("unexpected ecs service identity: %+v", service)
+	}
+	if service.TaskDefinitionArn != taskDefinitionOut.TaskDefinition.TaskDefinitionArn || service.DesiredCount != 2 || service.RunningCount != 1 || service.PendingCount != 1 || service.Status != types.ServiceStatusActive {
+		t.Fatalf("unexpected ecs service summary: %+v", service)
+	}
+
+	if len(payload.ECS.Tasks) != 1 {
+		t.Fatalf("ecs tasks len = %d, want 1", len(payload.ECS.Tasks))
+	}
+	if len(payload.ECS.TaskDefinitions) != 1 {
+		t.Fatalf("ecs task definitions len = %d, want 1", len(payload.ECS.TaskDefinitions))
+	}
+	if definition := payload.ECS.TaskDefinitions[0]; definition.Arn != taskDefinitionOut.TaskDefinition.TaskDefinitionArn || definition.Family != "worker" || definition.Revision != 1 || definition.Status != types.TaskDefinitionStatusActive {
+		t.Fatalf("unexpected ecs task definition summary: %+v", definition)
+	}
+	taskSummary := payload.ECS.Tasks[0]
+	if taskSummary.Arn != task.TaskArn || taskSummary.ClusterArn != task.ClusterArn || taskSummary.TaskDefinitionArn != task.TaskDefinitionArn {
+		t.Fatalf("unexpected ecs task identity: %+v", taskSummary)
+	}
+	if taskSummary.LastStatus != types.TaskStatusRunning || taskSummary.DesiredStatus != types.TaskDesiredStatusRunning || taskSummary.Group != "service:worker-service" || taskSummary.LaunchType != types.LaunchTypeFargate {
+		t.Fatalf("unexpected ecs task summary: %+v", taskSummary)
+	}
+	if len(taskSummary.Containers) != 1 {
+		t.Fatalf("ecs task containers len = %d, want 1: %+v", len(taskSummary.Containers), taskSummary)
+	}
+	container := taskSummary.Containers[0]
+	if container.Name != "worker" || container.LastStatus != types.TaskStatusRunning {
+		t.Fatalf("unexpected ecs task container summary: %+v", container)
+	}
+	if len(container.NetworkBindings) != 1 {
+		t.Fatalf("ecs task container network bindings len = %d, want 1: %+v", len(container.NetworkBindings), container)
+	}
+	binding := container.NetworkBindings[0]
+	if binding.ContainerPort != 8080 || binding.HostPort != 32768 || binding.Protocol != "tcp" || binding.BindIP != "127.0.0.1" {
+		t.Fatalf("unexpected ecs task network binding: %+v", binding)
+	}
+
+	foundECS := false
+	for _, name := range payload.Services {
+		if name == "ecs" {
+			foundECS = true
+			break
+		}
+	}
+	if !foundECS {
+		t.Fatalf("services missing ecs: %v", payload.Services)
+	}
+}
+
+func TestOverviewOmitsECSWhenUnconfigured(t *testing.T) {
+	h := newTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
+	rec := httptest.NewRecorder()
+	h.Overview(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, ok := payload["ecs"]; ok {
+		t.Fatalf("ecs field present without configured ECS service: %s", payload["ecs"])
 	}
 }
 

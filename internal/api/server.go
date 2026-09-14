@@ -15,6 +15,7 @@ import (
 	apigatewayhandler "github.com/aircwo-systems/tarn/internal/api/apigateway"
 	apigatewayv1handler "github.com/aircwo-systems/tarn/internal/api/apigatewayv1"
 	dynamodbhandler "github.com/aircwo-systems/tarn/internal/api/dynamodb"
+	ecshandler "github.com/aircwo-systems/tarn/internal/api/ecs"
 	eventbridgehandler "github.com/aircwo-systems/tarn/internal/api/eventbridge"
 	eventsourcehandler "github.com/aircwo-systems/tarn/internal/api/eventsource"
 	iamhandler "github.com/aircwo-systems/tarn/internal/api/iam"
@@ -31,19 +32,20 @@ import (
 
 // HandlerSet groups all per-account HTTP handlers.
 type HandlerSet struct {
-	APIGateway  *apigatewayhandler.Handler
-	APIGatewayV1 *apigatewayv1handler.Handler
-	Lambda      *lambdahandler.Handler
-	S3          *s3handler.Handler
-	SQS         *sqshandler.Handler
-	SNS         *snshandler.Handler
-	DynamoDB    *dynamodbhandler.Handler
-	Secrets     *secretshandler.Handler
-	EventSource *eventsourcehandler.Handler
-	EventBridge *eventbridgehandler.Handler
+	APIGateway    *apigatewayhandler.Handler
+	APIGatewayV1  *apigatewayv1handler.Handler
+	Lambda        *lambdahandler.Handler
+	S3            *s3handler.Handler
+	SQS           *sqshandler.Handler
+	SNS           *snshandler.Handler
+	DynamoDB      *dynamodbhandler.Handler
+	Secrets       *secretshandler.Handler
+	EventSource   *eventsourcehandler.Handler
+	EventBridge   *eventbridgehandler.Handler
+	ECS           *ecshandler.Handler
 	StepFunctions *stepfunctionshandler.Handler
-	IAM         *iamhandler.Handler
-	Admin       *adminhandler.Handler
+	IAM           *iamhandler.Handler
+	Admin         *adminhandler.Handler
 	// Logs is this account's CloudWatch-style logs service. It is per-account so
 	// log groups (e.g. /aws/lambda/<fn>) and the account's API request log do not
 	// leak across accounts.
@@ -443,7 +445,7 @@ func (s *Server) getRootDispatch(w http.ResponseWriter, r *http.Request) {
 	s.hs(r).S3.Dispatch(w, r)
 }
 
-// postRootDispatch routes POST / between Secrets Manager, IAM, SNS, SQS, DynamoDB, and EventBridge.
+// postRootDispatch routes POST / between Secrets Manager, IAM, SNS, SQS, DynamoDB, EventBridge, and ECS.
 func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
 	hs := s.hs(r)
 	if secretshandler.IsSecretsManagerRequest(r) {
@@ -464,6 +466,14 @@ func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AmazonSQS.") {
 		hs.SQS.Dispatch(w, r)
+		return
+	}
+	if ecshandler.IsECSRequest(r) {
+		if hs.ECS == nil {
+			writeECSUnconfigured(w)
+			return
+		}
+		hs.ECS.Dispatch(w, r)
 		return
 	}
 	if iamhandler.IsIAMRequest(r) {
@@ -503,7 +513,7 @@ func (s *Server) telemetryDBHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","sns","dynamodb","secretsmanager","eventsource","eventbridge","stepfunctions"]}`)
+	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","sns","dynamodb","secretsmanager","eventsource","eventbridge","ecs","stepfunctions"]}`)
 }
 
 func (s *Server) withLogging(next http.Handler) http.Handler {
@@ -543,6 +553,18 @@ func wantsHTML(r *http.Request) bool {
 	return strings.Contains(accept, "text/html")
 }
 
+// writeECSUnconfigured reports that no ECS handler exists for the resolved
+// account, rather than letting a nil *ecshandler.Handler panic. HandlerSet.ECS
+// is nil until the account bundle constructs one.
+func writeECSUnconfigured(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+	w.WriteHeader(http.StatusInternalServerError)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"__type":  "ServerException",
+		"message": "ECS is not configured for this account",
+	})
+}
+
 // dispatchProtocolRequest routes AWS protocol requests based on headers/query
 // independent of URL path. Returns true when a request was dispatched.
 func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request) bool {
@@ -577,6 +599,14 @@ func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request)
 
 	if iamhandler.IsIAMRequest(r) {
 		hs.IAM.Dispatch(w, r)
+		return true
+	}
+	if ecshandler.IsECSRequest(r) {
+		if hs.ECS == nil {
+			writeECSUnconfigured(w)
+			return true
+		}
+		hs.ECS.Dispatch(w, r)
 		return true
 	}
 
