@@ -1,8 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import { ArrowUpRightIcon, CaretDownIcon } from "phosphor-svelte";
-  import { Badge } from "$lib/components/ui/badge";
-  import LedDot from "$lib/components/common/led-dot.svelte";
+  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
   import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
   import { formatJSONForViewer } from "$lib/json-format";
   import type {
@@ -127,7 +126,7 @@
     openGroups = next;
   }
 
-  function groupDotColor(s: IterGroup["status"]): "green" | "amber" | "red" | "gray" {
+  function groupTone(s: IterGroup["status"]): Tone {
     if (s === "succeeded") return "green";
     if (s === "failed") return "red";
     return "amber";
@@ -179,7 +178,7 @@
     execution.output ? formatJSONForViewer(execution.output) : null,
   );
 
-  function statusColor(status: string): "green" | "amber" | "red" | "gray" {
+  function execTone(status: string): Tone {
     switch (status) {
       case "SUCCEEDED":
         return "green";
@@ -187,33 +186,21 @@
         return "amber";
       case "FAILED":
       case "TIMED_OUT":
+      case "ABORTED":
         return "red";
       default:
-        return "gray";
+        return "neutral";
     }
   }
 
-  function statusVariant(
-    status: string,
-  ): "default" | "destructive" | "amber" | "outline" {
-    switch (status) {
-      case "SUCCEEDED":
-        return "default";
-      case "FAILED":
-      case "TIMED_OUT":
-        return "destructive";
-      case "RUNNING":
-        return "amber";
-      default:
-        return "outline";
-    }
-  }
-
-  function eventColor(type: string): "green" | "amber" | "red" | "gray" {
-    if (type.includes("Succeeded")) return "green";
-    if (type.includes("Failed") || type.includes("TimedOut")) return "red";
-    if (type.includes("Scheduled") || type.includes("Started")) return "amber";
-    return "gray";
+  /** Log-style outcome tag for a history event. */
+  function eventTag(type: string): { label: string; tone: Tone } {
+    if (type.includes("Failed") || type.includes("TimedOut") || type.includes("Aborted"))
+      return { label: "err", tone: "red" };
+    if (type.includes("Succeeded")) return { label: "ok", tone: "green" };
+    if (type.includes("Scheduled") || type.includes("Started") || type.endsWith("StateEntered"))
+      return { label: "run", tone: "amber" };
+    return { label: "···", tone: "neutral" };
   }
 
   function stateName(ev: StateMachineEventSummary): string {
@@ -256,41 +243,33 @@
     return "";
   }
 
-  function formatTime(value?: string): string {
+  function compactTime(value?: string): string {
     if (!value) return "";
-    const date = new Date(value);
-    return Number.isNaN(date.getTime()) ? value : date.toLocaleTimeString();
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return value;
+    const p = (n: number, w = 2) => String(n).padStart(w, "0");
+    return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
   }
 </script>
 
-<div class="flex flex-col gap-3 p-3">
-  <div class="flex flex-wrap items-center gap-2">
-    <LedDot color={statusColor(execution.status)} />
-    <span
-      class="min-w-0 truncate font-mono text-xs text-foreground"
-      title={execution.name}
-    >
-      {execution.name}
-    </span>
-    <Badge variant={statusVariant(execution.status)}>{execution.status}</Badge>
+<div class="history">
+  <div class="history-head">
+    <span class="history-name" title={execution.name}>{execution.name}</span>
+    <RcTonePill tone={execTone(execution.status)}>{execution.status.toLowerCase()}</RcTonePill>
   </div>
 
   {#if execution.error}
-    <div class="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2">
-      <p class="text-xs font-semibold text-destructive">{execution.error}</p>
+    <div class="history-error">
+      <p class="history-error-title">{execution.error}</p>
       {#if execution.cause}
-        <p class="mt-1 whitespace-pre-wrap break-words font-mono text-[11px] text-muted-foreground">
-          {execution.cause}
-        </p>
+        <p class="history-error-cause">{execution.cause}</p>
       {/if}
     </div>
   {/if}
 
   {#if execution.output}
-    <div class="space-y-1">
-      <h5 class="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground/70">
-        Output
-      </h5>
+    <div class="history-output">
+      <p class="history-label">Output</p>
       <FormattedMessageViewer
         raw={execution.output}
         formatted={outputFormatted?.formatted}
@@ -305,17 +284,15 @@
     </div>
   {/if}
 
-  <div class="space-y-1.5">
-    <div class="flex items-center justify-between gap-2">
-      <h5 class="text-[10px] font-semibold uppercase tracking-[0.2em] text-muted-foreground/70">
-        History
-      </h5>
-      <div class="flex items-center gap-3">
+  <div class="history-stream">
+    <div class="history-stream-head">
+      <p class="history-label">History</p>
+      <div class="history-stream-tools">
         {#if hasGroups}
           <button
             type="button"
             onclick={() => (viewMode = viewMode === "grouped" ? "full" : "grouped")}
-            class="text-[10px] font-mono text-muted-foreground/70 hover:text-foreground transition-colors"
+            class="stream-tool"
             title={viewMode === "grouped" ? "Show the full raw event history" : "Group events by certificate"}
           >
             {viewMode === "grouped" ? "Full history" : "Grouped"}
@@ -325,11 +302,11 @@
           <button
             type="button"
             onclick={() => navigate(traceHash)}
-            class="inline-flex items-center gap-1 text-[10px] font-mono text-primary/70 hover:text-primary transition-colors"
+            class="stream-tool accent"
             title="View this execution in X-Ray"
           >
             <ArrowUpRightIcon size={10} />
-            View X-Ray trace
+            X-Ray
           </button>
         {/if}
       </div>
@@ -337,83 +314,72 @@
 
     {#snippet eventRow(ev: StateMachineEventSummary)}
       {@const logHash = lambdaLogHash(ev)}
-      <li class="flex items-start gap-2 py-1">
-        <span class="mt-1 shrink-0"><LedDot color={eventColor(ev.type)} /></span>
-        <div class="min-w-0 flex-1">
-          <div class="flex items-baseline gap-2">
-            <span class="text-xs text-foreground">{eventLabel(ev)}</span>
-            {#if eventDetail(ev)}
-              <span
-                class="min-w-0 truncate font-mono text-[10px] text-muted-foreground/70"
-                title={eventDetail(ev)}
-              >
-                {eventDetail(ev)}
-              </span>
-            {/if}
-          </div>
-          <div class="flex items-center gap-2 font-mono text-[10px] text-muted-foreground/50">
-            <span>{formatTime(ev.timestamp)}</span>
-            {#if logHash}
-              <button
-                type="button"
-                onclick={() => navigate(logHash)}
-                class="inline-flex items-center gap-1 text-primary/70 hover:text-primary transition-colors"
-                title={eventRequestId(ev)
-                  ? `View invoked logs (RequestId ${eventRequestId(ev)})`
-                  : "View invoked logs"}
-              >
-                <ArrowUpRightIcon size={9} />
-                View invoked logs
-              </button>
-            {/if}
-          </div>
-        </div>
+      {@const tag = eventTag(ev.type)}
+      {@const detail = eventDetail(ev)}
+      <li class="ev" data-tone={tag.tone}>
+        <span class="ev-tick" aria-hidden="true"></span>
+        <span class="ev-time">{compactTime(ev.timestamp)}</span>
+        <span class="ev-tag">{tag.label}</span>
+        <span class="ev-msg" title={detail || eventLabel(ev)}>
+          {eventLabel(ev)}
+          {#if detail}<span class="ev-detail">{detail}</span>{/if}
+        </span>
+        {#if logHash}
+          <button
+            type="button"
+            onclick={() => navigate(logHash)}
+            class="ev-link"
+            title={eventRequestId(ev)
+              ? `View invoked logs (RequestId ${eventRequestId(ev)})`
+              : "View invoked logs"}
+          >
+            <ArrowUpRightIcon size={9} />
+            logs
+          </button>
+        {/if}
       </li>
     {/snippet}
 
     {#if events.length === 0}
-      <p class="text-xs text-muted-foreground/70">
-        No history recorded for this execution.
-      </p>
+      <p class="empty">No history recorded for this execution.</p>
     {:else if viewMode === "grouped" && hasGroups}
-      <p class="font-mono text-[10px] text-muted-foreground/70">
+      <p class="group-stats">
         {groupStats.total} certificate{groupStats.total === 1 ? "" : "s"} · {groupStats.ok} ok{groupStats.failed > 0 ? ` · ${groupStats.failed} failed` : ""}
       </p>
       {#if model.pre.length > 0}
-        <ol class="space-y-0">
+        <ol class="ev-list">
           {#each model.pre as ev (ev.id)}{@render eventRow(ev)}{/each}
         </ol>
       {/if}
-      <ul class="space-y-1">
+      <ul class="group-list">
         {#each model.groups as g (g.index)}
           {@const open = openGroups.has(g.index)}
-          <li class="overflow-hidden rounded-md border border-border/60">
+          <li class="group">
             <button
               type="button"
               onclick={() => toggleGroup(g.index)}
-              class="flex w-full items-center gap-2 px-2 py-1.5 text-left transition-colors hover:bg-muted/50"
+              class="group-head"
+              aria-expanded={open}
             >
-              <LedDot color={groupDotColor(g.status)} />
-              <span class="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground" title={g.label}>
-                {g.label}
-              </span>
-              <span class="shrink-0 font-mono text-[10px] text-muted-foreground/55">{g.events.length} steps</span>
+              <span class="ev-tick" data-tone={groupTone(g.status)} aria-hidden="true"></span>
+              <span class="group-label" title={g.label}>{g.label}</span>
+              <span class="group-meta">{g.events.length} steps</span>
               {#if groupDuration(g)}
-                <span class="shrink-0 font-mono text-[10px] text-muted-foreground/45">{groupDuration(g)}</span>
+                <span class="group-meta">{groupDuration(g)}</span>
               {/if}
-              <Badge
-                variant={g.status === "failed" ? "destructive" : g.status === "succeeded" ? "default" : "amber"}
-                class="shrink-0 text-[9px]"
-              >
-                {g.status}
-              </Badge>
-              <CaretDownIcon size={11} class="shrink-0 text-muted-foreground/60 transition-transform {open ? 'rotate-180' : ''}" />
+              <RcTonePill tone={groupTone(g.status)}>{g.status}</RcTonePill>
+              <span class="group-caret {open ? 'open' : ''}"><CaretDownIcon size={11} /></span>
             </button>
             {#if open}
-              <ol class="space-y-0 border-t border-border/40 px-2 py-1">
+              <ol class="ev-list indented">
                 {#each g.events as ev (ev.id)}{@render eventRow(ev)}{/each}
                 {#if g.error}
-                  <li class="py-1 font-mono text-[10px] text-destructive">{g.error}</li>
+                  <li class="ev" data-tone="red">
+                    <span class="ev-tick" aria-hidden="true"></span>
+                    <span class="ev-time"></span>
+                    <span class="ev-tag">err</span>
+                    <span class="ev-msg">{g.error}</span>
+                  </li>
                 {/if}
               </ol>
             {/if}
@@ -421,14 +387,132 @@
         {/each}
       </ul>
       {#if model.post.length > 0}
-        <ol class="space-y-0">
+        <ol class="ev-list">
           {#each model.post as ev (ev.id)}{@render eventRow(ev)}{/each}
         </ol>
       {/if}
     {:else}
-      <ol class="space-y-0">
+      <ol class="ev-list">
         {#each events as ev (ev.id)}{@render eventRow(ev)}{/each}
       </ol>
     {/if}
   </div>
 </div>
+
+<style>
+  .history {
+    display: flex; flex-direction: column; gap: 12px;
+    font-family: var(--font-ui-mono, var(--font-mono, monospace)); font-size: 12px;
+  }
+
+  .history-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .history-name {
+    min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text-primary);
+  }
+
+  .history-label {
+    font-size: 10.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-tertiary);
+  }
+
+  .empty { font-size: 11.5px; color: var(--text-tertiary); font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif); }
+
+  .history-error {
+    border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
+    background: color-mix(in srgb, var(--accent-red) 5%, transparent);
+    border-radius: 8px; padding: 8px 10px;
+  }
+  .history-error-title { font-size: 12px; font-weight: 600; color: var(--accent-red); font-family: var(--font-sans, ui-sans-serif, system-ui, sans-serif); }
+  .history-error-cause {
+    margin-top: 4px; white-space: pre-wrap; word-break: break-all;
+    font-size: 11px; color: var(--text-secondary);
+  }
+
+  .history-output { display: flex; flex-direction: column; gap: 6px; }
+
+  .history-stream { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .history-stream-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .history-stream-tools { display: flex; align-items: center; gap: 10px; }
+  .stream-tool {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 10.5px; color: var(--text-tertiary);
+    transition: color 100ms ease;
+  }
+  .stream-tool:hover { color: var(--text-primary); }
+  .stream-tool.accent { color: var(--accent-green); opacity: 0.85; }
+  .stream-tool.accent:hover { color: var(--accent-green); opacity: 1; }
+
+  /* ─── Log-style event rows ─── */
+  .ev-list { display: flex; flex-direction: column; }
+  .ev-list.indented { border-top: 1px solid var(--border-subtle); padding: 2px 0 4px 8px; }
+
+  .ev {
+    position: relative; display: flex; align-items: center; gap: 8px;
+    min-height: 24px; padding: 3px 6px 3px 14px; border-radius: 4px;
+    white-space: nowrap; transition: background 100ms ease;
+  }
+  .ev:hover { background: var(--bg-element-hover); }
+
+  .ev-tick {
+    position: absolute; left: 5px; top: 9px; width: 2px; height: 6px;
+    border-radius: 2px; background: transparent;
+  }
+  .ev[data-tone="red"] .ev-tick { background: var(--accent-red); }
+  .ev[data-tone="amber"] .ev-tick { background: var(--accent-amber); }
+
+  .ev-time {
+    flex-shrink: 0; font-size: 11px; color: var(--text-tertiary);
+    font-variant-numeric: tabular-nums; user-select: none;
+  }
+  .ev:hover .ev-time { color: var(--text-secondary); }
+
+  .ev-tag {
+    width: 30px; flex-shrink: 0; font-size: 10px; font-weight: 600;
+    letter-spacing: 0.04em; color: var(--text-tertiary); user-select: none;
+  }
+  .ev[data-tone="green"] .ev-tag { color: var(--accent-green); opacity: 0.8; }
+  .ev[data-tone="amber"] .ev-tag { color: var(--accent-amber); }
+  .ev[data-tone="red"] .ev-tag { color: var(--accent-red); }
+
+  .ev-msg {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    color: var(--text-primary); opacity: 0.82; transition: opacity 100ms ease;
+  }
+  .ev[data-tone="red"] .ev-msg { color: var(--accent-red); opacity: 0.9; }
+  .ev:hover .ev-msg { opacity: 1; }
+  .ev-detail { color: var(--text-tertiary); opacity: 0.7; margin-left: 8px; }
+
+  .ev-link {
+    flex-shrink: 0; display: inline-flex; align-items: center; gap: 3px;
+    font-size: 10px; color: var(--text-tertiary); opacity: 0;
+    transition: opacity 100ms ease, color 100ms ease;
+  }
+  .ev:hover .ev-link, .ev-link:focus-visible { opacity: 1; }
+  .ev-link:hover { color: var(--accent-green); }
+
+  /* ─── Group headers ─── */
+  .group-list { display: flex; flex-direction: column; gap: 4px; }
+  .group { border: 1px solid var(--border-subtle); border-radius: 8px; overflow: hidden; }
+  .group-head {
+    position: relative; display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 5px 8px 5px 14px; text-align: left; transition: background 100ms ease;
+  }
+  .group-head:hover { background: var(--bg-element-hover); }
+  .group-head .ev-tick { top: 11px; }
+  .group-head .ev-tick[data-tone="green"] { background: var(--accent-green); }
+  .group-head .ev-tick[data-tone="red"] { background: var(--accent-red); }
+  .group-head .ev-tick[data-tone="amber"] { background: var(--accent-amber); }
+  .group-label {
+    flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    color: var(--text-primary);
+  }
+  .group-meta { flex-shrink: 0; font-size: 10px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+  .group-caret { flex-shrink: 0; display: inline-flex; color: var(--text-tertiary); transition: transform 180ms var(--ease-snappy); }
+  .group-caret.open { transform: rotate(180deg); }
+
+  .group-stats { font-size: 10.5px; color: var(--text-tertiary); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .ev, .ev-msg, .ev-link, .group-head, .group-caret { transition: none; }
+  }
+</style>
