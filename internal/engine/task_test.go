@@ -340,20 +340,26 @@ func TestScanDemuxedLinesDeliversStdoutAndStderrLines(t *testing.T) {
 	}
 
 	var got []string
-	err := scanDemuxedLines(bytes.NewReader(mux.Bytes()), func(line string) {
+	var gotStderr []bool
+	err := scanDemuxedLines(bytes.NewReader(mux.Bytes()), func(line string, stderr bool) {
 		got = append(got, line)
+		gotStderr = append(gotStderr, stderr)
 	})
 	if err != nil {
 		t.Fatalf("scanDemuxedLines: %v", err)
 	}
 
 	want := []string{"hello stdout", "hello stderr", "second stdout line"}
+	wantStderr := []bool{false, true, false}
 	if len(got) != len(want) {
 		t.Fatalf("expected %d lines, got %d: %v", len(want), len(got), got)
 	}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("line %d mismatch: want %q, got %q (full: %v)", i, want[i], got[i], got)
+		}
+		if gotStderr[i] != wantStderr[i] {
+			t.Fatalf("line %d stderr flag: want %v, got %v (full: %v)", i, wantStderr[i], gotStderr[i], gotStderr)
 		}
 	}
 }
@@ -376,7 +382,7 @@ func (r *failingReader) Read(p []byte) (int, error) {
 
 func TestScanDemuxedLinesPropagatesStreamError(t *testing.T) {
 	boom := errors.New("boom")
-	err := scanDemuxedLines(&failingReader{err: boom}, func(string) {})
+	err := scanDemuxedLines(&failingReader{err: boom}, func(string, bool) {})
 	if !errors.Is(err, boom) {
 		t.Fatalf("expected wrapped boom error, got %v", err)
 	}

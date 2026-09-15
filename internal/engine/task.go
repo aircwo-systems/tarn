@@ -570,39 +570,55 @@ func (e *Engine) WaitTaskContainer(ctx context.Context, containerID string) (int
 
 // scanDemuxedLines decodes a Docker-multiplexed stdout/stderr stream and
 // delivers each line to onLine as it is produced, blocking until muxed
-// reaches EOF or errors. It is factored out of FollowContainerLogs so the
-// decoding can be unit tested against a fake multiplexed reader with no
-// Docker daemon involved, the same way readContainerLogStream is tested by
+// reaches EOF or errors. The stderr flag tells which stream a line came
+// from: Docker multiplexes the two, and downstream classifiers (e.g. ECS log
+// levels) cannot recover that signal from the line content alone. It is
+// factored out of FollowContainerLogs so the decoding can be unit tested
+// against a fake multiplexed reader with no Docker daemon involved, the
+// same way readContainerLogStream is tested by
 // TestReadContainerLogStreamPreservesInterleaving in container_test.go —
 // this is the streaming counterpart of that one-shot helper, built on the
 // same stdcopy demux rather than a reimplementation of it.
-func scanDemuxedLines(muxed io.Reader, onLine func(line string)) error {
-	pr, pw := io.Pipe()
+func scanDemuxedLines(muxed io.Reader, onLine func(line string, stderr bool)) error {
+	outR, outW := io.Pipe()
+	errR, errW := io.Pipe()
 	copyDone := make(chan error, 1)
 	go func() {
-		_, err := stdcopy.StdCopy(pw, pw, muxed)
+		_, err := stdcopy.StdCopy(outW, errW, muxed)
 		copyDone <- err
-		_ = pw.CloseWithError(err)
+		_ = outW.CloseWithError(err)
+		_ = errW.CloseWithError(err)
 	}()
 
-	scanner := bufio.NewScanner(pr)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		onLine(scanner.Text())
+	scan := func(r *io.PipeReader, stderr bool) {
+		scanner := bufio.NewScanner(r)
+		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			onLine(scanner.Text(), stderr)
+		}
 	}
 
-	copyErr := <-copyDone
-	if scanErr := scanner.Err(); scanErr != nil {
-		return scanErr
-	}
-	return copyErr
+	// Drain stderr in the background while stdout is scanned on the caller
+	// goroutine, so at least one stream's callback ordering stays exactly
+	// as before. Cross-stream interleaving at delivery is arrival-ordered,
+	// which matches how consumers timestamp lines on receipt.
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		scan(errR, true)
+	}()
+	scan(outR, false)
+	wg.Wait()
+
+	return <-copyDone
 }
 
 // FollowContainerLogs streams a running container's logs with follow
 // enabled, delivering decoded lines to onLine until the container stops or
 // ctx is cancelled. It does not format, classify or parse lines — T7
 // decides where they go (CreateLogGroup/PutLogEvents per the design doc).
-func (e *Engine) FollowContainerLogs(ctx context.Context, containerID string, onLine func(line string)) error {
+func (e *Engine) FollowContainerLogs(ctx context.Context, containerID string, onLine func(line string, stderr bool)) error {
 	reader, err := e.client.ContainerLogs(ctx, containerID, container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,

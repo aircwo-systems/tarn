@@ -3,6 +3,7 @@ package ecs
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -51,6 +52,16 @@ type fakeEngine struct {
 	// need to tell a graceful exit apart from a context-canceled one set it
 	// to something else (e.g. 143, SIGTERM's conventional code).
 	stopExitCode int64
+	// scriptLines, when set, are delivered to the FollowContainerLogs
+	// callback (with their stream flags) before it blocks on ctx, letting
+	// pumpLogs tests feed deterministic stdout/stderr output with no Docker.
+	scriptLines []scriptLogLine
+}
+
+// scriptLogLine is one canned container log line for fakeEngine.
+type scriptLogLine struct {
+	line   string
+	stderr bool
 }
 
 func newFakeEngine() *fakeEngine {
@@ -129,8 +140,14 @@ func (f *fakeEngine) WaitTaskContainer(ctx context.Context, containerID string) 
 	}
 }
 
-func (f *fakeEngine) FollowContainerLogs(ctx context.Context, containerID string, onLine func(line string)) error {
+func (f *fakeEngine) FollowContainerLogs(ctx context.Context, containerID string, onLine func(line string, stderr bool)) error {
 	f.record("logs-start:" + containerID)
+	f.mu.Lock()
+	lines := append([]scriptLogLine(nil), f.scriptLines...)
+	f.mu.Unlock()
+	for _, l := range lines {
+		onLine(l.line, l.stderr)
+	}
 	<-ctx.Done()
 	f.record("logs-done:" + containerID)
 	return ctx.Err()
@@ -1748,6 +1765,58 @@ func TestServiceLaunchBackoffGrowsOnRepeatedInstantCrashes(t *testing.T) {
 	for i := 1; i < len(delays); i++ {
 		if delays[i] <= delays[i-1] {
 			t.Fatalf("expected strictly growing backoff delays, got %v", delays)
+		}
+	}
+}
+
+// --- container log levels ----------------------------------------------------
+
+// TestPumpLogsMarksStderrLinesAsError verifies the stderr fix: plain
+// containers carry no level metadata, so anything they write to stderr (e.g.
+// Node's console.error) must surface as ERROR instead of being keyword-filed
+// as INFO. Explicit tokens still win over the stream default.
+func TestPumpLogsMarksStderrLinesAsError(t *testing.T) {
+	r, _, eng, sink := newTestRunner(t)
+	eng.scriptLines = []scriptLogLine{
+		{line: "serving on :8080", stderr: false},
+		{line: "publish attempt 1 failed: HTTP 503", stderr: true},
+		{line: "WARN retrying in 100ms", stderr: true},
+		{line: "boom: unexpected ERROR talking to queue", stderr: false},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		r.pumpLogs(ctx, "/ecs/test", "stream-1", "container-1")
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		sink.mu.Lock()
+		n := len(sink.events)
+		sink.mu.Unlock()
+		if n >= 4 {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatalf("timed out waiting for pumped events, got %d", n)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.events) != 4 {
+		t.Fatalf("events = %d, want 4", len(sink.events))
+	}
+	wantLevels := []logs.LogLevel{logs.LevelINFO, logs.LevelERROR, logs.LevelWARN, logs.LevelERROR}
+	for i, want := range wantLevels {
+		if sink.events[i].Level != want {
+			t.Errorf("event %d (%q): level = %s, want %s", i, sink.events[i].Message, sink.events[i].Level, want)
 		}
 	}
 }

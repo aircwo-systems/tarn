@@ -80,7 +80,7 @@ type taskEngine interface {
 	EnsureImageRef(ctx context.Context, ref string) error
 	CreateAndStartTaskContainer(ctx context.Context, spec engine.TaskContainerSpec) (*engine.TaskContainerHandle, error)
 	WaitTaskContainer(ctx context.Context, containerID string) (int64, error)
-	FollowContainerLogs(ctx context.Context, containerID string, onLine func(line string)) error
+	FollowContainerLogs(ctx context.Context, containerID string, onLine func(line string, stderr bool)) error
 	ListContainersByLabel(ctx context.Context, selector map[string]string) ([]engine.TaskContainerSummary, error)
 	RemoveTaskContainer(ctx context.Context, containerID string) error
 	StopContainer(ctx context.Context, containerID string) error
@@ -1404,11 +1404,20 @@ func taskRanStabilityWindow(task *types.Task) bool {
 // produce (see docs/design/ecs-support.md).
 func (r *Runner) pumpLogs(ctx context.Context, logGroup, streamName, containerID string) {
 	r.logs.CreateLogGroup(logGroup)
-	err := r.eng.FollowContainerLogs(ctx, containerID, func(line string) {
+	err := r.eng.FollowContainerLogs(ctx, containerID, func(line string, stderr bool) {
+		level := logs.DetectLevel(line)
+		if stderr && level == logs.LevelINFO {
+			// Plain containers carry no level metadata: anything they write
+			// to stderr is error output (e.g. Node's console.error), but
+			// keyword detection alone would file "failed: HTTP 503" as INFO.
+			// Only the unclassified default is upgraded — an explicit WARN
+			// or DEBUG token stays as detected.
+			level = logs.LevelERROR
+		}
 		r.logs.PutLogEvents(logGroup, streamName, []logs.LogEvent{{
 			Timestamp:  time.Now().UTC(),
 			Message:    line,
-			Level:      logs.DetectLevel(line),
+			Level:      level,
 			Source:     logs.SourceOutput,
 			StreamName: streamName,
 		}})
