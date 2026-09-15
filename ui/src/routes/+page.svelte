@@ -60,6 +60,11 @@
     resolveDirectPrototypeFilter,
     extractTagOnlyFilterQuery,
   } from "$lib/filter-utils";
+  import {
+    TabNavigationHistory,
+    tabFromHash,
+    type DashboardTab,
+  } from "$lib/navigation-history";
 
   const dashboard = getDashboard();
   const filters = getDashboardFilters();
@@ -68,8 +73,8 @@
   const accountSettings = getAccountSettings();
 
   // ── Routing ─────────────────────────────────────────────────────
-  const validTabs = ["overview","gateways","chaos","functions","ecs","queues","dynamodb","sns","secrets","triggers","eventbridge","stepfunctions","storage","logs","xray","settings"];
-  let activeTab = $state("overview");
+  const tabHistory = new TabNavigationHistory();
+  let activeTab = $state<DashboardTab>("overview");
   let logsInitialGroup = $state("");
   let logsInitialTimestamp = $state("");
   let logsInitialStream = $state("");
@@ -78,7 +83,9 @@
   function readHash() {
     const raw = window.location.hash.replace("#", "");
     const [tab, qs] = raw.split("?");
-    if (validTabs.includes(tab)) activeTab = tab;
+    const nextTab = tabFromHash(window.location.hash);
+    if (nextTab) activeTab = nextTab;
+    tabHistory.remember(window.location.hash);
     logsInitialGroup = "";
     logsInitialTimestamp = "";
     logsInitialStream = "";
@@ -96,8 +103,11 @@
   }
 
   function setTab(tab: string) {
-    activeTab = tab;
-    window.location.hash = tab;
+    const nextTab = tabFromHash(tab);
+    if (!nextTab) return;
+    tabHistory.remember(window.location.hash);
+    activeTab = nextTab;
+    window.location.hash = tabHistory.destination(nextTab);
   }
 
   function openTrace(traceId: string) {
@@ -111,9 +121,13 @@
   onMount(() => {
     const stopLogPulse = startLogPulse();
     readHash();
-    window.addEventListener("hashchange", readHash);
+    const handleHashChange = (event: HashChangeEvent) => {
+      tabHistory.remember(new URL(event.oldURL).hash);
+      readHash();
+    };
+    window.addEventListener("hashchange", handleHashChange);
     return () => {
-      window.removeEventListener("hashchange", readHash);
+      window.removeEventListener("hashchange", handleHashChange);
       stopLogPulse();
     };
   });
