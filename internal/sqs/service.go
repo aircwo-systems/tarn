@@ -14,17 +14,19 @@ const dlqRetryCountAttribute = "TarnRetryCount"
 
 // Service implements SQS business logic.
 type Service struct {
-	cfg   *config.Config
-	store *Store
-	done  chan struct{}
+	cfg       *config.Config
+	store     *Store
+	disruptor *Disruptor
+	done      chan struct{}
 }
 
 // NewService creates a new SQS service.
 func NewService(cfg *config.Config) *Service {
 	return &Service{
-		cfg:   cfg,
-		store: NewStore(cfg),
-		done:  make(chan struct{}),
+		cfg:       cfg,
+		store:     NewStore(cfg),
+		disruptor: newDisruptor(),
+		done:      make(chan struct{}),
 	}
 }
 
@@ -96,9 +98,39 @@ func (s *Service) GetQueueAttributes(name string, attrNames []string) (map[strin
 	return s.store.GetQueueAttributes(name, attrNames)
 }
 
-// SendMessage sends a message to a queue.
+// SendMessage sends a message to a queue. When a disruptor rule is armed for
+// the queue it may fail with a *DisruptError instead, without persisting
+// anything — this is how partial publish failures are simulated.
 func (s *Service) SendMessage(queueName, body string, delaySec int, attrs map[string]*types.MessageAttribute, groupId, dedupId string) (*types.SQSMessage, error) {
+	if derr := s.disruptor.shouldFail(queueName); derr != nil {
+		return nil, derr
+	}
 	return s.store.SendMessage(queueName, body, delaySec, attrs, groupId, dedupId)
+}
+
+// SetDisruptorRule stores (or replaces) the send-failure rule for a queue.
+func (s *Service) SetDisruptorRule(rule Rule) Rule {
+	return s.disruptor.Set(rule)
+}
+
+// ClearDisruptorRule removes the rule for a queue. Returns true when one existed.
+func (s *Service) ClearDisruptorRule(queueName string) bool {
+	return s.disruptor.Clear(queueName)
+}
+
+// ClearAllDisruptorRules removes every send-failure rule.
+func (s *Service) ClearAllDisruptorRules() {
+	s.disruptor.ClearAll()
+}
+
+// GetDisruptorRule returns the rule for a queue, if any.
+func (s *Service) GetDisruptorRule(queueName string) (Rule, bool) {
+	return s.disruptor.Get(queueName)
+}
+
+// ListDisruptorRules returns all send-failure rules.
+func (s *Service) ListDisruptorRules() []Rule {
+	return s.disruptor.List()
 }
 
 // ReceiveMessage receives messages from a queue, supporting long polling.
