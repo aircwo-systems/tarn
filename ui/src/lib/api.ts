@@ -1,5 +1,7 @@
 import type {
   DisruptorRule,
+  ECSTaskDefinitionDetail,
+  ECSRunTaskResult,
   EventBridgeFireResult,
   EventBridgeRaceResult,
   OverviewResponse,
@@ -494,6 +496,57 @@ export async function clearDisruptorRules(queues?: string[]): Promise<void> {
   if (!response.ok) {
     throw new Error(await extractJSONError(response, `HTTP ${response.status}`));
   }
+}
+
+export interface ECSContainerOverrideInput {
+  name: string;
+  command?: string[];
+  environment?: { name: string; value: string }[];
+}
+
+export interface RunECSTaskInput {
+  cluster?: string;
+  taskDefinition: string;
+  count?: number;
+  launchType?: string;
+  overrides?: {
+    containerOverrides: ECSContainerOverrideInput[];
+  };
+}
+
+export async function describeECSTaskDefinition(
+  family: string,
+  signal?: AbortSignal,
+): Promise<ECSTaskDefinitionDetail> {
+  const response = await fetch(
+    endpoint(`/_tarn/admin/ecs/task-definitions/${encodeURIComponent(family)}`),
+    {
+      method: "GET",
+      headers: { Accept: "application/json", ...accountHeaders() },
+      signal,
+    },
+  );
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `HTTP ${response.status}`));
+  }
+  return (await response.json()) as ECSTaskDefinitionDetail;
+}
+
+export async function runECSTask(input: RunECSTaskInput): Promise<ECSRunTaskResult> {
+  const response = await fetch(endpoint("/_tarn/admin/ecs/run-task"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...accountHeaders(),
+    },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `HTTP ${response.status}`));
+  }
+  const payload = (await response.json()) as ECSRunTaskResult;
+  return { tasks: payload.tasks ?? [], failures: payload.failures ?? [] };
 }
 
 async function hydrateQueueMessages(

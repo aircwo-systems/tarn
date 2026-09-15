@@ -487,6 +487,39 @@ export interface ECSTaskDefinitionSummary {
   status: string;
 }
 
+export interface ECSTaskDefinitionContainer {
+  name: string;
+  image: string;
+  essential: boolean;
+}
+
+export interface ECSTaskDefinitionDetail {
+  family: string;
+  revision: number;
+  status: string;
+  taskDefinitionArn: string;
+  containers: ECSTaskDefinitionContainer[];
+}
+
+export interface ECSLaunchedTask {
+  taskArn: string;
+  clusterArn: string;
+  taskDefinitionArn: string;
+  lastStatus: string;
+  desiredStatus: string;
+}
+
+export interface ECSRunFailure {
+  arn?: string;
+  reason?: string;
+  detail?: string;
+}
+
+export interface ECSRunTaskResult {
+  tasks: ECSLaunchedTask[];
+  failures?: ECSRunFailure[];
+}
+
 export interface LogGroupSummary {
   name: string;
   createdAt: string;

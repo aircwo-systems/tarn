@@ -1,9 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { PlayIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
   import EcsList from "$lib/components/ecs/ecs-list.svelte";
   import EcsDetail from "$lib/components/ecs/ecs-detail.svelte";
-  import { getDashboard } from "$lib/state.svelte";
+  import EcsRunTaskDialog from "$lib/components/ecs/ecs-run-task-dialog.svelte";
+  import { getDashboard, refresh } from "$lib/state.svelte";
   import { ecsKey, type EcsSelection } from "$lib/ecs";
 
   let {
@@ -19,6 +21,7 @@
   const clusters = $derived(ecs?.clusters ?? []);
   const services = $derived(ecs?.services ?? []);
   const tasks = $derived(ecs?.tasks ?? []);
+  const taskDefinitions = $derived(ecs?.taskDefinitions ?? []);
 
   // Keyed by kind + ARN: polling replaces the objects, so holding one would freeze the panel.
   let selectedKey = $state<string | null>(null);
@@ -40,6 +43,27 @@
     history.replaceState(null, "", `#ecs?sel=${encodeURIComponent(selectedKey)}`);
   }
 
+  // Run-task dialog presets follow the current selection: a selected cluster
+  // (or service/task) pre-fills its cluster, and a service/task pre-fills
+  // its task definition for one-click re-runs.
+  let runOpen = $state(false);
+  const runClusterArn = $derived.by((): string | null => {
+    if (!selected) return null;
+    if (selected.kind === "cluster") return selected.resource.arn;
+    return selected.resource.clusterArn ?? null;
+  });
+  const runTaskDefArn = $derived.by((): string | null => {
+    if (!selected || selected.kind === "cluster") return null;
+    return selected.resource.taskDefinitionArn ?? null;
+  });
+
+  async function handleLaunched(taskArns: string[]) {
+    runOpen = false;
+    await refresh();
+    const launched = (dashboard.data?.ecs?.tasks ?? []).find((t) => taskArns.includes(t.arn));
+    if (launched) select({ kind: "task", resource: launched });
+  }
+
   onMount(() => {
     const qs = window.location.hash.split("?")[1];
     const sel = qs ? new URLSearchParams(qs).get("sel") : null;
@@ -53,7 +77,26 @@
     description="{clusters.length} clusters · {services.length} services · {runningTasks} running tasks"
     {sidebarCollapsed}
     {onToggleSidebar}
-  />
+  >
+    {#snippet actions()}
+      {#if clusters.length > 0 && taskDefinitions.length > 0}
+        <button type="button" class="run-btn" onclick={() => (runOpen = true)}>
+          <PlayIcon size={12} weight="fill" />Run task
+        </button>
+      {/if}
+    {/snippet}
+  </SectionHeader>
+
+  {#if runOpen}
+    <EcsRunTaskDialog
+      {clusters}
+      {taskDefinitions}
+      initialClusterArn={runClusterArn}
+      initialTaskDefinitionArn={runTaskDefArn}
+      onclose={() => (runOpen = false)}
+      onlaunched={(arns) => void handleLaunched(arns)}
+    />
+  {/if}
 
   {#if dashboard.loading && !dashboard.data}
     <div class="layout">
@@ -82,6 +125,15 @@
 
 <style>
   .ecs { display: flex; flex-direction: column; min-height: 100%; }
+  .run-btn {
+    display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--accent-green) 40%, transparent);
+    font-size: 11.5px; color: var(--accent-green);
+    transition: color 120ms ease, background 120ms ease, border-color 120ms ease, transform 120ms ease;
+  }
+  .run-btn:hover { background: color-mix(in srgb, var(--accent-green) 10%, transparent); }
+  .run-btn:active { transform: scale(0.96); }
+  .run-btn:focus-visible { outline: 1px solid var(--border-focus); outline-offset: 2px; }
   .layout {
     display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 28px; padding: 20px 0 48px;
     max-width: 1320px;
