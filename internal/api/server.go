@@ -194,6 +194,15 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /_tarn/admin/queues/{name}/messages", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.QueueMessages(w, r)
 	})
+	mux.HandleFunc("GET /_tarn/admin/sqs/disruptor", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.ListDisruptorRules(w, r)
+	})
+	mux.HandleFunc("PUT /_tarn/admin/sqs/disruptor", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.SetDisruptorRules(w, r)
+	})
+	mux.HandleFunc("DELETE /_tarn/admin/sqs/disruptor", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.ClearDisruptorRules(w, r)
+	})
 	mux.HandleFunc("GET /_tarn/admin/logs/groups", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.LogGroups(w, r)
 	})

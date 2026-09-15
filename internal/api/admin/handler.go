@@ -51,6 +51,10 @@ type Handler struct {
 	stepfunctions *stepfunctionssvc.Service
 	ecs           *ecssvc.Service
 	traceStore    *tracesvc.Store
+	// taskRunner launches ECS tasks for the dashboard's run-task trigger.
+	// It is optional: while unset, RunECSTask reports 503 like the AWS
+	// protocol surface does without a runner.
+	taskRunner types.TaskRunner
 }
 
 func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apigatewayv1svc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, sns *snssvc.Service, dynamodb *dynamodbsvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, eventbridge *eventbridgesvc.Service, stepfunctions *stepfunctionssvc.Service, traceStore *tracesvc.Store) *Handler {
@@ -397,6 +401,10 @@ type queueSummary struct {
 	Tags             map[string]string `json:"tags,omitempty"`
 	TagCount         int               `json:"tagCount"`
 	RecentMessages   []queueMessage    `json:"recentMessages,omitempty"`
+	// Disruptor send-failure injection state (in-memory, not persisted).
+	DisruptEnabled     bool   `json:"disruptEnabled"`
+	DisruptFailureRate int    `json:"disruptFailureRate,omitempty"`
+	DisruptCode        string `json:"disruptCode,omitempty"`
 }
 
 type topicSummary struct {
@@ -1044,6 +1052,13 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			Tags:             cloneStringMap(q.Tags),
 			TagCount:         len(q.Tags),
 		}
+		if h.sqs != nil {
+			if rule, ok := h.sqs.GetDisruptorRule(q.QueueName); ok && rule.Enabled {
+				summary.DisruptEnabled = true
+				summary.DisruptFailureRate = rule.FailureRate
+				summary.DisruptCode = rule.Code
+			}
+		}
 
 		if dlqName != "" {
 			resp.Connections = append(resp.Connections, infraConnection{
@@ -1642,6 +1657,146 @@ func parseDLQRetryCount(attrs map[string]*types.MessageAttribute) int {
 		return 0
 	}
 	return value
+}
+
+// disruptorRulePayload is the JSON body for setting SQS send-failure rules.
+// It accepts either a single "queue" or multiple "queues" so the dashboard
+// can target one queue from its detail panel or many from a bulk action.
+type disruptorRulePayload struct {
+	Queue       string   `json:"queue"`
+	Queues      []string `json:"queues"`
+	Enabled     bool     `json:"enabled"`
+	FailureRate int      `json:"failureRate"`
+	Code        string   `json:"code"`
+	Message     string   `json:"message"`
+}
+
+// ListDisruptorRules returns all SQS send-failure rules for this account.
+func (h *Handler) ListDisruptorRules(w http.ResponseWriter, r *http.Request) {
+	if h.sqs == nil {
+		writeError(w, http.StatusServiceUnavailable, "sqs service unavailable")
+		return
+	}
+	rules := h.sqs.ListDisruptorRules()
+	if rules == nil {
+		rules = []sqssvc.Rule{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"rules": rules})
+}
+
+// SetDisruptorRules creates or replaces SQS send-failure rules for one or
+// multiple queues. Rules are in-memory only and do not survive restarts.
+func (h *Handler) SetDisruptorRules(w http.ResponseWriter, r *http.Request) {
+	if h.sqs == nil {
+		writeError(w, http.StatusServiceUnavailable, "sqs service unavailable")
+		return
+	}
+	var req disruptorRulePayload
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	names := collectDisruptorQueues(req)
+	if len(names) == 0 {
+		writeError(w, http.StatusBadRequest, "queue or queues is required")
+		return
+	}
+	if req.FailureRate < 0 || req.FailureRate > 100 {
+		writeError(w, http.StatusBadRequest, "failureRate must be between 0 and 100")
+		return
+	}
+	code := strings.TrimSpace(req.Code)
+	if code == "" {
+		code = sqssvc.DisruptCodeServiceUnavailable
+	}
+	switch code {
+	case sqssvc.DisruptCodeInternalError, sqssvc.DisruptCodeServiceUnavailable, sqssvc.DisruptCodeOverLimit, sqssvc.DisruptCodeThrottling:
+	default:
+		writeError(w, http.StatusBadRequest, "unsupported code: "+code)
+		return
+	}
+	applied := make([]sqssvc.Rule, 0, len(names))
+	for _, name := range names {
+		if _, err := h.sqs.GetQueue(name); err != nil {
+			writeError(w, http.StatusNotFound, "queue not found: "+name)
+			return
+		}
+		applied = append(applied, h.sqs.SetDisruptorRule(sqssvc.Rule{
+			QueueName:   name,
+			Enabled:     req.Enabled,
+			FailureRate: req.FailureRate,
+			Code:        code,
+			Message:     strings.TrimSpace(req.Message),
+		}))
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"rules": applied})
+}
+
+// ClearDisruptorRules removes SQS send-failure rules. Accepts ?queue=<name>,
+// a JSON body {queue|queues}, or ?all=true / empty body to clear everything.
+func (h *Handler) ClearDisruptorRules(w http.ResponseWriter, r *http.Request) {
+	if h.sqs == nil {
+		writeError(w, http.StatusServiceUnavailable, "sqs service unavailable")
+		return
+	}
+	if v := strings.TrimSpace(r.URL.Query().Get("queue")); v != "" {
+		h.sqs.ClearDisruptorRule(v)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"cleared": []string{v}})
+		return
+	}
+	if strings.TrimSpace(r.URL.Query().Get("all")) == "true" {
+		h.sqs.ClearAllDisruptorRules()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"clearedAll": true})
+		return
+	}
+	var req disruptorRulePayload
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&req)
+	}
+	names := collectDisruptorQueues(req)
+	if len(names) == 0 {
+		// No target given: clear everything (bulk "disable disruptor" action).
+		h.sqs.ClearAllDisruptorRules()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"clearedAll": true})
+		return
+	}
+	for _, name := range names {
+		h.sqs.ClearDisruptorRule(name)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"cleared": names})
+}
+
+func collectDisruptorQueues(req disruptorRulePayload) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return
+		}
+		if _, dup := seen[v]; dup {
+			return
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	add(req.Queue)
+	for _, q := range req.Queues {
+		add(q)
+	}
+	return out
 }
 
 // LogGroups returns all log group summaries.
