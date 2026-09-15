@@ -28,8 +28,11 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/volume"
+	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
+	units "github.com/docker/go-units"
 )
 
 // TaskContainerSpec describes a task container to create, independent of
@@ -57,8 +60,16 @@ type TaskContainerSpec struct {
 	// Ports lists container ports to publish. Each is bound to an ephemeral
 	// host port so multiple replicas of the same task definition never
 	// collide; the assigned host ports are read back after start and
-	// returned as NetworkBindings.
+	// returned as NetworkBindings. A port present as a key in FixedHostPorts
+	// with a non-zero value is bound to that exact host port instead.
 	Ports []int
+	// FixedHostPorts maps a container port to a specific host port to bind it
+	// to, mirroring a task definition PortMapping's non-zero HostPort. A
+	// missing entry, or a zero value, keeps the ephemeral-port behavior.
+	// Binding fails (ContainerCreate/ContainerStart returns an error, which
+	// the caller surfaces as the task's StoppedReason) if the host port is
+	// already in use — Tarn does not reserve or queue for fixed ports.
+	FixedHostPorts map[int]int
 	// Labels are applied to the container verbatim. The engine is shared
 	// across accounts, so labels (e.g. tarn.account, tarn.task-arn) are the
 	// only thing preventing cross-account collisions when T7 reconciles or
@@ -85,6 +96,65 @@ type TaskContainerSpec struct {
 	// up for the caller (or none was assigned), in which case the env var is
 	// omitted entirely.
 	CorrelationID string
+
+	// WorkingDirectory maps to Config.WorkingDir. Empty preserves the image's
+	// own default.
+	WorkingDirectory string
+	// User maps to Config.User. Empty preserves the image's own default.
+	User string
+	// StopTimeout is the SIGTERM grace period in seconds used when stopping
+	// the container (StopContainer). Zero means "use the caller's default"
+	// (AWS's own default is 30s; see runner.go's use of this field).
+	StopTimeout int
+	// Ulimits maps to HostConfig.Ulimits.
+	Ulimits []types.Ulimit
+	// DockerLabels are merged into Labels without clobbering Tarn's own
+	// tarn.* keys (see internal/ecs/labels.go): Tarn's keys always win on
+	// collision.
+	DockerLabels map[string]string
+	// ReadonlyRootFilesystem maps to HostConfig.ReadonlyRootfs.
+	ReadonlyRootFilesystem bool
+	// Privileged maps to HostConfig.Privileged.
+	Privileged bool
+	// InitProcessEnabled maps to HostConfig.Init.
+	InitProcessEnabled bool
+	// CapAdd / CapDrop map to HostConfig.CapAdd / CapDrop.
+	CapAdd  []string
+	CapDrop []string
+	// ShmSize maps to HostConfig.ShmSize, in bytes (converted from the ECS
+	// SharedMemorySize MiB value by the caller).
+	ShmSize int64
+	// Tmpfs maps to HostConfig.Tmpfs: containerPath -> mount options string
+	// (Docker's "size=Xm,other-opt" form), converted by the caller from ECS's
+	// Tmpfs shape.
+	Tmpfs map[string]string
+	// Hostname maps to Config.Hostname.
+	Hostname string
+	// DNSServers maps to HostConfig.DNS.
+	DNSServers []string
+	// ExtraHosts are appended to the fixed host.docker.internal entry this
+	// engine always adds for task containers, never replacing it.
+	ExtraHosts []string
+	// Interactive maps to Config.OpenStdin.
+	Interactive bool
+	// PseudoTerminal maps to Config.Tty.
+	PseudoTerminal bool
+	// Binds are additional bind/volume mount specs in Docker's
+	// "source:target[:opts]" form, appended to the event-payload bind mount
+	// this engine may add, never replacing it. Populated by the ECS runner
+	// from Volumes/MountPoints/VolumesFrom resolution.
+	Binds []string
+	// VolumesFrom maps to HostConfig.VolumesFrom (Docker container name or ID
+	// plus optional ":ro"/":rw" suffix), resolved by the caller from the task
+	// definition's VolumesFrom.
+	VolumesFrom []string
+	// HealthCheck maps to Config.Healthcheck. Nil (the common case) leaves
+	// the image's own HEALTHCHECK, if any, in effect. AWS's echo-only-what-was-set
+	// defaults (interval 30s, timeout 5s, retries 3, startPeriod 0) are
+	// applied here at Docker HEALTHCHECK creation time — see
+	// buildTaskHealthCheck — never persisted back onto the caller's
+	// ContainerHealthCheck.
+	HealthCheck *types.ContainerHealthCheck
 }
 
 // defaultTaskAccountID is used for AWS_ACCESS_KEY_ID when neither the spec
@@ -229,16 +299,21 @@ func buildTaskContainerEnv(spec TaskContainerSpec, tarnPort int) []string {
 }
 
 // buildTaskPortBindings builds the ExposedPorts/PortBindings pair for a
-// task container: every requested container port is exposed and bound to
-// an ephemeral host port (empty HostPort lets Docker assign one), so
-// multiple replicas of the same task definition never collide.
-func buildTaskPortBindings(ports []int) (nat.PortSet, nat.PortMap) {
+// task container: every requested container port is exposed and bound to an
+// ephemeral host port (empty HostPort lets Docker assign one), unless fixed
+// gives that port a non-zero host port, in which case it is bound to that
+// exact host port instead.
+func buildTaskPortBindings(ports []int, fixed map[int]int) (nat.PortSet, nat.PortMap) {
 	exposed := nat.PortSet{}
 	bindings := nat.PortMap{}
 	for _, p := range ports {
 		natPort := nat.Port(fmt.Sprintf("%d/tcp", p))
 		exposed[natPort] = struct{}{}
-		bindings[natPort] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: ""}}
+		hostPort := ""
+		if fixed != nil && fixed[p] != 0 {
+			hostPort = strconv.Itoa(fixed[p])
+		}
+		bindings[natPort] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: hostPort}}
 	}
 	return exposed, bindings
 }
@@ -372,6 +447,39 @@ func buildTaskResources(spec TaskContainerSpec) (container.Resources, error) {
 	return resources, nil
 }
 
+// buildTaskHealthCheck maps an ECS ContainerHealthCheck onto Docker's
+// HealthConfig. ECS's Command already uses Docker's own convention
+// (["CMD-SHELL", "..."] or ["CMD", arg0, arg1, ...]), so it passes through
+// unchanged as Test. AWS's defaults (interval 30s, timeout 5s, retries 3,
+// startPeriod 0) apply only here, at container-create time — the stored
+// ContainerHealthCheck itself keeps nil fields nil so DescribeTaskDefinition
+// echoes back exactly what was registered.
+func buildTaskHealthCheck(hc *types.ContainerHealthCheck) *container.HealthConfig {
+	interval := types.DefaultHealthCheckIntervalSeconds
+	if hc.Interval != nil {
+		interval = *hc.Interval
+	}
+	timeout := types.DefaultHealthCheckTimeoutSeconds
+	if hc.Timeout != nil {
+		timeout = *hc.Timeout
+	}
+	retries := types.DefaultHealthCheckRetries
+	if hc.Retries != nil {
+		retries = *hc.Retries
+	}
+	startPeriod := types.DefaultHealthCheckStartPeriodSeconds
+	if hc.StartPeriod != nil {
+		startPeriod = *hc.StartPeriod
+	}
+	return &container.HealthConfig{
+		Test:        hc.Command,
+		Interval:    time.Duration(interval) * time.Second,
+		Timeout:     time.Duration(timeout) * time.Second,
+		StartPeriod: time.Duration(startPeriod) * time.Second,
+		Retries:     retries,
+	}
+}
+
 func buildTaskContainerConfig(spec TaskContainerSpec, tarnPort int) (*container.Config, *container.HostConfig, error) {
 	network, err := resolveTaskNetworkMode(spec.NetworkMode, len(spec.Ports) > 0)
 	if err != nil {
@@ -385,7 +493,7 @@ func buildTaskContainerConfig(spec TaskContainerSpec, tarnPort int) (*container.
 	var exposedPorts nat.PortSet
 	var portBindings nat.PortMap
 	if network.publishPorts {
-		exposedPorts, portBindings = buildTaskPortBindings(spec.Ports)
+		exposedPorts, portBindings = buildTaskPortBindings(spec.Ports, spec.FixedHostPorts)
 	} else {
 		exposedPorts = nat.PortSet{}
 		portBindings = nat.PortMap{}
@@ -395,25 +503,86 @@ func buildTaskContainerConfig(spec TaskContainerSpec, tarnPort int) (*container.
 		Image:        spec.Image,
 		Env:          buildTaskContainerEnv(spec, tarnPort),
 		Cmd:          spec.Command,
-		Labels:       spec.Labels,
+		Labels:       mergeTaskLabels(spec.DockerLabels, spec.Labels),
 		ExposedPorts: exposedPorts,
+		WorkingDir:   spec.WorkingDirectory,
+		User:         spec.User,
+		Hostname:     spec.Hostname,
+		OpenStdin:    spec.Interactive,
+		Tty:          spec.PseudoTerminal,
 	}
 	if len(spec.Entrypoint) > 0 {
 		containerCfg.Entrypoint = spec.Entrypoint
 	}
+	if spec.HealthCheck != nil {
+		containerCfg.Healthcheck = buildTaskHealthCheck(spec.HealthCheck)
+	}
 
 	hostCfg := &container.HostConfig{
-		NetworkMode:  network.dockerMode,
-		PortBindings: portBindings,
-		Resources:    resources,
+		NetworkMode:    network.dockerMode,
+		PortBindings:   portBindings,
+		Resources:      resources,
+		ReadonlyRootfs: spec.ReadonlyRootFilesystem,
+		Privileged:     spec.Privileged,
+		DNS:            spec.DNSServers,
+		VolumesFrom:    spec.VolumesFrom,
+		ShmSize:        spec.ShmSize,
 	}
+	if spec.InitProcessEnabled {
+		init := true
+		hostCfg.Init = &init
+	}
+	if len(spec.CapAdd) > 0 {
+		hostCfg.CapAdd = spec.CapAdd
+	}
+	if len(spec.CapDrop) > 0 {
+		hostCfg.CapDrop = spec.CapDrop
+	}
+	if len(spec.Ulimits) > 0 {
+		hostCfg.Ulimits = make([]*units.Ulimit, 0, len(spec.Ulimits))
+		for _, u := range spec.Ulimits {
+			hostCfg.Ulimits = append(hostCfg.Ulimits, &units.Ulimit{Name: u.Name, Soft: int64(u.SoftLimit), Hard: int64(u.HardLimit)})
+		}
+	}
+	if len(spec.Tmpfs) > 0 {
+		hostCfg.Tmpfs = spec.Tmpfs
+	}
+
+	var binds []string
 	if spec.EventPayloadFile != "" {
-		hostCfg.Binds = []string{fmt.Sprintf("%s:%s:ro", spec.EventPayloadFile, taskPayloadPath)}
+		binds = append(binds, fmt.Sprintf("%s:%s:ro", spec.EventPayloadFile, taskPayloadPath))
 	}
+	binds = append(binds, spec.Binds...)
+	if len(binds) > 0 {
+		hostCfg.Binds = binds
+	}
+
+	extraHosts := []string{}
 	if network.hostGateway {
-		hostCfg.ExtraHosts = []string{taskHostGateway}
+		extraHosts = append(extraHosts, taskHostGateway)
+	}
+	extraHosts = append(extraHosts, spec.ExtraHosts...)
+	if len(extraHosts) > 0 {
+		hostCfg.ExtraHosts = extraHosts
 	}
 	return containerCfg, hostCfg, nil
+}
+
+// mergeTaskLabels merges an ECS container definition's dockerLabels under
+// Tarn's own tarn.* labels (tarnLabels), so a task definition can never
+// clobber the labels reconcile/startup-reaping rely on.
+func mergeTaskLabels(dockerLabels, tarnLabels map[string]string) map[string]string {
+	if len(dockerLabels) == 0 {
+		return tarnLabels
+	}
+	merged := make(map[string]string, len(dockerLabels)+len(tarnLabels))
+	for k, v := range dockerLabels {
+		merged[k] = v
+	}
+	for k, v := range tarnLabels {
+		merged[k] = v
+	}
+	return merged
 }
 
 // CreateAndStartTaskContainer creates and starts an ad-hoc container from an
@@ -568,6 +737,21 @@ func (e *Engine) WaitTaskContainer(ctx context.Context, containerID string) (int
 	}
 }
 
+// InspectContainerHealth returns Docker's inspect Health.Status
+// ("starting"/"healthy"/"unhealthy") for a container created with a
+// HealthCheck (see buildTaskHealthCheck), or "" for one with none — inspect
+// omits State.Health entirely in that case.
+func (e *Engine) InspectContainerHealth(ctx context.Context, containerID string) (string, error) {
+	inspect, err := e.client.ContainerInspect(ctx, containerID)
+	if err != nil {
+		return "", err
+	}
+	if inspect.State == nil || inspect.State.Health == nil {
+		return "", nil
+	}
+	return inspect.State.Health.Status, nil
+}
+
 // scanDemuxedLines decodes a Docker-multiplexed stdout/stderr stream and
 // delivers each line to onLine as it is produced, blocking until muxed
 // reaches EOF or errors. The stderr flag tells which stream a line came
@@ -590,11 +774,16 @@ func scanDemuxedLines(muxed io.Reader, onLine func(line string, stderr bool)) er
 		_ = errW.CloseWithError(err)
 	}()
 
+	// onLine is invoked from two goroutines; serialize it so callers need
+	// no locking of their own.
+	var deliverMu sync.Mutex
 	scan := func(r *io.PipeReader, stderr bool) {
 		scanner := bufio.NewScanner(r)
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
+			deliverMu.Lock()
 			onLine(scanner.Text(), stderr)
+			deliverMu.Unlock()
 		}
 	}
 
@@ -693,4 +882,75 @@ func (e *Engine) removeTaskPayloadFile(containerID string) {
 	if path, ok := e.taskPayloadFiles.LoadAndDelete(containerID); ok {
 		_ = os.Remove(path.(string))
 	}
+}
+
+// EnsureTaskVolume creates a Docker named volume if it doesn't already
+// exist. Docker volume creation is idempotent by name: calling it again for
+// a volume that already exists just returns that volume unchanged (its
+// driver/options/labels are not updated to match this call's), which is
+// exactly the "create if missing, otherwise reuse" semantics ECS volume
+// scoping needs.
+func (e *Engine) EnsureTaskVolume(ctx context.Context, name, driver string, driverOpts, labels map[string]string) error {
+	_, err := e.client.VolumeCreate(ctx, volume.CreateOptions{
+		Name:       name,
+		Driver:     driver,
+		DriverOpts: driverOpts,
+		Labels:     labels,
+	})
+	if err != nil {
+		return fmt.Errorf("create volume %s: %w", name, err)
+	}
+	return nil
+}
+
+// TaskVolumeExists reports whether a Docker volume named name already
+// exists. Used to enforce ECS's dockerVolumeConfiguration.autoprovision=false
+// for a "shared" scope volume: a task referencing one that doesn't already
+// exist must fail to launch rather than silently create it.
+func (e *Engine) TaskVolumeExists(ctx context.Context, name string) (bool, error) {
+	_, err := e.client.VolumeInspect(ctx, name)
+	if err != nil {
+		if client.IsErrNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("inspect volume %s: %w", name, err)
+	}
+	return true, nil
+}
+
+// RemoveTaskVolume removes a Docker named volume by name. Callers treat this
+// as best-effort (log and continue): a volume Docker still considers busy,
+// or one that is already gone, must never block a task from being recorded
+// STOPPED.
+func (e *Engine) RemoveTaskVolume(ctx context.Context, name string) error {
+	if err := e.client.VolumeRemove(ctx, name, false); err != nil {
+		return fmt.Errorf("remove volume %s: %w", name, err)
+	}
+	return nil
+}
+
+// TaskVolumeSummary is one Docker volume matched by ListTaskVolumesByLabel.
+// Labels are included (not just Name) so a caller can read back which task
+// it belongs to without having to reconstruct that from the name.
+type TaskVolumeSummary struct {
+	Name   string
+	Labels map[string]string
+}
+
+// ListTaskVolumesByLabel lists every Docker volume whose labels match every
+// key/value pair in selector, the volume counterpart of
+// ListContainersByLabel. Used at startup recovery to find task-scoped
+// volumes left behind by tasks that no longer exist in the store.
+func (e *Engine) ListTaskVolumesByLabel(ctx context.Context, selector map[string]string) ([]TaskVolumeSummary, error) {
+	resp, err := e.client.VolumeList(ctx, volume.ListOptions{Filters: buildLabelFilterArgs(selector)})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list volumes by label: %w", err)
+	}
+	out := make([]TaskVolumeSummary, 0, len(resp.Volumes))
+	for _, v := range resp.Volumes {
+		if v != nil {
+			out = append(out, TaskVolumeSummary{Name: v.Name, Labels: v.Labels})
+		}
+	}
+	return out, nil
 }

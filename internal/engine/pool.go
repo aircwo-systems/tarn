@@ -85,7 +85,7 @@ func (wp *WarmPool) evictIdle() {
 	ctx := context.Background()
 	for _, info := range toEvict {
 		log.Printf("[warm-pool] evicting idle container for %s (idle %s)", info.FunctionName, time.Since(info.LastInvoked))
-		if err := wp.engine.StopContainer(ctx, info.ID); err != nil {
+		if err := wp.engine.StopContainer(ctx, info.ID, 0); err != nil {
 			log.Printf("[warm-pool] error stopping container %s: %v", info.ID[:12], err)
 		}
 		// RemoveContainer drops it from its function's pool slice.

@@ -142,6 +142,10 @@ type ecsServiceSummary struct {
 	PendingCount      int    `json:"pendingCount"`
 	Status            string `json:"status"`
 	LaunchType        string `json:"launchType,omitempty"`
+	// ProxyURL reaches this service's running tasks through Tarn's /_ecs/
+	// reverse proxy at a stable URL, round-robining across replicas — unlike
+	// a task container's host port, it survives task restarts.
+	ProxyURL string `json:"proxyUrl,omitempty"`
 }
 
 type ecsTaskSummary struct {
@@ -1248,7 +1252,7 @@ func (h *Handler) listECSOverview() *ecsOverview {
 				break
 			}
 			for _, arn := range definitions.TaskDefinitionArns {
-				described, describeErr := h.ecs.DescribeTaskDefinition(arn)
+				described, describeErr := h.ecs.DescribeTaskDefinition(arn, nil)
 				if describeErr != nil || described == nil || described.TaskDefinition == nil {
 					continue
 				}
@@ -1299,7 +1303,7 @@ func (h *Handler) listECSOverview() *ecsOverview {
 			})
 			if describeErr == nil && serviceDetails != nil {
 				for _, service := range serviceDetails.Services {
-					overview.Services = append(overview.Services, ecsServiceSummary{
+					summary := ecsServiceSummary{
 						Name:              service.ServiceName,
 						Arn:               service.ServiceArn,
 						ClusterArn:        service.ClusterArn,
@@ -1309,7 +1313,12 @@ func (h *Handler) listECSOverview() *ecsOverview {
 						PendingCount:      service.PendingCount,
 						Status:            service.Status,
 						LaunchType:        service.LaunchType,
-					})
+					}
+					if endpoint := h.cfg.Endpoint(); endpoint != "" && h.cfg.AccountID != "" {
+						summary.ProxyURL = endpoint + "/_ecs/" + h.cfg.AccountID + "/" +
+							cluster.ClusterName + "/" + service.ServiceName + "/"
+					}
+					overview.Services = append(overview.Services, summary)
 				}
 			}
 		}
@@ -1936,7 +1945,7 @@ func (h *Handler) ECSTaskDefinition(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "task definition family is required")
 		return
 	}
-	described, err := h.ecs.DescribeTaskDefinition(family)
+	described, err := h.ecs.DescribeTaskDefinition(family, nil)
 	if err != nil || described == nil || described.TaskDefinition == nil {
 		status := http.StatusNotFound
 		msg := "task definition not found: " + family

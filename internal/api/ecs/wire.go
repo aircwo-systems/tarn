@@ -13,13 +13,22 @@ import (
 // boundary to the camelCase, epoch-seconds shape used by ECS clients.
 
 type wireCluster struct {
-	ClusterName                       string `json:"clusterName"`
-	ClusterArn                        string `json:"clusterArn"`
-	Status                            string `json:"status"`
-	RegisteredContainerInstancesCount int    `json:"registeredContainerInstancesCount"`
-	RunningTasksCount                 int    `json:"runningTasksCount"`
-	PendingTasksCount                 int    `json:"pendingTasksCount"`
-	ActiveServicesCount               int    `json:"activeServicesCount"`
+	ClusterName                       string    `json:"clusterName"`
+	ClusterArn                        string    `json:"clusterArn"`
+	Status                            string    `json:"status"`
+	RegisteredContainerInstancesCount int       `json:"registeredContainerInstancesCount"`
+	RunningTasksCount                 int       `json:"runningTasksCount"`
+	PendingTasksCount                 int       `json:"pendingTasksCount"`
+	ActiveServicesCount               int       `json:"activeServicesCount"`
+	Tags                              []wireTag `json:"tags,omitempty"`
+}
+
+// wireTag mirrors the AWS ECS Tag shape. Unlike most ECS wire fields, its
+// member names are lowercase "key"/"value" even before the general
+// PascalCase->camelCase translation this file otherwise applies.
+type wireTag struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 type wireTaskDefinition struct {
@@ -33,20 +42,181 @@ type wireTaskDefinition struct {
 	Status                  string                    `json:"status"`
 	RequiresCompatibilities []string                  `json:"requiresCompatibilities,omitempty"`
 	RegisteredAt            *float64                  `json:"registeredAt,omitempty"`
+
+	TaskRoleArn          string                    `json:"taskRoleArn,omitempty"`
+	ExecutionRoleArn     string                    `json:"executionRoleArn,omitempty"`
+	PidMode              string                    `json:"pidMode,omitempty"`
+	IpcMode              string                    `json:"ipcMode,omitempty"`
+	RuntimePlatform      *wireRuntimePlatform      `json:"runtimePlatform,omitempty"`
+	EphemeralStorage     *wireEphemeralStorage     `json:"ephemeralStorage,omitempty"`
+	Volumes              []wireVolume              `json:"volumes,omitempty"`
+	PlacementConstraints []wirePlacementConstraint `json:"placementConstraints,omitempty"`
+}
+
+type wireRuntimePlatform struct {
+	CpuArchitecture       string `json:"cpuArchitecture,omitempty"`
+	OperatingSystemFamily string `json:"operatingSystemFamily,omitempty"`
+}
+
+type wireEphemeralStorage struct {
+	SizeInGiB int `json:"sizeInGiB,omitempty"`
+}
+
+type wirePlacementConstraint struct {
+	Type       string `json:"type,omitempty"`
+	Expression string `json:"expression,omitempty"`
+}
+
+type wireVolume struct {
+	Name                      string                      `json:"name"`
+	Host                      *wireHostVolumeProperties   `json:"host,omitempty"`
+	DockerVolumeConfiguration *wireDockerVolumeConfig     `json:"dockerVolumeConfiguration,omitempty"`
+	EfsVolumeConfiguration    *wireEFSVolumeConfiguration `json:"efsVolumeConfiguration,omitempty"`
+}
+
+type wireHostVolumeProperties struct {
+	SourcePath string `json:"sourcePath,omitempty"`
+}
+
+type wireDockerVolumeConfig struct {
+	Scope         string            `json:"scope,omitempty"`
+	Autoprovision bool              `json:"autoprovision,omitempty"`
+	Driver        string            `json:"driver,omitempty"`
+	DriverOpts    map[string]string `json:"driverOpts,omitempty"`
+	Labels        map[string]string `json:"labels,omitempty"`
+}
+
+type wireEFSVolumeConfiguration struct {
+	FileSystemId          string                      `json:"fileSystemId,omitempty"`
+	RootDirectory         string                      `json:"rootDirectory,omitempty"`
+	TransitEncryption     string                      `json:"transitEncryption,omitempty"`
+	TransitEncryptionPort int                         `json:"transitEncryptionPort,omitempty"`
+	AuthorizationConfig   *wireEFSAuthorizationConfig `json:"authorizationConfig,omitempty"`
+}
+
+type wireEFSAuthorizationConfig struct {
+	AccessPointId string `json:"accessPointId,omitempty"`
+	IAM           string `json:"iam,omitempty"`
 }
 
 type wireContainerDefinition struct {
-	Name              string                `json:"name"`
-	Image             string                `json:"image"`
-	Command           []string              `json:"command,omitempty"`
-	EntryPoint        []string              `json:"entryPoint,omitempty"`
-	Environment       []wireKeyValuePair    `json:"environment,omitempty"`
-	PortMappings      []wirePortMapping     `json:"portMappings,omitempty"`
-	LogConfiguration  *wireLogConfiguration `json:"logConfiguration,omitempty"`
-	Essential         *bool                 `json:"essential,omitempty"`
-	Cpu               int                   `json:"cpu,omitempty"`
-	Memory            int                   `json:"memory,omitempty"`
-	MemoryReservation int                   `json:"memoryReservation,omitempty"`
+	Name              string                    `json:"name"`
+	Image             string                    `json:"image"`
+	Command           []string                  `json:"command,omitempty"`
+	EntryPoint        []string                  `json:"entryPoint,omitempty"`
+	Environment       []wireKeyValuePair        `json:"environment,omitempty"`
+	PortMappings      []wirePortMapping         `json:"portMappings,omitempty"`
+	LogConfiguration  *wireLogConfiguration     `json:"logConfiguration,omitempty"`
+	Essential         *bool                     `json:"essential,omitempty"`
+	Cpu               int                       `json:"cpu,omitempty"`
+	Memory            int                       `json:"memory,omitempty"`
+	MemoryReservation int                       `json:"memoryReservation,omitempty"`
+	Secrets           []wireContainerSecret     `json:"secrets,omitempty"`
+	HealthCheck       *wireContainerHealthCheck `json:"healthCheck,omitempty"`
+	DependsOn         []wireContainerDependency `json:"dependsOn,omitempty"`
+
+	WorkingDirectory string            `json:"workingDirectory,omitempty"`
+	User             string            `json:"user,omitempty"`
+	StopTimeout      int               `json:"stopTimeout,omitempty"`
+	StartTimeout     int               `json:"startTimeout,omitempty"`
+	Ulimits          []wireUlimit      `json:"ulimits,omitempty"`
+	DockerLabels     map[string]string `json:"dockerLabels,omitempty"`
+	MountPoints      []wireMountPoint  `json:"mountPoints,omitempty"`
+	VolumesFrom      []wireVolumeFrom  `json:"volumesFrom,omitempty"`
+
+	ReadonlyRootFilesystem *bool                `json:"readonlyRootFilesystem,omitempty"`
+	Privileged             *bool                `json:"privileged,omitempty"`
+	LinuxParameters        *wireLinuxParameters `json:"linuxParameters,omitempty"`
+
+	Hostname       string              `json:"hostname,omitempty"`
+	DnsServers     []string            `json:"dnsServers,omitempty"`
+	ExtraHosts     []wireHostEntry     `json:"extraHosts,omitempty"`
+	Interactive    *bool               `json:"interactive,omitempty"`
+	PseudoTerminal *bool               `json:"pseudoTerminal,omitempty"`
+	SystemControls []wireSystemControl `json:"systemControls,omitempty"`
+
+	EnvironmentFiles      []wireEnvironmentFile      `json:"environmentFiles,omitempty"`
+	RepositoryCredentials *wireRepositoryCredentials `json:"repositoryCredentials,omitempty"`
+	FirelensConfiguration *wireFirelensConfiguration `json:"firelensConfiguration,omitempty"`
+}
+
+type wireUlimit struct {
+	Name      string `json:"name"`
+	SoftLimit int    `json:"softLimit"`
+	HardLimit int    `json:"hardLimit"`
+}
+
+type wireMountPoint struct {
+	SourceVolume  string `json:"sourceVolume,omitempty"`
+	ContainerPath string `json:"containerPath,omitempty"`
+	ReadOnly      bool   `json:"readOnly,omitempty"`
+}
+
+type wireVolumeFrom struct {
+	SourceContainer string `json:"sourceContainer,omitempty"`
+	ReadOnly        bool   `json:"readOnly,omitempty"`
+}
+
+type wireLinuxParameters struct {
+	InitProcessEnabled *bool                   `json:"initProcessEnabled,omitempty"`
+	Capabilities       *wireKernelCapabilities `json:"capabilities,omitempty"`
+	SharedMemorySize   int                     `json:"sharedMemorySize,omitempty"`
+	Tmpfs              []wireTmpfs             `json:"tmpfs,omitempty"`
+}
+
+type wireKernelCapabilities struct {
+	Add  []string `json:"add,omitempty"`
+	Drop []string `json:"drop,omitempty"`
+}
+
+type wireTmpfs struct {
+	ContainerPath string   `json:"containerPath,omitempty"`
+	Size          int      `json:"size,omitempty"`
+	MountOptions  []string `json:"mountOptions,omitempty"`
+}
+
+type wireHostEntry struct {
+	Hostname  string `json:"hostname,omitempty"`
+	IpAddress string `json:"ipAddress,omitempty"`
+}
+
+type wireSystemControl struct {
+	Namespace string `json:"namespace,omitempty"`
+	Value     string `json:"value,omitempty"`
+}
+
+type wireEnvironmentFile struct {
+	Value string `json:"value,omitempty"`
+	Type  string `json:"type,omitempty"`
+}
+
+type wireRepositoryCredentials struct {
+	CredentialsParameter string `json:"credentialsParameter,omitempty"`
+}
+
+type wireFirelensConfiguration struct {
+	Type    string            `json:"type,omitempty"`
+	Options map[string]string `json:"options,omitempty"`
+}
+
+// wireContainerSecret echoes ValueFrom verbatim (it is a reference, not a
+// value) — never the resolved secret value.
+type wireContainerSecret struct {
+	Name      string `json:"name"`
+	ValueFrom string `json:"valueFrom"`
+}
+
+type wireContainerHealthCheck struct {
+	Command     []string `json:"command,omitempty"`
+	Interval    *int     `json:"interval,omitempty"`
+	Timeout     *int     `json:"timeout,omitempty"`
+	Retries     *int     `json:"retries,omitempty"`
+	StartPeriod *int     `json:"startPeriod,omitempty"`
+}
+
+type wireContainerDependency struct {
+	ContainerName string `json:"containerName"`
+	Condition     string `json:"condition"`
 }
 
 type wirePortMapping struct {
@@ -83,6 +253,7 @@ type wireService struct {
 	DeploymentConfiguration *wireDeploymentConfiguration `json:"deploymentConfiguration,omitempty"`
 	EnableECSManagedTags    bool                         `json:"enableECSManagedTags,omitempty"`
 	PropagateTags           string                       `json:"propagateTags,omitempty"`
+	Tags                    []wireTag                    `json:"tags,omitempty"`
 }
 
 type wireNetworkConfiguration struct {
@@ -132,6 +303,27 @@ type wireTask struct {
 	StoppedAt         *float64            `json:"stoppedAt,omitempty"`
 	StoppedReason     string              `json:"stoppedReason,omitempty"`
 	CreatedAt         *float64            `json:"createdAt,omitempty"`
+	Tags              []wireTag           `json:"tags,omitempty"`
+	HealthStatus      string              `json:"healthStatus,omitempty"`
+	Overrides         *wireTaskOverride   `json:"overrides,omitempty"`
+}
+
+type wireTaskOverride struct {
+	ContainerOverrides []wireContainerOverride `json:"containerOverrides,omitempty"`
+	Cpu                string                  `json:"cpu,omitempty"`
+	Memory             string                  `json:"memory,omitempty"`
+	TaskRoleArn        string                  `json:"taskRoleArn,omitempty"`
+	ExecutionRoleArn   string                  `json:"executionRoleArn,omitempty"`
+}
+
+type wireContainerOverride struct {
+	Name              string                `json:"name"`
+	Command           []string              `json:"command,omitempty"`
+	Environment       []wireKeyValuePair    `json:"environment,omitempty"`
+	Cpu               int                   `json:"cpu,omitempty"`
+	Memory            int                   `json:"memory,omitempty"`
+	MemoryReservation int                   `json:"memoryReservation,omitempty"`
+	EnvironmentFiles  []wireEnvironmentFile `json:"environmentFiles,omitempty"`
 }
 
 type wireTaskContainer struct {
@@ -142,6 +334,7 @@ type wireTaskContainer struct {
 	ExitCode        *int64               `json:"exitCode,omitempty"`
 	Reason          string               `json:"reason,omitempty"`
 	NetworkBindings []wireNetworkBinding `json:"networkBindings,omitempty"`
+	HealthStatus    string               `json:"healthStatus,omitempty"`
 }
 
 type wireNetworkBinding struct {
@@ -166,12 +359,24 @@ type wireDescribeClustersOutput struct {
 	Failures []wireFailure `json:"failures,omitempty"`
 }
 
+// wireRegisterTaskDefinitionOutput carries Tags at the top level, alongside
+// TaskDefinition, never inside it — matching real ECS's
+// RegisterTaskDefinitionResponse shape.
 type wireRegisterTaskDefinitionOutput struct {
 	TaskDefinition *wireTaskDefinition `json:"taskDefinition"`
+	Tags           []wireTag           `json:"tags,omitempty"`
 }
 
+// wireDescribeTaskDefinitionOutput carries Tags at the top level (only when
+// the request's Include contained "TAGS"), never inside TaskDefinition —
+// matching real ECS's DescribeTaskDefinitionResponse shape.
 type wireDescribeTaskDefinitionOutput struct {
 	TaskDefinition *wireTaskDefinition `json:"taskDefinition"`
+	Tags           []wireTag           `json:"tags,omitempty"`
+}
+
+type wireListTagsForResourceOutput struct {
+	Tags []wireTag `json:"tags"`
 }
 
 type wireRunTaskOutput struct {
@@ -231,19 +436,26 @@ func ecsWireBody(body any) any {
 	case deleteClusterOutput:
 		return wireCreateClusterOutput{Cluster: wireClusterPtr(value.Cluster)}
 	case types.RegisterTaskDefinitionOutput:
-		return wireRegisterTaskDefinitionOutput{TaskDefinition: wireTaskDefinitionPtr(value.TaskDefinition)}
+		return wireRegisterTaskDefinitionOutput{TaskDefinition: wireTaskDefinitionPtr(value.TaskDefinition), Tags: wireTags(value.Tags)}
 	case *types.RegisterTaskDefinitionOutput:
 		if value == nil {
 			return (*wireRegisterTaskDefinitionOutput)(nil)
 		}
-		return wireRegisterTaskDefinitionOutput{TaskDefinition: wireTaskDefinitionPtr(value.TaskDefinition)}
+		return wireRegisterTaskDefinitionOutput{TaskDefinition: wireTaskDefinitionPtr(value.TaskDefinition), Tags: wireTags(value.Tags)}
 	case types.DescribeTaskDefinitionOutput:
-		return wireDescribeTaskDefinitionOutput{TaskDefinition: wireTaskDefinitionPtr(value.TaskDefinition)}
+		return wireDescribeTaskDefinitionOutput{TaskDefinition: wireTaskDefinitionPtr(value.TaskDefinition), Tags: wireTags(value.Tags)}
 	case *types.DescribeTaskDefinitionOutput:
 		if value == nil {
 			return (*wireDescribeTaskDefinitionOutput)(nil)
 		}
-		return wireDescribeTaskDefinitionOutput{TaskDefinition: wireTaskDefinitionPtr(value.TaskDefinition)}
+		return wireDescribeTaskDefinitionOutput{TaskDefinition: wireTaskDefinitionPtr(value.TaskDefinition), Tags: wireTags(value.Tags)}
+	case types.ListTagsForResourceOutput:
+		return wireListTagsForResourceOutput{Tags: wireTagsOrEmpty(value.Tags)}
+	case *types.ListTagsForResourceOutput:
+		if value == nil {
+			return (*wireListTagsForResourceOutput)(nil)
+		}
+		return wireListTagsForResourceOutput{Tags: wireTagsOrEmpty(value.Tags)}
 	case types.ListTaskDefinitionsOutput:
 		return wireStringList(value.TaskDefinitionArns, "taskDefinitionArns", value.NextToken)
 	case *types.ListTaskDefinitionsOutput:
@@ -402,7 +614,30 @@ func wireClusterValue(value types.Cluster) wireCluster {
 		RunningTasksCount:                 value.RunningTasksCount,
 		PendingTasksCount:                 value.PendingTasksCount,
 		ActiveServicesCount:               value.ActiveServicesCount,
+		Tags:                              wireTags(value.Tags),
 	}
+}
+
+// wireTags converts a domain tag list to the wire shape, or nil for an empty
+// list (so "tags" is omitted rather than emitted as []).
+func wireTags(values []types.Tag) []wireTag {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]wireTag, len(values))
+	for i, t := range values {
+		out[i] = wireTag{Key: t.Key, Value: t.Value}
+	}
+	return out
+}
+
+// wireTagsOrEmpty is like wireTags but returns [] rather than nil for an
+// empty list, matching ListTagsForResource's always-present "tags" array.
+func wireTagsOrEmpty(values []types.Tag) []wireTag {
+	if tags := wireTags(values); tags != nil {
+		return tags
+	}
+	return []wireTag{}
 }
 
 func wireTaskDefinitionPtr(value *types.TaskDefinition) *wireTaskDefinition {
@@ -429,7 +664,79 @@ func wireTaskDefinitionValue(value types.TaskDefinition) wireTaskDefinition {
 		Status:                  value.Status,
 		RequiresCompatibilities: value.RequiresCompatibilities,
 		RegisteredAt:            epochSecondsOrNil(value.RegisteredAt),
+
+		TaskRoleArn:          value.TaskRoleArn,
+		ExecutionRoleArn:     value.ExecutionRoleArn,
+		PidMode:              value.PidMode,
+		IpcMode:              value.IpcMode,
+		RuntimePlatform:      wireRuntimePlatformPtr(value.RuntimePlatform),
+		EphemeralStorage:     wireEphemeralStoragePtr(value.EphemeralStorage),
+		Volumes:              wireVolumes(value.Volumes),
+		PlacementConstraints: wirePlacementConstraints(value.PlacementConstraints),
 	}
+}
+
+func wireRuntimePlatformPtr(value *types.RuntimePlatform) *wireRuntimePlatform {
+	if value == nil {
+		return nil
+	}
+	return &wireRuntimePlatform{CpuArchitecture: value.CpuArchitecture, OperatingSystemFamily: value.OperatingSystemFamily}
+}
+
+func wireEphemeralStoragePtr(value *types.EphemeralStorage) *wireEphemeralStorage {
+	if value == nil {
+		return nil
+	}
+	return &wireEphemeralStorage{SizeInGiB: value.SizeInGiB}
+}
+
+func wirePlacementConstraints(values []types.PlacementConstraint) []wirePlacementConstraint {
+	if values == nil {
+		return nil
+	}
+	out := make([]wirePlacementConstraint, len(values))
+	for i, v := range values {
+		out[i] = wirePlacementConstraint{Type: v.Type, Expression: v.Expression}
+	}
+	return out
+}
+
+func wireVolumes(values []types.Volume) []wireVolume {
+	if values == nil {
+		return nil
+	}
+	out := make([]wireVolume, len(values))
+	for i, v := range values {
+		wv := wireVolume{Name: v.Name}
+		if v.Host != nil {
+			wv.Host = &wireHostVolumeProperties{SourcePath: v.Host.SourcePath}
+		}
+		if v.DockerVolumeConfiguration != nil {
+			wv.DockerVolumeConfiguration = &wireDockerVolumeConfig{
+				Scope:         v.DockerVolumeConfiguration.Scope,
+				Autoprovision: v.DockerVolumeConfiguration.Autoprovision,
+				Driver:        v.DockerVolumeConfiguration.Driver,
+				DriverOpts:    v.DockerVolumeConfiguration.DriverOpts,
+				Labels:        v.DockerVolumeConfiguration.Labels,
+			}
+		}
+		if v.EfsVolumeConfiguration != nil {
+			wv.EfsVolumeConfiguration = &wireEFSVolumeConfiguration{
+				FileSystemId:          v.EfsVolumeConfiguration.FileSystemId,
+				RootDirectory:         v.EfsVolumeConfiguration.RootDirectory,
+				TransitEncryption:     v.EfsVolumeConfiguration.TransitEncryption,
+				TransitEncryptionPort: v.EfsVolumeConfiguration.TransitEncryptionPort,
+			}
+			if v.EfsVolumeConfiguration.AuthorizationConfig != nil {
+				wv.EfsVolumeConfiguration.AuthorizationConfig = &wireEFSAuthorizationConfig{
+					AccessPointId: v.EfsVolumeConfiguration.AuthorizationConfig.AccessPointId,
+					IAM:           v.EfsVolumeConfiguration.AuthorizationConfig.IAM,
+				}
+			}
+		}
+		out[i] = wv
+	}
+	return out
 }
 
 func wireContainerDefinitionValue(value types.ContainerDefinition) wireContainerDefinition {
@@ -448,6 +755,30 @@ func wireContainerDefinitionValue(value types.ContainerDefinition) wireContainer
 			Options:   value.LogConfiguration.Options,
 		}
 	}
+	var secrets []wireContainerSecret
+	if value.Secrets != nil {
+		secrets = make([]wireContainerSecret, len(value.Secrets))
+		for i, secret := range value.Secrets {
+			secrets[i] = wireContainerSecret{Name: secret.Name, ValueFrom: secret.ValueFrom}
+		}
+	}
+	var healthCheck *wireContainerHealthCheck
+	if value.HealthCheck != nil {
+		healthCheck = &wireContainerHealthCheck{
+			Command:     value.HealthCheck.Command,
+			Interval:    value.HealthCheck.Interval,
+			Timeout:     value.HealthCheck.Timeout,
+			Retries:     value.HealthCheck.Retries,
+			StartPeriod: value.HealthCheck.StartPeriod,
+		}
+	}
+	var dependsOn []wireContainerDependency
+	if value.DependsOn != nil {
+		dependsOn = make([]wireContainerDependency, len(value.DependsOn))
+		for i, dep := range value.DependsOn {
+			dependsOn[i] = wireContainerDependency{ContainerName: dep.ContainerName, Condition: dep.Condition}
+		}
+	}
 	return wireContainerDefinition{
 		Name:              value.Name,
 		Image:             value.Image,
@@ -460,7 +791,134 @@ func wireContainerDefinitionValue(value types.ContainerDefinition) wireContainer
 		Cpu:               value.Cpu,
 		Memory:            value.Memory,
 		MemoryReservation: value.MemoryReservation,
+		Secrets:           secrets,
+		HealthCheck:       healthCheck,
+		DependsOn:         dependsOn,
+
+		WorkingDirectory: value.WorkingDirectory,
+		User:             value.User,
+		StopTimeout:      value.StopTimeout,
+		StartTimeout:     value.StartTimeout,
+		Ulimits:          wireUlimits(value.Ulimits),
+		DockerLabels:     value.DockerLabels,
+		MountPoints:      wireMountPoints(value.MountPoints),
+		VolumesFrom:      wireVolumesFrom(value.VolumesFrom),
+
+		ReadonlyRootFilesystem: value.ReadonlyRootFilesystem,
+		Privileged:             value.Privileged,
+		LinuxParameters:        wireLinuxParametersPtr(value.LinuxParameters),
+
+		Hostname:       value.Hostname,
+		DnsServers:     value.DnsServers,
+		ExtraHosts:     wireHostEntries(value.ExtraHosts),
+		Interactive:    value.Interactive,
+		PseudoTerminal: value.PseudoTerminal,
+		SystemControls: wireSystemControls(value.SystemControls),
+
+		EnvironmentFiles:      wireEnvironmentFiles(value.EnvironmentFiles),
+		RepositoryCredentials: wireRepositoryCredentialsPtr(value.RepositoryCredentials),
+		FirelensConfiguration: wireFirelensConfigurationPtr(value.FirelensConfiguration),
 	}
+}
+
+func wireUlimits(values []types.Ulimit) []wireUlimit {
+	if values == nil {
+		return nil
+	}
+	out := make([]wireUlimit, len(values))
+	for i, v := range values {
+		out[i] = wireUlimit{Name: v.Name, SoftLimit: v.SoftLimit, HardLimit: v.HardLimit}
+	}
+	return out
+}
+
+func wireMountPoints(values []types.MountPoint) []wireMountPoint {
+	if values == nil {
+		return nil
+	}
+	out := make([]wireMountPoint, len(values))
+	for i, v := range values {
+		out[i] = wireMountPoint{SourceVolume: v.SourceVolume, ContainerPath: v.ContainerPath, ReadOnly: v.ReadOnly}
+	}
+	return out
+}
+
+func wireVolumesFrom(values []types.VolumeFrom) []wireVolumeFrom {
+	if values == nil {
+		return nil
+	}
+	out := make([]wireVolumeFrom, len(values))
+	for i, v := range values {
+		out[i] = wireVolumeFrom{SourceContainer: v.SourceContainer, ReadOnly: v.ReadOnly}
+	}
+	return out
+}
+
+func wireHostEntries(values []types.HostEntry) []wireHostEntry {
+	if values == nil {
+		return nil
+	}
+	out := make([]wireHostEntry, len(values))
+	for i, v := range values {
+		out[i] = wireHostEntry{Hostname: v.Hostname, IpAddress: v.IpAddress}
+	}
+	return out
+}
+
+func wireSystemControls(values []types.SystemControl) []wireSystemControl {
+	if values == nil {
+		return nil
+	}
+	out := make([]wireSystemControl, len(values))
+	for i, v := range values {
+		out[i] = wireSystemControl{Namespace: v.Namespace, Value: v.Value}
+	}
+	return out
+}
+
+func wireEnvironmentFiles(values []types.EnvironmentFile) []wireEnvironmentFile {
+	if values == nil {
+		return nil
+	}
+	out := make([]wireEnvironmentFile, len(values))
+	for i, v := range values {
+		out[i] = wireEnvironmentFile{Value: v.Value, Type: v.Type}
+	}
+	return out
+}
+
+func wireRepositoryCredentialsPtr(value *types.RepositoryCredentials) *wireRepositoryCredentials {
+	if value == nil {
+		return nil
+	}
+	return &wireRepositoryCredentials{CredentialsParameter: value.CredentialsParameter}
+}
+
+func wireFirelensConfigurationPtr(value *types.FirelensConfiguration) *wireFirelensConfiguration {
+	if value == nil {
+		return nil
+	}
+	return &wireFirelensConfiguration{Type: value.Type, Options: value.Options}
+}
+
+func wireLinuxParametersPtr(value *types.LinuxParameters) *wireLinuxParameters {
+	if value == nil {
+		return nil
+	}
+	out := &wireLinuxParameters{
+		InitProcessEnabled: value.InitProcessEnabled,
+		SharedMemorySize:   value.SharedMemorySize,
+	}
+	if value.Capabilities != nil {
+		out.Capabilities = &wireKernelCapabilities{Add: value.Capabilities.Add, Drop: value.Capabilities.Drop}
+	}
+	if value.Tmpfs != nil {
+		out.Tmpfs = make([]wireTmpfs, len(value.Tmpfs))
+		for i, tf := range value.Tmpfs {
+			out.Tmpfs[i] = wireTmpfs{ContainerPath: tf.ContainerPath, Size: tf.Size, MountOptions: tf.MountOptions}
+		}
+	}
+	return out
 }
 
 func wireServicePtr(value *types.ECSService) *wireService {
@@ -491,6 +949,7 @@ func wireServiceValue(value types.ECSService) wireService {
 		DeploymentConfiguration: wireDeploymentConfigurationPtr(value.DeploymentConfiguration),
 		EnableECSManagedTags:    value.EnableECSManagedTags,
 		PropagateTags:           value.PropagateTags,
+		Tags:                    wireTags(value.Tags),
 	}
 }
 
@@ -582,7 +1041,41 @@ func wireTaskValue(value types.Task) wireTask {
 		StoppedAt:         epochSecondsPtr(value.StoppedAt),
 		StoppedReason:     value.StoppedReason,
 		CreatedAt:         epochSecondsOrNil(value.CreatedAt),
+		Tags:              wireTags(value.Tags),
+		HealthStatus:      value.HealthStatus,
+		Overrides:         wireTaskOverridePtr(value.Overrides),
 	}
+}
+
+func wireTaskOverridePtr(value *types.TaskOverride) *wireTaskOverride {
+	if value == nil {
+		return nil
+	}
+	out := &wireTaskOverride{
+		Cpu:              value.Cpu,
+		Memory:           value.Memory,
+		TaskRoleArn:      value.TaskRoleArn,
+		ExecutionRoleArn: value.ExecutionRoleArn,
+	}
+	if value.ContainerOverrides != nil {
+		out.ContainerOverrides = make([]wireContainerOverride, len(value.ContainerOverrides))
+		for i, co := range value.ContainerOverrides {
+			environment := make([]wireKeyValuePair, len(co.Environment))
+			for j, kv := range co.Environment {
+				environment[j] = wireKeyValuePair{Name: kv.Name, Value: kv.Value}
+			}
+			out.ContainerOverrides[i] = wireContainerOverride{
+				Name:              co.Name,
+				Command:           co.Command,
+				Environment:       environment,
+				Cpu:               co.Cpu,
+				Memory:            co.Memory,
+				MemoryReservation: co.MemoryReservation,
+				EnvironmentFiles:  wireEnvironmentFiles(co.EnvironmentFiles),
+			}
+		}
+	}
+	return out
 }
 
 func wireTaskContainerValue(value types.TaskContainer) wireTaskContainer {
@@ -603,6 +1096,7 @@ func wireTaskContainerValue(value types.TaskContainer) wireTaskContainer {
 		ExitCode:        value.ExitCode,
 		Reason:          value.Reason,
 		NetworkBindings: bindings,
+		HealthStatus:    value.HealthStatus,
 	}
 }
 

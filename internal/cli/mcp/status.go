@@ -68,6 +68,10 @@ type ECSServiceInfo struct {
 	DesiredCount int    `json:"desiredCount"`
 	RunningCount int    `json:"runningCount"`
 	PendingCount int    `json:"pendingCount"`
+	// ProxyURL is a stable URL that reaches this service's running tasks
+	// through Tarn's /_ecs/ reverse proxy, round-robining across replicas.
+	// Unlike a container's hostUrl, it doesn't change when tasks restart.
+	ProxyURL string `json:"proxyUrl,omitempty"`
 }
 
 // ECSTaskInfo is one task: its identity, lifecycle status, and the containers
@@ -167,7 +171,9 @@ arguments to the other tarn tools.
 
 When ECS is provisioned, also returns its clusters, services, and tasks. A
 task's containers publish their ports on 127.0.0.1 at an ephemeral host port;
-this reports each as a ready-to-dial hostUrl. A task's logs live in its
+this reports each as a ready-to-dial hostUrl. A service also reports a stable
+proxyUrl (/_ecs/<account>/<cluster>/<service>/) that round-robins across its
+running tasks and survives task restarts, unlike a container's hostUrl. A task's logs live in its
 awslogs group, by convention /ecs/<family>, readable with tarn_get_logs using
 logGroup.
 
@@ -256,14 +262,22 @@ func addStatusTool(s *mcp.Server, c *client) {
 			}
 
 			for _, svc := range ov.ECS.Services {
-				ecs.Services = append(ecs.Services, ECSServiceInfo{
+				info := ECSServiceInfo{
 					Name:         svc.Name,
 					Cluster:      clusterName(svc.ClusterArn),
 					Status:       svc.Status,
 					DesiredCount: svc.DesiredCount,
 					RunningCount: svc.RunningCount,
 					PendingCount: svc.PendingCount,
-				})
+				}
+				// Only set ProxyURL when the cluster ARN actually resolved to a
+				// name: clusterName falls back to the raw ARN on a miss, and an
+				// ARN embedded in a URL path would be garbage, not a usable link.
+				if resolvedName, ok := clusterNames[svc.ClusterArn]; ok && c.endpoint != "" && ov.Config.AccountID != "" {
+					info.ProxyURL = c.endpoint + "/_ecs/" + ov.Config.AccountID + "/" +
+						resolvedName + "/" + svc.Name + "/"
+				}
+				ecs.Services = append(ecs.Services, info)
 			}
 
 			for _, task := range ov.ECS.Tasks {

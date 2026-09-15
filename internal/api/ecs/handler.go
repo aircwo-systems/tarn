@@ -43,6 +43,13 @@ func (h *Handler) SetTaskRunner(runner types.TaskRunner) {
 	h.runner = runner
 }
 
+// Service exposes the underlying control-plane service so callers outside
+// the AWS JSON protocol surface (e.g. the /_ecs/ reverse proxy in
+// internal/api/ecsproxy.go) can resolve clusters/services/tasks directly.
+func (h *Handler) Service() *ecssvc.Service {
+	return h.svc
+}
+
 // IsECSRequest reports whether r targets the ECS JSON protocol, following
 // the IsDynamoDBRequest / IsSNSRequest convention used by sibling handlers.
 func IsECSRequest(r *http.Request) bool {
@@ -100,6 +107,12 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		h.listServices(w, body)
 	case "DescribeServices":
 		h.describeServices(w, body)
+	case "TagResource":
+		h.tagResource(w, body)
+	case "UntagResource":
+		h.untagResource(w, body)
+	case "ListTagsForResource":
+		h.listTagsForResource(w, body)
 	default:
 		log.Printf("[ecs] unhandled action: %s", action)
 		writeError(w, http.StatusBadRequest, "InvalidAction", fmt.Sprintf("Unsupported ECS action: %s", action))
@@ -196,7 +209,7 @@ func (h *Handler) describeTaskDefinition(w http.ResponseWriter, body []byte) {
 		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
 		return
 	}
-	out, err := h.svc.DescribeTaskDefinition(in.TaskDefinition)
+	out, err := h.svc.DescribeTaskDefinition(in.TaskDefinition, in.Include)
 	if err != nil {
 		writeSvcError(w, err)
 		return
@@ -376,6 +389,50 @@ func (h *Handler) describeServices(w http.ResponseWriter, body []byte) {
 		return
 	}
 	out, err := h.svc.DescribeServices(&in)
+	if err != nil {
+		writeSvcError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// --- Tagging ---------------------------------------------------------------
+
+func (h *Handler) tagResource(w http.ResponseWriter, body []byte) {
+	var in types.TagResourceInput
+	if err := decodeJSON(body, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	out, err := h.svc.TagResource(&in)
+	if err != nil {
+		writeSvcError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) untagResource(w http.ResponseWriter, body []byte) {
+	var in types.UntagResourceInput
+	if err := decodeJSON(body, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	out, err := h.svc.UntagResource(&in)
+	if err != nil {
+		writeSvcError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) listTagsForResource(w http.ResponseWriter, body []byte) {
+	var in types.ListTagsForResourceInput
+	if err := decodeJSON(body, &in); err != nil {
+		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	out, err := h.svc.ListTagsForResource(&in)
 	if err != nil {
 		writeSvcError(w, err)
 		return

@@ -63,6 +63,24 @@ func serviceNameFromRef(ref string) string {
 	return ref
 }
 
+// parseServiceArn splits a full "arn:aws:ecs:...:service/<cluster>/<name>"
+// ARN into its cluster and service names. ok is false for anything that
+// isn't a full service ARN (e.g. a bare name), since TagResource/
+// UntagResource/ListTagsForResource need the cluster to look the service up
+// and a bare name alone doesn't carry it.
+func parseServiceArn(ref string) (clusterName, serviceName string, ok bool) {
+	idx := strings.Index(ref, ":service/")
+	if idx < 0 {
+		return "", "", false
+	}
+	rest := ref[idx+len(":service/"):]
+	slash := strings.Index(rest, "/")
+	if slash < 0 {
+		return "", "", false
+	}
+	return rest[:slash], rest[slash+1:], true
+}
+
 // parseTaskDefinitionRef parses a family, "family:revision", or full
 // "arn:aws:ecs:...:task-definition/family:revision" reference. hasRevision is
 // false when the caller gave a bare family name, meaning "latest ACTIVE".

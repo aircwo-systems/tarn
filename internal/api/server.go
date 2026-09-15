@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -427,6 +429,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /{account}/{queue}", s.postAccountDispatch)
 	mux.HandleFunc("POST /", s.postRootDispatch)
 
+	// ECS service reverse proxy — stable URLs for containers that would
+	// otherwise only be reachable on an ephemeral 127.0.0.1 host port.
+	s.registerECSProxyRoutes(mux)
+
 	// Optional dashboard UI (SPA fallback for GET requests only)
 	s.registerUIRoutes(mux)
 }
@@ -592,6 +598,14 @@ func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request)
 	if r.Method != http.MethodPost {
 		return false
 	}
+	if strings.HasPrefix(r.URL.Path, "/_ecs/") {
+		// The ECS reverse proxy (registerECSProxyRoutes) owns this whole
+		// subtree and must see the request untouched: r.ParseForm() below
+		// would drain a form-encoded proxied body before it reaches the
+		// backend, and a proxied request that happens to carry AWS protocol
+		// headers/params must not get hijacked into SNS/DynamoDB/etc.
+		return false
+	}
 
 	hs := s.hs(r)
 
@@ -658,4 +672,18 @@ func (w *statusWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// Hijack delegates to the underlying ResponseWriter if it implements
+// http.Hijacker. Without this, httputil.ReverseProxy's WebSocket upgrade
+// path (used by the /_ecs/ proxy in ecsproxy.go) fails outright:
+// handleUpgradeResponse type-asserts the ResponseWriter it's given directly
+// against http.Hijacker, and every request passes through this wrapper via
+// withLogging before reaching the proxy.
+func (w *statusWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hj, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("underlying ResponseWriter does not support hijacking")
+	}
+	return hj.Hijack()
 }

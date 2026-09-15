@@ -525,6 +525,59 @@ process.on("SIGTERM", () => process.exit(0));`
 		t.Fatalf("unexpected service response: %+v", accepted)
 	}
 
+	// ── Same service, reached through the /_ecs/ reverse proxy ─────────────
+	// Cluster and service share `name` here, so the stable URL is
+	// /_ecs/<account>/<name>/<name>/... . This proves the proxy resolves the
+	// RUNNING task and forwards both a POST (with body/headers) and a GET to
+	// the actual container, without the caller ever learning the ephemeral
+	// host port serviceURL above came from.
+	proxyBase := endpoint + "/_ecs/" + account + "/" + name + "/" + name
+	proxyCorrelationID := "e2e-proxy-corr-" + suffix
+
+	postReq, err := http.NewRequest(http.MethodPost, proxyBase+"/orders", strings.NewReader(order))
+	if err != nil {
+		t.Fatalf("build proxy POST request: %v", err)
+	}
+	postReq.Header.Set("Content-Type", "application/json")
+	postReq.Header.Set("X-Correlation-Id", proxyCorrelationID)
+	postResp, err := http.DefaultClient.Do(postReq)
+	if err != nil {
+		t.Fatalf("POST via /_ecs/ proxy: %v", err)
+	}
+	postBody, _ := io.ReadAll(postResp.Body)
+	postResp.Body.Close()
+	if postResp.StatusCode != http.StatusAccepted {
+		t.Fatalf("POST via /_ecs/ proxy returned %d: %s", postResp.StatusCode, postBody)
+	}
+	var acceptedViaProxy struct {
+		ID            string `json:"id"`
+		Total         int    `json:"total"`
+		CorrelationID string `json:"correlationId"`
+	}
+	if err := json.Unmarshal(postBody, &acceptedViaProxy); err != nil {
+		t.Fatalf("decode proxied service response: %v: %s", err, postBody)
+	}
+	if acceptedViaProxy.ID != orderID || acceptedViaProxy.Total != 17 || acceptedViaProxy.CorrelationID != proxyCorrelationID {
+		t.Fatalf("unexpected proxied service response: %+v", acceptedViaProxy)
+	}
+
+	// A GET the container itself 404s (its handler only accepts POST
+	// /orders); an empty body distinguishes "the container answered" from
+	// Tarn's own proxy-level 404 (which carries a "service not found"/
+	// "cluster not found" message body).
+	getResp, err := http.Get(proxyBase + "/orders")
+	if err != nil {
+		t.Fatalf("GET via /_ecs/ proxy: %v", err)
+	}
+	getBody, _ := io.ReadAll(getResp.Body)
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("GET via /_ecs/ proxy returned %d, want the container's own 404: %s", getResp.StatusCode, getBody)
+	}
+	if len(getBody) != 0 {
+		t.Fatalf("GET via /_ecs/ proxy returned a body, want the container's empty 404: %s", getBody)
+	}
+
 	// ── Verify output over MCP ──────────────────────────────────────────────
 
 	eventually("service publish log", time.Minute, func() (bool, string) {

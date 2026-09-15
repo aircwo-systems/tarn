@@ -156,7 +156,7 @@ func TestRegisterTaskDefinitionRevisioning(t *testing.T) {
 	}
 
 	// Both revisions must stay independently describable.
-	d1, err := svc.DescribeTaskDefinition("web:1")
+	d1, err := svc.DescribeTaskDefinition("web:1", nil)
 	if err != nil {
 		t.Fatalf("DescribeTaskDefinition web:1: %v", err)
 	}
@@ -164,7 +164,7 @@ func TestRegisterTaskDefinitionRevisioning(t *testing.T) {
 		t.Fatalf("expected web:1 to describe revision 1, got %d", d1.TaskDefinition.Revision)
 	}
 
-	d2, err := svc.DescribeTaskDefinition("web:2")
+	d2, err := svc.DescribeTaskDefinition("web:2", nil)
 	if err != nil {
 		t.Fatalf("DescribeTaskDefinition web:2: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestRegisterTaskDefinitionRevisioning(t *testing.T) {
 	}
 
 	// A bare family name resolves to the latest ACTIVE revision.
-	latest, err := svc.DescribeTaskDefinition("web")
+	latest, err := svc.DescribeTaskDefinition("web", nil)
 	if err != nil {
 		t.Fatalf("DescribeTaskDefinition web: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestRegisterTaskDefinitionRevisioning(t *testing.T) {
 	}
 
 	// Full ARN form also resolves.
-	byARN, err := svc.DescribeTaskDefinition(out1.TaskDefinition.TaskDefinitionArn)
+	byARN, err := svc.DescribeTaskDefinition(out1.TaskDefinition.TaskDefinitionArn, nil)
 	if err != nil {
 		t.Fatalf("DescribeTaskDefinition by ARN: %v", err)
 	}
@@ -210,7 +210,7 @@ func TestDeregisterTaskDefinitionMarksInactiveButDescribable(t *testing.T) {
 	}
 
 	// Still describable directly.
-	d, err := svc.DescribeTaskDefinition("web:1")
+	d, err := svc.DescribeTaskDefinition("web:1", nil)
 	if err != nil {
 		t.Fatalf("DescribeTaskDefinition web:1 after deregister: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestDeregisterTaskDefinitionMarksInactiveButDescribable(t *testing.T) {
 
 	// Bare family still resolves to the latest ACTIVE revision (2), skipping
 	// the now-INACTIVE revision 1.
-	latest, err := svc.DescribeTaskDefinition("web")
+	latest, err := svc.DescribeTaskDefinition("web", nil)
 	if err != nil {
 		t.Fatalf("DescribeTaskDefinition web: %v", err)
 	}
@@ -784,7 +784,7 @@ func TestPersistenceSurvivesStoreReload(t *testing.T) {
 		t.Fatalf("expected persisted cluster to survive reload, got %+v", desc.Clusters)
 	}
 
-	tdDesc, err := svc2.DescribeTaskDefinition("web:2")
+	tdDesc, err := svc2.DescribeTaskDefinition("web:2", nil)
 	if err != nil {
 		t.Fatalf("DescribeTaskDefinition after reload: %v", err)
 	}
@@ -1118,5 +1118,269 @@ func TestCreateServiceAcceptsDaemonSchedulingStrategy(t *testing.T) {
 		SchedulingStrategy: "NOT_A_STRATEGY",
 	}); err == nil {
 		t.Fatal("expected an invalid schedulingStrategy to be rejected")
+	}
+}
+
+// --- Tagging --------------------------------------------------------------
+
+// TestCreateClusterTagsAndListTagsForResource guards that tags supplied on
+// CreateCluster are stored and retrievable via ListTagsForResource, and are
+// gated behind Include=["TAGS"] on DescribeClusters (matching real ECS,
+// which omits tags unless asked for).
+func TestCreateClusterTagsAndListTagsForResource(t *testing.T) {
+	svc := newTestService(t)
+
+	out, err := svc.CreateCluster(&types.CreateClusterInput{
+		ClusterName: "tagged-cluster",
+		Tags:        []types.Tag{{Key: "env", Value: "prod"}, {Key: "team", Value: "platform"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	if len(out.Cluster.Tags) != 2 {
+		t.Fatalf("expected 2 tags on created cluster, got %+v", out.Cluster.Tags)
+	}
+
+	listed, err := svc.ListTagsForResource(&types.ListTagsForResourceInput{ResourceArn: out.Cluster.ClusterArn})
+	if err != nil {
+		t.Fatalf("ListTagsForResource: %v", err)
+	}
+	if len(listed.Tags) != 2 {
+		t.Fatalf("expected 2 tags from ListTagsForResource, got %+v", listed.Tags)
+	}
+
+	// DescribeClusters without Include=["TAGS"] must not echo tags.
+	withoutInclude, err := svc.DescribeClusters(&types.DescribeClustersInput{Clusters: []string{"tagged-cluster"}})
+	if err != nil {
+		t.Fatalf("DescribeClusters: %v", err)
+	}
+	if len(withoutInclude.Clusters[0].Tags) != 0 {
+		t.Fatalf("expected no tags without Include=TAGS, got %+v", withoutInclude.Clusters[0].Tags)
+	}
+
+	// DescribeClusters with Include=["TAGS"] must echo them.
+	withInclude, err := svc.DescribeClusters(&types.DescribeClustersInput{
+		Clusters: []string{"tagged-cluster"},
+		Include:  []string{"TAGS"},
+	})
+	if err != nil {
+		t.Fatalf("DescribeClusters with Include=TAGS: %v", err)
+	}
+	if len(withInclude.Clusters[0].Tags) != 2 {
+		t.Fatalf("expected 2 tags with Include=TAGS, got %+v", withInclude.Clusters[0].Tags)
+	}
+}
+
+// TestTagResourceUntagResourceRoundTrip covers add/replace/remove across all
+// four taggable resource kinds (cluster, task definition, service, task).
+func TestTagResourceUntagResourceRoundTrip(t *testing.T) {
+	svc := newTestService(t)
+
+	clusterOut, err := svc.CreateCluster(&types.CreateClusterInput{ClusterName: "rt-cluster"})
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+	tdOut, err := svc.RegisterTaskDefinition(webTaskDefInput())
+	if err != nil {
+		t.Fatalf("RegisterTaskDefinition: %v", err)
+	}
+	svcOut, err := svc.CreateService(&types.CreateServiceInput{
+		Cluster:        "rt-cluster",
+		ServiceName:    "rt-service",
+		TaskDefinition: "web",
+		DesiredCount:   0,
+	})
+	if err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+	task, err := svc.NewTaskRecord(clusterOut.Cluster, tdOut.TaskDefinition, nil, "", "")
+	if err != nil {
+		t.Fatalf("NewTaskRecord: %v", err)
+	}
+
+	for _, arn := range []string{clusterOut.Cluster.ClusterArn, tdOut.TaskDefinition.TaskDefinitionArn, svcOut.Service.ServiceArn, task.TaskArn} {
+		if _, err := svc.TagResource(&types.TagResourceInput{
+			ResourceArn: arn,
+			Tags:        []types.Tag{{Key: "a", Value: "1"}, {Key: "b", Value: "2"}},
+		}); err != nil {
+			t.Fatalf("TagResource(%s): %v", arn, err)
+		}
+		listed, err := svc.ListTagsForResource(&types.ListTagsForResourceInput{ResourceArn: arn})
+		if err != nil {
+			t.Fatalf("ListTagsForResource(%s): %v", arn, err)
+		}
+		if len(listed.Tags) != 2 {
+			t.Fatalf("ListTagsForResource(%s): expected 2 tags, got %+v", arn, listed.Tags)
+		}
+
+		// TagResource replaces an existing key's value rather than duplicating it.
+		if _, err := svc.TagResource(&types.TagResourceInput{
+			ResourceArn: arn,
+			Tags:        []types.Tag{{Key: "a", Value: "updated"}},
+		}); err != nil {
+			t.Fatalf("TagResource replace(%s): %v", arn, err)
+		}
+		listed, err = svc.ListTagsForResource(&types.ListTagsForResourceInput{ResourceArn: arn})
+		if err != nil {
+			t.Fatalf("ListTagsForResource(%s): %v", arn, err)
+		}
+		if len(listed.Tags) != 2 {
+			t.Fatalf("ListTagsForResource(%s): expected key replace not append, got %+v", arn, listed.Tags)
+		}
+		for _, tag := range listed.Tags {
+			if tag.Key == "a" && tag.Value != "updated" {
+				t.Fatalf("ListTagsForResource(%s): key a not replaced, got %+v", arn, listed.Tags)
+			}
+		}
+
+		if _, err := svc.UntagResource(&types.UntagResourceInput{ResourceArn: arn, TagKeys: []string{"a"}}); err != nil {
+			t.Fatalf("UntagResource(%s): %v", arn, err)
+		}
+		listed, err = svc.ListTagsForResource(&types.ListTagsForResourceInput{ResourceArn: arn})
+		if err != nil {
+			t.Fatalf("ListTagsForResource(%s): %v", arn, err)
+		}
+		if len(listed.Tags) != 1 || listed.Tags[0].Key != "b" {
+			t.Fatalf("UntagResource(%s) did not remove key a, got %+v", arn, listed.Tags)
+		}
+	}
+}
+
+// TestTagResourceUnknownArnFails guards that tagging a nonexistent resource
+// reports an error, matching real ECS, rather than silently succeeding.
+func TestTagResourceUnknownArnFails(t *testing.T) {
+	svc := newTestService(t)
+
+	if _, err := svc.TagResource(&types.TagResourceInput{
+		ResourceArn: "arn:aws:ecs:us-east-1:000000000000:cluster/does-not-exist",
+		Tags:        []types.Tag{{Key: "a", Value: "1"}},
+	}); err == nil {
+		t.Fatal("expected TagResource against an unknown cluster ARN to fail")
+	}
+	if _, err := svc.ListTagsForResource(&types.ListTagsForResourceInput{
+		ResourceArn: "arn:aws:ecs:us-east-1:000000000000:task/default/does-not-exist",
+	}); err == nil {
+		t.Fatal("expected ListTagsForResource against an unknown task ARN to fail")
+	}
+	if _, err := svc.TagResource(&types.TagResourceInput{
+		ResourceArn: "not-an-arn-at-all",
+		Tags:        []types.Tag{{Key: "a", Value: "1"}},
+	}); err == nil {
+		t.Fatal("expected TagResource against an unresolvable ARN shape to fail")
+	}
+}
+
+// TestTagValidation guards the limits real ECS enforces: max 50 tags, key
+// 1-128 chars, value <=256 chars, no "aws:"-prefixed keys, no duplicate keys
+// within one request.
+func TestTagValidation(t *testing.T) {
+	svc := newTestService(t)
+	clusterOut, err := svc.CreateCluster(&types.CreateClusterInput{ClusterName: "validate-cluster"})
+	if err != nil {
+		t.Fatalf("CreateCluster: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		tags []types.Tag
+	}{
+		{"empty key", []types.Tag{{Key: "", Value: "x"}}},
+		{"key too long", []types.Tag{{Key: string(make([]byte, 129)), Value: "x"}}},
+		{"value too long", []types.Tag{{Key: "k", Value: string(make([]byte, 257))}}},
+		{"reserved aws prefix", []types.Tag{{Key: "aws:reserved", Value: "x"}}},
+		{"duplicate key", []types.Tag{{Key: "dup", Value: "1"}, {Key: "dup", Value: "2"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := svc.TagResource(&types.TagResourceInput{
+				ResourceArn: clusterOut.Cluster.ClusterArn,
+				Tags:        tc.tags,
+			}); err == nil {
+				t.Fatalf("expected tag validation to reject %s", tc.name)
+			}
+		})
+	}
+
+	// Exceeding 50 tags total (existing + new) is also rejected.
+	var many []types.Tag
+	for i := 0; i < 51; i++ {
+		many = append(many, types.Tag{Key: string(rune('a'+i%26)) + string(rune(i)), Value: "v"})
+	}
+	if _, err := svc.CreateCluster(&types.CreateClusterInput{
+		ClusterName: "too-many-tags",
+		Tags:        many,
+	}); err == nil {
+		t.Fatal("expected CreateCluster to reject more than 50 tags")
+	}
+}
+
+// TestRegisterTaskDefinitionTagsAtTopLevel guards that tags never appear
+// inside the TaskDefinition wire/domain object itself: they're a sibling
+// field on Register/DescribeTaskDefinitionOutput, and DescribeTaskDefinition
+// only populates them when include contains "TAGS".
+func TestRegisterTaskDefinitionTagsAtTopLevel(t *testing.T) {
+	svc := newTestService(t)
+
+	in := webTaskDefInput()
+	in.Tags = []types.Tag{{Key: "env", Value: "test"}}
+	out, err := svc.RegisterTaskDefinition(in)
+	if err != nil {
+		t.Fatalf("RegisterTaskDefinition: %v", err)
+	}
+	if len(out.Tags) != 1 {
+		t.Fatalf("expected RegisterTaskDefinitionOutput.Tags to carry the tag, got %+v", out.Tags)
+	}
+
+	withoutInclude, err := svc.DescribeTaskDefinition("web", nil)
+	if err != nil {
+		t.Fatalf("DescribeTaskDefinition: %v", err)
+	}
+	if len(withoutInclude.Tags) != 0 {
+		t.Fatalf("expected no tags without Include=TAGS, got %+v", withoutInclude.Tags)
+	}
+
+	withInclude, err := svc.DescribeTaskDefinition("web", []string{"TAGS"})
+	if err != nil {
+		t.Fatalf("DescribeTaskDefinition with Include=TAGS: %v", err)
+	}
+	if len(withInclude.Tags) != 1 {
+		t.Fatalf("expected 1 tag with Include=TAGS, got %+v", withInclude.Tags)
+	}
+}
+
+// TestCreateServiceTagsAndDescribeGating mirrors the cluster test for
+// services: CreateService.Tags is stored, and DescribeServices only echoes
+// it back when Include contains "TAGS".
+func TestCreateServiceTagsAndDescribeGating(t *testing.T) {
+	svc := newTestService(t)
+	if _, err := svc.RegisterTaskDefinition(webTaskDefInput()); err != nil {
+		t.Fatalf("RegisterTaskDefinition: %v", err)
+	}
+	if _, err := svc.CreateService(&types.CreateServiceInput{
+		ServiceName:    "tagged-service",
+		TaskDefinition: "web",
+		DesiredCount:   0,
+		Tags:           []types.Tag{{Key: "env", Value: "prod"}},
+	}); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+
+	withoutInclude, err := svc.DescribeServices(&types.DescribeServicesInput{Services: []string{"tagged-service"}})
+	if err != nil {
+		t.Fatalf("DescribeServices: %v", err)
+	}
+	if len(withoutInclude.Services[0].Tags) != 0 {
+		t.Fatalf("expected no tags without Include=TAGS, got %+v", withoutInclude.Services[0].Tags)
+	}
+
+	withInclude, err := svc.DescribeServices(&types.DescribeServicesInput{
+		Services: []string{"tagged-service"},
+		Include:  []string{"TAGS"},
+	})
+	if err != nil {
+		t.Fatalf("DescribeServices with Include=TAGS: %v", err)
+	}
+	if len(withInclude.Services[0].Tags) != 1 || withInclude.Services[0].Tags[0].Key != "env" {
+		t.Fatalf("expected 1 tag with Include=TAGS, got %+v", withInclude.Services[0].Tags)
 	}
 }

@@ -509,6 +509,7 @@ func cloneCluster(src *types.Cluster) *types.Cluster {
 		return nil
 	}
 	dst := *src
+	dst.Tags = cloneTags(src.Tags)
 	return &dst
 }
 
@@ -526,7 +527,48 @@ func cloneTaskDefinition(src *types.TaskDefinition) *types.TaskDefinition {
 	if src.RequiresCompatibilities != nil {
 		dst.RequiresCompatibilities = append([]string(nil), src.RequiresCompatibilities...)
 	}
+	if src.RuntimePlatform != nil {
+		rp := *src.RuntimePlatform
+		dst.RuntimePlatform = &rp
+	}
+	if src.EphemeralStorage != nil {
+		es := *src.EphemeralStorage
+		dst.EphemeralStorage = &es
+	}
+	if src.Volumes != nil {
+		dst.Volumes = make([]types.Volume, len(src.Volumes))
+		for i, v := range src.Volumes {
+			dst.Volumes[i] = cloneVolume(v)
+		}
+	}
+	if src.PlacementConstraints != nil {
+		dst.PlacementConstraints = append([]types.PlacementConstraint(nil), src.PlacementConstraints...)
+	}
+	dst.Tags = cloneTags(src.Tags)
 	return &dst
+}
+
+func cloneVolume(src types.Volume) types.Volume {
+	dst := src
+	if src.Host != nil {
+		h := *src.Host
+		dst.Host = &h
+	}
+	if src.DockerVolumeConfiguration != nil {
+		dv := *src.DockerVolumeConfiguration
+		dv.DriverOpts = cloneStringMap(src.DockerVolumeConfiguration.DriverOpts)
+		dv.Labels = cloneStringMap(src.DockerVolumeConfiguration.Labels)
+		dst.DockerVolumeConfiguration = &dv
+	}
+	if src.EfsVolumeConfiguration != nil {
+		efs := *src.EfsVolumeConfiguration
+		if src.EfsVolumeConfiguration.AuthorizationConfig != nil {
+			ac := *src.EfsVolumeConfiguration.AuthorizationConfig
+			efs.AuthorizationConfig = &ac
+		}
+		dst.EfsVolumeConfiguration = &efs
+	}
+	return dst
 }
 
 func cloneContainerDefinition(src types.ContainerDefinition) types.ContainerDefinition {
@@ -554,7 +596,119 @@ func cloneContainerDefinition(src types.ContainerDefinition) types.ContainerDefi
 		v := *src.Essential
 		dst.Essential = &v
 	}
+	if src.Ulimits != nil {
+		dst.Ulimits = append([]types.Ulimit(nil), src.Ulimits...)
+	}
+	if src.DockerLabels != nil {
+		dst.DockerLabels = cloneStringMap(src.DockerLabels)
+	}
+	if src.MountPoints != nil {
+		dst.MountPoints = append([]types.MountPoint(nil), src.MountPoints...)
+	}
+	if src.Secrets != nil {
+		dst.Secrets = append([]types.ContainerSecret(nil), src.Secrets...)
+	}
+	if src.HealthCheck != nil {
+		dst.HealthCheck = cloneHealthCheck(src.HealthCheck)
+	}
+	if src.DependsOn != nil {
+		dst.DependsOn = append([]types.ContainerDependency(nil), src.DependsOn...)
+	}
+	if src.VolumesFrom != nil {
+		dst.VolumesFrom = append([]types.VolumeFrom(nil), src.VolumesFrom...)
+	}
+	if src.ReadonlyRootFilesystem != nil {
+		v := *src.ReadonlyRootFilesystem
+		dst.ReadonlyRootFilesystem = &v
+	}
+	if src.Privileged != nil {
+		v := *src.Privileged
+		dst.Privileged = &v
+	}
+	if src.LinuxParameters != nil {
+		dst.LinuxParameters = cloneLinuxParameters(src.LinuxParameters)
+	}
+	if src.DnsServers != nil {
+		dst.DnsServers = append([]string(nil), src.DnsServers...)
+	}
+	if src.ExtraHosts != nil {
+		dst.ExtraHosts = append([]types.HostEntry(nil), src.ExtraHosts...)
+	}
+	if src.Interactive != nil {
+		v := *src.Interactive
+		dst.Interactive = &v
+	}
+	if src.PseudoTerminal != nil {
+		v := *src.PseudoTerminal
+		dst.PseudoTerminal = &v
+	}
+	if src.SystemControls != nil {
+		dst.SystemControls = append([]types.SystemControl(nil), src.SystemControls...)
+	}
+	if src.EnvironmentFiles != nil {
+		dst.EnvironmentFiles = append([]types.EnvironmentFile(nil), src.EnvironmentFiles...)
+	}
+	if src.RepositoryCredentials != nil {
+		rc := *src.RepositoryCredentials
+		dst.RepositoryCredentials = &rc
+	}
+	if src.FirelensConfiguration != nil {
+		fc := *src.FirelensConfiguration
+		fc.Options = cloneStringMap(src.FirelensConfiguration.Options)
+		dst.FirelensConfiguration = &fc
+	}
 	return dst
+}
+
+// cloneHealthCheck deep-copies a container health check, including the
+// command slice and the optional scalar pointers (an unset field must stay
+// distinguishable from an explicit 0 for DescribeTaskDefinition echo).
+func cloneHealthCheck(src *types.ContainerHealthCheck) *types.ContainerHealthCheck {
+	if src == nil {
+		return nil
+	}
+	dst := *src
+	if src.Command != nil {
+		dst.Command = append([]string(nil), src.Command...)
+	}
+	copyIntPtr := func(p *int) *int {
+		if p == nil {
+			return nil
+		}
+		v := *p
+		return &v
+	}
+	dst.Interval = copyIntPtr(src.Interval)
+	dst.Timeout = copyIntPtr(src.Timeout)
+	dst.Retries = copyIntPtr(src.Retries)
+	dst.StartPeriod = copyIntPtr(src.StartPeriod)
+	return &dst
+}
+
+func cloneLinuxParameters(src *types.LinuxParameters) *types.LinuxParameters {
+	if src == nil {
+		return nil
+	}
+	dst := *src
+	if src.InitProcessEnabled != nil {
+		v := *src.InitProcessEnabled
+		dst.InitProcessEnabled = &v
+	}
+	if src.Capabilities != nil {
+		cap := *src.Capabilities
+		cap.Add = append([]string(nil), src.Capabilities.Add...)
+		cap.Drop = append([]string(nil), src.Capabilities.Drop...)
+		dst.Capabilities = &cap
+	}
+	if src.Tmpfs != nil {
+		dst.Tmpfs = make([]types.Tmpfs, len(src.Tmpfs))
+		for i, tf := range src.Tmpfs {
+			out := tf
+			out.MountOptions = append([]string(nil), tf.MountOptions...)
+			dst.Tmpfs[i] = out
+		}
+	}
+	return &dst
 }
 
 func cloneService(src *types.ECSService) *types.ECSService {
@@ -568,6 +722,7 @@ func cloneService(src *types.ECSService) *types.ECSService {
 		t := *src.InactiveAt
 		dst.InactiveAt = &t
 	}
+	dst.Tags = cloneTags(src.Tags)
 	return &dst
 }
 
@@ -612,6 +767,12 @@ func cloneTask(src *types.Task) *types.Task {
 		t := *src.StoppedAt
 		dst.StoppedAt = &t
 	}
+	if src.Overrides != nil {
+		ov := *src.Overrides
+		ov.ContainerOverrides = append([]types.ContainerOverride(nil), src.Overrides.ContainerOverrides...)
+		dst.Overrides = &ov
+	}
+	dst.Tags = cloneTags(src.Tags)
 	return &dst
 }
 

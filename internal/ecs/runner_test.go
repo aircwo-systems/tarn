@@ -52,10 +52,66 @@ type fakeEngine struct {
 	// need to tell a graceful exit apart from a context-canceled one set it
 	// to something else (e.g. 143, SIGTERM's conventional code).
 	stopExitCode int64
+	// stopTimeouts records the SIGTERM grace (seconds) each StopContainer
+	// call asked for, so tests can assert per-container StopTimeout
+	// plumbing without a Docker daemon.
+	stopTimeouts map[string]int
 	// scriptLines, when set, are delivered to the FollowContainerLogs
 	// callback (with their stream flags) before it blocks on ctx, letting
 	// pumpLogs tests feed deterministic stdout/stderr output with no Docker.
 	scriptLines []scriptLogLine
+	// health maps a container ID to the Docker inspect Health.Status string
+	// InspectContainerHealth returns for it ("", "starting", "healthy",
+	// "unhealthy"). Missing entries return "" (no HEALTHCHECK defined).
+	health    map[string]string
+	healthErr error
+
+	// volumeCreateCalls records every EnsureTaskVolume call, in order, so
+	// tests can assert driver/driverOpts/labels were plumbed through without
+	// a Docker daemon.
+	volumeCreateCalls []fakeVolumeCreateCall
+	// volumeExists seeds TaskVolumeExists's answer for a given name; a name
+	// absent from the map reports false (not found), matching a fresh
+	// Docker host with no such volume yet.
+	volumeExists    map[string]bool
+	volumeExistErr  error
+	volumeCreateErr error
+	// volumeRemoveCalls records every RemoveTaskVolume call, in order.
+	volumeRemoveCalls []string
+	volumeRemoveErr   error
+	// listVolumesResult is returned verbatim by ListTaskVolumesByLabel,
+	// letting startup-recovery tests seed pre-existing Docker volumes with
+	// no daemon involved.
+	listVolumesResult []engine.TaskVolumeSummary
+	listVolumesErr    error
+}
+
+// fakeVolumeCreateCall records one EnsureTaskVolume invocation.
+type fakeVolumeCreateCall struct {
+	Name       string
+	Driver     string
+	DriverOpts map[string]string
+	Labels     map[string]string
+}
+
+// setHealth sets the Docker health status InspectContainerHealth reports for
+// containerID, safe to call concurrently with the poller goroutine.
+func (f *fakeEngine) setHealth(containerID, status string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.health == nil {
+		f.health = make(map[string]string)
+	}
+	f.health[containerID] = status
+}
+
+func (f *fakeEngine) InspectContainerHealth(ctx context.Context, containerID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.healthErr != nil {
+		return "", f.healthErr
+	}
+	return f.health[containerID], nil
 }
 
 // scriptLogLine is one canned container log line for fakeEngine.
@@ -205,9 +261,13 @@ func (f *fakeEngine) RemoveTaskContainer(ctx context.Context, containerID string
 	return nil
 }
 
-func (f *fakeEngine) StopContainer(ctx context.Context, containerID string) error {
+func (f *fakeEngine) StopContainer(ctx context.Context, containerID string, timeoutSec int) error {
 	f.record("stop:" + containerID)
 	f.mu.Lock()
+	if f.stopTimeouts == nil {
+		f.stopTimeouts = make(map[string]int)
+	}
+	f.stopTimeouts[containerID] = timeoutSec
 	f.stoppedIDs[containerID] = true
 	if _, delayed := f.delayedStops[containerID]; delayed {
 		f.mu.Unlock()
@@ -223,6 +283,78 @@ func (f *fakeEngine) StopContainer(ctx context.Context, containerID string) erro
 		}
 	}
 	return nil
+}
+
+func (f *fakeEngine) EnsureTaskVolume(ctx context.Context, name, driver string, driverOpts, labels map[string]string) error {
+	f.record("ensure-volume:" + name)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.volumeCreateErr != nil {
+		return f.volumeCreateErr
+	}
+	f.volumeCreateCalls = append(f.volumeCreateCalls, fakeVolumeCreateCall{
+		Name: name, Driver: driver, DriverOpts: driverOpts, Labels: labels,
+	})
+	if f.volumeExists == nil {
+		f.volumeExists = make(map[string]bool)
+	}
+	f.volumeExists[name] = true
+	return nil
+}
+
+func (f *fakeEngine) TaskVolumeExists(ctx context.Context, name string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.volumeExistErr != nil {
+		return false, f.volumeExistErr
+	}
+	return f.volumeExists[name], nil
+}
+
+func (f *fakeEngine) RemoveTaskVolume(ctx context.Context, name string) error {
+	f.record("remove-volume:" + name)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.volumeRemoveErr != nil {
+		return f.volumeRemoveErr
+	}
+	f.volumeRemoveCalls = append(f.volumeRemoveCalls, name)
+	delete(f.volumeExists, name)
+	return nil
+}
+
+func (f *fakeEngine) ListTaskVolumesByLabel(ctx context.Context, selector map[string]string) ([]engine.TaskVolumeSummary, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.listVolumesErr != nil {
+		return nil, f.listVolumesErr
+	}
+	var out []engine.TaskVolumeSummary
+	for _, v := range f.listVolumesResult {
+		match := true
+		for k, want := range selector {
+			if v.Labels[k] != want {
+				match = false
+				break
+			}
+		}
+		if match {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeEngine) volumeCreateCallsSnapshot() []fakeVolumeCreateCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]fakeVolumeCreateCall(nil), f.volumeCreateCalls...)
+}
+
+func (f *fakeEngine) volumeRemoveCallsSnapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.volumeRemoveCalls...)
 }
 
 // finish delivers an exit signal to a container's wait channel directly,
@@ -331,6 +463,335 @@ func TestRunnerMapsTaskResourcesAndNetworkModeToEngine(t *testing.T) {
 	}
 
 	finishAllContainers(eng, 0, nil)
+	r.Stop()
+}
+
+// TestRunnerResolvesTaskScopedSharedVolumeAcrossContainers verifies a bare
+// task-definition volume (no Host, no DockerVolumeConfiguration) mounted by
+// two containers resolves to the same Docker named-volume bind on both,
+// scoped to this task only — matching AWS's "volume shared within one task"
+// semantics for a plain Volume entry with only mountPoints referencing it.
+func TestRunnerResolvesTaskScopedSharedVolumeAcrossContainers(t *testing.T) {
+	r, svc, eng, _ := newTestRunner(t)
+	tdOut, err := svc.RegisterTaskDefinition(&types.RegisterTaskDefinitionInput{
+		Family: "shared-volume",
+		Volumes: []types.Volume{
+			{Name: "shared"},
+		},
+		ContainerDefinitions: []types.ContainerDefinition{
+			{
+				Name:        "writer",
+				Image:       "example/writer:latest",
+				MountPoints: []types.MountPoint{{SourceVolume: "shared", ContainerPath: "/data"}},
+			},
+			{
+				Name:        "reader",
+				Image:       "example/reader:latest",
+				MountPoints: []types.MountPoint{{SourceVolume: "shared", ContainerPath: "/mnt", ReadOnly: true}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RegisterTaskDefinition: %v", err)
+	}
+
+	out, err := r.RunTask(context.Background(), &types.RunTaskInput{TaskDefinition: tdOut.TaskDefinition.Family})
+	if err != nil {
+		t.Fatalf("RunTask: %v", err)
+	}
+	taskArn := out.Tasks[0].TaskArn
+	wantVolume := "tarn-ecs-task-" + taskIDFromRef(taskArn) + "-shared"
+
+	specs := eng.createdSpecs()
+	if len(specs) != 2 {
+		t.Fatalf("created specs = %d, want 2: %+v", len(specs), specs)
+	}
+	byImage := map[string]engine.TaskContainerSpec{}
+	for _, s := range specs {
+		byImage[s.Image] = s
+	}
+	writer, ok := byImage["example/writer:latest"]
+	if !ok {
+		t.Fatalf("no spec for writer container: %+v", specs)
+	}
+	reader, ok := byImage["example/reader:latest"]
+	if !ok {
+		t.Fatalf("no spec for reader container: %+v", specs)
+	}
+	if len(writer.Binds) != 1 || writer.Binds[0] != wantVolume+":/data" {
+		t.Fatalf("writer binds = %v, want [%s:/data]", writer.Binds, wantVolume)
+	}
+	if len(reader.Binds) != 1 || reader.Binds[0] != wantVolume+":/mnt:ro" {
+		t.Fatalf("reader binds = %v, want [%s:/mnt:ro]", reader.Binds, wantVolume)
+	}
+
+	finishAllContainers(eng, 0, nil)
+	r.Stop()
+}
+
+// TestRunnerResolvesHostVolumeToDirectBindMount verifies a task-definition
+// volume with Host.SourcePath set binds that exact host path, and that a
+// shared-scope dockerVolumeConfiguration volume gets a stable name derived
+// from the account ID (not the task), so two tasks referencing it share the
+// same underlying Docker volume.
+func TestRunnerResolvesHostVolumeToDirectBindMount(t *testing.T) {
+	r, svc, eng, _ := newTestRunner(t)
+	tdOut, err := svc.RegisterTaskDefinition(&types.RegisterTaskDefinitionInput{
+		Family: "host-and-shared-volume",
+		Volumes: []types.Volume{
+			{Name: "hostvol", Host: &types.HostVolumeProperties{SourcePath: "/host/data"}},
+			{Name: "sharedvol", DockerVolumeConfiguration: &types.DockerVolumeConfiguration{Scope: "shared", Autoprovision: true}},
+		},
+		ContainerDefinitions: []types.ContainerDefinition{
+			{
+				Name:  "app",
+				Image: "example/app:latest",
+				MountPoints: []types.MountPoint{
+					{SourceVolume: "hostvol", ContainerPath: "/data"},
+					{SourceVolume: "sharedvol", ContainerPath: "/shared"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RegisterTaskDefinition: %v", err)
+	}
+
+	if _, err := r.RunTask(context.Background(), &types.RunTaskInput{TaskDefinition: tdOut.TaskDefinition.Family}); err != nil {
+		t.Fatalf("RunTask: %v", err)
+	}
+
+	specs := eng.createdSpecs()
+	if len(specs) != 1 {
+		t.Fatalf("created specs = %d, want 1: %+v", len(specs), specs)
+	}
+	binds := specs[0].Binds
+	wantHost := "/host/data:/data"
+	wantShared := "tarn-ecs-shared-" + r.cfg.AccountID + "-sharedvol:/shared"
+	got := map[string]bool{wantHost: false, wantShared: false}
+	for _, b := range binds {
+		if _, ok := got[b]; ok {
+			got[b] = true
+		}
+	}
+	for want, seen := range got {
+		if !seen {
+			t.Fatalf("binds = %v, missing expected bind %q", binds, want)
+		}
+	}
+
+	finishAllContainers(eng, 0, nil)
+	r.Stop()
+}
+
+// TestRunnerCreatesDockerVolumeWithDriverOptsAndLabels verifies a task-scoped
+// dockerVolumeConfiguration's Driver/DriverOpts/Labels reach
+// EnsureTaskVolume verbatim, merged with Tarn's own tarn.* labels
+// (account/task-arn/volume-scope) so the created volume is identifiable for
+// startup recovery.
+func TestRunnerCreatesDockerVolumeWithDriverOptsAndLabels(t *testing.T) {
+	r, svc, eng, _ := newTestRunner(t)
+	tdOut, err := svc.RegisterTaskDefinition(&types.RegisterTaskDefinitionInput{
+		Family: "volume-driver-opts",
+		Volumes: []types.Volume{
+			{
+				Name: "data",
+				DockerVolumeConfiguration: &types.DockerVolumeConfiguration{
+					Driver:     "local",
+					DriverOpts: map[string]string{"type": "tmpfs"},
+					Labels:     map[string]string{"team": "platform"},
+				},
+			},
+		},
+		ContainerDefinitions: []types.ContainerDefinition{
+			{
+				Name:        "app",
+				Image:       "example/app:latest",
+				MountPoints: []types.MountPoint{{SourceVolume: "data", ContainerPath: "/data"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RegisterTaskDefinition: %v", err)
+	}
+
+	out, err := r.RunTask(context.Background(), &types.RunTaskInput{TaskDefinition: tdOut.TaskDefinition.Family})
+	if err != nil {
+		t.Fatalf("RunTask: %v", err)
+	}
+	if len(out.Tasks) != 1 {
+		t.Fatalf("RunTask returned %d tasks, failures=%+v", len(out.Tasks), out.Failures)
+	}
+	taskArn := out.Tasks[0].TaskArn
+	wantName := "tarn-ecs-task-" + taskIDFromRef(taskArn) + "-data"
+
+	calls := eng.volumeCreateCallsSnapshot()
+	if len(calls) != 1 {
+		t.Fatalf("volume create calls = %d, want 1: %+v", len(calls), calls)
+	}
+	call := calls[0]
+	if call.Name != wantName {
+		t.Fatalf("volume name = %q, want %q", call.Name, wantName)
+	}
+	if call.Driver != "local" {
+		t.Fatalf("driver = %q, want local", call.Driver)
+	}
+	if call.DriverOpts["type"] != "tmpfs" {
+		t.Fatalf("driverOpts = %+v, want type=tmpfs", call.DriverOpts)
+	}
+	if call.Labels["team"] != "platform" {
+		t.Fatalf("labels missing user label: %+v", call.Labels)
+	}
+	if call.Labels[labelAccount] != r.cfg.AccountID || call.Labels[labelTaskArn] != taskArn || call.Labels[labelVolumeScope] != volumeScopeTask {
+		t.Fatalf("labels missing tarn.* identification: %+v", call.Labels)
+	}
+
+	finishAllContainers(eng, 0, nil)
+	r.Stop()
+}
+
+// TestRunnerFailsLaunchWhenSharedVolumeMissingAndAutoprovisionFalse verifies
+// a shared-scope volume with autoprovision=false that doesn't already exist
+// on the Docker host fails the task launch with a clear reason, instead of
+// RunTask silently creating a "shared" volume ECS itself would have refused
+// to create.
+func TestRunnerFailsLaunchWhenSharedVolumeMissingAndAutoprovisionFalse(t *testing.T) {
+	r, svc, eng, _ := newTestRunner(t)
+	tdOut, err := svc.RegisterTaskDefinition(&types.RegisterTaskDefinitionInput{
+		Family: "volume-no-autoprovision",
+		Volumes: []types.Volume{
+			{Name: "data", DockerVolumeConfiguration: &types.DockerVolumeConfiguration{Scope: "shared", Autoprovision: false}},
+		},
+		ContainerDefinitions: []types.ContainerDefinition{
+			{
+				Name:        "app",
+				Image:       "example/app:latest",
+				MountPoints: []types.MountPoint{{SourceVolume: "data", ContainerPath: "/data"}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RegisterTaskDefinition: %v", err)
+	}
+
+	out, err := r.RunTask(context.Background(), &types.RunTaskInput{TaskDefinition: tdOut.TaskDefinition.Family})
+	if err != nil {
+		t.Fatalf("RunTask: %v", err)
+	}
+	if len(out.Tasks) != 0 || len(out.Failures) != 1 {
+		t.Fatalf("expected one failure and no tasks, got tasks=%+v failures=%+v", out.Tasks, out.Failures)
+	}
+	if !strings.Contains(out.Failures[0].Detail, "autoprovision is false") {
+		t.Fatalf("failure detail = %q, want mention of autoprovision", out.Failures[0].Detail)
+	}
+	if len(eng.volumeCreateCallsSnapshot()) != 0 {
+		t.Fatalf("expected no volume to be created, got %+v", eng.volumeCreateCallsSnapshot())
+	}
+
+	r.Stop()
+}
+
+// TestRunnerRemovesTaskScopedVolumeOnStopButNotShared verifies finishTask
+// removes a task-scoped Docker volume once every container has stopped, but
+// never touches a shared-scope volume used by the same task.
+func TestRunnerRemovesTaskScopedVolumeOnStopButNotShared(t *testing.T) {
+	r, svc, eng, _ := newTestRunner(t)
+	tdOut, err := svc.RegisterTaskDefinition(&types.RegisterTaskDefinitionInput{
+		Family: "volume-remove-on-stop",
+		Volumes: []types.Volume{
+			{Name: "scratch"},
+			{Name: "sharedvol", DockerVolumeConfiguration: &types.DockerVolumeConfiguration{Scope: "shared", Autoprovision: true}},
+		},
+		ContainerDefinitions: []types.ContainerDefinition{
+			{
+				Name:  "app",
+				Image: "example/app:latest",
+				MountPoints: []types.MountPoint{
+					{SourceVolume: "scratch", ContainerPath: "/scratch"},
+					{SourceVolume: "sharedvol", ContainerPath: "/shared"},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("RegisterTaskDefinition: %v", err)
+	}
+
+	out, err := r.RunTask(context.Background(), &types.RunTaskInput{TaskDefinition: tdOut.TaskDefinition.Family})
+	if err != nil {
+		t.Fatalf("RunTask: %v", err)
+	}
+	if len(out.Tasks) != 1 {
+		t.Fatalf("RunTask returned %d tasks, failures=%+v", len(out.Tasks), out.Failures)
+	}
+	taskArn := out.Tasks[0].TaskArn
+	wantScratchVolume := "tarn-ecs-task-" + taskIDFromRef(taskArn) + "-scratch"
+	wantSharedVolume := "tarn-ecs-shared-" + r.cfg.AccountID + "-sharedvol"
+
+	finishAllContainers(eng, 0, nil)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		task, err := svc.GetTask(taskArn)
+		if err == nil && task.LastStatus == types.TaskStatusStopped {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("task did not reach STOPPED in time")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	removed := eng.volumeRemoveCallsSnapshot()
+	if len(removed) != 1 || removed[0] != wantScratchVolume {
+		t.Fatalf("volume remove calls = %v, want exactly [%s]", removed, wantScratchVolume)
+	}
+	for _, name := range removed {
+		if name == wantSharedVolume {
+			t.Fatalf("shared volume %s must never be removed automatically", wantSharedVolume)
+		}
+	}
+
+	r.Stop()
+}
+
+// TestRecoverOrphanTaskVolumesRemovesOnlyStoppedOrUnknownTasks verifies
+// startup recovery's orphan volume sweep removes a task-scoped volume
+// belonging to a task the store no longer has (or already STOPPED), while
+// leaving alone a volume belonging to a task that's still running, and never
+// considering a shared-scope volume in the first place (selectorForAccountTaskVolumes
+// only ever asks the engine for task-scoped labels).
+func TestRecoverOrphanTaskVolumesRemovesOnlyStoppedOrUnknownTasks(t *testing.T) {
+	r, _, eng, _ := newTestRunner(t)
+	accountID := r.cfg.AccountID
+
+	runningTaskArn := "arn:aws:ecs:us-east-1:000000000000:task/default/running-task"
+	goneTaskArn := "arn:aws:ecs:us-east-1:000000000000:task/default/gone-task"
+
+	eng.listVolumesResult = []engine.TaskVolumeSummary{
+		{
+			Name:   "tarn-ecs-task-running-scratch",
+			Labels: taskVolumeLabels(accountID, runningTaskArn, volumeScopeTask),
+		},
+		{
+			Name:   "tarn-ecs-task-gone-scratch",
+			Labels: taskVolumeLabels(accountID, goneTaskArn, volumeScopeTask),
+		},
+	}
+
+	tasksByARN := map[string]*types.Task{
+		runningTaskArn: {TaskArn: runningTaskArn, LastStatus: types.TaskStatusRunning},
+		// goneTaskArn deliberately absent, simulating a task the store has
+		// already pruned.
+	}
+
+	r.recoverOrphanTaskVolumes(context.Background(), tasksByARN)
+
+	removed := eng.volumeRemoveCallsSnapshot()
+	if len(removed) != 1 || removed[0] != "tarn-ecs-task-gone-scratch" {
+		t.Fatalf("removed volumes = %v, want exactly [tarn-ecs-task-gone-scratch]", removed)
+	}
+
 	r.Stop()
 }
 
@@ -458,7 +919,7 @@ func TestServiceOwnedTaskGetsGroupConventionAndIsFoundByListTasks(t *testing.T) 
 		t.Fatalf("CreateService: %v", err)
 	}
 
-	task, err := r.launchTask(context.Background(), cluster, td, nil, "", serviceGroup("svcA"), "svcA")
+	task, err := r.launchTask(context.Background(), cluster, td, nil, "", serviceGroup("svcA"), "svcA", nil)
 	if err != nil {
 		t.Fatalf("launchTask: %v", err)
 	}
@@ -804,7 +1265,7 @@ func TestReconcileRolloutStopsOnlyOneOldTaskWhenDefinitionsAreMixed(t *testing.T
 		t.Fatalf("UpdateService: %v", err)
 	}
 	service := updated.Service
-	newTask, err := r.launchTask(context.Background(), cluster, newTD, nil, service.LaunchType, serviceGroup(service.ServiceName), service.ServiceName)
+	newTask, err := r.launchTask(context.Background(), cluster, newTD, nil, service.LaunchType, serviceGroup(service.ServiceName), service.ServiceName, nil)
 	if err != nil {
 		t.Fatalf("launchTask new definition: %v", err)
 	}
@@ -923,7 +1384,7 @@ func TestReconcileScalesDownToDesiredCount(t *testing.T) {
 	group := serviceGroup("svcDown")
 	var taskArns []string
 	for i := 0; i < 3; i++ {
-		task, err := r.launchTask(context.Background(), cluster, td, nil, "", group, "svcDown")
+		task, err := r.launchTask(context.Background(), cluster, td, nil, "", group, "svcDown", nil)
 		if err != nil {
 			t.Fatalf("launchTask: %v", err)
 		}
@@ -1035,11 +1496,11 @@ func TestReconcileScaleDownDoesNotCountTaskDrainingFromDocker(t *testing.T) {
 	}
 
 	group := serviceGroup("svcDownDelay")
-	first, err := r.launchTask(context.Background(), cluster, td, nil, "", group, "svcDownDelay")
+	first, err := r.launchTask(context.Background(), cluster, td, nil, "", group, "svcDownDelay", nil)
 	if err != nil {
 		t.Fatalf("launch first task: %v", err)
 	}
-	second, err := r.launchTask(context.Background(), cluster, td, nil, "", group, "svcDownDelay")
+	second, err := r.launchTask(context.Background(), cluster, td, nil, "", group, "svcDownDelay", nil)
 	if err != nil {
 		t.Fatalf("launch second task: %v", err)
 	}
@@ -1319,6 +1780,106 @@ func TestRunTaskLaunchesCountIndependentTasks(t *testing.T) {
 	r.Stop()
 }
 
+// TestRunTaskPropagatesTagsFromTaskDefinition guards RunTask's
+// PropagateTags=TASK_DEFINITION path: tags from the task definition are
+// copied onto the launched task, merged with (not overridden by) any
+// explicit RunTask tags of the same key.
+func TestRunTaskPropagatesTagsFromTaskDefinition(t *testing.T) {
+	r, svc, eng, _ := newTestRunner(t)
+	tdOut, err := svc.RegisterTaskDefinition(&types.RegisterTaskDefinitionInput{
+		Family: "fam-propagate-tags",
+		ContainerDefinitions: []types.ContainerDefinition{
+			{Name: "app", Image: "example/app:latest"},
+		},
+		Tags: []types.Tag{{Key: "env", Value: "prod"}, {Key: "owner", Value: "team-a"}},
+	})
+	if err != nil {
+		t.Fatalf("RegisterTaskDefinition: %v", err)
+	}
+
+	out, err := r.RunTask(context.Background(), &types.RunTaskInput{
+		TaskDefinition: tdOut.TaskDefinition.Family,
+		PropagateTags:  "TASK_DEFINITION",
+		Tags:           []types.Tag{{Key: "owner", Value: "explicit-wins"}},
+	})
+	if err != nil {
+		t.Fatalf("RunTask: %v", err)
+	}
+	if len(out.Tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(out.Tasks))
+	}
+
+	task, err := svc.GetTask(out.Tasks[0].TaskArn)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	byKey := map[string]string{}
+	for _, tag := range task.Tags {
+		byKey[tag.Key] = tag.Value
+	}
+	if byKey["env"] != "prod" {
+		t.Fatalf("expected propagated env=prod tag, got %+v", task.Tags)
+	}
+	if byKey["owner"] != "explicit-wins" {
+		t.Fatalf("expected explicit RunTask tag to win over propagated, got %+v", task.Tags)
+	}
+
+	// Without PropagateTags, only explicit RunTask tags land on the task.
+	out2, err := r.RunTask(context.Background(), &types.RunTaskInput{
+		TaskDefinition: tdOut.TaskDefinition.Family,
+		Tags:           []types.Tag{{Key: "solo", Value: "yes"}},
+	})
+	if err != nil {
+		t.Fatalf("RunTask (no propagate): %v", err)
+	}
+	task2, err := svc.GetTask(out2.Tasks[0].TaskArn)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if len(task2.Tags) != 1 || task2.Tags[0].Key != "solo" {
+		t.Fatalf("expected only explicit tag without PropagateTags, got %+v", task2.Tags)
+	}
+
+	finishAllContainers(eng, 0, nil)
+	r.Stop()
+}
+
+// TestServicePropagatesTagsToLaunchedTasks guards CreateService's
+// PropagateTags=SERVICE path: the reconcile loop's launched tasks inherit
+// the service's tags.
+func TestServicePropagatesTagsToLaunchedTasks(t *testing.T) {
+	r, svc, eng, _ := newTestRunner(t)
+	td := registerSingleContainerTaskDef(t, svc, "fam-service-propagate-tags")
+	cluster, err := svc.ResolveCluster("")
+	if err != nil {
+		t.Fatalf("ResolveCluster: %v", err)
+	}
+
+	createOut, err := svc.CreateService(&types.CreateServiceInput{
+		ServiceName:    "propagate-svc",
+		TaskDefinition: td.Family,
+		DesiredCount:   1,
+		PropagateTags:  "SERVICE",
+		Tags:           []types.Tag{{Key: "env", Value: "prod"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+
+	r.reconcileService(context.Background(), cluster, createOut.Service)
+
+	tasks := svc.store.ListTasks(cluster.ClusterArn)
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 launched task, got %d", len(tasks))
+	}
+	if len(tasks[0].Tags) != 1 || tasks[0].Tags[0].Key != "env" || tasks[0].Tags[0].Value != "prod" {
+		t.Fatalf("expected launched task to inherit service tags, got %+v", tasks[0].Tags)
+	}
+
+	finishAllContainers(eng, 0, nil)
+	r.Stop()
+}
+
 // --- startup recovery ----------------------------------------------------------
 
 func TestRunnerRecoversPersistedRuntimeIDAndLifecycle(t *testing.T) {
@@ -1561,7 +2122,7 @@ func TestDrainServiceDoesNotBlockOnAnUnrelatedServicesLaunch(t *testing.T) {
 
 	launchDone := make(chan struct{})
 	go func() {
-		_, _ = r.launchTask(context.Background(), cluster, tdA, nil, "", serviceGroup("svcGateA"), "svcGateA")
+		_, _ = r.launchTask(context.Background(), cluster, tdA, nil, "", serviceGroup("svcGateA"), "svcGateA", nil)
 		close(launchDone)
 	}()
 	select {
@@ -1621,7 +2182,7 @@ func TestDrainServiceRejectsLaunchAfterItConcludes(t *testing.T) {
 		t.Fatalf("DrainService: %v", err)
 	}
 
-	if _, err := r.launchTask(context.Background(), cluster, td, nil, "", serviceGroup("svcRejectAfterDrain"), "svcRejectAfterDrain"); err == nil {
+	if _, err := r.launchTask(context.Background(), cluster, td, nil, "", serviceGroup("svcRejectAfterDrain"), "svcRejectAfterDrain", nil); err == nil {
 		t.Fatal("expected launch for a service already drained to be rejected")
 	}
 
@@ -1637,7 +2198,7 @@ func TestDrainServiceRejectsLaunchAfterItConcludes(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("recreate CreateService: %v", err)
 	}
-	if _, err := r.launchTask(context.Background(), cluster, td, nil, "", serviceGroup("svcRejectAfterDrain"), "svcRejectAfterDrain"); err != nil {
+	if _, err := r.launchTask(context.Background(), cluster, td, nil, "", serviceGroup("svcRejectAfterDrain"), "svcRejectAfterDrain", nil); err != nil {
 		t.Fatalf("launch for recreated service rejected: %v", err)
 	}
 
@@ -1672,7 +2233,7 @@ func TestDrainServiceStopsTrackedTaskAndWaitsForRealExitCode(t *testing.T) {
 		t.Fatalf("CreateService: %v", err)
 	}
 
-	task, err := r.launchTask(context.Background(), cluster, td, nil, "", serviceGroup("svcDrainDeadLoop"), "svcDrainDeadLoop")
+	task, err := r.launchTask(context.Background(), cluster, td, nil, "", serviceGroup("svcDrainDeadLoop"), "svcDrainDeadLoop", nil)
 	if err != nil {
 		t.Fatalf("launchTask: %v", err)
 	}
@@ -1742,7 +2303,7 @@ func TestServiceLaunchBackoffGrowsOnRepeatedInstantCrashes(t *testing.T) {
 	var delays []time.Duration
 	for i := 0; i < 3; i++ {
 		before := time.Now()
-		task, err := r.launchTask(context.Background(), cluster, td, nil, "", serviceGroup("svcCrashLoop"), "svcCrashLoop")
+		task, err := r.launchTask(context.Background(), cluster, td, nil, "", serviceGroup("svcCrashLoop"), "svcCrashLoop", nil)
 		if err != nil {
 			t.Fatalf("launchTask %d: %v", i, err)
 		}

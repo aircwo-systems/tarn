@@ -9,7 +9,41 @@ const (
 	labelCluster = "tarn.cluster"
 	labelService = "tarn.service"
 	labelTaskArn = "tarn.task-arn"
+	// labelVolumeScope marks a Docker named volume Tarn created for an ECS
+	// task definition volume, distinguishing "task" (removed when the owning
+	// task stops) from "shared" (never removed automatically).
+	labelVolumeScope = "tarn.volume-scope"
 )
+
+const (
+	volumeScopeTask   = "task"
+	volumeScopeShared = "shared"
+)
+
+// taskVolumeLabels builds the label set for a Docker named volume Tarn
+// creates on behalf of a task definition Volume entry. taskArn is empty for
+// a shared-scope volume: it is not owned by any single task, so tagging it
+// with one task's ARN would be misleading for recovery's orphan sweep.
+func taskVolumeLabels(accountID, taskArn, scope string) map[string]string {
+	labels := map[string]string{
+		labelAccount:     accountID,
+		labelVolumeScope: scope,
+	}
+	if taskArn != "" {
+		labels[labelTaskArn] = taskArn
+	}
+	return labels
+}
+
+// selectorForAccountTaskVolumes matches every task-scoped Docker volume
+// Tarn created for accountID, used by startup recovery to find volumes left
+// behind by tasks no longer in the store.
+func selectorForAccountTaskVolumes(accountID string) map[string]string {
+	return map[string]string{
+		labelAccount:     accountID,
+		labelVolumeScope: volumeScopeTask,
+	}
+}
 
 // taskLabels builds the full label set for a task's containers. serviceName
 // is omitted entirely (not set to "") for standalone RunTask tasks: an

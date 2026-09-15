@@ -440,9 +440,23 @@ func (e *Engine) StartContainer(ctx context.Context, info *ContainerInfo) error 
 	return nil
 }
 
-// StopContainer stops a running container.
-func (e *Engine) StopContainer(ctx context.Context, containerID string) error {
-	timeout := 5
+// DefaultStopTimeoutSec is the SIGTERM grace period used when stopping a
+// container that defines no StopTimeout of its own.
+const DefaultStopTimeoutSec = 5
+
+// ResolveStopTimeoutSec normalizes a container StopTimeout value: positive
+// values pass through, anything else means the engine default.
+func ResolveStopTimeoutSec(v int) int {
+	if v <= 0 {
+		return DefaultStopTimeoutSec
+	}
+	return v
+}
+
+// StopContainer stops a running container, waiting up to timeoutSec after
+// SIGTERM before SIGKILL. A non-positive timeoutSec selects the default.
+func (e *Engine) StopContainer(ctx context.Context, containerID string, timeoutSec int) error {
+	timeout := ResolveStopTimeoutSec(timeoutSec)
 	return e.client.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout})
 }
 
@@ -473,7 +487,7 @@ func (e *Engine) EvictContainer(ctx context.Context, functionName string) {
 	delete(e.containers, functionName)
 	e.mu.Unlock()
 	for _, info := range pool {
-		_ = e.StopContainer(ctx, info.ID)
+		_ = e.StopContainer(ctx, info.ID, 0)
 		_ = e.client.ContainerRemove(ctx, info.ID, container.RemoveOptions{Force: true})
 	}
 }

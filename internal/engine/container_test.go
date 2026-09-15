@@ -93,3 +93,22 @@ func TestReadContainerLogStreamPreservesInterleaving(t *testing.T) {
 		t.Fatalf("log stream mismatch\nwant:\n%s\ngot:\n%s", want.String(), got)
 	}
 }
+
+func TestResolveStopTimeoutSec(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		given int
+		want  int
+	}{
+		{"negative means default", -1, DefaultStopTimeoutSec},
+		{"zero means default", 0, DefaultStopTimeoutSec},
+		{"positive passes through", 30, 30},
+		{"one second passes through", 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ResolveStopTimeoutSec(tc.given); got != tc.want {
+				t.Fatalf("ResolveStopTimeoutSec(%d) = %d, want %d", tc.given, got, tc.want)
+			}
+		})
+	}
+}

@@ -34,7 +34,11 @@ const (
 	// stopContainerTimeout bounds Stop()'s attempt to stop every tracked
 	// container when the runner itself is shutting down.
 	stopContainerTimeout = 10 * time.Second
-	maxRunTaskCount      = 10
+	// stopTimeoutGracePeriod bounds how long past the longest SIGTERM grace
+	// stopContainerIDs waits. With all-default timeouts the context is
+	// 5s + 5s = 10s, exactly the previous stopContainerTimeout behavior.
+	stopTimeoutGracePeriod = 5 * time.Second
+	maxRunTaskCount        = 10
 )
 
 var (
@@ -83,7 +87,21 @@ type taskEngine interface {
 	FollowContainerLogs(ctx context.Context, containerID string, onLine func(line string, stderr bool)) error
 	ListContainersByLabel(ctx context.Context, selector map[string]string) ([]engine.TaskContainerSummary, error)
 	RemoveTaskContainer(ctx context.Context, containerID string) error
-	StopContainer(ctx context.Context, containerID string) error
+	StopContainer(ctx context.Context, containerID string, timeoutSec int) error
+	// InspectContainerHealth returns Docker's inspect Health.Status
+	// ("starting"/"healthy"/"unhealthy"), or "" when the container defines
+	// no HEALTHCHECK. Only called for containers whose ContainerDefinition
+	// sets HealthCheck (see spawnHealthPoller in health.go).
+	InspectContainerHealth(ctx context.Context, containerID string) (string, error)
+
+	// EnsureTaskVolume, TaskVolumeExists, RemoveTaskVolume and
+	// ListTaskVolumesByLabel back the ECS Volume/DockerVolumeConfiguration
+	// resolution in resolveAndEnsureVolumes and finishTask's task-scoped
+	// volume cleanup. Every method mirrors one exported on *engine.Engine.
+	EnsureTaskVolume(ctx context.Context, name, driver string, driverOpts, labels map[string]string) error
+	TaskVolumeExists(ctx context.Context, name string) (bool, error)
+	RemoveTaskVolume(ctx context.Context, name string) error
+	ListTaskVolumesByLabel(ctx context.Context, selector map[string]string) ([]engine.TaskVolumeSummary, error)
 }
 
 // logSink is the narrow logging dependency the runner needs. It matches
@@ -122,6 +140,16 @@ type runningTask struct {
 	// marks it essential (nil/true means essential — AWS's default). Traces
 	// only fail the task's status over an essential container's exit code.
 	essential map[string]bool
+	// stopTimeouts records, per container name, the task definition's
+	// StopTimeout in seconds. Only positive values are kept; anything
+	// absent means the engine default. Captured at launch so stops honor
+	// it even if the definition changes later.
+	stopTimeouts map[string]int
+	// taskVolumeNames lists the Docker named volumes resolveAndEnsureVolumes
+	// created with "task" scope for this task, so finishTask can remove them
+	// once every container has stopped. Shared-scope volumes are never
+	// listed here — they must outlive this task.
+	taskVolumeNames []string
 }
 
 type launchBackoffState struct {
@@ -153,6 +181,11 @@ type Runner struct {
 	// launches. Nil until SetTraceStore is called (mirrors every other
 	// service's SetTraceStore); trace recording is a no-op when nil.
 	traceStore *tracesvc.Store
+
+	// secretsResolver resolves container definition `secrets` entries into
+	// environment values at launch. Nil until SetSecretsResolver is called; a
+	// container definition with no `secrets` never consults it.
+	secretsResolver SecretsResolver
 
 	// ctx is the runner's own lifetime context. It is deliberately NOT the
 	// ctx passed in to RunTask: that request context dies as soon as the API
@@ -266,14 +299,14 @@ func (r *Runner) Stop() {
 		// then stop every container the runner is currently tracking.
 		r.launchGate.Lock()
 		r.mu.Lock()
-		var ids []string
+		stops := make(map[*runningTask][]string)
 		var taskArns []string
 		for taskArn, rt := range r.tasks {
 			taskArns = append(taskArns, taskArn)
 			r.markRunningTaskStopping(rt)
 			rt.mu.Lock()
 			for _, id := range rt.containerIDs {
-				ids = append(ids, id)
+				stops[rt] = append(stops[rt], id)
 			}
 			rt.mu.Unlock()
 		}
@@ -285,7 +318,9 @@ func (r *Runner) Stop() {
 			}
 		}
 
-		r.stopContainerIDs(context.Background(), ids, "during shutdown")
+		for rt, ids := range stops {
+			r.stopContainerIDs(context.Background(), rt, ids, "during shutdown")
+		}
 
 		// 3. Wait for every wait/log-pump goroutine to observe the real
 		// exit, record it, drain logs and remove the container. lifecycleCtx
@@ -341,6 +376,20 @@ func (r *Runner) RunTask(ctx context.Context, in *types.RunTaskInput) (*types.Ru
 	if err := validateOverrides(td, in.Overrides); err != nil {
 		return nil, err
 	}
+	if err := validateTags(in.Tags); err != nil {
+		return nil, err
+	}
+
+	// RunTask's PropagateTags is TASK_DEFINITION or NONE (no SERVICE option —
+	// that's CreateService-only, since a standalone RunTask has no owning
+	// service to copy tags from). Explicit tags win over a propagated key of
+	// the same name.
+	var tags []types.Tag
+	if strings.EqualFold(in.PropagateTags, "TASK_DEFINITION") {
+		tags = mergeTags(td.Tags, in.Tags)
+	} else {
+		tags = cloneTags(in.Tags)
+	}
 
 	count := in.Count
 	if count < 0 || count > maxRunTaskCount {
@@ -355,7 +404,7 @@ func (r *Runner) RunTask(ctx context.Context, in *types.RunTaskInput) (*types.Ru
 		// serviceName is empty here: RunTask always launches standalone
 		// tasks. Service-owned tasks are launched by the reconcile loop via
 		// launchTask directly, with the real service name for labeling.
-		task, err := r.launchTaskWithPayload(ctx, cluster, td, in.Overrides, in.EventPayload, in.LaunchType, in.Group, "", in.CorrelationID)
+		task, err := r.launchTaskWithPayload(ctx, cluster, td, in.Overrides, in.EventPayload, in.LaunchType, in.Group, "", in.CorrelationID, tags)
 		if err != nil {
 			out.Failures = append(out.Failures, types.Failure{
 				Reason: "TaskFailedToStart",
@@ -408,7 +457,7 @@ func (r *Runner) StopTask(ctx context.Context, cluster, taskArn, reason string) 
 	}
 	rt.mu.Unlock()
 
-	r.stopContainerIDs(ctx, ids, fmt.Sprintf("(task %s)", task.TaskArn))
+	r.stopContainerIDs(ctx, rt, ids, fmt.Sprintf("(task %s)", task.TaskArn))
 	return nil
 }
 
@@ -458,7 +507,7 @@ func (r *Runner) DrainService(ctx context.Context, cluster *types.Cluster, servi
 			continue
 		}
 		r.markRunningTaskStopping(rt)
-		r.stopContainerIDs(ctx, r.taskContainerIDs(rt), fmt.Sprintf("(drain service %s)", serviceName))
+		r.stopContainerIDs(ctx, rt, r.taskContainerIDs(rt), fmt.Sprintf("(drain service %s)", serviceName))
 	}
 
 	selector := selectorForService(r.cfg.AccountID, cluster.ClusterName, serviceName)
@@ -485,7 +534,7 @@ func (r *Runner) DrainService(ctx context.Context, cluster *types.Cluster, servi
 		}
 
 		for _, summary := range live {
-			if err := r.eng.StopContainer(ctx, summary.ID); err != nil {
+			if err := r.eng.StopContainer(ctx, summary.ID, 0); err != nil {
 				log.Printf("[ecs] drain service %s: stop container %s: %v", serviceName, summary.ID, err)
 			}
 		}
@@ -570,11 +619,11 @@ func (r *Runner) serviceGate(key string) *serviceGate {
 // Task.Group value (serviceGroup(name) for service-owned tasks; whatever
 // the caller supplied otherwise). serviceName is used purely for the
 // tarn.service Docker label and is empty for standalone RunTask tasks.
-func (r *Runner) launchTask(ctx context.Context, cluster *types.Cluster, td *types.TaskDefinition, overrides *types.TaskOverride, launchType, group, serviceName string) (*types.Task, error) {
-	return r.launchTaskWithPayload(ctx, cluster, td, overrides, nil, launchType, group, serviceName, "")
+func (r *Runner) launchTask(ctx context.Context, cluster *types.Cluster, td *types.TaskDefinition, overrides *types.TaskOverride, launchType, group, serviceName string, tags []types.Tag) (*types.Task, error) {
+	return r.launchTaskWithPayload(ctx, cluster, td, overrides, nil, launchType, group, serviceName, "", tags)
 }
 
-func (r *Runner) launchTaskWithPayload(ctx context.Context, cluster *types.Cluster, td *types.TaskDefinition, overrides *types.TaskOverride, eventPayload []byte, launchType, group, serviceName, correlationID string) (*types.Task, error) {
+func (r *Runner) launchTaskWithPayload(ctx context.Context, cluster *types.Cluster, td *types.TaskDefinition, overrides *types.TaskOverride, eventPayload []byte, launchType, group, serviceName, correlationID string, tags []types.Tag) (*types.Task, error) {
 	r.launchGate.RLock()
 	defer r.launchGate.RUnlock()
 	if r.stopped.Load() {
@@ -603,7 +652,7 @@ func (r *Runner) launchTaskWithPayload(ctx context.Context, cluster *types.Clust
 	if err := validateOverrides(td, overrides); err != nil {
 		return nil, err
 	}
-	resources, err := resolveTaskContainerResources(td)
+	resources, err := resolveTaskContainerResources(applyResourceOverrides(td, overrides))
 	if err != nil {
 		return nil, invalidParameterError("%v", err)
 	}
@@ -618,6 +667,11 @@ func (r *Runner) launchTaskWithPayload(ctx context.Context, cluster *types.Clust
 	}
 	if _, cErr := r.svc.SetTaskCorrelationID(task.TaskArn, correlationID); cErr != nil {
 		log.Printf("[ecs] record correlation id for %s: %v", task.TaskArn, cErr)
+	}
+	if len(tags) > 0 {
+		if _, tErr := r.svc.SetTaskTags(task.TaskArn, tags); tErr != nil {
+			log.Printf("[ecs] record tags for %s: %v", task.TaskArn, tErr)
+		}
 	}
 
 	spanName := serviceName
@@ -637,6 +691,7 @@ func (r *Runner) launchTaskWithPayload(ctx context.Context, cluster *types.Clust
 		group:             group,
 		taskDefinitionArn: td.TaskDefinitionArn,
 		essential:         essential,
+		stopTimeouts:      containerStopTimeouts(td),
 	}
 	if serviceName != "" {
 		rt.serviceKey = serviceKey(cluster.ClusterArn, serviceName)
@@ -650,23 +705,30 @@ func (r *Runner) launchTaskWithPayload(ctx context.Context, cluster *types.Clust
 		rt.mu.Unlock()
 	}
 
-	for _, cd := range td.ContainerDefinitions {
-		if err := r.startContainer(launchCtx, cluster, task, td, cd, overrides, eventPayload, serviceName, resources[cd.Name], rt); err != nil {
-			_, _ = r.svc.SetContainerStatus(task.TaskArn, cd.Name, types.TaskStatusStopped)
-			_, _ = r.svc.StopTaskRecord(task.TaskArn, err.Error())
-			r.markRunningTaskStopping(rt)
-			r.setTaskStatusAfterLaunchFailure(task.TaskArn, rt)
-			r.completeLaunch(task.TaskArn, rt)
-			r.stopContainerIDs(context.Background(), r.taskContainerIDs(rt), fmt.Sprintf("(failed launch %s)", task.TaskArn))
-			return nil, err
-		}
+	taskVolumeNames, volErr := r.resolveAndEnsureVolumes(launchCtx, td, task.TaskArn)
+	rt.taskVolumeNames = taskVolumeNames
+	if volErr != nil {
+		_, _ = r.svc.StopTaskRecord(task.TaskArn, volErr.Error())
+		r.markRunningTaskStopping(rt)
+		r.setTaskStatusAfterLaunchFailure(task.TaskArn, rt)
+		r.completeLaunch(task.TaskArn, rt)
+		return nil, volErr
+	}
+
+	if err := r.startContainers(launchCtx, cluster, task, td, overrides, eventPayload, serviceName, resources, rt); err != nil {
+		_, _ = r.svc.StopTaskRecord(task.TaskArn, err.Error())
+		r.markRunningTaskStopping(rt)
+		r.setTaskStatusAfterLaunchFailure(task.TaskArn, rt)
+		r.completeLaunch(task.TaskArn, rt)
+		r.stopContainerIDs(context.Background(), rt, r.taskContainerIDs(rt), fmt.Sprintf("(failed launch %s)", task.TaskArn))
+		return nil, err
 	}
 
 	remaining, stopping := r.completeLaunch(task.TaskArn, rt)
 	if stopping || r.stopped.Load() {
 		if remaining > 0 {
 			_, _ = r.svc.SetTaskStatus(task.TaskArn, types.TaskStatusStopping)
-			r.stopContainerIDs(context.Background(), r.taskContainerIDs(rt), fmt.Sprintf("(stopped during launch %s)", task.TaskArn))
+			r.stopContainerIDs(context.Background(), rt, r.taskContainerIDs(rt), fmt.Sprintf("(stopped during launch %s)", task.TaskArn))
 		}
 	} else if remaining > 0 {
 		if runningTaskRec, allowed, err := r.svc.SetTaskRunningIfDesired(task.TaskArn); err != nil {
@@ -674,7 +736,7 @@ func (r *Runner) launchTaskWithPayload(ctx context.Context, cluster *types.Clust
 		} else if !allowed {
 			r.markRunningTaskStopping(rt)
 			_, _ = r.svc.SetTaskStatus(task.TaskArn, types.TaskStatusStopping)
-			r.stopContainerIDs(context.Background(), r.taskContainerIDs(rt), fmt.Sprintf("(stopped during launch %s)", task.TaskArn))
+			r.stopContainerIDs(context.Background(), rt, r.taskContainerIDs(rt), fmt.Sprintf("(stopped during launch %s)", task.TaskArn))
 		} else {
 			r.recordTaskRunningTrace(rt, runningTaskRec)
 		}
@@ -687,10 +749,46 @@ func (r *Runner) launchTaskWithPayload(ctx context.Context, cluster *types.Clust
 	return refreshed, nil
 }
 
+// startContainers starts every container in td.ContainerDefinitions,
+// honoring each container's DependsOn conditions. Containers with no
+// dependency on one another start concurrently; a dependent container first
+// waits (bounded by ctx) for its dependencies' conditions via
+// waitForDependencies before startContainer is called for it. On the first
+// failure the failing container's record is marked STOPPED and its error is
+// returned — the caller's usual failure cleanup (stopContainerIDs, sweeping
+// everything rt has recorded so far) handles every container already
+// started by a sibling goroutine.
+func (r *Runner) startContainers(ctx context.Context, cluster *types.Cluster, task *types.Task, td *types.TaskDefinition, overrides *types.TaskOverride, eventPayload []byte, serviceName string, resources map[string]taskContainerResources, rt *runningTask) error {
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(td.ContainerDefinitions))
+	for _, cd := range td.ContainerDefinitions {
+		cd := cd
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := r.waitForDependencies(ctx, task.TaskArn, cd); err != nil {
+				errCh <- fmt.Errorf("container %s: %w", cd.Name, err)
+				return
+			}
+			if err := r.startContainer(ctx, cluster, task, td, cd, overrides, eventPayload, serviceName, resources[cd.Name], rt); err != nil {
+				_, _ = r.svc.SetContainerStatus(task.TaskArn, cd.Name, types.TaskStatusStopped)
+				errCh <- err
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // startContainer ensures the image, applies overrides, creates and starts
 // the container, records its network bindings and RUNNING status, and
 // spawns its log pump / wait goroutines.
-
 func (r *Runner) startContainer(ctx context.Context, cluster *types.Cluster, task *types.Task, td *types.TaskDefinition, cd types.ContainerDefinition, overrides *types.TaskOverride, eventPayload []byte, serviceName string, resources taskContainerResources, rt *runningTask) error {
 	rt.mu.Lock()
 	startedBeforeStop := rt.stopRequested || r.stopped.Load()
@@ -699,37 +797,132 @@ func (r *Runner) startContainer(ctx context.Context, cluster *types.Cluster, tas
 		return clientError("task %s was stopped before container %s could start", task.TaskArn, cd.Name)
 	}
 
+	secretEnv, err := r.resolveContainerSecrets(cd)
+	if err != nil {
+		return err
+	}
+
 	if err := r.eng.EnsureImageRef(ctx, cd.Image); err != nil {
 		return fmt.Errorf("image %s: %w", cd.Image, err)
 	}
 
 	override := containerOverrideFor(overrides, cd.Name)
 	env := mergeContainerEnv(cd.Environment, override)
+	// Secrets win over a same-named Environment entry — see the comment on
+	// types.ContainerDefinition.Secrets for why.
+	for name, value := range secretEnv {
+		env[name] = value
+	}
 	cmd := resolveCommand(cd, override)
 
 	ports := make([]int, 0, len(cd.PortMappings))
+	var fixedHostPorts map[int]int
 	for _, pm := range cd.PortMappings {
 		ports = append(ports, pm.ContainerPort)
+		if pm.HostPort != 0 {
+			// Task definitions that pin a host port (rather than leaving it 0
+			// for Tarn to assign ephemerally) get bound to exactly that port.
+			// If it's already taken, Docker's create/start error propagates up
+			// through this function and becomes the task's StoppedReason.
+			if fixedHostPorts == nil {
+				fixedHostPorts = make(map[int]int, len(cd.PortMappings))
+			}
+			fixedHostPorts[pm.ContainerPort] = pm.HostPort
+		}
 	}
 
 	labels := taskLabels(r.cfg.AccountID, cluster.ClusterName, serviceName, task.TaskArn)
 
+	binds := resolveContainerMounts(td, task.TaskArn, r.cfg.AccountID, cd)
+	volumesFrom := resolveVolumesFrom(task.TaskArn, cd)
+
+	var capAdd, capDrop []string
+	var initEnabled bool
+	var shmSize int64
+	var tmpfs map[string]string
+	if cd.LinuxParameters != nil {
+		if cd.LinuxParameters.InitProcessEnabled != nil {
+			initEnabled = *cd.LinuxParameters.InitProcessEnabled
+		}
+		if cd.LinuxParameters.Capabilities != nil {
+			capAdd = cd.LinuxParameters.Capabilities.Add
+			capDrop = cd.LinuxParameters.Capabilities.Drop
+		}
+		if cd.LinuxParameters.SharedMemorySize > 0 {
+			shmSize = int64(cd.LinuxParameters.SharedMemorySize) * bytesPerMiBRunner
+		}
+		if len(cd.LinuxParameters.Tmpfs) > 0 {
+			tmpfs = make(map[string]string, len(cd.LinuxParameters.Tmpfs))
+			for _, tf := range cd.LinuxParameters.Tmpfs {
+				opts := "rw"
+				if tf.Size > 0 {
+					opts = fmt.Sprintf("rw,size=%dm", tf.Size)
+				}
+				if len(tf.MountOptions) > 0 {
+					opts = opts + "," + strings.Join(tf.MountOptions, ",")
+				}
+				tmpfs[tf.ContainerPath] = opts
+			}
+		}
+	}
+	var readonlyRootFS, privileged, interactive, pseudoTTY bool
+	if cd.ReadonlyRootFilesystem != nil {
+		readonlyRootFS = *cd.ReadonlyRootFilesystem
+	}
+	if cd.Privileged != nil {
+		privileged = *cd.Privileged
+	}
+	if cd.Interactive != nil {
+		interactive = *cd.Interactive
+	}
+	if cd.PseudoTerminal != nil {
+		pseudoTTY = *cd.PseudoTerminal
+	}
+	extraHosts := make([]string, 0, len(cd.ExtraHosts))
+	for _, h := range cd.ExtraHosts {
+		if h.Hostname == "" || h.IpAddress == "" {
+			continue
+		}
+		extraHosts = append(extraHosts, fmt.Sprintf("%s:%s", h.Hostname, h.IpAddress))
+	}
+
 	handle, err := r.eng.CreateAndStartTaskContainer(ctx, engine.TaskContainerSpec{
-		Image:             cd.Image,
-		Name:              containerDockerName(task.TaskArn, cd.Name),
-		Command:           cmd,
-		Entrypoint:        cd.EntryPoint,
-		Env:               env,
-		CPU:               resources.cpu,
-		Memory:            resources.memory,
-		MemoryReservation: resources.memoryReservation,
-		NetworkMode:       td.NetworkMode,
-		Ports:             ports,
-		Labels:            labels,
-		Region:            r.cfg.Region,
-		EventPayload:      append([]byte(nil), eventPayload...),
-		AccountID:         r.cfg.AccountID,
-		CorrelationID:     rt.correlationID,
+		Image:                  cd.Image,
+		Name:                   containerDockerName(task.TaskArn, cd.Name),
+		Command:                cmd,
+		Entrypoint:             cd.EntryPoint,
+		Env:                    env,
+		CPU:                    resources.cpu,
+		Memory:                 resources.memory,
+		MemoryReservation:      resources.memoryReservation,
+		NetworkMode:            td.NetworkMode,
+		Ports:                  ports,
+		FixedHostPorts:         fixedHostPorts,
+		Labels:                 labels,
+		Region:                 r.cfg.Region,
+		EventPayload:           append([]byte(nil), eventPayload...),
+		AccountID:              r.cfg.AccountID,
+		CorrelationID:          rt.correlationID,
+		WorkingDirectory:       cd.WorkingDirectory,
+		User:                   cd.User,
+		StopTimeout:            cd.StopTimeout,
+		Ulimits:                cd.Ulimits,
+		DockerLabels:           cd.DockerLabels,
+		ReadonlyRootFilesystem: readonlyRootFS,
+		Privileged:             privileged,
+		InitProcessEnabled:     initEnabled,
+		CapAdd:                 capAdd,
+		CapDrop:                capDrop,
+		ShmSize:                shmSize,
+		Tmpfs:                  tmpfs,
+		Hostname:               cd.Hostname,
+		DNSServers:             cd.DnsServers,
+		ExtraHosts:             extraHosts,
+		Interactive:            interactive,
+		PseudoTerminal:         pseudoTTY,
+		Binds:                  binds,
+		VolumesFrom:            volumesFrom,
+		HealthCheck:            cd.HealthCheck,
 	})
 	if err != nil {
 		return fmt.Errorf("start container %s: %w", cd.Name, err)
@@ -757,9 +950,12 @@ func (r *Runner) startContainer(ctx context.Context, cluster *types.Cluster, tas
 
 	logGroup := resolveLogGroup(td, cd)
 	streamName := taskIDFromRef(task.TaskArn) + "/" + cd.Name
-	r.spawnLifecycle(task.TaskArn, cd.Name, handle.ID, logGroup, streamName, rt)
+	exited := r.spawnLifecycle(task.TaskArn, cd.Name, handle.ID, logGroup, streamName, rt)
+	if cd.HealthCheck != nil && !stopping {
+		r.spawnHealthPoller(task.TaskArn, cd.Name, handle.ID, rt, exited)
+	}
 	if stopping {
-		r.stopContainerIDs(context.Background(), []string{handle.ID}, fmt.Sprintf("(stopped during launch %s)", task.TaskArn))
+		r.stopContainerIDs(context.Background(), rt, []string{handle.ID}, fmt.Sprintf("(stopped during launch %s)", task.TaskArn))
 	}
 	return nil
 }
@@ -842,6 +1038,14 @@ func (r *Runner) finishTask(taskArn string, rt *runningTask) {
 		delete(r.tasks, taskArn)
 	}
 	r.mu.Unlock()
+
+	// Every container has already been removed by this point (spawnLifecycle
+	// removes its own container before calling onContainerFinished, which is
+	// what drives finishTask once rt.remaining reaches 0), so task-scoped
+	// volumes are safe to remove now. Best-effort: never blocks STOPPED.
+	if len(rt.taskVolumeNames) > 0 {
+		r.removeTaskVolumes(context.Background(), taskArn, rt.taskVolumeNames)
+	}
 }
 
 // recordTaskRunningTrace records the trace for a task reaching RUNNING. It is
@@ -994,14 +1198,41 @@ func ecsTraceHTTPStatus(status string) int {
 	return 200
 }
 
-func (r *Runner) stopContainerIDs(ctx context.Context, ids []string, detail string) {
+func (r *Runner) stopContainerIDs(ctx context.Context, rt *runningTask, ids []string, detail string) {
 	if len(ids) == 0 {
 		return
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	stopCtx, cancel := context.WithTimeout(ctx, stopContainerTimeout)
+	// Resolve the SIGTERM grace per container from the snapshot taken at
+	// launch; unknown containers fall back to the engine default. Resolved
+	// values go to the engine so recordings (and tests) see real seconds.
+	timeouts := make(map[string]int, len(ids))
+	maxSec := 0
+	if rt != nil {
+		rt.mu.Lock()
+		names := make(map[string]string, len(rt.containerIDs))
+		for name, id := range rt.containerIDs {
+			names[id] = name
+		}
+		snapshot := rt.stopTimeouts
+		rt.mu.Unlock()
+		for _, id := range ids {
+			if secs, ok := snapshot[names[id]]; ok && secs > 0 {
+				timeouts[id] = secs
+			}
+		}
+	}
+	for _, id := range ids {
+		if _, ok := timeouts[id]; !ok {
+			timeouts[id] = engine.DefaultStopTimeoutSec
+		}
+		if timeouts[id] > maxSec {
+			maxSec = timeouts[id]
+		}
+	}
+	stopCtx, cancel := context.WithTimeout(ctx, time.Duration(maxSec)*time.Second+stopTimeoutGracePeriod)
 	defer cancel()
 
 	unique := make(map[string]struct{}, len(ids))
@@ -1018,12 +1249,29 @@ func (r *Runner) stopContainerIDs(ctx context.Context, ids []string, detail stri
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := r.eng.StopContainer(stopCtx, id); err != nil {
+			if err := r.eng.StopContainer(stopCtx, id, timeouts[id]); err != nil {
 				log.Printf("[ecs] stop container %s %s: %v", id, detail, err)
 			}
 		}()
 	}
 	wg.Wait()
+}
+
+// containerStopTimeouts snapshots per-container SIGTERM grace periods
+// (seconds) from a task definition. Containers without a positive
+// StopTimeout are absent: callers fall back to the engine default. A nil
+// definition (e.g. unresolvable during recovery) yields no overrides.
+func containerStopTimeouts(td *types.TaskDefinition) map[string]int {
+	out := make(map[string]int)
+	if td == nil {
+		return out
+	}
+	for _, cd := range td.ContainerDefinitions {
+		if cd.StopTimeout > 0 {
+			out[cd.Name] = cd.StopTimeout
+		}
+	}
+	return out
 }
 
 // recoverTasks reconnects persisted active task records to Docker containers
@@ -1086,6 +1334,42 @@ func (r *Runner) recoverTasks(ctx context.Context) {
 			continue
 		}
 		r.cleanupOrphanContainer(ctx, summary)
+	}
+
+	r.recoverOrphanTaskVolumes(ctx, tasksByARN)
+}
+
+// recoverOrphanTaskVolumes removes task-scoped Docker volumes left behind by
+// a Tarn restart that lost track of the task that owned them: a crash
+// between "task fully stopped" and "finishTask's removeTaskVolumes call"
+// would otherwise leak that volume forever, since nothing else ever
+// revisits it. A volume is orphaned when its tarn.task-arn label names a
+// task the store no longer has, or one already STOPPED — a still-running or
+// still-launching task's volume is left alone. A volume with no
+// tarn.task-arn label at all is skipped rather than guessed at. Shared-scope
+// volumes are never considered here (selectorForAccountTaskVolumes only
+// matches "task" scope), matching the "never remove shared volumes" rule
+// finishTask itself follows.
+func (r *Runner) recoverOrphanTaskVolumes(ctx context.Context, tasksByARN map[string]*types.Task) {
+	if isNilTaskEngine(r.eng) {
+		return
+	}
+	volumes, err := r.eng.ListTaskVolumesByLabel(ctx, selectorForAccountTaskVolumes(r.cfg.AccountID))
+	if err != nil {
+		log.Printf("[ecs] startup recovery: list task volumes: %v", err)
+		return
+	}
+	for _, vol := range volumes {
+		taskArn := strings.TrimSpace(vol.Labels[labelTaskArn])
+		if taskArn == "" {
+			continue
+		}
+		if task, ok := tasksByARN[taskArn]; ok && task.LastStatus != types.TaskStatusStopped {
+			continue
+		}
+		if err := r.eng.RemoveTaskVolume(ctx, vol.Name); err != nil {
+			log.Printf("[ecs] startup recovery: remove orphan volume %s: %v", vol.Name, err)
+		}
 	}
 }
 
@@ -1150,6 +1434,7 @@ func (r *Runner) recoverTask(ctx context.Context, task *types.Task, summaries ma
 	}
 
 	rt := &runningTask{containerIDs: make(map[string]string), launchComplete: true}
+	rt.stopTimeouts = containerStopTimeouts(td)
 	if strings.HasPrefix(task.Group, "service:") {
 		rt.serviceKey = serviceKey(task.ClusterArn, strings.TrimPrefix(task.Group, "service:"))
 	}
@@ -1233,7 +1518,7 @@ func (r *Runner) recoverTask(ctx context.Context, task *types.Task, summaries ma
 	stopCtx, cancel := context.WithTimeout(ctx, stopContainerTimeout)
 	defer cancel()
 	for _, id := range stopIDs {
-		if err := r.eng.StopContainer(stopCtx, id); err != nil {
+		if err := r.eng.StopContainer(stopCtx, id, 0); err != nil {
 			log.Printf("[ecs] startup recovery: stop desired-stopped container %s: %v", id, err)
 		}
 	}
@@ -1276,7 +1561,7 @@ func (r *Runner) cleanupOrphanContainer(ctx context.Context, summary engine.Task
 		return
 	}
 	if summary.State == "running" {
-		if err := r.eng.StopContainer(ctx, summary.ID); err != nil {
+		if err := r.eng.StopContainer(ctx, summary.ID, 0); err != nil {
 			log.Printf("[ecs] startup recovery: stop orphan container %s: %v", summary.ID, err)
 		}
 	}
@@ -1289,9 +1574,17 @@ func (r *Runner) cleanupOrphanContainer(ctx context.Context, summary engine.Task
 // Cleanup ordering on exit is: read the exit code, set STOPPED, drain the
 // remaining log stream, then remove the container — never removed before
 // its logs are drained, and never removed before the exit code is read.
-func (r *Runner) spawnLifecycle(taskArn, containerName, containerID, logGroup, streamName string, rt *runningTask) {
+// spawnLifecycle's return channel is closed as soon as WaitTaskContainer
+// returns (the container is no longer running), letting a caller like
+// spawnHealthPoller stop polling promptly instead of only on Stop()'s
+// lifecycleCtx cancellation — which Stop() itself doesn't fire until after
+// waiting (bounded by stopContainerTimeout) for every r.wg goroutine,
+// including that poller, to finish. Without this signal a health poller
+// with nothing else to wake it keeps ticking for the full timeout.
+func (r *Runner) spawnLifecycle(taskArn, containerName, containerID, logGroup, streamName string, rt *runningTask) <-chan struct{} {
 	pumpCtx, pumpCancel := context.WithCancel(r.lifecycleCtx)
 	pumpDone := make(chan struct{})
+	exited := make(chan struct{})
 
 	r.wg.Add(1)
 	go func() {
@@ -1309,6 +1602,7 @@ func (r *Runner) spawnLifecycle(taskArn, containerName, containerID, logGroup, s
 		// Docker to gracefully stop this container, so WaitTaskContainer
 		// would return "context canceled" instead of the real exit code.
 		exitCode, waitErr := r.eng.WaitTaskContainer(r.lifecycleCtx, containerID)
+		close(exited)
 		var ec *int64
 		reason := ""
 		if waitErr == nil {
@@ -1344,6 +1638,8 @@ func (r *Runner) spawnLifecycle(taskArn, containerName, containerID, logGroup, s
 
 		r.onContainerFinished(taskArn)
 	}()
+
+	return exited
 }
 
 // logContainerExit records an ERROR event when a container stops
@@ -1594,11 +1890,20 @@ func (r *Runner) reconcileService(ctx context.Context, cluster *types.Cluster, s
 		r.recordServiceLaunchFailure(launchKey, time.Now())
 		return
 	}
+	// PropagateTags on a service is SERVICE, TASK_DEFINITION, or NONE; copy
+	// the corresponding tags onto every task this reconcile pass launches.
+	var launchTags []types.Tag
+	switch strings.ToUpper(svc.PropagateTags) {
+	case "SERVICE":
+		launchTags = cloneTags(svc.Tags)
+	case "TASK_DEFINITION":
+		launchTags = cloneTags(td.Tags)
+	}
 	for i := 0; i < diff; i++ {
 		if !r.serviceLaunchAllowed(launchKey, time.Now()) {
 			return
 		}
-		if _, err := r.launchTask(ctx, cluster, td, nil, svc.LaunchType, group, svc.ServiceName); err != nil {
+		if _, err := r.launchTask(ctx, cluster, td, nil, svc.LaunchType, group, svc.ServiceName, launchTags); err != nil {
 			log.Printf("[ecs] reconcile: start task for service %s: %v", svc.ServiceName, err)
 			r.recordServiceLaunchFailure(launchKey, time.Now())
 			return
@@ -1874,6 +2179,183 @@ func resolveCommand(cd types.ContainerDefinition, override *types.ContainerOverr
 // container: stable, unique per task, and human-recognisable in `docker ps`.
 func containerDockerName(taskArn, containerName string) string {
 	return "tarn-ecs-" + taskIDFromRef(taskArn) + "-" + containerName
+}
+
+// bytesPerMiBRunner mirrors internal/engine's bytesPerMiB, kept as a
+// separate constant here so this package doesn't need to import an
+// unexported engine constant.
+const bytesPerMiBRunner = int64(1024 * 1024)
+
+// resolveContainerMounts converts a container definition's MountPoints into
+// Docker bind specs ("source:target[:ro]"). SourceVolume is resolved
+// against the task definition's Volumes list:
+//   - Host.SourcePath set: bind-mounts that host path directly.
+//   - DockerVolumeConfiguration or a bare volume (neither Host nor
+//     DockerVolumeConfiguration set): a Docker named volume. "shared" scope
+//     gets a stable per-account+volume-name name so it survives across
+//     tasks; anything else (including bare volumes, which AWS shares only
+//     within one task) gets a name unique to this task, letting every
+//     container in the task reference the same named volume while Docker
+//     auto-creates it on first use.
+//   - EfsVolumeConfiguration-only volumes are store/echo only (no local EFS
+//     emulation) and are skipped here.
+func resolveContainerMounts(td *types.TaskDefinition, taskArn, accountID string, cd types.ContainerDefinition) []string {
+	if len(cd.MountPoints) == 0 {
+		return nil
+	}
+	volumes := make(map[string]types.Volume, len(td.Volumes))
+	for _, v := range td.Volumes {
+		volumes[v.Name] = v
+	}
+	var binds []string
+	for _, mp := range cd.MountPoints {
+		vol, ok := volumes[mp.SourceVolume]
+		if !ok || mp.ContainerPath == "" {
+			continue
+		}
+		source, isNamedVolume := volumeDockerName(vol, taskArn, accountID)
+		if source == "" && !isNamedVolume {
+			// EFS-only volume, or an unresolvable one: not applied locally.
+			continue
+		}
+		bind := source + ":" + mp.ContainerPath
+		if mp.ReadOnly {
+			bind += ":ro"
+		}
+		binds = append(binds, bind)
+	}
+	return binds
+}
+
+// volumeDockerName returns the Docker bind-mount source for a task
+// definition Volume entry: an absolute host path for a Host.SourcePath
+// volume (isNamedVolume false — no Docker named volume is created for a
+// plain bind mount), or a deterministic Docker named-volume name otherwise
+// (isNamedVolume true). An EFS-only volume (no Host, no
+// DockerVolumeConfiguration) returns ("", false): it is store/echo only,
+// with no local EFS emulation.
+//
+// Naming: "shared" scope gets a name stable across every task in this
+// account ("tarn-ecs-shared-<account>-<volume>"), so repeated tasks
+// referencing it share the same underlying Docker volume the way AWS's EFS
+// shared scope would. Everything else (a bare volume with neither Host nor
+// DockerVolumeConfiguration, or an explicit "task" scope) gets a name unique
+// to this task ("tarn-ecs-task-<taskID>-<volume>"), matching AWS's "shared
+// only within one task" default.
+func volumeDockerName(v types.Volume, taskArn, accountID string) (name string, isNamedVolume bool) {
+	if v.Host != nil && v.Host.SourcePath != "" {
+		return v.Host.SourcePath, false
+	}
+	if v.EfsVolumeConfiguration != nil && v.DockerVolumeConfiguration == nil {
+		return "", false
+	}
+	if v.DockerVolumeConfiguration != nil && v.DockerVolumeConfiguration.Scope == volumeScopeShared {
+		return "tarn-ecs-shared-" + accountID + "-" + v.Name, true
+	}
+	return "tarn-ecs-task-" + taskIDFromRef(taskArn) + "-" + v.Name, true
+}
+
+// resolveAndEnsureVolumes validates and creates the Docker named volumes a
+// task definition's Volumes need before any of its containers start.
+// Host-only and EFS-only volumes need nothing done here (resolved directly
+// by resolveContainerMounts, or left store/echo only for EFS). A "shared"
+// scope volume with autoprovision=false must already exist — a missing one
+// fails the whole launch with a clear StoppedReason rather than silently
+// creating a volume ECS itself would have refused to. Every other
+// Docker-volume-configured or bare volume is created if missing (Docker's
+// own create-by-name is idempotent) carrying Tarn's own tarn.* labels; the
+// "task"-scoped names created are returned so the caller can record them on
+// rt.taskVolumeNames for finishTask to remove once the task stops.
+func (r *Runner) resolveAndEnsureVolumes(ctx context.Context, td *types.TaskDefinition, taskArn string) ([]string, error) {
+	var taskScoped []string
+	accountID := r.cfg.AccountID
+	for _, v := range td.Volumes {
+		name, isNamedVolume := volumeDockerName(v, taskArn, accountID)
+		if !isNamedVolume {
+			continue
+		}
+
+		scope := volumeScopeTask
+		autoprovision := true
+		var driver string
+		var driverOpts, dockerLabels map[string]string
+		if v.DockerVolumeConfiguration != nil {
+			driver = v.DockerVolumeConfiguration.Driver
+			driverOpts = v.DockerVolumeConfiguration.DriverOpts
+			dockerLabels = v.DockerVolumeConfiguration.Labels
+			if v.DockerVolumeConfiguration.Scope == volumeScopeShared {
+				scope = volumeScopeShared
+				autoprovision = v.DockerVolumeConfiguration.Autoprovision
+			}
+		}
+
+		if scope == volumeScopeShared && !autoprovision {
+			exists, err := r.eng.TaskVolumeExists(ctx, name)
+			if err != nil {
+				return taskScoped, fmt.Errorf("volume %q: check shared Docker volume %q: %w", v.Name, name, err)
+			}
+			if !exists {
+				return taskScoped, clientError("volume %q: shared Docker volume %q does not exist and autoprovision is false", v.Name, name)
+			}
+			continue
+		}
+
+		ownTaskArn := ""
+		if scope == volumeScopeTask {
+			ownTaskArn = taskArn
+		}
+		labels := make(map[string]string, len(dockerLabels)+2)
+		for k, val := range dockerLabels {
+			labels[k] = val
+		}
+		for k, val := range taskVolumeLabels(accountID, ownTaskArn, scope) {
+			labels[k] = val
+		}
+		if err := r.eng.EnsureTaskVolume(ctx, name, driver, driverOpts, labels); err != nil {
+			return taskScoped, fmt.Errorf("volume %q: %w", v.Name, err)
+		}
+		if scope == volumeScopeTask {
+			taskScoped = append(taskScoped, name)
+		}
+	}
+	return taskScoped, nil
+}
+
+// removeTaskVolumes best-effort removes every task-scoped Docker volume rt
+// recorded at launch. Errors are logged, never surfaced: a volume Docker
+// still considers busy (e.g. a slow container teardown race) or one that's
+// already gone must not block the task from being recorded STOPPED, and
+// there's no caller left to report the error to.
+func (r *Runner) removeTaskVolumes(ctx context.Context, taskArn string, names []string) {
+	for _, name := range names {
+		if err := r.eng.RemoveTaskVolume(ctx, name); err != nil {
+			log.Printf("[ecs] remove task volume %s for %s: %v", name, taskArn, err)
+		}
+	}
+}
+
+// resolveVolumesFrom converts a container definition's VolumesFrom into
+// Docker's "container:[ro|rw]" HostConfig.VolumesFrom form, referencing
+// other containers of the same task by their deterministic Docker name.
+// This does not wait for the source container to exist first; a task
+// definition relying on VolumesFrom should also declare the equivalent
+// DependsOn so container start order matches.
+func resolveVolumesFrom(taskArn string, cd types.ContainerDefinition) []string {
+	if len(cd.VolumesFrom) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(cd.VolumesFrom))
+	for _, vf := range cd.VolumesFrom {
+		if vf.SourceContainer == "" {
+			continue
+		}
+		ref := containerDockerName(taskArn, vf.SourceContainer)
+		if vf.ReadOnly {
+			ref += ":ro"
+		}
+		out = append(out, ref)
+	}
+	return out
 }
 
 // resolveLogGroup picks the CloudWatch-style log group a container's output

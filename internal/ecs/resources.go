@@ -122,6 +122,56 @@ func resolveTaskContainerResources(td *types.TaskDefinition) (map[string]taskCon
 	return resources, nil
 }
 
+// applyResourceOverrides returns a shallow copy of td with task-level
+// Cpu/Memory and per-container Cpu/Memory/MemoryReservation replaced by
+// whatever RunTask's overrides supplied, so resolveTaskContainerResources
+// sees the overridden values without mutating the stored task definition.
+// A blank override field leaves the task definition's own value in place.
+func applyResourceOverrides(td *types.TaskDefinition, overrides *types.TaskOverride) *types.TaskDefinition {
+	if td == nil {
+		return td
+	}
+	if overrides == nil || (overrides.Cpu == "" && overrides.Memory == "" && !anyContainerResourceOverride(overrides)) {
+		return td
+	}
+
+	out := *td
+	if overrides.Cpu != "" {
+		out.Cpu = overrides.Cpu
+	}
+	if overrides.Memory != "" {
+		out.Memory = overrides.Memory
+	}
+	out.ContainerDefinitions = make([]types.ContainerDefinition, len(td.ContainerDefinitions))
+	copy(out.ContainerDefinitions, td.ContainerDefinitions)
+	for i, cd := range out.ContainerDefinitions {
+		co := containerOverrideFor(overrides, cd.Name)
+		if co == nil {
+			continue
+		}
+		if co.Cpu != 0 {
+			cd.Cpu = co.Cpu
+		}
+		if co.Memory != 0 {
+			cd.Memory = co.Memory
+		}
+		if co.MemoryReservation != 0 {
+			cd.MemoryReservation = co.MemoryReservation
+		}
+		out.ContainerDefinitions[i] = cd
+	}
+	return &out
+}
+
+func anyContainerResourceOverride(overrides *types.TaskOverride) bool {
+	for _, co := range overrides.ContainerOverrides {
+		if co.Cpu != 0 || co.Memory != 0 || co.MemoryReservation != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func validateTaskDefinition(td *types.TaskDefinition) error {
 	if td == nil {
 		return fmt.Errorf("task definition is required")

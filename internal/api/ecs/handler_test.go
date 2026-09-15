@@ -692,3 +692,135 @@ func TestServiceLifecycle(t *testing.T) {
 		t.Fatalf("DeleteService status=%d body=%s", del.Code, del.Body.String())
 	}
 }
+
+// --- Tagging ---------------------------------------------------------------
+
+// TestTagResourceLifecycleAndWireShape drives TagResource/ListTagsForResource/
+// UntagResource through the dispatcher and checks the wire shape uses
+// lowercase "key"/"value" (unlike most ECS fields, which are merely
+// camelCase), and that "tags" is present on the create response and gated by
+// Include on Describe*.
+func TestTagResourceLifecycleAndWireShape(t *testing.T) {
+	h := newTestHandler(t)
+
+	create := invoke(t, h, "CreateCluster", map[string]any{
+		"ClusterName": "tag-wire-cluster",
+		"Tags":        []map[string]string{{"Key": "env", "Value": "prod"}},
+	})
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateCluster status=%d body=%s", create.Code, create.Body.String())
+	}
+	var clusterBody map[string]any
+	decodeBody(t, create, &clusterBody)
+	clusterShape := clusterBody["cluster"].(map[string]any)
+	tagsField, ok := clusterShape["tags"].([]any)
+	if !ok || len(tagsField) != 1 {
+		t.Fatalf("expected 1 tag on cluster wire shape, got %v", clusterShape["tags"])
+	}
+	tagShape := tagsField[0].(map[string]any)
+	if tagShape["key"] != "env" || tagShape["value"] != "prod" {
+		t.Fatalf("expected lowercase key/value wire tag, got %v", tagShape)
+	}
+	clusterArn := clusterShape["clusterArn"].(string)
+
+	// DescribeClusters without Include=["TAGS"] omits tags.
+	describeNoInclude := invoke(t, h, "DescribeClusters", map[string]any{"Clusters": []string{"tag-wire-cluster"}})
+	var describeNoIncludeBody map[string]any
+	decodeBody(t, describeNoInclude, &describeNoIncludeBody)
+	clusters := describeNoIncludeBody["clusters"].([]any)
+	if _, ok := clusters[0].(map[string]any)["tags"]; ok {
+		t.Fatalf("expected tags omitted without Include=TAGS, got %v", clusters[0])
+	}
+
+	// DescribeClusters with Include=["TAGS"] includes them.
+	describeInclude := invoke(t, h, "DescribeClusters", map[string]any{
+		"Clusters": []string{"tag-wire-cluster"},
+		"Include":  []string{"TAGS"},
+	})
+	var describeIncludeBody map[string]any
+	decodeBody(t, describeInclude, &describeIncludeBody)
+	clustersInc := describeIncludeBody["clusters"].([]any)
+	if tags, ok := clustersInc[0].(map[string]any)["tags"].([]any); !ok || len(tags) != 1 {
+		t.Fatalf("expected 1 tag with Include=TAGS, got %v", clustersInc[0])
+	}
+
+	// ListTagsForResource
+	listed := invoke(t, h, "ListTagsForResource", map[string]any{"ResourceArn": clusterArn})
+	if listed.Code != http.StatusOK {
+		t.Fatalf("ListTagsForResource status=%d body=%s", listed.Code, listed.Body.String())
+	}
+	var listedOut types.ListTagsForResourceOutput
+	decodeBody(t, listed, &listedOut)
+	if len(listedOut.Tags) != 1 || listedOut.Tags[0].Key != "env" {
+		t.Fatalf("unexpected ListTagsForResource output: %+v", listedOut.Tags)
+	}
+
+	// TagResource adds a second tag.
+	tagRec := invoke(t, h, "TagResource", types.TagResourceInput{
+		ResourceArn: clusterArn,
+		Tags:        []types.Tag{{Key: "team", Value: "platform"}},
+	})
+	if tagRec.Code != http.StatusOK {
+		t.Fatalf("TagResource status=%d body=%s", tagRec.Code, tagRec.Body.String())
+	}
+
+	listedAgain := invoke(t, h, "ListTagsForResource", map[string]any{"ResourceArn": clusterArn})
+	var listedAgainOut types.ListTagsForResourceOutput
+	decodeBody(t, listedAgain, &listedAgainOut)
+	if len(listedAgainOut.Tags) != 2 {
+		t.Fatalf("expected 2 tags after TagResource, got %+v", listedAgainOut.Tags)
+	}
+
+	// UntagResource removes one.
+	untag := invoke(t, h, "UntagResource", types.UntagResourceInput{
+		ResourceArn: clusterArn,
+		TagKeys:     []string{"team"},
+	})
+	if untag.Code != http.StatusOK {
+		t.Fatalf("UntagResource status=%d body=%s", untag.Code, untag.Body.String())
+	}
+	listedFinal := invoke(t, h, "ListTagsForResource", map[string]any{"ResourceArn": clusterArn})
+	var listedFinalOut types.ListTagsForResourceOutput
+	decodeBody(t, listedFinal, &listedFinalOut)
+	if len(listedFinalOut.Tags) != 1 || listedFinalOut.Tags[0].Key != "env" {
+		t.Fatalf("expected 1 tag after UntagResource, got %+v", listedFinalOut.Tags)
+	}
+}
+
+// TestTagResourceUnknownArnReturnsError guards that TagResource against an
+// ARN that doesn't resolve to any known resource fails, matching real ECS.
+func TestTagResourceUnknownArnReturnsError(t *testing.T) {
+	h := newTestHandler(t)
+	rec := invoke(t, h, "TagResource", types.TagResourceInput{
+		ResourceArn: "arn:aws:ecs:us-east-1:000000000000:cluster/does-not-exist",
+		Tags:        []types.Tag{{Key: "a", Value: "1"}},
+	})
+	if rec.Code == http.StatusOK {
+		t.Fatalf("expected TagResource against an unknown ARN to fail, got status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestRegisterTaskDefinitionTagsWireShape guards that RegisterTaskDefinition's
+// response places "tags" at the top level of the wire body, not nested
+// inside "taskDefinition".
+func TestRegisterTaskDefinitionTagsWireShape(t *testing.T) {
+	h := newTestHandler(t)
+	rec := invoke(t, h, "RegisterTaskDefinition", types.RegisterTaskDefinitionInput{
+		Family:               "tag-wire-family",
+		ContainerDefinitions: []types.ContainerDefinition{{Name: "app", Image: "example/app:latest"}},
+		Tags:                 []types.Tag{{Key: "env", Value: "test"}},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("RegisterTaskDefinition status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	decodeBody(t, rec, &body)
+	tags, ok := body["tags"].([]any)
+	if !ok || len(tags) != 1 {
+		t.Fatalf("expected top-level tags on RegisterTaskDefinition response, got %v", body)
+	}
+	tdShape := body["taskDefinition"].(map[string]any)
+	if _, ok := tdShape["tags"]; ok {
+		t.Fatalf("expected tags to be absent from taskDefinition itself, got %v", tdShape)
+	}
+}

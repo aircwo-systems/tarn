@@ -126,6 +126,14 @@ func (s *Service) CreateCluster(in *types.CreateClusterInput) (*types.CreateClus
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	var tags []types.Tag
+	if in != nil {
+		if err := validateTags(in.Tags); err != nil {
+			return nil, err
+		}
+		tags = cloneTags(in.Tags)
+	}
+
 	if existing, err := s.store.GetCluster(name); err == nil {
 		s.hydrateClusterCounts(existing)
 		return &types.CreateClusterOutput{Cluster: existing}, nil
@@ -135,6 +143,7 @@ func (s *Service) CreateCluster(in *types.CreateClusterInput) (*types.CreateClus
 		ClusterName: name,
 		ClusterArn:  clusterARN(s.cfg, name),
 		Status:      types.ClusterStatusActive,
+		Tags:        tags,
 	}
 	if err := s.store.SaveCluster(cluster); err != nil {
 		return nil, err
@@ -158,12 +167,15 @@ func (s *Service) ListClusters(in *types.ListClustersInput) (*types.ListClusters
 
 func (s *Service) DescribeClusters(in *types.DescribeClustersInput) (*types.DescribeClustersOutput, error) {
 	var refs []string
+	var include []string
 	if in != nil {
 		refs = in.Clusters
+		include = in.Include
 	}
 	if len(refs) == 0 {
 		refs = []string{defaultClusterName}
 	}
+	withTags := includesTag(include)
 
 	out := &types.DescribeClustersOutput{}
 	for _, ref := range refs {
@@ -186,7 +198,11 @@ func (s *Service) DescribeClusters(in *types.DescribeClustersInput) (*types.Desc
 			continue
 		}
 		s.hydrateClusterCounts(cluster)
-		out.Clusters = append(out.Clusters, *cluster)
+		clusterCopy := *cluster
+		if !withTags {
+			clusterCopy.Tags = nil
+		}
+		out.Clusters = append(out.Clusters, clusterCopy)
 	}
 	return out, nil
 }
@@ -307,6 +323,12 @@ func (s *Service) RegisterTaskDefinition(in *types.RegisterTaskDefinitionInput) 
 		}
 		names[cd.Name] = true
 	}
+	if err := validateDependsOn(in.ContainerDefinitions, names); err != nil {
+		return nil, err
+	}
+	if err := validateTags(in.Tags); err != nil {
+		return nil, err
+	}
 
 	networkMode, err := normalizeNetworkMode(in.NetworkMode)
 	if err != nil {
@@ -342,19 +364,35 @@ func (s *Service) RegisterTaskDefinition(in *types.RegisterTaskDefinitionInput) 
 		Status:                  types.TaskDefinitionStatusActive,
 		RequiresCompatibilities: append([]string(nil), in.RequiresCompatibilities...),
 		RegisteredAt:            time.Now().UTC(),
+		TaskRoleArn:             in.TaskRoleArn,
+		ExecutionRoleArn:        in.ExecutionRoleArn,
+		PidMode:                 in.PidMode,
+		IpcMode:                 in.IpcMode,
+		RuntimePlatform:         in.RuntimePlatform,
+		EphemeralStorage:        in.EphemeralStorage,
+		Volumes:                 append([]types.Volume(nil), in.Volumes...),
+		PlacementConstraints:    append([]types.PlacementConstraint(nil), in.PlacementConstraints...),
+		Tags:                    cloneTags(in.Tags),
 	}
 	if err := s.store.SaveTaskDefinition(td); err != nil {
 		return nil, err
 	}
-	return &types.RegisterTaskDefinitionOutput{TaskDefinition: td}, nil
+	return &types.RegisterTaskDefinitionOutput{TaskDefinition: td, Tags: cloneTags(td.Tags)}, nil
 }
 
-func (s *Service) DescribeTaskDefinition(ref string) (*types.DescribeTaskDefinitionOutput, error) {
+// DescribeTaskDefinition resolves ref to a TaskDefinition record. Tags is
+// only populated when include contains "TAGS", matching real ECS (tags sit
+// at the top level of the output, never inside TaskDefinition itself).
+func (s *Service) DescribeTaskDefinition(ref string, include []string) (*types.DescribeTaskDefinitionOutput, error) {
 	td, err := s.resolveTaskDefinition(ref)
 	if err != nil {
 		return nil, err
 	}
-	return &types.DescribeTaskDefinitionOutput{TaskDefinition: td}, nil
+	out := &types.DescribeTaskDefinitionOutput{TaskDefinition: td}
+	if includesTag(include) {
+		out.Tags = cloneTags(td.Tags)
+	}
+	return out, nil
 }
 
 // ListTaskDefinitions returns task-definition ARNs in family/revision order.
@@ -543,12 +581,11 @@ func (s *Service) NewTaskRecord(cluster *types.Cluster, taskDef *types.TaskDefin
 		Containers:        containers,
 		CreatedAt:         time.Now().UTC(),
 	}
-	if overrides != nil {
-		// Overrides are not stored on the Task itself (AWS doesn't echo them
-		// back on DescribeTasks either); the runner consumes them directly
-		// off the RunTask input to build the container.
-		_ = overrides
-	}
+	// Overrides is stored so DescribeTasks can echo back taskRoleArn /
+	// executionRoleArn / cpu / memory overrides (real ECS does the same);
+	// the runner still consumes overrides directly off the RunTask input to
+	// build the container rather than reading them back off the task.
+	task.Overrides = overrides
 
 	if err := s.store.SaveTask(task); err != nil {
 		return nil, err
@@ -752,6 +789,64 @@ func (s *Service) SetContainerExitCode(taskArn, containerName string, exitCode *
 	return task, nil
 }
 
+// SetContainerHealthStatus records one container's Docker HEALTHCHECK result
+// and recomputes the task's aggregate HealthStatus (UNHEALTHY if any
+// container is unhealthy, else UNKNOWN if any is unknown, else HEALTHY —
+// counting only containers that report a health check at all).
+func (s *Service) SetContainerHealthStatus(taskArn, containerName, status string) (*types.Task, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, err := s.getTaskByRef(taskArn)
+	if err != nil {
+		return nil, err
+	}
+	if !s.mutateContainer(task, containerName, func(c *types.TaskContainer) {
+		c.HealthStatus = status
+	}) {
+		return nil, clientError("container %s not found on task %s", containerName, taskArn)
+	}
+	task.HealthStatus = aggregateTaskHealthStatus(task.Containers)
+	if err := s.store.SaveTask(task); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
+// aggregateTaskHealthStatus rolls up every container's HealthStatus into the
+// task-level value DescribeTasks reports, mirroring AWS: UNHEALTHY wins over
+// UNKNOWN wins over HEALTHY. Containers with no health check (empty
+// HealthStatus) are not counted; the result is "" when none report one.
+func aggregateTaskHealthStatus(containers []types.TaskContainer) string {
+	seen := false
+	unhealthy := false
+	unknown := false
+	for _, c := range containers {
+		switch c.HealthStatus {
+		case "":
+			continue
+		case types.HealthStatusUnhealthy:
+			seen = true
+			unhealthy = true
+		case types.HealthStatusUnknown:
+			seen = true
+			unknown = true
+		case types.HealthStatusHealthy:
+			seen = true
+		}
+	}
+	if !seen {
+		return ""
+	}
+	if unhealthy {
+		return types.HealthStatusUnhealthy
+	}
+	if unknown {
+		return types.HealthStatusUnknown
+	}
+	return types.HealthStatusHealthy
+}
+
 func (s *Service) mutateContainer(task *types.Task, containerName string, fn func(*types.TaskContainer)) bool {
 	for i := range task.Containers {
 		if task.Containers[i].Name == containerName {
@@ -828,6 +923,7 @@ func (s *Service) DescribeTasks(in *types.DescribeTasksInput) (*types.DescribeTa
 		return nil, err
 	}
 
+	withTags := includesTag(in.Include)
 	out := &types.DescribeTasksOutput{}
 	for _, ref := range in.Tasks {
 		task, err := s.getTaskByRef(ref)
@@ -839,7 +935,11 @@ func (s *Service) DescribeTasks(in *types.DescribeTasksInput) (*types.DescribeTa
 			})
 			continue
 		}
-		out.Tasks = append(out.Tasks, *task)
+		taskCopy := *task
+		if !withTags {
+			taskCopy.Tags = nil
+		}
+		out.Tasks = append(out.Tasks, taskCopy)
 	}
 	return out, nil
 }
@@ -859,6 +959,9 @@ func (s *Service) CreateService(in *types.CreateServiceInput) (*types.CreateServ
 	}
 	if in.DesiredCount < 0 {
 		return nil, invalidParameterError("desiredCount must be >= 0")
+	}
+	if err := validateTags(in.Tags); err != nil {
+		return nil, err
 	}
 
 	cluster, err := s.ResolveCluster(in.Cluster)
@@ -931,6 +1034,7 @@ func (s *Service) CreateService(in *types.CreateServiceInput) (*types.CreateServ
 		DeploymentConfiguration: deploymentConfig,
 		EnableECSManagedTags:    in.EnableECSManagedTags,
 		PropagateTags:           propagateTags,
+		Tags:                    cloneTags(in.Tags),
 	}
 	if err := s.store.SaveService(svc); err != nil {
 		return nil, err
@@ -1148,6 +1252,7 @@ func (s *Service) DescribeServices(in *types.DescribeServicesInput) (*types.Desc
 		return nil, err
 	}
 
+	withTags := includesTag(in.Include)
 	out := &types.DescribeServicesOutput{}
 	for _, ref := range in.Services {
 		name := serviceNameFromRef(ref)
@@ -1160,7 +1265,11 @@ func (s *Service) DescribeServices(in *types.DescribeServicesInput) (*types.Desc
 			})
 			continue
 		}
-		out.Services = append(out.Services, *svc)
+		svcCopy := *svc
+		if !withTags {
+			svcCopy.Tags = nil
+		}
+		out.Services = append(out.Services, svcCopy)
 	}
 	return out, nil
 }
@@ -1197,4 +1306,232 @@ func (s *Service) SetServiceCounts(cluster *types.Cluster, serviceName string, r
 		return nil, err
 	}
 	return svc, nil
+}
+
+// SetTaskTags records the tags a task was launched with (explicit RunTask
+// tags plus whatever propagateTags copied from the task definition or
+// owning service). Called by the runner right after NewTaskRecord, the same
+// way SetTaskCorrelationID is.
+func (s *Service) SetTaskTags(taskArn string, tags []types.Tag) (*types.Task, error) {
+	if len(tags) == 0 {
+		return s.GetTask(taskArn)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	task, err := s.getTaskByRef(taskArn)
+	if err != nil {
+		return nil, err
+	}
+	task.Tags = cloneTags(tags)
+	if err := s.store.SaveTask(task); err != nil {
+		return nil, err
+	}
+	return task, nil
+}
+
+// --- Tagging (TagResource / UntagResource / ListTagsForResource) -----------
+
+const maxResourceTags = 50
+
+// includesTag reports whether include (a DescribeClusters/DescribeServices/
+// DescribeTasks/DescribeTaskDefinition Include list) asked for "TAGS",
+// matching real ECS's opt-in tag reporting.
+func includesTag(include []string) bool {
+	for _, v := range include {
+		if strings.EqualFold(v, "TAGS") {
+			return true
+		}
+	}
+	return false
+}
+
+// validateTags checks a caller-supplied tag list against real ECS's limits:
+// at most 50 tags, key 1-128 chars, value 0-256 chars, no "aws:"-prefixed
+// keys (reserved), and no duplicate keys within one request.
+func validateTags(tags []types.Tag) error {
+	if len(tags) > maxResourceTags {
+		return invalidParameterError("tags: the maximum number of tags per resource is %d", maxResourceTags)
+	}
+	seen := make(map[string]bool, len(tags))
+	for _, t := range tags {
+		if len(t.Key) < 1 || len(t.Key) > 128 {
+			return invalidParameterError("Tag key must be between 1 and 128 characters: %q", t.Key)
+		}
+		if len(t.Value) > 256 {
+			return invalidParameterError("Tag value must be 256 characters or fewer: %q", t.Value)
+		}
+		if strings.HasPrefix(strings.ToLower(t.Key), "aws:") {
+			return invalidParameterError("Tag keys beginning with 'aws:' are reserved: %q", t.Key)
+		}
+		if seen[t.Key] {
+			return invalidParameterError("Duplicate tag key in request: %q", t.Key)
+		}
+		seen[t.Key] = true
+	}
+	return nil
+}
+
+// cloneTags returns an independent copy of tags, or nil for an empty list.
+func cloneTags(tags []types.Tag) []types.Tag {
+	if len(tags) == 0 {
+		return nil
+	}
+	return append([]types.Tag(nil), tags...)
+}
+
+// mergeTags applies updates onto existing, replacing any key already
+// present and appending new keys, preserving existing's original order.
+func mergeTags(existing, updates []types.Tag) []types.Tag {
+	byKey := make(map[string]string, len(existing)+len(updates))
+	order := make([]string, 0, len(existing)+len(updates))
+	for _, t := range existing {
+		if _, ok := byKey[t.Key]; !ok {
+			order = append(order, t.Key)
+		}
+		byKey[t.Key] = t.Value
+	}
+	for _, t := range updates {
+		if _, ok := byKey[t.Key]; !ok {
+			order = append(order, t.Key)
+		}
+		byKey[t.Key] = t.Value
+	}
+	if len(order) == 0 {
+		return nil
+	}
+	out := make([]types.Tag, len(order))
+	for i, k := range order {
+		out[i] = types.Tag{Key: k, Value: byKey[k]}
+	}
+	return out
+}
+
+// removeTagKeys drops every tag in existing whose key appears in keys.
+func removeTagKeys(existing []types.Tag, keys []string) []types.Tag {
+	if len(existing) == 0 || len(keys) == 0 {
+		return existing
+	}
+	drop := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		drop[k] = true
+	}
+	out := make([]types.Tag, 0, len(existing))
+	for _, t := range existing {
+		if !drop[t.Key] {
+			out = append(out, t)
+		}
+	}
+	return cloneTags(out)
+}
+
+// taggableLocked resolves arn (a cluster, task definition, service, or task
+// ARN) to get/set accessors for that resource's tag list. Callers must hold
+// s.mu; set persists through the same store method the resource's other
+// mutators use.
+func (s *Service) taggableLocked(arn string) (get func() []types.Tag, set func([]types.Tag) error, err error) {
+	switch {
+	case strings.Contains(arn, ":cluster/"):
+		c, gerr := s.store.GetCluster(clusterNameFromRef(arn))
+		if gerr != nil {
+			return nil, nil, clientError("Cluster not found: %s", arn)
+		}
+		return func() []types.Tag { return c.Tags },
+			func(t []types.Tag) error { c.Tags = t; return s.store.SaveCluster(c) },
+			nil
+	case strings.Contains(arn, ":task-definition/"):
+		td, terr := s.resolveTaskDefinition(arn)
+		if terr != nil {
+			return nil, nil, clientError("Task definition not found: %s", arn)
+		}
+		return func() []types.Tag { return td.Tags },
+			func(t []types.Tag) error { td.Tags = t; return s.store.SaveTaskDefinition(td) },
+			nil
+	case strings.Contains(arn, ":service/"):
+		clusterName, name, ok := parseServiceArn(arn)
+		if !ok {
+			return nil, nil, invalidParameterError("Invalid service ARN: %s", arn)
+		}
+		svc, serr := s.store.GetService(clusterARN(s.cfg, clusterName), name)
+		if serr != nil {
+			return nil, nil, clientError("Service not found: %s", arn)
+		}
+		return func() []types.Tag { return svc.Tags },
+			func(t []types.Tag) error { svc.Tags = t; return s.store.SaveService(svc) },
+			nil
+	case strings.Contains(arn, ":task/"):
+		task, terr := s.getTaskByRef(arn)
+		if terr != nil {
+			return nil, nil, clientError("Task not found: %s", arn)
+		}
+		return func() []types.Tag { return task.Tags },
+			func(t []types.Tag) error { task.Tags = t; return s.store.SaveTask(task) },
+			nil
+	default:
+		return nil, nil, invalidParameterError("Long arn format is not supported for this resource: %s", arn)
+	}
+}
+
+// TagResource adds or replaces tags on a cluster, task definition, service,
+// or task, resolved from ResourceArn.
+func (s *Service) TagResource(in *types.TagResourceInput) (*types.TagResourceOutput, error) {
+	if in == nil || strings.TrimSpace(in.ResourceArn) == "" {
+		return nil, invalidParameterError("resourceArn is required")
+	}
+	if err := validateTags(in.Tags); err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	get, set, err := s.taggableLocked(in.ResourceArn)
+	if err != nil {
+		return nil, err
+	}
+	merged := mergeTags(get(), in.Tags)
+	if len(merged) > maxResourceTags {
+		return nil, invalidParameterError("tags: the maximum number of tags per resource is %d", maxResourceTags)
+	}
+	if err := set(merged); err != nil {
+		return nil, err
+	}
+	return &types.TagResourceOutput{}, nil
+}
+
+// UntagResource removes the given tag keys from a cluster, task definition,
+// service, or task, resolved from ResourceArn.
+func (s *Service) UntagResource(in *types.UntagResourceInput) (*types.UntagResourceOutput, error) {
+	if in == nil || strings.TrimSpace(in.ResourceArn) == "" {
+		return nil, invalidParameterError("resourceArn is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	get, set, err := s.taggableLocked(in.ResourceArn)
+	if err != nil {
+		return nil, err
+	}
+	if err := set(removeTagKeys(get(), in.TagKeys)); err != nil {
+		return nil, err
+	}
+	return &types.UntagResourceOutput{}, nil
+}
+
+// ListTagsForResource returns the tags currently attached to a cluster, task
+// definition, service, or task, resolved from ResourceArn.
+func (s *Service) ListTagsForResource(in *types.ListTagsForResourceInput) (*types.ListTagsForResourceOutput, error) {
+	if in == nil || strings.TrimSpace(in.ResourceArn) == "" {
+		return nil, invalidParameterError("resourceArn is required")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	get, _, err := s.taggableLocked(in.ResourceArn)
+	if err != nil {
+		return nil, err
+	}
+	return &types.ListTagsForResourceOutput{Tags: cloneTags(get())}, nil
 }

@@ -83,6 +83,18 @@ type Cluster struct {
 	RunningTasksCount                 int    `json:"runningTasksCount"`
 	PendingTasksCount                 int    `json:"pendingTasksCount"`
 	ActiveServicesCount               int    `json:"activeServicesCount"`
+	// Tags is only echoed on DescribeClusters when the request's Include
+	// contains "TAGS", matching real ECS. See internal/ecs/service.go's
+	// includesTag / applyTagInclusion.
+	Tags []Tag `json:"Tags,omitempty"`
+}
+
+// Tag mirrors the AWS ECS tag shape. Unlike most ECS wire fields (which are
+// camelCase), ECS's Tag member names are lowercase "key"/"value" on the
+// wire; see internal/api/ecs/wire.go's wireTag.
+type Tag struct {
+	Key   string `json:"Key"`
+	Value string `json:"Value"`
 }
 
 // TaskDefinition models one revision of a task definition family. Family plus
@@ -99,6 +111,86 @@ type TaskDefinition struct {
 	Status                  string                `json:"Status"`
 	RequiresCompatibilities []string              `json:"RequiresCompatibilities,omitempty"`
 	RegisteredAt            time.Time             `json:"RegisteredAt"`
+	// Tags is never part of the taskDefinition wire shape itself (real ECS
+	// reports tags at the top level of Register/DescribeTaskDefinition's
+	// output, only when Include contains "TAGS"); wireTaskDefinitionValue in
+	// internal/api/ecs/wire.go deliberately does not map this field onto
+	// wireTaskDefinition. The JSON tag here only matters for on-disk
+	// persistence (internal/ecs/store.go marshals types.TaskDefinition
+	// directly).
+	Tags []Tag `json:"Tags,omitempty"`
+
+	// TaskRoleArn / ExecutionRoleArn are stored and echoed for Terraform
+	// drift-avoidance only; Tarn does not vend credentials from either role
+	// locally.
+	TaskRoleArn      string `json:"TaskRoleArn,omitempty"`
+	ExecutionRoleArn string `json:"ExecutionRoleArn,omitempty"`
+	// PidMode and IpcMode are stored/echoed only; the namespace sharing they
+	// describe is not applied locally.
+	PidMode string `json:"PidMode,omitempty"`
+	IpcMode string `json:"IpcMode,omitempty"`
+
+	RuntimePlatform      *RuntimePlatform      `json:"RuntimePlatform,omitempty"`
+	EphemeralStorage     *EphemeralStorage     `json:"EphemeralStorage,omitempty"`
+	Volumes              []Volume              `json:"Volumes,omitempty"`
+	PlacementConstraints []PlacementConstraint `json:"PlacementConstraints,omitempty"`
+}
+
+// RuntimePlatform mirrors the AWS ECS shape. Store/echo only.
+type RuntimePlatform struct {
+	CpuArchitecture       string `json:"CpuArchitecture,omitempty"`
+	OperatingSystemFamily string `json:"OperatingSystemFamily,omitempty"`
+}
+
+// EphemeralStorage mirrors the AWS ECS shape. Store/echo only.
+type EphemeralStorage struct {
+	SizeInGiB int `json:"SizeInGiB,omitempty"`
+}
+
+// PlacementConstraint mirrors the AWS ECS shape. Store/echo only.
+type PlacementConstraint struct {
+	Type       string `json:"Type,omitempty"`
+	Expression string `json:"Expression,omitempty"`
+}
+
+// Volume mirrors the AWS ECS task-definition volume shape. Host and
+// DockerVolumeConfiguration are applied locally (see internal/engine/task.go
+// volume resolution); EfsVolumeConfiguration is store/echo only.
+type Volume struct {
+	Name                      string                     `json:"Name"`
+	Host                      *HostVolumeProperties      `json:"Host,omitempty"`
+	DockerVolumeConfiguration *DockerVolumeConfiguration `json:"DockerVolumeConfiguration,omitempty"`
+	EfsVolumeConfiguration    *EFSVolumeConfiguration    `json:"EfsVolumeConfiguration,omitempty"`
+}
+
+// HostVolumeProperties mirrors the AWS ECS shape.
+type HostVolumeProperties struct {
+	SourcePath string `json:"SourcePath,omitempty"`
+}
+
+// DockerVolumeConfiguration mirrors the AWS ECS shape.
+type DockerVolumeConfiguration struct {
+	Scope         string            `json:"Scope,omitempty"`
+	Autoprovision bool              `json:"Autoprovision,omitempty"`
+	Driver        string            `json:"Driver,omitempty"`
+	DriverOpts    map[string]string `json:"DriverOpts,omitempty"`
+	Labels        map[string]string `json:"Labels,omitempty"`
+}
+
+// EFSVolumeConfiguration mirrors the AWS ECS shape. Store/echo only: Tarn
+// has no EFS emulation.
+type EFSVolumeConfiguration struct {
+	FileSystemId          string                  `json:"FileSystemId,omitempty"`
+	RootDirectory         string                  `json:"RootDirectory,omitempty"`
+	TransitEncryption     string                  `json:"TransitEncryption,omitempty"`
+	TransitEncryptionPort int                     `json:"TransitEncryptionPort,omitempty"`
+	AuthorizationConfig   *EFSAuthorizationConfig `json:"AuthorizationConfig,omitempty"`
+}
+
+// EFSAuthorizationConfig mirrors the AWS ECS shape. Store/echo only.
+type EFSAuthorizationConfig struct {
+	AccessPointId string `json:"AccessPointId,omitempty"`
+	IAM           string `json:"IAM,omitempty"`
 }
 
 // ContainerDefinition models a single container within a TaskDefinition.
@@ -114,7 +206,176 @@ type ContainerDefinition struct {
 	Cpu               int               `json:"Cpu,omitempty"`
 	Memory            int               `json:"Memory,omitempty"`
 	MemoryReservation int               `json:"MemoryReservation,omitempty"`
+	// Secrets are resolved at launch time (Secrets Manager only — Tarn has no
+	// SSM service) and injected as environment variables named Name. Not
+	// echoed anywhere except back through this same field: values are never
+	// logged, traced, or placed in Docker labels. If an Environment entry
+	// shares the same Name, the secret wins (AWS's own precedence here is
+	// unusual/undocumented; this is the documented Tarn choice).
+	Secrets []ContainerSecret `json:"Secrets,omitempty"`
+	// HealthCheck is stored/echoed exactly as given — nil sub-fields must stay
+	// nil so DescribeTaskDefinition doesn't introduce drift against
+	// Terraform's container_definitions plan. Defaults (interval 30s, timeout
+	// 5s, retries 3, startPeriod 0) are applied only at Docker HEALTHCHECK
+	// creation time, never written back here.
+	HealthCheck *ContainerHealthCheck `json:"HealthCheck,omitempty"`
+	// DependsOn orders this container's start relative to others in the same
+	// task definition. Validated for unknown container names and cycles at
+	// RegisterTaskDefinition time.
+	DependsOn []ContainerDependency `json:"DependsOn,omitempty"`
+
+	// Fields below are additional Terraform-drift-avoidance fields. See the
+	// per-field comments for which are applied locally vs. store/echo only.
+	WorkingDirectory string            `json:"WorkingDirectory,omitempty"`
+	User             string            `json:"User,omitempty"`
+	StopTimeout      int               `json:"StopTimeout,omitempty"`
+	StartTimeout     int               `json:"StartTimeout,omitempty"`
+	Ulimits          []Ulimit          `json:"Ulimits,omitempty"`
+	DockerLabels     map[string]string `json:"DockerLabels,omitempty"`
+	MountPoints      []MountPoint      `json:"MountPoints,omitempty"`
+	VolumesFrom      []VolumeFrom      `json:"VolumesFrom,omitempty"`
+
+	ReadonlyRootFilesystem *bool            `json:"ReadonlyRootFilesystem,omitempty"`
+	Privileged             *bool            `json:"Privileged,omitempty"`
+	LinuxParameters        *LinuxParameters `json:"LinuxParameters,omitempty"`
+
+	Hostname       string          `json:"Hostname,omitempty"`
+	DnsServers     []string        `json:"DnsServers,omitempty"`
+	ExtraHosts     []HostEntry     `json:"ExtraHosts,omitempty"`
+	Interactive    *bool           `json:"Interactive,omitempty"`
+	PseudoTerminal *bool           `json:"PseudoTerminal,omitempty"`
+	SystemControls []SystemControl `json:"SystemControls,omitempty"`
+
+	// EnvironmentFiles, RepositoryCredentials and FirelensConfiguration are
+	// store/echo only: Tarn does not fetch S3 env files, pull credentials
+	// from Secrets Manager for image pulls, or run a log router locally.
+	EnvironmentFiles      []EnvironmentFile      `json:"EnvironmentFiles,omitempty"`
+	RepositoryCredentials *RepositoryCredentials `json:"RepositoryCredentials,omitempty"`
+	FirelensConfiguration *FirelensConfiguration `json:"FirelensConfiguration,omitempty"`
 }
+
+// Ulimit mirrors the AWS ECS shape. Applied to HostConfig.Ulimits.
+type Ulimit struct {
+	Name      string `json:"Name"`
+	SoftLimit int    `json:"SoftLimit"`
+	HardLimit int    `json:"HardLimit"`
+}
+
+// MountPoint mirrors the AWS ECS shape: SourceVolume names an entry in the
+// TaskDefinition's Volumes list, resolved to a Docker mount at ContainerPath.
+type MountPoint struct {
+	SourceVolume  string `json:"SourceVolume,omitempty"`
+	ContainerPath string `json:"ContainerPath,omitempty"`
+	ReadOnly      bool   `json:"ReadOnly,omitempty"`
+}
+
+// VolumeFrom mirrors the AWS ECS shape: SourceContainer names another
+// container in the same task definition to inherit mounts from.
+type VolumeFrom struct {
+	SourceContainer string `json:"SourceContainer,omitempty"`
+	ReadOnly        bool   `json:"ReadOnly,omitempty"`
+}
+
+// LinuxParameters mirrors the (partial) AWS ECS shape. InitProcessEnabled,
+// Capabilities and SharedMemorySize/Tmpfs are applied locally; other real
+// AWS sub-fields (Devices, MaxSwap, Swappiness) are not modeled.
+type LinuxParameters struct {
+	InitProcessEnabled *bool               `json:"InitProcessEnabled,omitempty"`
+	Capabilities       *KernelCapabilities `json:"Capabilities,omitempty"`
+	SharedMemorySize   int                 `json:"SharedMemorySize,omitempty"`
+	Tmpfs              []Tmpfs             `json:"Tmpfs,omitempty"`
+}
+
+// KernelCapabilities mirrors the AWS ECS shape.
+type KernelCapabilities struct {
+	Add  []string `json:"Add,omitempty"`
+	Drop []string `json:"Drop,omitempty"`
+}
+
+// Tmpfs mirrors the AWS ECS shape.
+type Tmpfs struct {
+	ContainerPath string   `json:"ContainerPath,omitempty"`
+	Size          int      `json:"Size,omitempty"`
+	MountOptions  []string `json:"MountOptions,omitempty"`
+}
+
+// HostEntry mirrors the AWS ECS extraHosts shape.
+type HostEntry struct {
+	Hostname  string `json:"Hostname,omitempty"`
+	IpAddress string `json:"IpAddress,omitempty"`
+}
+
+// SystemControl mirrors the AWS ECS shape. Store/echo only.
+type SystemControl struct {
+	Namespace string `json:"Namespace,omitempty"`
+	Value     string `json:"Value,omitempty"`
+}
+
+// EnvironmentFile mirrors the AWS ECS shape. Store/echo only.
+type EnvironmentFile struct {
+	Value string `json:"Value,omitempty"`
+	Type  string `json:"Type,omitempty"`
+}
+
+// RepositoryCredentials mirrors the AWS ECS shape. Store/echo only.
+type RepositoryCredentials struct {
+	CredentialsParameter string `json:"CredentialsParameter,omitempty"`
+}
+
+// FirelensConfiguration mirrors the AWS ECS shape. Store/echo only.
+type FirelensConfiguration struct {
+	Type    string            `json:"Type,omitempty"`
+	Options map[string]string `json:"Options,omitempty"`
+}
+
+// ContainerSecret mirrors the AWS ECS Secret shape: an environment variable
+// Name whose value is resolved from ValueFrom at launch time.
+type ContainerSecret struct {
+	Name      string `json:"Name"`
+	ValueFrom string `json:"ValueFrom"`
+}
+
+// ContainerHealthCheck mirrors the AWS ECS HealthCheck shape. Interval,
+// Timeout, Retries and StartPeriod are pointers so an unset field is
+// distinguishable from an explicit 0, matching AWS's echo-only-what-was-set
+// behaviour on DescribeTaskDefinition.
+type ContainerHealthCheck struct {
+	Command     []string `json:"Command,omitempty"`
+	Interval    *int     `json:"Interval,omitempty"`
+	Timeout     *int     `json:"Timeout,omitempty"`
+	Retries     *int     `json:"Retries,omitempty"`
+	StartPeriod *int     `json:"StartPeriod,omitempty"`
+}
+
+// Container health check defaults, applied only at Docker HEALTHCHECK
+// creation time (never persisted back onto a ContainerHealthCheck).
+const (
+	DefaultHealthCheckIntervalSeconds    = 30
+	DefaultHealthCheckTimeoutSeconds     = 5
+	DefaultHealthCheckRetries            = 3
+	DefaultHealthCheckStartPeriodSeconds = 0
+)
+
+// ContainerDependency mirrors the AWS ECS ContainerDependency shape.
+type ContainerDependency struct {
+	ContainerName string `json:"ContainerName"`
+	Condition     string `json:"Condition"`
+}
+
+// Container dependency conditions, per AWS ECS semantics.
+const (
+	ContainerConditionStart    = "START"
+	ContainerConditionComplete = "COMPLETE"
+	ContainerConditionSuccess  = "SUCCESS"
+	ContainerConditionHealthy  = "HEALTHY"
+)
+
+// Container/task health status values, mirroring AWS ECS's HealthStatus.
+const (
+	HealthStatusHealthy   = "HEALTHY"
+	HealthStatusUnhealthy = "UNHEALTHY"
+	HealthStatusUnknown   = "UNKNOWN"
+)
 
 // PortMapping maps a container port to a host port. HostPort is 0 in the
 // task definition (meaning "assign an ephemeral port at run time"); the
@@ -170,6 +431,9 @@ type ECSService struct {
 	DeploymentConfiguration *DeploymentConfiguration `json:"DeploymentConfiguration,omitempty"`
 	EnableECSManagedTags    bool                     `json:"EnableECSManagedTags,omitempty"`
 	PropagateTags           string                   `json:"PropagateTags,omitempty"`
+	// Tags is only echoed on DescribeServices when the request's Include
+	// contains "TAGS", matching real ECS.
+	Tags []Tag `json:"Tags,omitempty"`
 
 	// InactiveAt records when DeleteService tombstoned this record (kept
 	// INACTIVE rather than removed, so Terraform's post-destroy
@@ -223,6 +487,19 @@ type Task struct {
 	// the wire shape in internal/api/ecs/wire.go the same way EventPayload is
 	// kept off RunTaskInput's.
 	CorrelationID string `json:"-"`
+	// Tags is only echoed on DescribeTasks when the request's Include
+	// contains "TAGS", matching real ECS.
+	Tags []Tag `json:"Tags,omitempty"`
+	// HealthStatus aggregates every container's HealthStatus: UNHEALTHY if
+	// any is unhealthy, else UNKNOWN if any is unknown, else HEALTHY. Empty
+	// (omitted) when the task definition defines no container health checks
+	// at all, matching AWS leaving the field unset in that case.
+	HealthStatus string `json:"HealthStatus,omitempty"`
+	// Overrides records the TaskOverride this task was launched with (RunTask
+	// input), echoed back on DescribeTasks so a caller can see the
+	// taskRoleArn/executionRoleArn/cpu/memory overrides that were actually
+	// applied. Never mutated after launch.
+	Overrides *TaskOverride `json:"Overrides,omitempty"`
 }
 
 // TaskContainer models one container within a running Task. ExitCode is a
@@ -236,6 +513,10 @@ type TaskContainer struct {
 	ExitCode        *int64           `json:"ExitCode,omitempty"`
 	Reason          string           `json:"Reason,omitempty"`
 	NetworkBindings []NetworkBinding `json:"NetworkBindings,omitempty"`
+	// HealthStatus reflects the container's Docker HEALTHCHECK state
+	// (HEALTHY/UNHEALTHY/UNKNOWN). Empty when the container defines no
+	// HealthCheck.
+	HealthStatus string `json:"HealthStatus,omitempty"`
 }
 
 // NetworkBinding records one published host port for a TaskContainer, the
@@ -253,6 +534,15 @@ type NetworkBinding struct {
 // "Payload delivery" section).
 type TaskOverride struct {
 	ContainerOverrides []ContainerOverride `json:"ContainerOverrides,omitempty"`
+	// Cpu / Memory override the task definition's own values for this run
+	// only, feeding resolveTaskContainerResources the same way the task
+	// definition's fields do.
+	Cpu    string `json:"Cpu,omitempty"`
+	Memory string `json:"Memory,omitempty"`
+	// TaskRoleArn / ExecutionRoleArn are stored on the task and echoed back
+	// on DescribeTasks; Tarn does not vend credentials from either role.
+	TaskRoleArn      string `json:"TaskRoleArn,omitempty"`
+	ExecutionRoleArn string `json:"ExecutionRoleArn,omitempty"`
 }
 
 // ContainerOverride overrides fields of a single named container for one
@@ -261,6 +551,14 @@ type ContainerOverride struct {
 	Name        string         `json:"Name"`
 	Command     []string       `json:"Command,omitempty"`
 	Environment []KeyValuePair `json:"Environment,omitempty"`
+	// Cpu / Memory / MemoryReservation override the container definition's
+	// own resource values for this run only.
+	Cpu               int `json:"Cpu,omitempty"`
+	Memory            int `json:"Memory,omitempty"`
+	MemoryReservation int `json:"MemoryReservation,omitempty"`
+	// EnvironmentFiles is store/echo only, mirroring
+	// ContainerDefinition.EnvironmentFiles.
+	EnvironmentFiles []EnvironmentFile `json:"EnvironmentFiles,omitempty"`
 }
 
 // --- Phase-one request/response shapes -------------------------------------
@@ -268,6 +566,7 @@ type ContainerOverride struct {
 // CreateClusterInput is the input to CreateCluster.
 type CreateClusterInput struct {
 	ClusterName string `json:"ClusterName"`
+	Tags        []Tag  `json:"Tags,omitempty"`
 }
 
 // CreateClusterOutput is the output of CreateCluster.
@@ -290,6 +589,9 @@ type ListClustersOutput struct {
 // DescribeClustersInput is the input to DescribeClusters.
 type DescribeClustersInput struct {
 	Clusters []string `json:"Clusters,omitempty"`
+	// Include may contain "TAGS", which is required for DescribeClusters to
+	// echo back the cluster's Tags, matching real ECS.
+	Include []string `json:"Include,omitempty"`
 }
 
 // DescribeClustersOutput is the output of DescribeClusters.
@@ -314,21 +616,40 @@ type RegisterTaskDefinitionInput struct {
 	Memory                  string                `json:"Memory,omitempty"`
 	NetworkMode             string                `json:"NetworkMode,omitempty"`
 	RequiresCompatibilities []string              `json:"RequiresCompatibilities,omitempty"`
+	Tags                    []Tag                 `json:"Tags,omitempty"`
+
+	TaskRoleArn          string                `json:"TaskRoleArn,omitempty"`
+	ExecutionRoleArn     string                `json:"ExecutionRoleArn,omitempty"`
+	PidMode              string                `json:"PidMode,omitempty"`
+	IpcMode              string                `json:"IpcMode,omitempty"`
+	RuntimePlatform      *RuntimePlatform      `json:"RuntimePlatform,omitempty"`
+	EphemeralStorage     *EphemeralStorage     `json:"EphemeralStorage,omitempty"`
+	Volumes              []Volume              `json:"Volumes,omitempty"`
+	PlacementConstraints []PlacementConstraint `json:"PlacementConstraints,omitempty"`
 }
 
 // RegisterTaskDefinitionOutput is the output of RegisterTaskDefinition.
+// Tags is populated (from the TaskDefinition record) at the top level of the
+// output, never inside TaskDefinition, matching real ECS.
 type RegisterTaskDefinitionOutput struct {
 	TaskDefinition *TaskDefinition `json:"TaskDefinition"`
+	Tags           []Tag           `json:"Tags,omitempty"`
 }
 
 // DescribeTaskDefinitionInput is the input to DescribeTaskDefinition.
 type DescribeTaskDefinitionInput struct {
 	TaskDefinition string `json:"TaskDefinition"`
+	// Include may contain "TAGS", which is required for DescribeTaskDefinition
+	// to echo back the task definition's Tags, matching real ECS.
+	Include []string `json:"Include,omitempty"`
 }
 
-// DescribeTaskDefinitionOutput is the output of DescribeTaskDefinition.
+// DescribeTaskDefinitionOutput is the output of DescribeTaskDefinition. Tags
+// is only populated when the request's Include contains "TAGS", and always
+// sits at the top level of the output, never inside TaskDefinition.
 type DescribeTaskDefinitionOutput struct {
 	TaskDefinition *TaskDefinition `json:"TaskDefinition"`
+	Tags           []Tag           `json:"Tags,omitempty"`
 }
 
 // ListTaskDefinitionsInput is the input to ListTaskDefinitions.
@@ -356,6 +677,11 @@ type RunTaskInput struct {
 	Group          string        `json:"Group,omitempty"`
 	LaunchType     string        `json:"LaunchType,omitempty"`
 	Overrides      *TaskOverride `json:"Overrides,omitempty"`
+	Tags           []Tag         `json:"Tags,omitempty"`
+	// PropagateTags is "TASK_DEFINITION" or "NONE" ("" defaults to "NONE"),
+	// matching real RunTask (which, unlike CreateService, has no "SERVICE"
+	// option).
+	PropagateTags string `json:"PropagateTags,omitempty"`
 	// EventPayload is an internal delivery hint used by the local
 	// EventBridge-to-ECS adapter. It is never part of the AWS RunTask wire
 	// request.
@@ -406,6 +732,9 @@ type ListTasksOutput struct {
 type DescribeTasksInput struct {
 	Cluster string   `json:"Cluster,omitempty"`
 	Tasks   []string `json:"Tasks"`
+	// Include may contain "TAGS", which is required for DescribeTasks to
+	// echo back each task's Tags, matching real ECS.
+	Include []string `json:"Include,omitempty"`
 }
 
 // DescribeTasksOutput is the output of DescribeTasks.
@@ -429,6 +758,7 @@ type CreateServiceInput struct {
 	DeploymentConfiguration *DeploymentConfiguration `json:"DeploymentConfiguration,omitempty"`
 	EnableECSManagedTags    bool                     `json:"EnableECSManagedTags,omitempty"`
 	PropagateTags           string                   `json:"PropagateTags,omitempty"`
+	Tags                    []Tag                    `json:"Tags,omitempty"`
 }
 
 // CreateServiceOutput is the output of CreateService.
@@ -481,12 +811,47 @@ type ListServicesOutput struct {
 type DescribeServicesInput struct {
 	Cluster  string   `json:"Cluster,omitempty"`
 	Services []string `json:"Services"`
+	// Include may contain "TAGS", which is required for DescribeServices to
+	// echo back each service's Tags, matching real ECS.
+	Include []string `json:"Include,omitempty"`
 }
 
 // DescribeServicesOutput is the output of DescribeServices.
 type DescribeServicesOutput struct {
 	Services []ECSService `json:"Services"`
 	Failures []Failure    `json:"Failures,omitempty"`
+}
+
+// --- Tagging request/response shapes ----------------------------------------
+
+// TagResourceInput is the input to TagResource. ResourceArn identifies a
+// cluster, task definition, service, or task; see
+// internal/ecs/service.go's taggableLocked for ARN resolution.
+type TagResourceInput struct {
+	ResourceArn string `json:"ResourceArn"`
+	Tags        []Tag  `json:"Tags"`
+}
+
+// TagResourceOutput is the (empty) output of TagResource.
+type TagResourceOutput struct{}
+
+// UntagResourceInput is the input to UntagResource.
+type UntagResourceInput struct {
+	ResourceArn string   `json:"ResourceArn"`
+	TagKeys     []string `json:"TagKeys"`
+}
+
+// UntagResourceOutput is the (empty) output of UntagResource.
+type UntagResourceOutput struct{}
+
+// ListTagsForResourceInput is the input to ListTagsForResource.
+type ListTagsForResourceInput struct {
+	ResourceArn string `json:"ResourceArn"`
+}
+
+// ListTagsForResourceOutput is the output of ListTagsForResource.
+type ListTagsForResourceOutput struct {
+	Tags []Tag `json:"Tags"`
 }
 
 // TaskRunner defines the ECS behaviour required by callers (EventBridge, Step

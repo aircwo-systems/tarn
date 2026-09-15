@@ -186,6 +186,11 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	if err := secretsSvc.Init(); err != nil {
 		return nil, fmt.Errorf("secrets store: %w", err)
 	}
+	// ECS container definitions can reference Secrets Manager secrets via
+	// `secrets`; the runner resolves them at launch time (see
+	// internal/ecs/secretref.go). Wired here, after secretsSvc exists, rather
+	// than up where ecsRunner is constructed.
+	ecsRunner.SetSecretsResolver(secretsSvc)
 
 	// DynamoDB
 	dynamoSvc := dynamodb.NewService(acctCfg)
