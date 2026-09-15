@@ -84,6 +84,13 @@ func (h *Handler) SetECSService(svc *ecssvc.Service) {
 	h.ecs = svc
 }
 
+// SetECSTaskRunner wires the account-local ECS task runner used by the
+// dashboard's run-task trigger. Mirrors SetECSService: until called,
+// RunECSTask reports 503 instead of reaching a nil runner.
+func (h *Handler) SetECSTaskRunner(runner types.TaskRunner) {
+	h.taskRunner = runner
+}
+
 type overviewResponse struct {
 	Status              string                   `json:"status"`
 	Timestamp           time.Time                `json:"timestamp"`
@@ -1797,6 +1804,177 @@ func collectDisruptorQueues(req disruptorRulePayload) []string {
 		add(q)
 	}
 	return out
+}
+
+// ecsRunTaskRequest is the dashboard run-task trigger payload. Field names
+// are camelCase for the UI; it maps onto types.RunTaskInput one-to-one.
+type ecsRunTaskRequest struct {
+	Cluster        string               `json:"cluster"`
+	TaskDefinition string               `json:"taskDefinition"`
+	Count          int                  `json:"count"`
+	LaunchType     string               `json:"launchType"`
+	Overrides      *ecsRunTaskOverrides `json:"overrides,omitempty"`
+}
+
+type ecsRunTaskOverrides struct {
+	ContainerOverrides []ecsContainerOverride `json:"containerOverrides,omitempty"`
+}
+
+type ecsContainerOverride struct {
+	Name        string      `json:"name"`
+	Command     []string    `json:"command,omitempty"`
+	Environment []ecsEnvVar `json:"environment,omitempty"`
+}
+
+type ecsEnvVar struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type ecsLaunchedTask struct {
+	TaskArn           string `json:"taskArn"`
+	ClusterArn        string `json:"clusterArn"`
+	TaskDefinitionArn string `json:"taskDefinitionArn"`
+	LastStatus        string `json:"lastStatus"`
+	DesiredStatus     string `json:"desiredStatus"`
+}
+
+type ecsRunFailure struct {
+	Arn    string `json:"arn,omitempty"`
+	Reason string `json:"reason,omitempty"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// RunECSTask launches one or more ECS tasks for the dashboard's run-task
+// trigger. It is a thin admin passthrough over the same runner the AWS
+// RunTask API uses, so launched tasks behave identically.
+func (h *Handler) RunECSTask(w http.ResponseWriter, r *http.Request) {
+	if h.taskRunner == nil {
+		writeError(w, http.StatusServiceUnavailable, "ECS task runner is not configured for this account")
+		return
+	}
+	var req ecsRunTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(req.TaskDefinition) == "" {
+		writeError(w, http.StatusBadRequest, "taskDefinition is required")
+		return
+	}
+	count := req.Count
+	if count == 0 {
+		count = 1
+	}
+	if count < 1 || count > 10 {
+		writeError(w, http.StatusBadRequest, "count must be between 1 and 10")
+		return
+	}
+
+	in := &types.RunTaskInput{
+		Cluster:        strings.TrimSpace(req.Cluster),
+		TaskDefinition: strings.TrimSpace(req.TaskDefinition),
+		Count:          count,
+		LaunchType:     strings.TrimSpace(req.LaunchType),
+	}
+	if req.Overrides != nil {
+		ov := &types.TaskOverride{}
+		for _, co := range req.Overrides.ContainerOverrides {
+			if strings.TrimSpace(co.Name) == "" {
+				writeError(w, http.StatusBadRequest, "overrides.containerOverrides[].name is required")
+				return
+			}
+			out := types.ContainerOverride{Name: strings.TrimSpace(co.Name), Command: co.Command}
+			for _, kv := range co.Environment {
+				if strings.TrimSpace(kv.Name) == "" {
+					writeError(w, http.StatusBadRequest, "overrides environment entries need a name")
+					return
+				}
+				out.Environment = append(out.Environment, types.KeyValuePair{Name: kv.Name, Value: kv.Value})
+			}
+			ov.ContainerOverrides = append(ov.ContainerOverrides, out)
+		}
+		in.Overrides = ov
+	}
+
+	out, err := h.taskRunner.RunTask(r.Context(), in)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	result := struct {
+		Tasks    []ecsLaunchedTask `json:"tasks"`
+		Failures []ecsRunFailure   `json:"failures,omitempty"`
+	}{Tasks: []ecsLaunchedTask{}}
+	for _, t := range out.Tasks {
+		result.Tasks = append(result.Tasks, ecsLaunchedTask{
+			TaskArn:           t.TaskArn,
+			ClusterArn:        t.ClusterArn,
+			TaskDefinitionArn: t.TaskDefinitionArn,
+			LastStatus:        t.LastStatus,
+			DesiredStatus:     t.DesiredStatus,
+		})
+	}
+	for _, f := range out.Failures {
+		result.Failures = append(result.Failures, ecsRunFailure{Arn: f.Arn, Reason: f.Reason, Detail: f.Detail})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(result)
+}
+
+// ECSTaskDefinition describes one task definition for the run-task trigger,
+// so the UI can offer its container names for per-run environment overrides.
+func (h *Handler) ECSTaskDefinition(w http.ResponseWriter, r *http.Request) {
+	if h.ecs == nil {
+		writeError(w, http.StatusServiceUnavailable, "ecs service unavailable")
+		return
+	}
+	family := strings.TrimSpace(r.PathValue("family"))
+	if family == "" {
+		writeError(w, http.StatusBadRequest, "task definition family is required")
+		return
+	}
+	described, err := h.ecs.DescribeTaskDefinition(family)
+	if err != nil || described == nil || described.TaskDefinition == nil {
+		status := http.StatusNotFound
+		msg := "task definition not found: " + family
+		if err != nil {
+			msg = err.Error()
+		}
+		writeError(w, status, msg)
+		return
+	}
+	td := described.TaskDefinition
+	type container struct {
+		Name      string `json:"name"`
+		Image     string `json:"image"`
+		Essential bool   `json:"essential"`
+	}
+	resp := struct {
+		Family            string      `json:"family"`
+		Revision          int         `json:"revision"`
+		Status            string      `json:"status"`
+		TaskDefinitionArn string      `json:"taskDefinitionArn"`
+		Containers        []container `json:"containers"`
+	}{
+		Family:            td.Family,
+		Revision:          td.Revision,
+		Status:            td.Status,
+		TaskDefinitionArn: td.TaskDefinitionArn,
+		Containers:        []container{},
+	}
+	for _, cd := range td.ContainerDefinitions {
+		essential := true
+		if cd.Essential != nil {
+			essential = *cd.Essential
+		}
+		resp.Containers = append(resp.Containers, container{Name: cd.Name, Image: cd.Image, Essential: essential})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // LogGroups returns all log group summaries.

@@ -203,6 +203,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /_tarn/admin/sqs/disruptor", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.ClearDisruptorRules(w, r)
 	})
+	mux.HandleFunc("POST /_tarn/admin/ecs/run-task", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.RunECSTask(w, r)
+	})
+	mux.HandleFunc("GET /_tarn/admin/ecs/task-definitions/{family}", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.ECSTaskDefinition(w, r)
+	})
 	mux.HandleFunc("GET /_tarn/admin/logs/groups", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.LogGroups(w, r)
 	})

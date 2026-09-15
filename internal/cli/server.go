@@ -324,6 +324,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 		s3Svc, esmSvc, eventbridgeSvc, stepFunctionsSvc, shared.traceStore,
 	)
 	adminHandler.SetECSService(ecsSvc)
+	adminHandler.SetECSTaskRunner(ecsRunner)
 
 	hs := &api.HandlerSet{
 		APIGateway:    apigatewayhandler.NewHandler(gatewaySvc),
