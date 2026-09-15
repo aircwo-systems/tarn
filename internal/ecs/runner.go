@@ -1323,6 +1323,7 @@ func (r *Runner) spawnLifecycle(taskArn, containerName, containerID, logGroup, s
 		if _, err := r.svc.SetContainerStatus(taskArn, containerName, types.TaskStatusStopped); err != nil {
 			log.Printf("[ecs] record container status for %s/%s: %v", taskArn, containerName, err)
 		}
+		r.logContainerExit(logGroup, streamName, containerName, ec, reason, rt)
 
 		// Drain: let the pump finish on its own for a bounded grace period
 		// (Docker's follow stream normally ends shortly after exit), then
@@ -1343,6 +1344,40 @@ func (r *Runner) spawnLifecycle(taskArn, containerName, containerID, logGroup, s
 
 		r.onContainerFinished(taskArn)
 	}()
+}
+
+// logContainerExit records an ERROR event when a container stops
+// unexpectedly: a nonzero (or missing) exit code on an essential container
+// nobody asked to stop. It mirrors the trace-span rule in recordTaskTrace
+// so logs and traces agree on what "failed" means. Expected stops (StopTask,
+// runner shutdown) and non-essential sidecars stay silent — their exit codes
+// are the expected outcome, not a crash.
+func (r *Runner) logContainerExit(logGroup, streamName, containerName string, ec *int64, reason string, rt *runningTask) {
+	rt.mu.Lock()
+	stopRequested := rt.stopRequested
+	essential := rt.essential == nil || rt.essential[containerName]
+	rt.mu.Unlock()
+	if stopRequested || r.stopped.Load() || !essential {
+		return
+	}
+	if ec != nil && *ec == 0 {
+		return
+	}
+	msg := fmt.Sprintf("container %q stopped without an exit code", containerName)
+	if ec != nil {
+		msg = fmt.Sprintf("container %q exited with code %d", containerName, *ec)
+	}
+	if reason != "" {
+		msg += ": " + reason
+	}
+	r.logs.CreateLogGroup(logGroup)
+	r.logs.PutLogEvents(logGroup, streamName, []logs.LogEvent{{
+		Timestamp:  time.Now().UTC(),
+		Message:    msg,
+		Level:      logs.LevelERROR,
+		Source:     logs.SourceRuntime,
+		StreamName: streamName,
+	}})
 }
 
 // onContainerFinished decrements the task's remaining-container count and,

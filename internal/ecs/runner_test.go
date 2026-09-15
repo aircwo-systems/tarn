@@ -1820,3 +1820,81 @@ func TestPumpLogsMarksStderrLinesAsError(t *testing.T) {
 		}
 	}
 }
+
+func TestLogContainerExit(t *testing.T) {
+	newRunner := func(t *testing.T) (*Runner, *fakeLogSink) {
+		t.Helper()
+		r, _, _, sink := newTestRunner(t)
+		return r, sink
+	}
+	essentialRT := func() *runningTask {
+		return &runningTask{essential: map[string]bool{"app": true, "sidecar": false}}
+	}
+	code3 := int64(3)
+	code0 := int64(0)
+
+	t.Run("nonzero essential exit logs ERROR with code", func(t *testing.T) {
+		r, sink := newRunner(t)
+		r.logContainerExit("/ecs/g", "s", "app", &code3, "", essentialRT())
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		if len(sink.events) != 1 {
+			t.Fatalf("events = %d, want 1", len(sink.events))
+		}
+		ev := sink.events[0]
+		if ev.Level != logs.LevelERROR {
+			t.Errorf("level = %s, want ERROR", ev.Level)
+		}
+		if !strings.Contains(ev.Message, `"app"`) || !strings.Contains(ev.Message, "3") {
+			t.Errorf("message should name the container and code, got %q", ev.Message)
+		}
+	})
+
+	t.Run("missing exit code logs ERROR with reason", func(t *testing.T) {
+		r, sink := newRunner(t)
+		r.logContainerExit("/ecs/g", "s", "app", nil, "container gone", essentialRT())
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		if len(sink.events) != 1 {
+			t.Fatalf("events = %d, want 1", len(sink.events))
+		}
+		if sink.events[0].Level != logs.LevelERROR {
+			t.Errorf("level = %s, want ERROR", sink.events[0].Level)
+		}
+		if !strings.Contains(sink.events[0].Message, "container gone") {
+			t.Errorf("message should carry the reason, got %q", sink.events[0].Message)
+		}
+	})
+
+	t.Run("clean exit stays silent", func(t *testing.T) {
+		r, sink := newRunner(t)
+		r.logContainerExit("/ecs/g", "s", "app", &code0, "", essentialRT())
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		if len(sink.events) != 0 {
+			t.Fatalf("events = %d, want 0", len(sink.events))
+		}
+	})
+
+	t.Run("requested stop stays silent", func(t *testing.T) {
+		r, sink := newRunner(t)
+		rt := essentialRT()
+		rt.stopRequested = true
+		r.logContainerExit("/ecs/g", "s", "app", &code3, "", rt)
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		if len(sink.events) != 0 {
+			t.Fatalf("events = %d, want 0", len(sink.events))
+		}
+	})
+
+	t.Run("non-essential crash stays silent", func(t *testing.T) {
+		r, sink := newRunner(t)
+		r.logContainerExit("/ecs/g", "s", "sidecar", &code3, "", essentialRT())
+		sink.mu.Lock()
+		defer sink.mu.Unlock()
+		if len(sink.events) != 0 {
+			t.Fatalf("events = %d, want 0", len(sink.events))
+		}
+	})
+}
