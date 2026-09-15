@@ -7,10 +7,15 @@
     queues,
     selectedName,
     onselect,
+    selection = null,
+    ontoggleselect = null,
   }: {
     queues: QueueSummary[];
     selectedName: string | null;
     onselect: (name: string) => void;
+    /** When set, rows show checkboxes for bulk disruptor targeting. */
+    selection?: Set<string> | null;
+    ontoggleselect?: ((name: string) => void) | null;
   } = $props();
 
   let query = $state("");
@@ -42,23 +47,40 @@
 
   <div class="rows">
     {#each visible as queue (queue.name)}
-      <RcListRow
-        mono
-        title={queue.name}
-        sub="{queue.fifo ? 'FIFO' : 'Standard'} · {queue.approxVisible} visible"
-        selected={queue.name === selectedName}
-        onclick={() => onselect(queue.name)}
-      >
-        {#snippet trailing()}
-          {#if (queue.approxStale ?? 0) > 0}
-            <span class="state failed">{numberFormatter.format(queue.approxStale ?? 0)} stale</span>
-          {:else if queue.approxVisible > 0}
-            <span class="calls" title="{queue.approxVisible} visible messages">{numberFormatter.format(queue.approxVisible)}</span>
-          {:else if queue.approxInFlight > 0}
-            <span class="calls" title="{queue.approxInFlight} in flight">{numberFormatter.format(queue.approxInFlight)}</span>
-          {/if}
-        {/snippet}
-      </RcListRow>
+      <div class="row" class:selected={queue.name === selectedName}>
+        {#if selection && ontoggleselect}
+          {@const toggle = ontoggleselect}
+          <input
+            type="checkbox"
+            class="pick"
+            checked={selection.has(queue.name)}
+            onchange={() => toggle(queue.name)}
+            onclick={(e) => e.stopPropagation()}
+            aria-label={`Target ${queue.name} for disruptor`}
+            title="Target for disruptor"
+          />
+        {/if}
+        <RcListRow
+          mono
+          title={queue.name}
+          sub="{queue.fifo ? 'FIFO' : 'Standard'} · {queue.approxVisible} visible"
+          selected={queue.name === selectedName}
+          onclick={() => onselect(queue.name)}
+        >
+          {#snippet trailing()}
+            {#if queue.disruptEnabled}
+              <span class="state disrupted" title="Disruptor armed: ~{queue.disruptFailureRate ?? '?'}% sends fail ({queue.disruptCode ?? 'ServiceUnavailable'})">disrupt</span>
+            {/if}
+            {#if (queue.approxStale ?? 0) > 0}
+              <span class="state failed">{numberFormatter.format(queue.approxStale ?? 0)} stale</span>
+            {:else if queue.approxVisible > 0}
+              <span class="calls" title="{queue.approxVisible} visible messages">{numberFormatter.format(queue.approxVisible)}</span>
+            {:else if queue.approxInFlight > 0}
+              <span class="calls" title="{queue.approxInFlight} in flight">{numberFormatter.format(queue.approxInFlight)}</span>
+            {/if}
+          {/snippet}
+        </RcListRow>
+      </div>
     {:else}
       <p class="none">No match for “{query}”</p>
     {/each}
@@ -66,8 +88,7 @@
 </div>
 
 <style>
-  .queue-list { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-  .search {
+  .queue-list { display: flex; flex-direction: column; gap: 8px; min-height: 0; }  .search {
     display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border-radius: 8px;
     border: 1px solid var(--border-subtle); background: var(--bg-app); color: var(--text-tertiary);
     transition: border-color 120ms ease;
@@ -78,11 +99,15 @@
   .search input::placeholder { color: var(--text-tertiary); }
   .count { font-size: 10.5px; font-variant-numeric: tabular-nums; }
   .rows { display: flex; flex-direction: column; gap: 2px; }
+  .row { display: flex; align-items: center; gap: 6px; min-width: 0; }
+  .row > :global(.rc-list-row) { flex: 1; min-width: 0; }
+  .pick { flex-shrink: 0; width: 14px; height: 14px; accent-color: var(--accent-red); cursor: pointer; }
   .calls { font: 10.5px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
   .state {
     font-size: 10px; padding: 1px 6px; border-radius: 6px; color: var(--accent-amber);
     background: color-mix(in srgb, var(--accent-amber) 10%, transparent);
   }
   .state.failed { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 10%, transparent); }
+  .state.disrupted { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 12%, transparent); }
   .none { padding: 12px 10px; font-size: 11.5px; color: var(--text-tertiary); }
 </style>

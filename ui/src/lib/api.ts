@@ -1,4 +1,5 @@
 import type {
+  DisruptorRule,
   EventBridgeFireResult,
   EventBridgeRaceResult,
   OverviewResponse,
@@ -398,7 +399,11 @@ export async function removeEventBridgeTargets(
 export async function fireEventBridgeRule(ruleName: string): Promise<EventBridgeFireResult> {
   const response = await fetch(endpoint("/_tarn/admin/eventbridge/fire"), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json", ...accountHeaders() },
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...accountHeaders(),
+    },
     body: JSON.stringify({ ruleName }),
   });
   if (!response.ok) {
@@ -414,13 +419,81 @@ export async function runEventBridgeRace(
 ): Promise<EventBridgeRaceResult> {
   const response = await fetch(endpoint("/_tarn/admin/eventbridge/race"), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json", ...accountHeaders() },
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...accountHeaders(),
+    },
     body: JSON.stringify({ ruleName, runs, concurrency }),
   });
   if (!response.ok) {
     throw new Error(await extractJSONError(response, `HTTP ${response.status}`));
   }
   return (await response.json()) as EventBridgeRaceResult;
+}
+
+export async function fetchDisruptorRules(signal?: AbortSignal): Promise<DisruptorRule[]> {
+  const response = await fetch(endpoint("/_tarn/admin/sqs/disruptor"), {
+    method: "GET",
+    headers: { Accept: "application/json", ...accountHeaders() },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `HTTP ${response.status}`));
+  }
+  const payload = (await response.json()) as { rules?: DisruptorRule[] };
+  return Array.isArray(payload?.rules) ? payload.rules : [];
+}
+
+export interface SetDisruptorInput {
+  queue?: string;
+  queues?: string[];
+  enabled: boolean;
+  failureRate: number;
+  code?: string;
+}
+
+export async function setDisruptorRules(input: SetDisruptorInput): Promise<DisruptorRule[]> {
+  const response = await fetch(endpoint("/_tarn/admin/sqs/disruptor"), {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...accountHeaders(),
+    },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `HTTP ${response.status}`));
+  }
+  const payload = (await response.json()) as { rules?: DisruptorRule[] };
+  return Array.isArray(payload?.rules) ? payload.rules : [];
+}
+
+export async function clearDisruptorRules(queues?: string[]): Promise<void> {
+  let url = endpoint("/_tarn/admin/sqs/disruptor");
+  let init: RequestInit;
+  if (!queues || queues.length === 0) {
+    url += "?all=true";
+    init = { method: "DELETE", headers: { Accept: "application/json", ...accountHeaders() } };
+  } else if (queues.length === 1) {
+    url += `?queue=${encodeURIComponent(queues[0])}`;
+    init = { method: "DELETE", headers: { Accept: "application/json", ...accountHeaders() } };
+  } else {
+    init = {
+      method: "DELETE",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        ...accountHeaders(),
+      },
+      body: JSON.stringify({ queues }),
+    };
+  }
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `HTTP ${response.status}`));
+  }
 }
 
 async function hydrateQueueMessages(

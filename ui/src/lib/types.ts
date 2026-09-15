@@ -239,6 +239,18 @@ export interface QueueSummary {
   tags?: Record<string, string>;
   tagCount: number;
   recentMessages?: QueueMessageSummary[];
+  /** SQS send-failure injection state (in-memory, not persisted). */
+  disruptEnabled: boolean;
+  disruptFailureRate?: number;
+  disruptCode?: string;
+}
+
+export interface DisruptorRule {
+  queue: string;
+  enabled: boolean;
+  failureRate: number;
+  code: string;
+  message?: string;
 }
 
 export interface TopicSummary {

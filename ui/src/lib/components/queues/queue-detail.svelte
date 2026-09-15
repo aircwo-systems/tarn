@@ -5,6 +5,7 @@
   import RcKv from "$lib/components/rack/rc-kv.svelte";
   import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
   import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
+  import QueueDisruptor from "./queue-disruptor.svelte";
   import { formatJSONForViewer } from "$lib/json-format";
   import { formatUnixSeconds } from "$lib/utils";
   import type { QueueMessageSummary, QueueSummary } from "$lib/types";
@@ -84,6 +85,9 @@
       <div class="title-row">
         <h1 title={queue.name}>{queue.name}</h1>
         <RcTonePill tone={queue.fifo ? "amber" : "neutral"}>{queue.fifo ? "fifo" : "standard"}</RcTonePill>
+        {#if queue.disruptEnabled}
+          <RcTonePill tone="red">disruptor {queue.disruptFailureRate ?? ""}%</RcTonePill>
+        {/if}
         {#if staleCount > 0}
           <RcTonePill tone="red">{staleCount} stale</RcTonePill>
         {/if}
@@ -210,7 +214,9 @@
     {/if}
   </RcPanel>
 
-  <RcPanel title="Configuration" index={1}>
+  <QueueDisruptor targets={[queue]} index={1} />
+
+  <RcPanel title="Configuration" index={2}>
     <RcKv items={config} />
     {#if tags.length > 0}
       <div class="tags">
