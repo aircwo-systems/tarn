@@ -13,6 +13,7 @@ package sqs
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -228,7 +229,7 @@ func (h *Handler) jsonSendMessage(w http.ResponseWriter, body []byte) {
 	}
 	msg, err := h.svc.SendMessage(name, req.MessageBody, req.DelaySeconds, req.MessageAttributes, req.MessageGroupId, req.MessageDeduplicationId)
 	if err != nil {
-		writeJSONError(w, 400, "InvalidParameterValue", err.Error())
+		writeSendJSONError(w, err)
 		return
 	}
 	writeJSON(w, 200, map[string]string{
@@ -279,7 +280,8 @@ func (h *Handler) jsonSendMessageBatch(w http.ResponseWriter, body []byte) {
 	for _, entry := range req.Entries {
 		msg, err := h.svc.SendMessage(name, entry.MessageBody, entry.DelaySeconds, entry.MessageAttributes, entry.MessageGroupId, entry.MessageDeduplicationId)
 		if err != nil {
-			failures = append(failures, failEntry{Id: entry.Id, Code: "InvalidParameterValue", Message: err.Error(), SenderFault: true})
+			code, senderFault := jsonBatchErrorCode(err)
+			failures = append(failures, failEntry{Id: entry.Id, Code: code, Message: err.Error(), SenderFault: senderFault})
 			continue
 		}
 		successes = append(successes, successEntry{Id: entry.Id, MessageId: msg.MessageId, MD5OfMessageBody: msg.MD5OfBody})
@@ -534,6 +536,26 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// writeSendJSONError maps SendMessage failures to AWS-shaped JSON errors,
+// preserving disruptor code/status so SDK retry behavior stays realistic.
+func writeSendJSONError(w http.ResponseWriter, err error) {
+	var derr *sqssvc.DisruptError
+	if errors.As(err, &derr) {
+		writeJSONError(w, derr.StatusCode, derr.Code, derr.Message)
+		return
+	}
+	writeJSONError(w, 400, "InvalidParameterValue", err.Error())
+}
+
+// jsonBatchErrorCode maps a per-entry failure to its code and SenderFault flag.
+func jsonBatchErrorCode(err error) (string, bool) {
+	var derr *sqssvc.DisruptError
+	if errors.As(err, &derr) {
+		return derr.Code, derr.StatusCode < 500
+	}
+	return "InvalidParameterValue", true
 }
 
 func writeJSONError(w http.ResponseWriter, status int, code, message string) {

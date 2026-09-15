@@ -2,6 +2,7 @@ package sqs
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -251,7 +252,7 @@ func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
 
 	msg, err := h.svc.SendMessage(name, msgBody, delaySec, msgAttrs, groupId, dedupId)
 	if err != nil {
-		writeXMLError(w, 400, "InvalidParameterValue", err.Error())
+		writeSendXMLError(w, err)
 		return
 	}
 
@@ -294,7 +295,8 @@ func (h *Handler) sendMessageBatch(w http.ResponseWriter, r *http.Request) {
 
 		msg, err := h.svc.SendMessage(name, msgBody, delaySec, msgAttrs, groupId, dedupId)
 		if err != nil {
-			failXML += fmt.Sprintf("    <BatchResultErrorEntry>\n      <Id>%s</Id>\n      <SenderFault>true</SenderFault>\n      <Code>InvalidParameterValue</Code>\n      <Message>%s</Message>\n    </BatchResultErrorEntry>\n", id, err.Error())
+			code, senderFault := batchErrorCode(err)
+			failXML += fmt.Sprintf("    <BatchResultErrorEntry>\n      <Id>%s</Id>\n      <SenderFault>%t</SenderFault>\n      <Code>%s</Code>\n      <Message>%s</Message>\n    </BatchResultErrorEntry>\n", id, senderFault, code, xmlEscape(err.Error()))
 			continue
 		}
 		successXML += fmt.Sprintf("    <SendMessageBatchResultEntry>\n      <Id>%s</Id>\n      <MessageId>%s</MessageId>\n      <MD5OfMessageBody>%s</MD5OfMessageBody>\n    </SendMessageBatchResultEntry>\n", id, msg.MessageId, msg.MD5OfBody)
@@ -661,6 +663,28 @@ func writeXMLError(w http.ResponseWriter, status int, code, message string) {
 	w.WriteHeader(status)
 	fmt.Fprintf(w, `<?xml version="1.0"?><ErrorResponse xmlns="%s"><Error><Type>Sender</Type><Code>%s</Code><Message>%s</Message></Error><RequestId>%s</RequestId></ErrorResponse>`,
 		xmlNS, code, xmlEscape(message), uuid.New().String())
+}
+
+// writeSendXMLError maps SendMessage failures to AWS-shaped errors. Disruptor
+// injections keep their configured code/status (e.g. 503 ServiceUnavailable)
+// so SDK retry behavior stays realistic; all other errors stay 400.
+func writeSendXMLError(w http.ResponseWriter, err error) {
+	var derr *sqssvc.DisruptError
+	if errors.As(err, &derr) {
+		writeXMLError(w, derr.StatusCode, derr.Code, derr.Message)
+		return
+	}
+	writeXMLError(w, 400, "InvalidParameterValue", err.Error())
+}
+
+// batchErrorCode maps a per-entry SendMessage failure to its AWS code and
+// SenderFault flag (false for 5xx, matching real AWS batch responses).
+func batchErrorCode(err error) (string, bool) {
+	var derr *sqssvc.DisruptError
+	if errors.As(err, &derr) {
+		return derr.Code, derr.StatusCode < 500
+	}
+	return "InvalidParameterValue", true
 }
 
 func xmlEscape(s string) string {
