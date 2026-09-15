@@ -67,6 +67,34 @@ type LogFilter struct {
 	Groups     []string   // Optional: filter to specific log group names
 }
 
+// LogScanFilter specifies criteria for scanning log events across groups.
+type LogScanFilter struct {
+	Pattern    string     `json:"pattern"`
+	Level      LogLevel   `json:"level"`
+	StartTime  *time.Time `json:"startTime,omitempty"`
+	EndTime    *time.Time `json:"endTime,omitempty"`
+	Groups     []string   `json:"groups,omitempty"`
+	MaxSamples int        `json:"maxSamples,omitempty"`
+}
+
+// LogGroupScanResult represents match stats for a single log group.
+type LogGroupScanResult struct {
+	GroupName    string     `json:"groupName"`
+	MatchCount   int        `json:"matchCount"`
+	TotalEvents  int        `json:"totalEvents"`
+	LastMatch    *time.Time `json:"lastMatch,omitempty"`
+	SampleEvents []LogEvent `json:"sampleEvents,omitempty"`
+}
+
+// LogScanResult represents the aggregated result of scanning logs across groups.
+type LogScanResult struct {
+	Pattern      string               `json:"pattern"`
+	TotalMatches int                  `json:"totalMatches"`
+	TotalScanned int                  `json:"totalScanned"`
+	Groups       []LogGroupScanResult `json:"groups"`
+	DurationMs   float64              `json:"durationMs"`
+}
+
 // logGroup holds events in a ring buffer.
 type logGroup struct {
 	name      string
@@ -203,6 +231,108 @@ func (s *Store) GetLogEvents(groupName string, filter *LogFilter) ([]LogEvent, i
 	}
 
 	return paginateEvents(matched, filter)
+}
+
+// ScanLogs performs a fast full-text scan across log groups and aggregates match counts.
+func (s *Store) ScanLogs(filter *LogScanFilter) *LogScanResult {
+	start := time.Now()
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	pattern := ""
+	var level LogLevel
+	var startTime, endTime *time.Time
+	maxSamples := 3
+	var allowedGroups map[string]struct{}
+
+	if filter != nil {
+		pattern = strings.TrimSpace(filter.Pattern)
+		level = filter.Level
+		startTime = filter.StartTime
+		endTime = filter.EndTime
+		if filter.MaxSamples > 0 {
+			maxSamples = filter.MaxSamples
+			if maxSamples > 20 {
+				maxSamples = 20
+			}
+		}
+		if len(filter.Groups) > 0 {
+			allowedGroups = make(map[string]struct{}, len(filter.Groups))
+			for _, g := range filter.Groups {
+				allowedGroups[g] = struct{}{}
+			}
+		}
+	}
+
+	result := &LogScanResult{
+		Pattern: pattern,
+		Groups:  make([]LogGroupScanResult, 0),
+	}
+
+	for _, g := range s.groups {
+		if allowedGroups != nil {
+			if _, ok := allowedGroups[g.name]; !ok {
+				continue
+			}
+		}
+		result.TotalScanned += g.count
+		if g.count == 0 {
+			continue
+		}
+
+		groupRes := LogGroupScanResult{
+			GroupName:    g.name,
+			TotalEvents:  g.count,
+			SampleEvents: make([]LogEvent, 0, maxSamples),
+		}
+
+		ringStart := (g.head - g.count + g.maxEvents) % g.maxEvents
+		// Scan newest to oldest for latest match timestamp and fresh samples
+		for i := g.count - 1; i >= 0; i-- {
+			idx := (ringStart + i) % g.maxEvents
+			evt := g.events[idx]
+
+			if level != "" && !levelMatches(evt.Level, level) {
+				continue
+			}
+			if startTime != nil && evt.Timestamp.Before(*startTime) {
+				continue
+			}
+			if endTime != nil && evt.Timestamp.After(*endTime) {
+				continue
+			}
+			if pattern != "" && !ContainsFold(evt.Message, pattern) {
+				continue
+			}
+
+			groupRes.MatchCount++
+			if groupRes.LastMatch == nil || evt.Timestamp.After(*groupRes.LastMatch) {
+				ts := evt.Timestamp
+				groupRes.LastMatch = &ts
+			}
+			if len(groupRes.SampleEvents) < maxSamples {
+				tagged := evt
+				tagged.StreamName = g.name + "/" + evt.StreamName
+				groupRes.SampleEvents = append(groupRes.SampleEvents, tagged)
+			}
+		}
+
+		if groupRes.MatchCount > 0 {
+			result.TotalMatches += groupRes.MatchCount
+			result.Groups = append(result.Groups, groupRes)
+		}
+	}
+
+	// Sort groups by MatchCount descending, ties broken by GroupName
+	sort.Slice(result.Groups, func(i, j int) bool {
+		if result.Groups[i].MatchCount != result.Groups[j].MatchCount {
+			return result.Groups[i].MatchCount > result.Groups[j].MatchCount
+		}
+		return result.Groups[i].GroupName < result.Groups[j].GroupName
+	})
+
+	result.DurationMs = float64(time.Since(start).Microseconds()) / 1000.0
+	return result
 }
 
 // ListGroups returns summaries of all log groups.
@@ -428,6 +558,60 @@ func levelMatches(level, want LogLevel) bool {
 	return false
 }
 
+// ContainsFold reports whether substr is within s using case-insensitive ASCII comparison,
+// falling back to unicode lowercase comparison if non-ASCII characters are present.
+// It performs zero heap allocations in the common ASCII path.
+func ContainsFold(s, substr string) bool {
+	if len(substr) == 0 {
+		return true
+	}
+	if len(s) < len(substr) {
+		return false
+	}
+
+	for i := 0; i < len(substr); i++ {
+		if substr[i] >= 0x80 {
+			return strings.Contains(strings.ToLower(s), strings.ToLower(substr))
+		}
+	}
+
+	firstLower := substr[0]
+	if firstLower >= 'A' && firstLower <= 'Z' {
+		firstLower += 'a' - 'A'
+	}
+	firstUpper := firstLower
+	if firstUpper >= 'a' && firstUpper <= 'z' {
+		firstUpper -= 'a' - 'A'
+	}
+
+	n := len(substr)
+	max := len(s) - n
+	for i := 0; i <= max; i++ {
+		c := s[i]
+		if c == firstLower || c == firstUpper {
+			matched := true
+			for j := 1; j < n; j++ {
+				sc := s[i+j]
+				if sc >= 'A' && sc <= 'Z' {
+					sc += 'a' - 'A'
+				}
+				subC := substr[j]
+				if subC >= 'A' && subC <= 'Z' {
+					subC += 'a' - 'A'
+				}
+				if sc != subC {
+					matched = false
+					break
+				}
+			}
+			if matched {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func matchesFilter(evt LogEvent, filter *LogFilter) bool {
 	if filter == nil {
 		return true
@@ -444,7 +628,7 @@ func matchesFilter(evt LogEvent, filter *LogFilter) bool {
 	if filter.EndTime != nil && evt.Timestamp.After(*filter.EndTime) {
 		return false
 	}
-	if filter.Pattern != "" && !strings.Contains(strings.ToLower(evt.Message), strings.ToLower(filter.Pattern)) {
+	if filter.Pattern != "" && !ContainsFold(evt.Message, filter.Pattern) {
 		return false
 	}
 	return true

@@ -364,6 +364,7 @@ func testConfig() *config.Config {
 	cfg.LogsMaxEventsPerGroup = 1000
 	return cfg
 }
+
 func TestPaginationCursorDescendingPagesByWindow(t *testing.T) {
 	s := NewStore(500)
 	s.CreateGroup("/test")
@@ -496,5 +497,172 @@ func TestLevelMatchesCommaSet(t *testing.T) {
 	}
 	if !levelMatches(LevelERROR, "ERROR") {
 		t.Fatal("expected single level match")
+	}
+}
+
+func TestContainsFold(t *testing.T) {
+	cases := []struct {
+		s      string
+		sub    string
+		expect bool
+	}{
+		{"Hello Bob World", "bob", true},
+		{"Hello BOB World", "bob", true},
+		{"Hello bob World", "BOB", true},
+		{"Hello bOb World", "BoB", true},
+		{"Hello World", "bob", false},
+		{"bob", "bob", true},
+		{"bob", "", true},
+		{"", "bob", false},
+		{"", "", true},
+		{"a", "ab", false},
+		{"prefix bob suffix", "bob", true},
+		{"prefix BOB", "BOB", true},
+		{"BOB suffix", "BOB", true},
+		{"unicode Élément", "él", true},
+	}
+
+	for _, c := range cases {
+		got := ContainsFold(c.s, c.sub)
+		if got != c.expect {
+			t.Errorf("ContainsFold(%q, %q) = %v; want %v", c.s, c.sub, got, c.expect)
+		}
+	}
+}
+
+func TestScanLogs(t *testing.T) {
+	s := NewStore(500)
+	s.CreateGroup("/aws/lambda/checkout")
+	s.CreateGroup("/aws/lambda/auth")
+	s.CreateGroup("/tarn/api")
+
+	base := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+
+	// In checkout: 4 events, 3 contain "correlation-id"
+	s.PutLogEvents("/aws/lambda/checkout", "stream-1", []LogEvent{
+		{Timestamp: base.Add(1 * time.Second), Message: "User initialized order #101 correlation-id=corr-101", Level: LevelINFO},
+		{Timestamp: base.Add(2 * time.Second), Message: "Processing payment CORRELATION-ID=CORR-101", Level: LevelINFO},
+		{Timestamp: base.Add(3 * time.Second), Message: "Payment succeeded", Level: LevelINFO},
+		{Timestamp: base.Add(4 * time.Second), Message: "Order confirmed correlation-id=corr-101", Level: LevelINFO},
+	})
+
+	// In auth: 2 events, 1 contains "correlation-id"
+	s.PutLogEvents("/aws/lambda/auth", "stream-1", []LogEvent{
+		{Timestamp: base.Add(10 * time.Second), Message: "Login attempt correlation-id=corr-auth-99", Level: LevelINFO},
+		{Timestamp: base.Add(11 * time.Second), Message: "Token generated for user: alice", Level: LevelINFO},
+	})
+
+	// In api: 2 events, 0 contain "correlation-id"
+	s.PutLogEvents("/tarn/api", "requests", []LogEvent{
+		{Timestamp: base.Add(20 * time.Second), Message: "GET /checkout 200 45ms", Level: LevelINFO},
+		{Timestamp: base.Add(21 * time.Second), Message: "POST /auth 200 12ms", Level: LevelINFO},
+	})
+
+	scan := s.ScanLogs(&LogScanFilter{
+		Pattern: "correlation-id",
+	})
+
+	if scan.Pattern != "correlation-id" {
+		t.Fatalf("expected pattern correlation-id, got %s", scan.Pattern)
+	}
+	if scan.TotalMatches != 4 {
+		t.Fatalf("expected 4 total matches, got %d", scan.TotalMatches)
+	}
+	if scan.TotalScanned != 8 {
+		t.Fatalf("expected 8 total scanned, got %d", scan.TotalScanned)
+	}
+	if len(scan.Groups) != 2 {
+		t.Fatalf("expected 2 groups with matches, got %d", len(scan.Groups))
+	}
+
+	// Should be sorted by match count descending (/aws/lambda/checkout with 3 first)
+	if scan.Groups[0].GroupName != "/aws/lambda/checkout" || scan.Groups[0].MatchCount != 3 {
+		t.Fatalf("expected checkout first with 3 matches, got %+v", scan.Groups[0])
+	}
+	if scan.Groups[1].GroupName != "/aws/lambda/auth" || scan.Groups[1].MatchCount != 1 {
+		t.Fatalf("expected auth second with 1 match, got %+v", scan.Groups[1])
+	}
+
+	// Verify sample events
+	if len(scan.Groups[0].SampleEvents) != 3 {
+		t.Fatalf("expected 3 sample events for checkout, got %d", len(scan.Groups[0].SampleEvents))
+	}
+	// Last match should be the most recent one (t = base + 4s)
+	expectedLastMatch := base.Add(4 * time.Second)
+	if scan.Groups[0].LastMatch == nil || !scan.Groups[0].LastMatch.Equal(expectedLastMatch) {
+		t.Fatalf("expected lastMatch %v, got %v", expectedLastMatch, scan.Groups[0].LastMatch)
+	}
+}
+
+func TestScanLogsFilteredByLevelAndGroup(t *testing.T) {
+	s := NewStore(500)
+	s.CreateGroup("/a")
+	s.CreateGroup("/b")
+
+	base := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	s.PutLogEvents("/a", "stream-1", []LogEvent{
+		{Timestamp: base.Add(1 * time.Second), Message: "Error handler correlation-id=corr-err-1", Level: LevelERROR},
+		{Timestamp: base.Add(2 * time.Second), Message: "Info handler correlation-id=corr-info-1", Level: LevelINFO},
+	})
+	s.PutLogEvents("/b", "stream-1", []LogEvent{
+		{Timestamp: base.Add(3 * time.Second), Message: "Error handler correlation-id=corr-err-2", Level: LevelERROR},
+	})
+
+	// Filter by level ERROR
+	res := s.ScanLogs(&LogScanFilter{
+		Pattern: "correlation-id",
+		Level:   LevelERROR,
+	})
+	if res.TotalMatches != 2 {
+		t.Fatalf("expected 2 ERROR matches, got %d", res.TotalMatches)
+	}
+
+	// Filter by group /a only
+	resGroup := s.ScanLogs(&LogScanFilter{
+		Pattern: "correlation-id",
+		Groups:  []string{"/a"},
+	})
+	if resGroup.TotalMatches != 2 {
+		t.Fatalf("expected 2 matches in group /a, got %d", resGroup.TotalMatches)
+	}
+	if len(resGroup.Groups) != 1 || resGroup.Groups[0].GroupName != "/a" {
+		t.Fatalf("expected only group /a in results, got %+v", resGroup.Groups)
+	}
+}
+
+func BenchmarkScanLogs(b *testing.B) {
+	s := NewStore(10000)
+	s.CreateGroup("/group-1")
+	s.CreateGroup("/group-2")
+	s.CreateGroup("/group-3")
+
+	base := time.Date(2026, 4, 1, 10, 0, 0, 0, time.UTC)
+	for g := 1; g <= 3; g++ {
+		grp := fmt.Sprintf("/group-%d", g)
+		events := make([]LogEvent, 10000)
+		for i := 0; i < 10000; i++ {
+			msg := "normal log event processing data"
+			if i%20 == 0 {
+				msg = fmt.Sprintf("action correlation-id=corr-%d on item %d", i, i)
+			}
+			events[i] = LogEvent{
+				Timestamp: base.Add(time.Duration(i) * time.Millisecond),
+				Message:   msg,
+				Level:     LevelINFO,
+			}
+		}
+		s.PutLogEvents(grp, "stream-1", events)
+	}
+
+	filter := &LogScanFilter{
+		Pattern: "correlation-id",
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		res := s.ScanLogs(filter)
+		if res.TotalMatches != 1500 {
+			b.Fatalf("expected 1500 matches, got %d", res.TotalMatches)
+		}
 	}
 }

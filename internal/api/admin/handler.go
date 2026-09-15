@@ -2169,6 +2169,63 @@ func (h *Handler) AllLogEvents(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ScanLogs scans logs across all groups for matches and counts.
+func (h *Handler) ScanLogs(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	filter := &logssvc.LogScanFilter{}
+
+	if v := q.Get("pattern"); v != "" {
+		filter.Pattern = v
+	} else if v := q.Get("query"); v != "" {
+		filter.Pattern = v
+	} else if v := q.Get("q"); v != "" {
+		filter.Pattern = v
+	}
+
+	if v := q.Get("level"); v != "" {
+		filter.Level = logssvc.LogLevel(strings.ToUpper(v))
+	}
+	if v := q.Get("samples"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			filter.MaxSamples = n
+		}
+	}
+	if v := q.Get("startTime"); v != "" {
+		if ts, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			filter.StartTime = &ts
+		} else if ts, err := time.Parse(time.RFC3339, v); err == nil {
+			filter.StartTime = &ts
+		}
+	}
+	if v := q.Get("endTime"); v != "" {
+		if ts, err := time.Parse(time.RFC3339Nano, v); err == nil {
+			filter.EndTime = &ts
+		} else if ts, err := time.Parse(time.RFC3339, v); err == nil {
+			filter.EndTime = &ts
+		}
+	}
+	if groups := q["groups"]; len(groups) > 0 {
+		for _, g := range groups {
+			for _, part := range strings.Split(g, ",") {
+				if part != "" {
+					filter.Groups = append(filter.Groups, part)
+				}
+			}
+		}
+	} else if v := q.Get("groups"); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			if part != "" {
+				filter.Groups = append(filter.Groups, part)
+			}
+		}
+	}
+
+	res := h.logs.ScanLogs(filter)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(res)
+}
+
 // TracesForLog returns the best-matching trace for a log event from a lambda function.
 // Query params: function (lambda name, not the full group path), ts (RFC3339 timestamp).
 func (h *Handler) TracesForLog(w http.ResponseWriter, r *http.Request) {

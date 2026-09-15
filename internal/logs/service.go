@@ -45,6 +45,11 @@ func (s *Service) GetAllLogEvents(filter *LogFilter) ([]LogEvent, int, bool) {
 	return s.store.GetAllLogEvents(filter)
 }
 
+// ScanLogs searches logs across all or selected groups for matches and counts.
+func (s *Service) ScanLogs(filter *LogScanFilter) *LogScanResult {
+	return s.store.ScanLogs(filter)
+}
+
 // PruneOlderThan removes events older than the given cutoff from all groups.
 func (s *Service) PruneOlderThan(cutoff time.Time) int {
 	return s.store.PruneOlderThan(cutoff)

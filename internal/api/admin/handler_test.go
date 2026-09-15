@@ -1008,3 +1008,53 @@ func TestAllLogEventsFilterGroups(t *testing.T) {
 		t.Fatalf("got total %d, events len %d, want 2", payload.Total, len(payload.Events))
 	}
 }
+
+func TestScanLogsEndpoint(t *testing.T) {
+	h := newTestHandler(t)
+
+	h.logs.CreateLogGroup("/aws/lambda/checkout")
+	h.logs.CreateLogGroup("/aws/lambda/auth")
+	h.logs.CreateLogGroup("/tarn/api")
+
+	now := time.Now().UTC()
+	h.logs.PutLogEvents("/aws/lambda/checkout", "stream-1", []logssvc.LogEvent{
+		{Message: "User checkout started correlation-id=corr-abc-123", Timestamp: now, Level: logssvc.LevelINFO},
+		{Message: "Payment processed correlation-id=corr-abc-123", Timestamp: now.Add(time.Second), Level: logssvc.LevelINFO},
+	})
+	h.logs.PutLogEvents("/aws/lambda/auth", "stream-1", []logssvc.LogEvent{
+		{Message: "Login ok correlation-id=corr-xyz-999", Timestamp: now.Add(2 * time.Second), Level: logssvc.LevelINFO},
+		{Message: "Login Alice ok", Timestamp: now.Add(3 * time.Second), Level: logssvc.LevelINFO},
+	})
+	h.logs.PutLogEvents("/tarn/api", "stream-1", []logssvc.LogEvent{
+		{Message: "GET /health 200", Timestamp: now.Add(4 * time.Second), Level: logssvc.LevelINFO},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/logs/scan?pattern=correlation-id", nil)
+	rec := httptest.NewRecorder()
+	h.ScanLogs(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+
+	var res logssvc.LogScanResult
+	if err := json.NewDecoder(rec.Body).Decode(&res); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	if res.Pattern != "correlation-id" {
+		t.Fatalf("pattern = %q, want correlation-id", res.Pattern)
+	}
+	if res.TotalMatches != 3 {
+		t.Fatalf("totalMatches = %d, want 3", res.TotalMatches)
+	}
+	if len(res.Groups) != 2 {
+		t.Fatalf("groups len = %d, want 2", len(res.Groups))
+	}
+	if res.Groups[0].GroupName != "/aws/lambda/checkout" || res.Groups[0].MatchCount != 2 {
+		t.Fatalf("expected checkout first with 2 matches, got %+v", res.Groups[0])
+	}
+	if res.Groups[1].GroupName != "/aws/lambda/auth" || res.Groups[1].MatchCount != 1 {
+		t.Fatalf("expected auth second with 1 match, got %+v", res.Groups[1])
+	}
+}

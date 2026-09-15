@@ -10,6 +10,7 @@ import type {
   SecretValueResult,
   LogGroupSummary,
   LogEventsResponse,
+  LogEvent,
   RequestTrace,
 } from "$lib/types";
 
@@ -227,6 +228,56 @@ export async function fetchAllLogEvents(
     throw new Error(`Failed to load log events: HTTP ${response.status}`);
   }
   return (await response.json()) as LogEventsResponse;
+}
+
+export interface LogGroupScanResult {
+  groupName: string;
+  matchCount: number;
+  totalEvents: number;
+  lastMatch?: string;
+  sampleEvents: LogEvent[];
+}
+
+export interface LogScanResult {
+  pattern: string;
+  totalMatches: number;
+  totalScanned: number;
+  durationMs: number;
+  groups: LogGroupScanResult[];
+}
+
+export interface ScanLogsParams {
+  pattern: string;
+  level?: string;
+  groups?: string[];
+  samples?: number;
+  startTime?: string;
+  endTime?: string;
+}
+
+export async function scanLogs(
+  params: ScanLogsParams,
+  signal?: AbortSignal,
+): Promise<LogScanResult> {
+  const query = new URLSearchParams();
+  if (params.pattern) query.set("pattern", params.pattern);
+  if (params.level) query.set("level", params.level);
+  if (params.samples !== undefined) query.set("samples", String(params.samples));
+  if (params.startTime) query.set("startTime", params.startTime);
+  if (params.endTime) query.set("endTime", params.endTime);
+  if (params.groups && params.groups.length > 0) query.set("groups", params.groups.join(","));
+
+  const qs = query.toString();
+  const url = endpoint(`/_tarn/admin/logs/scan${qs ? "?" + qs : ""}`);
+  const response = await fetch(url, {
+    method: "GET",
+    headers: { Accept: "application/json", ...accountHeaders() },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to scan logs: HTTP ${response.status}`);
+  }
+  return (await response.json()) as LogScanResult;
 }
 
 export async function pruneOldLogs(retentionMinutes: number, signal?: AbortSignal): Promise<void> {

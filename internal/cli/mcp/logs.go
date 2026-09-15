@@ -75,11 +75,24 @@ func addLogsTool(s *mcp.Server, c *client) {
 		*mcp.CallToolResult, LogsOutput, error,
 	) {
 		group := strings.TrimSpace(in.LogGroup)
-		if group == "" {
+		endpoint := ""
+		if group == "*" || group == "__all__" || group == "all" {
+			endpoint = "/_tarn/admin/logs/events-all"
+			group = "all"
+		} else if group == "" {
 			if strings.TrimSpace(in.Function) == "" {
-				return nil, LogsOutput{}, errors.New("either function or logGroup is required")
+				if strings.TrimSpace(in.Pattern) != "" {
+					endpoint = "/_tarn/admin/logs/events-all"
+					group = "all"
+				} else {
+					return nil, LogsOutput{}, errors.New("either function, logGroup, or pattern across all logs is required")
+				}
+			} else {
+				group = logGroupFor(in.Function)
+				endpoint = "/_tarn/admin/logs/events/" + url.PathEscape(group)
 			}
-			group = logGroupFor(in.Function)
+		} else {
+			endpoint = "/_tarn/admin/logs/events/" + url.PathEscape(group)
 		}
 
 		limit := clampInt(in.Limit, 50, 200)
@@ -110,7 +123,7 @@ func addLogsTool(s *mcp.Server, c *client) {
 			} `json:"events"`
 			Total int `json:"total"`
 		}
-		if err := c.get(ctx, "/_tarn/admin/logs/events/"+url.PathEscape(group), in.Account, q, &raw); err != nil {
+		if err := c.get(ctx, endpoint, in.Account, q, &raw); err != nil {
 			return nil, LogsOutput{}, err
 		}
 

@@ -33,6 +33,7 @@
     order = "desc",
     showGroup = false,
     showStream = true,
+    highlightPattern = "",
     onSelect,
   }: {
     events: LogEvent[];
@@ -42,8 +43,30 @@
     order?: "asc" | "desc";
     showGroup?: boolean;
     showStream?: boolean;
+    highlightPattern?: string;
     onSelect: (event: LogEvent, key: string) => void;
   } = $props();
+
+  function splitMatches(text: string, pattern?: string): { text: string; match: boolean }[] {
+    if (!pattern || !pattern.trim()) return [{ text, match: false }];
+    const p = pattern.trim().toLowerCase();
+    const lower = text.toLowerCase();
+    const segments: { text: string; match: boolean }[] = [];
+    let lastIdx = 0;
+    let idx = lower.indexOf(p, lastIdx);
+    while (idx !== -1) {
+      if (idx > lastIdx) {
+        segments.push({ text: text.slice(lastIdx, idx), match: false });
+      }
+      segments.push({ text: text.slice(idx, idx + p.length), match: true });
+      lastIdx = idx + p.length;
+      idx = lower.indexOf(p, lastIdx);
+    }
+    if (lastIdx < text.length) {
+      segments.push({ text: text.slice(lastIdx), match: false });
+    }
+    return segments;
+  }
 
   let scroller = $state<HTMLDivElement | null>(null);
   let viewportH = $state(0);
@@ -309,7 +332,13 @@
             <span class="log-group" title={ev.streamName}>{groupTag(ev.streamName)}</span>
           {/if}
           <span class="log-msg" title={ev.message.length > 120 ? undefined : ev.message}>
-            {ev.message.length > 400 ? ev.message.slice(0, 400) : ev.message}
+            {#if highlightPattern && highlightPattern.trim()}
+              {#each splitMatches(ev.message.length > 400 ? ev.message.slice(0, 400) : ev.message, highlightPattern) as seg}
+                {#if seg.match}<mark class="log-search-match">{seg.text}</mark>{:else}{seg.text}{/if}
+              {/each}
+            {:else}
+              {ev.message.length > 400 ? ev.message.slice(0, 400) : ev.message}
+            {/if}
           </span>
           {#if showStream && ev.streamName && !showGroup}
             <span class="log-stream-name" title={ev.streamName}>{ev.streamName.slice(-12)}</span>
@@ -505,6 +534,14 @@
 
   @container (max-width: 640px) {
     .log-stream-name { display: none; }
+  }
+
+  :global(.log-search-match) {
+    background: rgba(245, 158, 11, 0.35);
+    color: inherit;
+    border-radius: 2px;
+    padding: 0 1px;
+    font-weight: 600;
   }
 
   .log-row.highlight {

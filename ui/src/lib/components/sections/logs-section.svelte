@@ -27,9 +27,12 @@
     fetchLogGroups,
     fetchLogEvents,
     fetchAllLogEvents,
+    scanLogs,
     clearLogGroup,
     fetchTraceForLog,
     type FetchLogEventsParams,
+    type LogScanResult,
+    type LogGroupScanResult,
   } from "$lib/api";
   import { highlightJSON } from "$lib/json-format";
   import {
@@ -111,6 +114,56 @@
   let groupSearch = $state("");
   let serviceFilter = $state("all");
   let sortOrder = $state<"desc" | "asc">("desc");
+
+  // Log full-text scan state
+  let scanResult = $state<LogScanResult | null>(null);
+  let scanning = $state(false);
+  let scanAbortController = $state<AbortController | null>(null);
+
+  let groupSearchTimer: ReturnType<typeof setTimeout> | null = null;
+  $effect(() => {
+    const query = groupSearch.trim();
+    if (!query) {
+      if (scanAbortController) {
+        scanAbortController.abort();
+        scanAbortController = null;
+      }
+      scanResult = null;
+      scanning = false;
+      return;
+    }
+
+    if (groupSearchTimer) clearTimeout(groupSearchTimer);
+    groupSearchTimer = setTimeout(async () => {
+      if (scanAbortController) {
+        scanAbortController.abort();
+      }
+      const ac = new AbortController();
+      scanAbortController = ac;
+      scanning = true;
+      try {
+        const res = await scanLogs({ pattern: query }, ac.signal);
+        scanResult = res;
+      } catch (err: any) {
+        if (err?.name !== "AbortError") {
+          // Ignore
+        }
+      } finally {
+        if (scanAbortController === ac) {
+          scanning = false;
+        }
+      }
+    }, 200);
+  });
+
+  const scanMatchMap = $derived.by(() => {
+    const map = new Map<string, number>();
+    if (!scanResult) return map;
+    for (const g of scanResult.groups) {
+      map.set(g.groupName, g.matchCount);
+    }
+    return map;
+  });
 
   // Detail panel
   let selectedEvent = $state<LogEvent | null>(null);
@@ -312,8 +365,11 @@
     selectedKey = null;
   }
 
-  function selectGroup(name: string) {
+  function selectGroup(name: string, initialPattern?: string) {
     selectedGroup = name;
+    if (initialPattern) {
+      filterPattern = initialPattern;
+    }
     if (name && name !== ALL_GROUP && !checkedGroups.includes(name)) {
       checkedGroups = [name];
     }
@@ -365,7 +421,7 @@
       return;
     }
 
-    selectGroup(group.name);
+    selectGroup(group.name, groupSearch.trim());
   }
 
   function toggleGroup(name: string, idx?: number) {
@@ -392,10 +448,13 @@
   function viewSelectedGroups() {
     if (checkedGroups.length === 0) return;
     if (checkedGroups.length === 1) {
-      selectGroup(checkedGroups[0]);
+      selectGroup(checkedGroups[0], groupSearch.trim());
       return;
     }
     selectedGroup = checkedGroups.join(",");
+    if (groupSearch.trim()) {
+      filterPattern = groupSearch.trim();
+    }
     resetPaging();
     highlightTimestamp = "";
     window.location.hash = `logs?groups=${encodeURIComponent(selectedGroup)}`;
@@ -705,12 +764,21 @@
     return options;
   });
   const filteredGroups = $derived(
-    groups.filter((group) => {
-      if (serviceFilter !== "all" && groupServiceKey(group.name) !== serviceFilter) return false;
-      const query = groupSearch.trim().toLowerCase();
-      if (!query) return true;
-      return group.name.toLowerCase().includes(query) || groupDisplayName(group.name).toLowerCase().includes(query);
-    }),
+    groups
+      .filter((group) => {
+        if (serviceFilter !== "all" && groupServiceKey(group.name) !== serviceFilter) return false;
+        const query = groupSearch.trim().toLowerCase();
+        if (!query) return true;
+        const nameMatch = group.name.toLowerCase().includes(query) || groupDisplayName(group.name).toLowerCase().includes(query);
+        const scanMatches = scanMatchMap.get(group.name) ?? 0;
+        return nameMatch || scanMatches > 0;
+      })
+      .sort((a, b) => {
+        const aMatches = scanMatchMap.get(a.name) ?? 0;
+        const bMatches = scanMatchMap.get(b.name) ?? 0;
+        if (aMatches !== bMatches) return bMatches - aMatches;
+        return b.eventCount - a.eventCount;
+      }),
   );
   const groupsCountLabel = $derived(
     filteredGroups.length === groups.length
@@ -830,6 +898,9 @@
           }}
         />
         {#if filterPattern}
+          <span class="rc-mono text-[10.5px] text-[var(--text-tertiary)] shrink-0 pr-1">
+            {eventsTotal.toLocaleString()} {eventsTotal === 1 ? "match" : "matches"}
+          </span>
           <button type="button" class="rc-search-clear" aria-label="Clear search" onclick={() => { filterPattern = ""; applyFilters(); }}>
             <XIcon size={11} />
           </button>
@@ -956,6 +1027,7 @@
               {keys}
               {selectedKey}
               {highlightKey}
+              highlightPattern={filterPattern}
               order={sortOrder}
               showGroup={isAllGroup || isMultiGroup}
               showStream={!selectedEvent}
@@ -1126,7 +1198,14 @@
     <div class="rc-querybar">
       <label class="rc-search">
         <MagnifyingGlassIcon size={13} class="shrink-0 text-[var(--text-tertiary)]" />
-        <input type="text" placeholder="Search services or log groups" bind:value={groupSearch} />
+        <input type="text" placeholder="Search logs (e.g. correlation-id) or groups" bind:value={groupSearch} />
+        {#if scanning}
+          <span class="rc-mono text-[10.5px] text-[var(--text-tertiary)] animate-pulse shrink-0">Scanning...</span>
+        {:else if groupSearch.trim()}
+          <button type="button" class="rc-search-clear" aria-label="Clear search" onclick={() => { groupSearch = ""; }}>
+            <XIcon size={11} />
+          </button>
+        {/if}
       </label>
       <div class="rc-levels" role="group" aria-label="Service filter">
         {#each serviceOptions as option (option.key)}
@@ -1161,6 +1240,28 @@
       {/if}
     </div>
 
+    {#if scanResult && groupSearch.trim()}
+      <div class="flex items-center justify-between px-3 py-2 rounded-lg bg-[color-mix(in_srgb,var(--accent-amber)_8%,transparent)] border border-[color-mix(in_srgb,var(--accent-amber)_25%,transparent)] text-[11.5px]">
+        <div class="flex items-center gap-2">
+          <span class="font-semibold text-[var(--accent-amber)]">
+            {scanResult.totalMatches.toLocaleString()} {scanResult.totalMatches === 1 ? "match" : "matches"}
+          </span>
+          <span class="text-[var(--text-secondary)]">
+            across {scanResult.groups.length} {scanResult.groups.length === 1 ? "group" : "groups"} (scanned {scanResult.totalScanned.toLocaleString()} events in {scanResult.durationMs}ms)
+          </span>
+        </div>
+        {#if scanResult.totalMatches > 0}
+          <button
+            type="button"
+            class="rc-tool text-[11px] font-medium text-[var(--accent-amber)] hover:underline flex items-center gap-1"
+            onclick={() => selectGroup(ALL_GROUP, groupSearch.trim())}
+          >
+            View all matches &rarr;
+          </button>
+        {/if}
+      </div>
+    {/if}
+
     {#if groupsError}
       <div class="rc-error">{groupsError}</div>
     {/if}
@@ -1190,13 +1291,24 @@
           aria-hidden="true"
         ></div>
 
-        <button type="button" data-group-row class="rc-group all" onclick={() => selectGroup(ALL_GROUP)}>
+        <button type="button" data-group-row class="rc-group all" onclick={() => selectGroup(ALL_GROUP, groupSearch.trim())}>
           <span class="rc-checkbox-spacer" aria-hidden="true"></span>
           <span aria-hidden="true"></span>
           <span class="rc-group-main">
             <span class="rc-group-name">All logs</span>
-            <span class="rc-group-path">Aggregated across every group</span>
+            <span class="rc-group-path">
+              {#if scanResult && groupSearch.trim()}
+                {scanResult.totalMatches.toLocaleString()} matching {scanResult.totalMatches === 1 ? "event" : "events"} across {scanResult.groups.length} {scanResult.groups.length === 1 ? "group" : "groups"} ({scanResult.durationMs}ms)
+              {:else}
+                Aggregated across every group
+              {/if}
+            </span>
           </span>
+          {#if scanResult && groupSearch.trim()}
+            <span class="rc-badge font-mono text-[11px] font-semibold text-[var(--accent-amber)] bg-[color-mix(in_srgb,var(--accent-amber)_15%,transparent)] border border-[color-mix(in_srgb,var(--accent-amber)_30%,transparent)] px-2 py-0.5 rounded-full">
+              {scanResult.totalMatches.toLocaleString()} matches
+            </span>
+          {/if}
           <span class="rc-group-meter" aria-hidden="true"><span style:width="100%"></span></span>
           <span class="rc-group-stat">{totalEventCount.toLocaleString()}<small>events</small></span>
           <span class="rc-group-stat streams">{groups.length}<small>groups</small></span>
@@ -1210,6 +1322,7 @@
         {:else}
           {#each filteredGroups as group, idx (group.name)}
             {@const isSelected = checkedGroups.includes(group.name)}
+            {@const matchCount = scanMatchMap.get(group.name) ?? 0}
             <div
               role="button"
               tabindex="0"
@@ -1227,7 +1340,7 @@
                   if (checkedGroups.length > 0) {
                     viewSelectedGroups();
                   } else {
-                    selectGroup(group.name);
+                    selectGroup(group.name, groupSearch.trim());
                   }
                 }
               }}
@@ -1257,6 +1370,11 @@
               </span>
               <span class="rc-group-stat">{group.eventCount.toLocaleString()}<small>events</small></span>
               <span class="rc-group-stat streams">{group.streamCount}<small>streams</small></span>
+              {#if matchCount > 0}
+                <span class="rc-badge font-mono text-[10.5px] font-medium text-[var(--accent-amber)] bg-[color-mix(in_srgb,var(--accent-amber)_15%,transparent)] border border-[color-mix(in_srgb,var(--accent-amber)_30%,transparent)] px-1.5 py-0.5 rounded">
+                  {matchCount.toLocaleString()} {matchCount === 1 ? "match" : "matches"}
+                </span>
+              {/if}
               <span class="rc-group-stat age" title={group.lastEvent ? new Date(group.lastEvent).toLocaleString() : undefined}>
                 {relativeAge(group.lastEvent)}
               </span>
