@@ -47,7 +47,6 @@ awslocal lambda create-event-source-mapping \
 
 ### Dead Letter Queues
 Capture messages that fail processing:
-
 <div class="example-block">
 <div class="lang">HCL (Terraform)</div>
 
@@ -70,6 +69,32 @@ resource "aws_sqs_queue_redrive_policy" "main" {
 }
 ```
 </div>
+
+### Disruptor (publish failure injection)
+Deliberately fail `SendMessage` calls to test how publishers handle partial
+failures. Arm it from the dashboard (SQS section, per queue or bulk) or via
+the admin API. Rules are in-memory only and do not survive restarts.
+
+```bash
+# Fail ~50% of sends to one queue with 503 ServiceUnavailable
+curl -X PUT http://127.0.0.1:4566/_tarn/admin/sqs/disruptor \
+  -H 'Content-Type: application/json' \
+  -d '{"queue":"my-queue","enabled":true,"failureRate":50,"code":"ServiceUnavailable"}'
+
+# Target several queues at once
+curl -X PUT http://127.0.0.1:4566/_tarn/admin/sqs/disruptor \
+  -H 'Content-Type: application/json' \
+  -d '{"queues":["a","b"],"enabled":true,"failureRate":100,"code":"InternalError"}'
+
+# List rules, disarm one queue, disarm everything
+curl http://127.0.0.1:4566/_tarn/admin/sqs/disruptor
+curl -X DELETE 'http://127.0.0.1:4566/_tarn/admin/sqs/disruptor?queue=my-queue'
+curl -X DELETE 'http://127.0.0.1:4566/_tarn/admin/sqs/disruptor?all=true'
+```
+
+Supported codes: `ServiceUnavailable` (503), `InternalError` (500),
+`Throttling` (400), `OverLimit` (400). Batch sends report per-entry failures,
+so partial batch failure is exercised realistically.
 
 ## Examples
 
