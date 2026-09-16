@@ -159,6 +159,8 @@ type ecsTaskSummary struct {
 	StartedAt         *time.Time                `json:"startedAt,omitempty"`
 	StoppedAt         *time.Time                `json:"stoppedAt,omitempty"`
 	StoppedReason     string                    `json:"stoppedReason,omitempty"`
+	StopCode          string                    `json:"stopCode,omitempty"`
+	HealthStatus      string                    `json:"healthStatus,omitempty"`
 	Containers        []ecsTaskContainerSummary `json:"containers,omitempty"`
 }
 
@@ -172,6 +174,7 @@ type ecsTaskContainerSummary struct {
 	LastStatus      string                     `json:"lastStatus"`
 	ExitCode        *int64                     `json:"exitCode,omitempty"`
 	Reason          string                     `json:"reason,omitempty"`
+	HealthStatus    string                     `json:"healthStatus,omitempty"`
 	NetworkBindings []ecsNetworkBindingSummary `json:"networkBindings,omitempty"`
 }
 
@@ -1347,6 +1350,7 @@ func (h *Handler) listECSOverview() *ecsOverview {
 							LastStatus:      c.LastStatus,
 							ExitCode:        c.ExitCode,
 							Reason:          c.Reason,
+							HealthStatus:    c.HealthStatus,
 							NetworkBindings: bindings,
 						})
 					}
@@ -1361,6 +1365,8 @@ func (h *Handler) listECSOverview() *ecsOverview {
 						StartedAt:         task.StartedAt,
 						StoppedAt:         task.StoppedAt,
 						StoppedReason:     task.StoppedReason,
+						StopCode:          task.StopCode,
+						HealthStatus:      task.HealthStatus,
 						Containers:        containers,
 					})
 				}
@@ -1846,6 +1852,11 @@ type ecsLaunchedTask struct {
 	TaskDefinitionArn string `json:"taskDefinitionArn"`
 	LastStatus        string `json:"lastStatus"`
 	DesiredStatus     string `json:"desiredStatus"`
+	// StopCode/StoppedReason let the dialog report a task that was created
+	// but failed to launch (stopCode TaskFailedToStart), which RunTask
+	// returns as a task rather than a failure, as AWS does.
+	StopCode      string `json:"stopCode,omitempty"`
+	StoppedReason string `json:"stoppedReason,omitempty"`
 }
 
 type ecsRunFailure struct {
@@ -1923,6 +1934,8 @@ func (h *Handler) RunECSTask(w http.ResponseWriter, r *http.Request) {
 			TaskDefinitionArn: t.TaskDefinitionArn,
 			LastStatus:        t.LastStatus,
 			DesiredStatus:     t.DesiredStatus,
+			StopCode:          t.StopCode,
+			StoppedReason:     t.StoppedReason,
 		})
 	}
 	for _, f := range out.Failures {
@@ -1931,6 +1944,47 @@ func (h *Handler) RunECSTask(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(result)
+}
+
+type ecsStopTaskRequest struct {
+	Cluster string `json:"cluster"`
+	Task    string `json:"task"`
+	Reason  string `json:"reason"`
+}
+
+// defaultConsoleStopReason is the stoppedReason recorded when the dashboard
+// stops a task without a caller-supplied reason.
+const defaultConsoleStopReason = "Stopped from Tarn console"
+
+// StopECSTask stops one ECS task for the dashboard. Like RunECSTask it is a
+// thin passthrough over the runner the AWS StopTask API uses, so the task
+// ends with stopCode UserInitiated and a service replaces it as usual.
+func (h *Handler) StopECSTask(w http.ResponseWriter, r *http.Request) {
+	if h.taskRunner == nil {
+		writeError(w, http.StatusServiceUnavailable, "ECS task runner is not configured for this account")
+		return
+	}
+	var req ecsStopTaskRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	task := strings.TrimSpace(req.Task)
+	if task == "" {
+		writeError(w, http.StatusBadRequest, "task is required")
+		return
+	}
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		reason = defaultConsoleStopReason
+	}
+	if err := h.taskRunner.StopTask(r.Context(), strings.TrimSpace(req.Cluster), task, reason); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]string{"taskArn": task, "reason": reason})
 }
 
 // ECSTaskDefinition describes one task definition for the run-task trigger,

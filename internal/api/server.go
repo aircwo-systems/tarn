@@ -208,6 +208,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /_tarn/admin/ecs/run-task", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.RunECSTask(w, r)
 	})
+	mux.HandleFunc("POST /_tarn/admin/ecs/stop-task", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.StopECSTask(w, r)
+	})
 	mux.HandleFunc("GET /_tarn/admin/ecs/task-definitions/{family}", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.ECSTaskDefinition(w, r)
 	})

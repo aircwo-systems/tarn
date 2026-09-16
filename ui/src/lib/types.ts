@@ -476,6 +476,26 @@ export interface ECSTaskSummary {
   startedAt?: string;
   stoppedAt?: string;
   stoppedReason?: string;
+  stopCode?: string;
+  healthStatus?: string;
+  containers?: ECSTaskContainerSummary[];
+}
+
+export interface ECSTaskContainerSummary {
+  name: string;
+  lastStatus: string;
+  exitCode?: number;
+  /** Why the container stopped or failed to start (e.g. a secret or image pull error). */
+  reason?: string;
+  healthStatus?: string;
+  networkBindings?: ECSNetworkBinding[];
+}
+
+export interface ECSNetworkBinding {
+  containerPort: number;
+  hostPort: number;
+  protocol?: string;
+  bindIP?: string;
 }
 
 export interface ECSTaskDefinitionSummary {
@@ -507,6 +527,9 @@ export interface ECSLaunchedTask {
   taskDefinitionArn: string;
   lastStatus: string;
   desiredStatus: string;
+  /** TaskFailedToStart when the task was created but its launch failed. */
+  stopCode?: string;
+  stoppedReason?: string;
 }
 
 export interface ECSRunFailure {

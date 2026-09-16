@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -33,6 +34,9 @@ func newTestECSService(t *testing.T) *ecssvc.Service {
 type stubTaskRunner struct {
 	runTaskFn func(ctx context.Context, in *types.RunTaskInput) (*types.RunTaskOutput, error)
 	lastInput *types.RunTaskInput
+
+	lastStop    []string
+	stopTaskErr error
 }
 
 func (f *stubTaskRunner) RunTask(ctx context.Context, in *types.RunTaskInput) (*types.RunTaskOutput, error) {
@@ -41,7 +45,58 @@ func (f *stubTaskRunner) RunTask(ctx context.Context, in *types.RunTaskInput) (*
 }
 
 func (f *stubTaskRunner) StopTask(ctx context.Context, cluster, taskArn, reason string) error {
+	f.lastStop = []string{cluster, taskArn, reason}
+	if f.stopTaskErr != nil {
+		return f.stopTaskErr
+	}
 	return nil
+}
+
+func TestStopECSTaskPassesThroughToRunner(t *testing.T) {
+	h := newTestHandler(t)
+	stub := &stubTaskRunner{}
+	h.SetECSTaskRunner(stub)
+
+	req := httptest.NewRequest(http.MethodPost, "/_tarn/admin/ecs/stop-task",
+		strings.NewReader(`{"cluster":"c","task":"arn:aws:ecs:us-east-1:000000000000:task/c/t1"}`))
+	rec := httptest.NewRecorder()
+	h.StopECSTask(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+	}
+	want := []string{"c", "arn:aws:ecs:us-east-1:000000000000:task/c/t1", defaultConsoleStopReason}
+	if len(stub.lastStop) != 3 || stub.lastStop[0] != want[0] || stub.lastStop[1] != want[1] || stub.lastStop[2] != want[2] {
+		t.Fatalf("runner StopTask args = %v, want %v", stub.lastStop, want)
+	}
+}
+
+func TestStopECSTaskValidationAndErrors(t *testing.T) {
+	h := newTestHandler(t)
+	req := httptest.NewRequest(http.MethodPost, "/_tarn/admin/ecs/stop-task", strings.NewReader(`{"task":"t1"}`))
+	rec := httptest.NewRecorder()
+	h.StopECSTask(rec, req)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("without runner: status = %d, want 503", rec.Code)
+	}
+
+	h.SetECSTaskRunner(&stubTaskRunner{stopTaskErr: errors.New("task t9 not found")})
+	for _, tc := range []struct {
+		name, body string
+		want       int
+	}{
+		{"missing task", `{"cluster":"c"}`, http.StatusBadRequest},
+		{"bad json", `{`, http.StatusBadRequest},
+		{"runner error", `{"task":"t9","reason":"x"}`, http.StatusBadRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			h.StopECSTask(rec, httptest.NewRequest(http.MethodPost, "/_tarn/admin/ecs/stop-task", strings.NewReader(tc.body)))
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body: %s)", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
 }
 
 func TestRunECSTaskWithoutRunnerReturns503(t *testing.T) {
@@ -98,6 +153,12 @@ func TestRunECSTaskPassesInputToRunner(t *testing.T) {
 					TaskDefinitionArn: "arn:aws:ecs:us-east-1:000000000000:task-definition/web:3",
 					LastStatus:        "RUNNING",
 					DesiredStatus:     "RUNNING",
+				}, {
+					TaskArn:       "arn:aws:ecs:us-east-1:000000000000:task/c/t2",
+					LastStatus:    "STOPPED",
+					DesiredStatus: "STOPPED",
+					StopCode:      types.TaskStopCodeTaskFailedToStart,
+					StoppedReason: "ResourceInitializationError: unable to pull secrets",
 				}},
 			}, nil
 		},
@@ -137,13 +198,18 @@ func TestRunECSTaskPassesInputToRunner(t *testing.T) {
 			TaskArn       string `json:"taskArn"`
 			LastStatus    string `json:"lastStatus"`
 			DesiredStatus string `json:"desiredStatus"`
+			StopCode      string `json:"stopCode"`
+			StoppedReason string `json:"stoppedReason"`
 		} `json:"tasks"`
 	}
 	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
-	if len(payload.Tasks) != 1 || payload.Tasks[0].TaskArn == "" || payload.Tasks[0].LastStatus != "RUNNING" {
+	if len(payload.Tasks) != 2 || payload.Tasks[0].TaskArn == "" || payload.Tasks[0].LastStatus != "RUNNING" {
 		t.Fatalf("unexpected tasks in response: %+v", payload.Tasks)
+	}
+	if failed := payload.Tasks[1]; failed.StopCode != "TaskFailedToStart" || !strings.Contains(failed.StoppedReason, "ResourceInitializationError") {
+		t.Fatalf("failed launch not reported with its stop code and reason: %+v", failed)
 	}
 }
 

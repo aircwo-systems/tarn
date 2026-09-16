@@ -583,6 +583,21 @@ export async function describeECSTaskDefinition(
   return (await response.json()) as ECSTaskDefinitionDetail;
 }
 
+export async function stopECSTask(input: { cluster?: string; task: string; reason?: string }): Promise<void> {
+  const response = await fetch(endpoint("/_tarn/admin/ecs/stop-task"), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...accountHeaders(),
+    },
+    body: JSON.stringify(input),
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `HTTP ${response.status}`));
+  }
+}
+
 export async function runECSTask(input: RunECSTaskInput): Promise<ECSRunTaskResult> {
   const response = await fetch(endpoint("/_tarn/admin/ecs/run-task"), {
     method: "POST",

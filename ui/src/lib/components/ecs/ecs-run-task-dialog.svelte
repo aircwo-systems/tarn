@@ -52,6 +52,12 @@
   let statusTone: "ok" | "err" = $state("ok");
   let result = $state<ECSRunTaskResult | null>(null);
 
+  // Like AWS, RunTask returns a task whose launch failed (a missing secret, a
+  // bad image) as a STOPPED task with stopCode TaskFailedToStart, not as an
+  // entry in failures — so both count as failures here.
+  const failedToStart = (r: ECSRunTaskResult) => r.tasks.filter((t) => t.stopCode === "TaskFailedToStart");
+  const startedTasks = (r: ECSRunTaskResult) => r.tasks.filter((t) => t.stopCode !== "TaskFailedToStart");
+
   const selectedDef = $derived(
     taskDefinitions.find((d) => d.taskDefinitionArn === taskDefArn) ?? null,
   );
@@ -114,12 +120,13 @@
             : undefined,
       });
       result = payload;
-      const arns = payload.tasks.map((t) => t.taskArn);
+      const arns = startedTasks(payload).map((t) => t.taskArn);
+      const failureCount = failedToStart(payload).length + (payload.failures?.length ?? 0);
       if (arns.length > 0) {
         statusTone = "ok";
         status =
-          payload.failures && payload.failures.length > 0
-            ? `Launched ${arns.length} task${arns.length === 1 ? "" : "s"} with ${payload.failures.length} failure${payload.failures.length === 1 ? "" : "s"}.`
+          failureCount > 0
+            ? `Launched ${arns.length} task${arns.length === 1 ? "" : "s"} with ${failureCount} failure${failureCount === 1 ? "" : "s"}.`
             : `Launched ${arns.length} task${arns.length === 1 ? "" : "s"}.`;
         onlaunched(arns);
       } else {
@@ -234,17 +241,20 @@
       <p class="status" class:err={statusTone === "err"}>{status}</p>
     {/if}
 
-    {#if result && (result.failures?.length ?? 0) > 0}
+    {#if result && (failedToStart(result).length > 0 || (result.failures?.length ?? 0) > 0)}
       <div class="failures">
-        {#each result.failures as f (f.arn ?? f.reason)}
+        {#each failedToStart(result) as t (t.taskArn)}
+          <p class="failure" title={t.taskArn}><span>Task failed to start</span>{t.stoppedReason || t.taskArn}</p>
+        {/each}
+        {#each result.failures ?? [] as f (f.arn ?? f.reason)}
           <p class="failure"><span>{f.reason ?? "Failed"}</span>{f.detail ?? f.arn ?? ""}</p>
         {/each}
       </div>
     {/if}
 
-    {#if result && result.tasks.length > 0}
+    {#if result && startedTasks(result).length > 0}
       <div class="launched">
-        {#each result.tasks as t (t.taskArn)}
+        {#each startedTasks(result) as t (t.taskArn)}
           <p class="task-arn" title={t.taskArn}>{t.taskArn} · {t.lastStatus.toLowerCase()}</p>
         {/each}
       </div>

@@ -116,7 +116,7 @@
       </aside>
       {#if selected}
         {#key ecsKey(selected.kind, selected.resource.arn)}
-          <EcsDetail sel={selected} {ecs} onselect={select} />
+          <EcsDetail sel={selected} {ecs} onselect={select} onstopped={refresh} />
         {/key}
       {/if}
     </div>
