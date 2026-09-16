@@ -414,10 +414,20 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /2015-03-31/functions/{name}/aliases", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.ListAliases(w, r) })
 	mux.HandleFunc("PUT /2015-03-31/functions/{name}/aliases/{aliasName}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.UpdateAlias(w, r) })
 	mux.HandleFunc("DELETE /2015-03-31/functions/{name}/aliases/{aliasName}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.DeleteAlias(w, r) })
-	// Tags
+	// Tags — legacy Tarn routes plus the AWS-standard TagResource/ListTags/
+	// UntagResource routes (POST/GET/DELETE /2017-03-31/tags/{resource} and
+	// the /2015-03-31/tags/{resource} alias some SDKs still emit). The
+	// {resource} segment is the function ARN; handlers resolve it to the
+	// bare function name.
 	mux.HandleFunc("GET /2015-03-31/functions/{name}/tags", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.ListTags(w, r) })
 	mux.HandleFunc("POST /2015-03-31/functions/{name}/tags", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.TagResource(w, r) })
 	mux.HandleFunc("DELETE /2015-03-31/functions/{name}/tags", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.UntagResource(w, r) })
+	mux.HandleFunc("GET /2015-03-31/tags/{resource...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.ListTags(w, r) })
+	mux.HandleFunc("POST /2015-03-31/tags/{resource...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.TagResource(w, r) })
+	mux.HandleFunc("DELETE /2015-03-31/tags/{resource...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.UntagResource(w, r) })
+	mux.HandleFunc("GET /2017-03-31/tags/{resource...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.ListTags(w, r) })
+	mux.HandleFunc("POST /2017-03-31/tags/{resource...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.TagResource(w, r) })
+	mux.HandleFunc("DELETE /2017-03-31/tags/{resource...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.UntagResource(w, r) })
 	// Resource policy compatibility (Terraform aws_lambda_permission)
 	mux.HandleFunc("POST /2015-03-31/functions/{name}/policy", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.AddPermission(w, r) })
 	mux.HandleFunc("GET /2015-03-31/functions/{name}/policy", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.GetPolicy(w, r) })

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -753,9 +754,48 @@ func (h *Handler) GetAccountSettings(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListTags handles GET /2015-03-31/functions/{name}/tags
-func (h *Handler) ListTags(w http.ResponseWriter, r *http.Request) {
+// tagTargetName resolves the function name for tagging endpoints. It supports
+// both the legacy Tarn route (/2015-03-31/functions/{name}/tags) and the
+// AWS-standard routes (/2015-03-31/tags/{resource} and
+// /2017-03-31/tags/{resource}) where {resource} is the function ARN
+// (e.g. arn:aws:lambda:us-east-1:123456789012:function:my-fn).
+func (h *Handler) tagTargetName(r *http.Request) string {
 	name := r.PathValue("name")
+	if name == "" {
+		name = r.PathValue("resource")
+	}
+	// The AWS-standard routes carry the URL-escaped ARN in {resource}.
+	// PathValue is already decoded, but unescape defensively in case the
+	// SDK double-encodes colons.
+	if unescaped, err := url.PathUnescape(name); err == nil {
+		name = unescaped
+	}
+	return normalizeFunctionName(name)
+}
+
+// parseTagKeys collects tag keys from the query string, supporting both
+// comma-separated (tagKeys=a,b) and repeated (tagKeys=a&tagKeys=b) forms,
+// as emitted by different AWS SDK versions.
+func parseTagKeys(r *http.Request) []string {
+	rawValues, ok := r.URL.Query()["tagKeys"]
+	if !ok || len(rawValues) == 0 {
+		return nil
+	}
+	var keys []string
+	for _, raw := range rawValues {
+		for _, k := range strings.Split(raw, ",") {
+			if k = strings.TrimSpace(k); k != "" {
+				keys = append(keys, k)
+			}
+		}
+	}
+	return keys
+}
+
+// ListTags handles GET /2015-03-31/functions/{name}/tags and the AWS-standard
+// GET /2015-03-31/tags/{resource} and GET /2017-03-31/tags/{resource}.
+func (h *Handler) ListTags(w http.ResponseWriter, r *http.Request) {
+	name := h.tagTargetName(r)
 	fn, err := h.svc.GetFunction(name)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
@@ -768,9 +808,11 @@ func (h *Handler) ListTags(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"Tags": tags})
 }
 
-// TagResource handles POST /2015-03-31/functions/{name}/tags
+// TagResource handles POST /2015-03-31/functions/{name}/tags and the
+// AWS-standard POST /2015-03-31/tags/{resource} and
+// POST /2017-03-31/tags/{resource} (body: {"Tags": {...}}).
 func (h *Handler) TagResource(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+	name := h.tagTargetName(r)
 	var req struct {
 		Tags map[string]string `json:"Tags"`
 	}
@@ -785,15 +827,16 @@ func (h *Handler) TagResource(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// UntagResource handles DELETE /2015-03-31/functions/{name}/tags
+// UntagResource handles DELETE /2015-03-31/functions/{name}/tags and the
+// AWS-standard DELETE /2015-03-31/tags/{resource} and
+// DELETE /2017-03-31/tags/{resource} (?tagKeys=...).
 func (h *Handler) UntagResource(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	keys := r.URL.Query().Get("tagKeys")
-	if keys == "" {
+	name := h.tagTargetName(r)
+	tagKeys := parseTagKeys(r)
+	if len(tagKeys) == 0 {
 		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "tagKeys parameter is required")
 		return
 	}
-	tagKeys := strings.Split(keys, ",")
 	if err := h.svc.UntagResource(name, tagKeys); err != nil {
 		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
 		return

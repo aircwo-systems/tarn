@@ -189,9 +189,28 @@ func (s *Service) ActivatePendingFunctions() {
 	}
 }
 
-// GetFunction retrieves a function by name.
+// resolveFunctionName strips a Lambda ARN down to the bare function name so
+// tagging endpoints (which receive the ARN as {Resource}) work the same as
+// name-based lookups. It mirrors the API handler's normalizeFunctionName:
+// "arn:aws:lambda:us-east-1:123:function:my-fn" (optionally with ":$LATEST" or
+// ":<version>" suffix) resolves to "my-fn". Plain names pass through.
+func resolveFunctionName(nameOrArn string) string {
+	trimmed := strings.TrimSpace(nameOrArn)
+	const marker = ":function:"
+	idx := strings.Index(trimmed, marker)
+	if idx < 0 {
+		return trimmed
+	}
+	tail := trimmed[idx+len(marker):]
+	if colon := strings.IndexByte(tail, ':'); colon >= 0 {
+		tail = tail[:colon]
+	}
+	return strings.TrimSpace(tail)
+}
+
+// GetFunction retrieves a function by name (or ARN).
 func (s *Service) GetFunction(name string) (*types.FunctionConfig, error) {
-	fn, err := s.store.GetFunction(name)
+	fn, err := s.store.GetFunction(resolveFunctionName(name))
 	if err != nil {
 		return nil, err
 	}
@@ -302,9 +321,9 @@ func (s *Service) UpdateFunctionCode(ctx context.Context, name string, code []by
 	return fn, nil
 }
 
-// TagResource adds or overwrites tags on a function.
+// TagResource adds or overwrites tags on a function (name or ARN).
 func (s *Service) TagResource(name string, tags map[string]string) error {
-	fn, err := s.store.GetFunction(name)
+	fn, err := s.store.GetFunction(resolveFunctionName(name))
 	if err != nil {
 		return err
 	}
@@ -317,9 +336,9 @@ func (s *Service) TagResource(name string, tags map[string]string) error {
 	return s.store.SaveFunction(fn)
 }
 
-// UntagResource removes specified tag keys from a function.
+// UntagResource removes specified tag keys from a function (name or ARN).
 func (s *Service) UntagResource(name string, tagKeys []string) error {
-	fn, err := s.store.GetFunction(name)
+	fn, err := s.store.GetFunction(resolveFunctionName(name))
 	if err != nil {
 		return err
 	}

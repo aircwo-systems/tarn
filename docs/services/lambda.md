@@ -24,6 +24,9 @@ Deploy and invoke serverless functions in Tarn.
 | PublishLayerVersion | Supported | For shared code |
 | GetLayerVersion | Supported | |
 | ListLayerVersions | Supported | |
+| TagResource | Supported | `POST /2017-03-31/tags/{arn}` (plus `2015-03-31` alias and legacy `POST /2015-03-31/functions/{name}/tags`) |
+| UntagResource | Supported | `DELETE /2017-03-31/tags/{arn}?tagKeys=...` (plus `2015-03-31` alias and legacy route) |
+| ListTags | Supported | `GET /2017-03-31/tags/{arn}` (plus `2015-03-31` alias and legacy route) |
 | CreateEventSourceMapping | Supported | SQS queues and DynamoDB Streams |
 | DeleteEventSourceMapping | Supported | |
 | ListEventSourceMappings | Supported | |
