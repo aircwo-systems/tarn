@@ -558,6 +558,15 @@ func jsonBatchErrorCode(err error) (string, bool) {
 	return "InvalidParameterValue", true
 }
 
+// sqsQueryErrorCodes maps JSON-protocol error shapes to the legacy query
+// protocol codes AWS returns in the X-Amzn-Query-Error header.
+var sqsQueryErrorCodes = map[string]string{
+	"QueueDoesNotExist":      "AWS.SimpleQueueService.NonExistentQueue",
+	"ReceiptHandleIsInvalid": "ReceiptHandleIsInvalid",
+	"InvalidParameterValue":  "InvalidParameterValue",
+	"MissingParameter":       "MissingParameter",
+}
+
 func writeJSONError(w http.ResponseWriter, status int, code, message string) {
 	// Match the AWS SQS JSON (awsjson1_0) error wire format so AWS SDK v2 / the
 	// Terraform AWS provider map the error to its typed exception (e.g.
@@ -567,6 +576,12 @@ func writeJSONError(w http.ResponseWriter, status int, code, message string) {
 	// content type.
 	w.Header().Set("Content-Type", "application/x-amz-json-1.0")
 	w.Header().Set("X-Amzn-Errortype", code)
+	// SQS is awsQueryCompatible: AWS also sends the legacy query error code,
+	// which the SDK surfaces as ErrorCode() and the Terraform provider matches
+	// on (e.g. AWS.SimpleQueueService.NonExistentQueue in its delete waiter).
+	if queryCode, ok := sqsQueryErrorCodes[code]; ok {
+		w.Header().Set("X-Amzn-Query-Error", queryCode+";Sender")
+	}
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"__type":  code,

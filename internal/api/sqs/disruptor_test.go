@@ -87,3 +87,27 @@ func TestDisruptedSendMessageBatchFailsPerEntry(t *testing.T) {
 		t.Fatalf("expected no successful entries at 100%% failure rate: %s", resp)
 	}
 }
+
+// Terraform's aws_sqs_queue delete waiter matches the legacy query error code
+// (AWS.SimpleQueueService.NonExistentQueue), which AWS sends alongside the
+// JSON shape in X-Amzn-Query-Error.
+func TestJSONMissingQueueSendsQueryCompatibleErrorCode(t *testing.T) {
+	h := newTestHandler(t)
+
+	body := `{"QueueUrl":"http://localhost:4566/000000000000/gone"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	req.Header.Set("X-Amz-Target", "AmazonSQS.GetQueueAttributes")
+	rec := httptest.NewRecorder()
+	h.Dispatch(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Amzn-Errortype"); got != "QueueDoesNotExist" {
+		t.Fatalf("X-Amzn-Errortype = %q, want QueueDoesNotExist", got)
+	}
+	if got := rec.Header().Get("X-Amzn-Query-Error"); got != "AWS.SimpleQueueService.NonExistentQueue;Sender" {
+		t.Fatalf("X-Amzn-Query-Error = %q, want AWS.SimpleQueueService.NonExistentQueue;Sender", got)
+	}
+}
