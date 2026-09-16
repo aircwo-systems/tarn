@@ -33,6 +33,10 @@ var dependsOnWaitTimeout = 10 * time.Minute
 // with a ClientException, so this does too — it is intentionally not part of
 // invalidParameterError's InvalidParameterException family.
 func validateDependsOn(cds []types.ContainerDefinition, names map[string]bool) *ServiceError {
+	essential := make(map[string]bool, len(cds))
+	for _, cd := range cds {
+		essential[cd.Name] = cd.Essential == nil || *cd.Essential
+	}
 	adjacency := make(map[string][]string, len(cds))
 	for _, cd := range cds {
 		for _, dep := range cd.DependsOn {
@@ -47,6 +51,11 @@ func validateDependsOn(cds []types.ContainerDefinition, names map[string]bool) *
 				types.ContainerConditionSuccess, types.ContainerConditionHealthy:
 			default:
 				return clientError("container %s: unsupported dependsOn condition %q", cd.Name, dep.Condition)
+			}
+			// As in AWS: a container that must exit (COMPLETE/SUCCESS) can't be
+			// essential, since its exit would stop the whole task.
+			if (dep.Condition == types.ContainerConditionComplete || dep.Condition == types.ContainerConditionSuccess) && essential[dep.ContainerName] {
+				return clientError("container %s: dependsOn condition %s can't be set on essential container %s", cd.Name, dep.Condition, dep.ContainerName)
 			}
 			adjacency[cd.Name] = append(adjacency[cd.Name], dep.ContainerName)
 		}

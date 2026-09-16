@@ -148,9 +148,11 @@ func TestECSDockerTaskVolumesAndFieldsE2E(t *testing.T) {
 		},
 		"ContainerDefinitions": []map[string]any{
 			{
-				"Name":             writerName,
-				"Image":            image,
-				"Essential":        true,
+				"Name":  writerName,
+				"Image": image,
+				// A COMPLETE dependency must be non-essential (as in AWS):
+				// an essential writer's exit would stop the task.
+				"Essential":        false,
 				"WorkingDirectory": "/tmp",
 				"User":             "0:0",
 				"Command": []string{"sh", "-c",

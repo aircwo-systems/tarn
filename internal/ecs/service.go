@@ -683,6 +683,12 @@ func (s *Service) SetTaskCorrelationID(taskArn, correlationID string) (*types.Ta
 // StopTaskRecord marks a task's desired status STOPPED and records the
 // reason, for use by the runner's StopTask before it stops the container.
 func (s *Service) StopTaskRecord(taskArn, reason string) (*types.Task, error) {
+	return s.StopTaskRecordWithCode(taskArn, "", reason)
+}
+
+// StopTaskRecordWithCode is StopTaskRecord that also records the AWS stopCode
+// (types.TaskStopCode*). An empty stopCode leaves any existing code intact.
+func (s *Service) StopTaskRecordWithCode(taskArn, stopCode, reason string) (*types.Task, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -692,6 +698,9 @@ func (s *Service) StopTaskRecord(taskArn, reason string) (*types.Task, error) {
 	}
 	task.DesiredStatus = types.TaskDesiredStatusStopped
 	task.StoppedReason = reason
+	if stopCode != "" {
+		task.StopCode = stopCode
+	}
 	if err := s.store.SaveTask(task); err != nil {
 		return nil, err
 	}

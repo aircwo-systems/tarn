@@ -678,11 +678,11 @@ func TestRunnerFailsLaunchWhenSharedVolumeMissingAndAutoprovisionFalse(t *testin
 	if err != nil {
 		t.Fatalf("RunTask: %v", err)
 	}
-	if len(out.Tasks) != 0 || len(out.Failures) != 1 {
-		t.Fatalf("expected one failure and no tasks, got tasks=%+v failures=%+v", out.Tasks, out.Failures)
+	if len(out.Tasks) != 1 || len(out.Failures) != 0 {
+		t.Fatalf("expected one stopped task and no failures, got tasks=%+v failures=%+v", out.Tasks, out.Failures)
 	}
-	if !strings.Contains(out.Failures[0].Detail, "autoprovision is false") {
-		t.Fatalf("failure detail = %q, want mention of autoprovision", out.Failures[0].Detail)
+	if got := out.Tasks[0]; got.StopCode != types.TaskStopCodeTaskFailedToStart || got.LastStatus != types.TaskStatusStopped || !strings.Contains(got.StoppedReason, "autoprovision is false") {
+		t.Fatalf("task = stopCode %q lastStatus %q reason %q, want TaskFailedToStart/STOPPED/autoprovision", got.StopCode, got.LastStatus, got.StoppedReason)
 	}
 	if len(eng.volumeCreateCallsSnapshot()) != 0 {
 		t.Fatalf("expected no volume to be created, got %+v", eng.volumeCreateCallsSnapshot())
@@ -986,7 +986,7 @@ func TestExitCodeZeroIsNotCollapsedToNil(t *testing.T) {
 	eng.finish(containerID, 0, nil)
 
 	waitForContainerStopped(t, svc, taskArn, "app")
-	waitForTaskDesiredStopped(t, svc, taskArn)
+	waitForTaskStopped(t, svc, taskArn)
 
 	task, err := svc.GetTask(taskArn)
 	if err != nil {
@@ -1070,6 +1070,26 @@ func waitForTaskDesiredStopped(t *testing.T, svc *Service, taskArn string) {
 		select {
 		case <-deadline:
 			t.Fatalf("timed out waiting for task %s to reach desired STOPPED", taskArn)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+// waitForTaskStopped waits for a task's LastStatus to reach STOPPED — i.e.
+// every container is gone and finishTask has run. DesiredStatus flips to
+// STOPPED earlier (as soon as an essential container exits), so tests that
+// assert on the finished task must wait for this instead.
+func waitForTaskStopped(t *testing.T, svc *Service, taskArn string) {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		task, err := svc.GetTask(taskArn)
+		if err == nil && task.LastStatus == types.TaskStatusStopped {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("timed out waiting for task %s to reach STOPPED", taskArn)
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
@@ -1573,8 +1593,11 @@ func TestPartialTaskLaunchStopsContainersAlreadyStarted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunTask: %v", err)
 	}
-	if len(out.Tasks) != 0 || len(out.Failures) != 1 {
+	if len(out.Tasks) != 1 || len(out.Failures) != 0 {
 		t.Fatalf("unexpected partial launch result: %+v", out)
+	}
+	if got := out.Tasks[0]; got.StopCode != types.TaskStopCodeTaskFailedToStart || got.DesiredStatus != types.TaskDesiredStatusStopped {
+		t.Fatalf("partial launch task = stopCode %q desired %q, want TaskFailedToStart/STOPPED", got.StopCode, got.DesiredStatus)
 	}
 	for _, id := range []string{"container-1", "container-2"} {
 		if indexOf(eng.callLog(), "stop:"+id) < 0 {
@@ -1740,6 +1763,9 @@ func TestStopTaskMarksRecordAndStopsContainer(t *testing.T) {
 	}
 	if task.StoppedReason != "manual stop" {
 		t.Fatalf("StoppedReason = %q, want %q", task.StoppedReason, "manual stop")
+	}
+	if task.StopCode != types.TaskStopCodeUserInitiated {
+		t.Fatalf("StopCode = %q, want UserInitiated", task.StopCode)
 	}
 
 	stopCalled := false
@@ -2312,7 +2338,7 @@ func TestServiceLaunchBackoffGrowsOnRepeatedInstantCrashes(t *testing.T) {
 			t.Fatalf("iteration %d: launched task has no recorded container ID", i)
 		}
 		eng.finish(containerID, 1, nil)
-		waitForTaskDesiredStopped(t, svc, task.TaskArn)
+		waitForTaskStopped(t, svc, task.TaskArn)
 
 		r.backoffMu.Lock()
 		state := r.launchBackoff[key]

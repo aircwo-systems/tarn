@@ -24,6 +24,14 @@ const (
 	TaskDesiredStatusStopped = "STOPPED"
 )
 
+// Task stop codes, mirroring AWS's Task.stopCode enum values Tarn produces.
+const (
+	TaskStopCodeTaskFailedToStart         = "TaskFailedToStart"
+	TaskStopCodeEssentialContainerExited  = "EssentialContainerExited"
+	TaskStopCodeUserInitiated             = "UserInitiated"
+	TaskStopCodeServiceSchedulerInitiated = "ServiceSchedulerInitiated"
+)
+
 // Cluster lifecycle statuses.
 const (
 	ClusterStatusActive   = "ACTIVE"
@@ -481,6 +489,7 @@ type Task struct {
 	StartedAt         *time.Time      `json:"StartedAt,omitempty"`
 	StoppedAt         *time.Time      `json:"StoppedAt,omitempty"`
 	StoppedReason     string          `json:"StoppedReason,omitempty"`
+	StopCode          string          `json:"StopCode,omitempty"`
 	CreatedAt         time.Time       `json:"CreatedAt"`
 	// CorrelationID is the trace correlation ID assigned to this task at
 	// launch (see RunTaskInput.CorrelationID). Not an AWS field — kept off

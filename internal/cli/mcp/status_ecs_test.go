@@ -31,13 +31,25 @@ func TestStatusReportsECSState(t *testing.T) {
 					"group":         "service:worker-service",
 					"lastStatus":    "RUNNING",
 					"desiredStatus": "RUNNING",
+					"healthStatus":  "HEALTHY",
 					"containers": []map[string]any{
 						{
-							"name": "worker", "lastStatus": "RUNNING", "exitCode": exitCode,
+							"name": "worker", "lastStatus": "RUNNING", "exitCode": exitCode, "healthStatus": "HEALTHY",
 							"networkBindings": []map[string]any{
 								{"containerPort": 8080, "hostPort": 32768, "protocol": "tcp", "bindIP": "127.0.0.1"},
 							},
 						},
+					},
+				},
+				{
+					"arn":           "arn:aws:ecs:us-east-1:000000000000:task/workers/def456",
+					"clusterArn":    "arn:aws:ecs:us-east-1:000000000000:cluster/workers",
+					"lastStatus":    "STOPPED",
+					"desiredStatus": "STOPPED",
+					"stoppedReason": "Essential container in task exited",
+					"stopCode":      "EssentialContainerExited",
+					"containers": []map[string]any{
+						{"name": "app", "lastStatus": "STOPPED", "exitCode": 1, "reason": "OutOfMemoryError: container killed"},
 					},
 				},
 			},
@@ -59,18 +71,25 @@ func TestStatusReportsECSState(t *testing.T) {
 	if svc.Name != "worker-service" || svc.Cluster != "workers" || svc.DesiredCount != 2 || svc.RunningCount != 1 || svc.PendingCount != 1 {
 		t.Errorf("unexpected service: %+v, want cluster resolved to its name", svc)
 	}
-	if len(out.ECS.Tasks) != 1 {
-		t.Fatalf("tasks len = %d, want 1", len(out.ECS.Tasks))
+	if len(out.ECS.Tasks) != 2 {
+		t.Fatalf("tasks len = %d, want 2", len(out.ECS.Tasks))
 	}
 	task := out.ECS.Tasks[0]
-	if task.Cluster != "workers" || task.Group != "service:worker-service" || task.LastStatus != "RUNNING" {
+	if task.Cluster != "workers" || task.Group != "service:worker-service" || task.LastStatus != "RUNNING" || task.HealthStatus != "HEALTHY" {
 		t.Errorf("unexpected task: %+v", task)
+	}
+	stopped := out.ECS.Tasks[1]
+	if stopped.StopCode != "EssentialContainerExited" || stopped.StoppedReason != "Essential container in task exited" {
+		t.Errorf("stopped task = %+v, want stopCode and stoppedReason carried through", stopped)
+	}
+	if len(stopped.Containers) != 1 || stopped.Containers[0].Reason != "OutOfMemoryError: container killed" {
+		t.Errorf("stopped task containers = %+v, want container reason carried through", stopped.Containers)
 	}
 	if len(task.Containers) != 1 {
 		t.Fatalf("containers len = %d, want 1", len(task.Containers))
 	}
 	container := task.Containers[0]
-	if container.Name != "worker" || container.ExitCode == nil || *container.ExitCode != 0 {
+	if container.Name != "worker" || container.ExitCode == nil || *container.ExitCode != 0 || container.HealthStatus != "HEALTHY" {
 		t.Errorf("unexpected container: %+v", container)
 	}
 	if len(container.HostURLs) != 1 || container.HostURLs[0] != "http://127.0.0.1:32768" {

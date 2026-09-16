@@ -83,15 +83,19 @@ type ECSTaskInfo struct {
 	LastStatus    string             `json:"lastStatus"`
 	DesiredStatus string             `json:"desiredStatus"`
 	StoppedReason string             `json:"stoppedReason,omitempty"`
+	StopCode      string             `json:"stopCode,omitempty" jsonschema:"Why the task stopped, as AWS reports it: TaskFailedToStart (launch failed; see stoppedReason), EssentialContainerExited (an essential container exited on its own), UserInitiated (StopTask), or ServiceSchedulerInitiated (scale-down or rolling deployment)."`
+	HealthStatus  string             `json:"healthStatus,omitempty" jsonschema:"HEALTHY, UNHEALTHY, or UNKNOWN, aggregated over containers with a healthCheck. An essential container going UNHEALTHY stops the task."`
 	Containers    []ECSContainerInfo `json:"containers,omitempty"`
 }
 
 // ECSContainerInfo is one container within a task.
 type ECSContainerInfo struct {
-	Name       string   `json:"name"`
-	LastStatus string   `json:"lastStatus"`
-	ExitCode   *int64   `json:"exitCode,omitempty"`
-	HostURLs   []string `json:"hostUrls,omitempty" jsonschema:"http://127.0.0.1:<hostPort> for each port this container published. Dial these directly to reach the container."`
+	Name         string   `json:"name"`
+	LastStatus   string   `json:"lastStatus"`
+	ExitCode     *int64   `json:"exitCode,omitempty"`
+	Reason       string   `json:"reason,omitempty" jsonschema:"Why this container stopped or failed to start, for example an image pull or secret resolution error."`
+	HealthStatus string   `json:"healthStatus,omitempty" jsonschema:"HEALTHY, UNHEALTHY, or UNKNOWN; present only for containers with a healthCheck."`
+	HostURLs     []string `json:"hostUrls,omitempty" jsonschema:"http://127.0.0.1:<hostPort> for each port this container published. Dial these directly to reach the container."`
 }
 
 // overview mirrors the subset of GET /_tarn/admin/overview that tarn_status
@@ -146,10 +150,14 @@ type overview struct {
 			LastStatus    string `json:"lastStatus"`
 			DesiredStatus string `json:"desiredStatus"`
 			StoppedReason string `json:"stoppedReason"`
+			StopCode      string `json:"stopCode"`
+			HealthStatus  string `json:"healthStatus"`
 			Containers    []struct {
 				Name            string `json:"name"`
 				LastStatus      string `json:"lastStatus"`
 				ExitCode        *int64 `json:"exitCode"`
+				Reason          string `json:"reason"`
+				HealthStatus    string `json:"healthStatus"`
 				NetworkBindings []struct {
 					HostPort int `json:"hostPort"`
 				} `json:"networkBindings"`
@@ -176,6 +184,12 @@ proxyUrl (/_ecs/<account>/<cluster>/<service>/) that round-robins across its
 running tasks and survives task restarts, unlike a container's hostUrl. A task's logs live in its
 awslogs group, by convention /ecs/<family>, readable with tarn_get_logs using
 logGroup.
+
+A stopped task reports why: stopCode is TaskFailedToStart (launch failed),
+EssentialContainerExited (an essential container exited on its own, so the rest
+were stopped), UserInitiated, or ServiceSchedulerInitiated, with details in
+stoppedReason and each container's reason. Tasks and containers with a
+healthCheck also report healthStatus.
 
 If Tarn is not running this returns running=false with the command to start it,
 rather than failing.`
@@ -288,12 +302,16 @@ func addStatusTool(s *mcp.Server, c *client) {
 					LastStatus:    task.LastStatus,
 					DesiredStatus: task.DesiredStatus,
 					StoppedReason: task.StoppedReason,
+					StopCode:      task.StopCode,
+					HealthStatus:  task.HealthStatus,
 				}
 				for _, c := range task.Containers {
 					container := ECSContainerInfo{
-						Name:       c.Name,
-						LastStatus: c.LastStatus,
-						ExitCode:   c.ExitCode,
+						Name:         c.Name,
+						LastStatus:   c.LastStatus,
+						ExitCode:     c.ExitCode,
+						Reason:       c.Reason,
+						HealthStatus: c.HealthStatus,
 					}
 					for _, nb := range c.NetworkBindings {
 						container.HostURLs = append(container.HostURLs,

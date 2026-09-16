@@ -124,8 +124,13 @@ type runningTask struct {
 	remaining      int
 	launchComplete bool
 	stopRequested  bool
-	serviceKey     string
-	containerIDs   map[string]string // container name -> Docker container ID
+	// essentialExited names the essential container whose own exit stopped
+	// this task (AWS's essential-container rule), or "" if none did. The
+	// siblings stopped as a consequence are then not failures in their own
+	// right, and the task keeps stopCode EssentialContainerExited.
+	essentialExited string
+	serviceKey      string
+	containerIDs    map[string]string // container name -> Docker container ID
 
 	// The fields below are captured once at launch (cluster/task definition
 	// are not otherwise available to finishTask/onContainerFinished) so the
@@ -352,8 +357,8 @@ func (r *Runner) Stop() {
 
 // RunTask resolves the task definition, then launches Count (default 1)
 // independent task instances. Each instance's containers are created from
-// the task definition layered with Overrides; failures for one instance are
-// reported in Failures rather than aborting the others.
+// the task definition layered with Overrides; a failed instance is returned
+// STOPPED (stopCode TaskFailedToStart) rather than aborting the others.
 func (r *Runner) RunTask(ctx context.Context, in *types.RunTaskInput) (*types.RunTaskOutput, error) {
 	if in == nil {
 		return nil, invalidParameterError("RunTask input is required")
@@ -405,6 +410,13 @@ func (r *Runner) RunTask(ctx context.Context, in *types.RunTaskInput) (*types.Ru
 		// tasks. Service-owned tasks are launched by the reconcile loop via
 		// launchTask directly, with the real service name for labeling.
 		task, err := r.launchTaskWithPayload(ctx, cluster, td, in.Overrides, in.EventPayload, in.LaunchType, in.Group, "", in.CorrelationID, tags)
+		if err != nil && task != nil {
+			// Like AWS, a task that got as far as a record is returned and
+			// shows the failure as STOPPED + stopCode TaskFailedToStart;
+			// Failures is kept for tasks that never existed.
+			out.Tasks = append(out.Tasks, *task)
+			continue
+		}
 		if err != nil {
 			out.Failures = append(out.Failures, types.Failure{
 				Reason: "TaskFailedToStart",
@@ -424,6 +436,12 @@ func (r *Runner) RunTask(ctx context.Context, in *types.RunTaskInput) (*types.Ru
 // that cleanup sequence actually happens — the same path a natural exit
 // takes, so there is exactly one place that does it.
 func (r *Runner) StopTask(ctx context.Context, cluster, taskArn, reason string) error {
+	return r.stopTask(ctx, cluster, taskArn, types.TaskStopCodeUserInitiated, reason)
+}
+
+// stopTask is StopTask with an explicit AWS stopCode, so scheduler-driven
+// stops (rolling deployment, scale-down) are distinguishable from user ones.
+func (r *Runner) stopTask(ctx context.Context, cluster, taskArn, stopCode, reason string) error {
 	task, err := r.svc.GetTask(taskArn)
 	if err != nil {
 		return err
@@ -436,7 +454,7 @@ func (r *Runner) StopTask(ctx context.Context, cluster, taskArn, reason string) 
 		}
 	}
 
-	if _, err := r.svc.StopTaskRecord(task.TaskArn, reason); err != nil {
+	if _, err := r.svc.StopTaskRecordWithCode(task.TaskArn, stopCode, reason); err != nil {
 		return err
 	}
 
@@ -708,20 +726,25 @@ func (r *Runner) launchTaskWithPayload(ctx context.Context, cluster *types.Clust
 	taskVolumeNames, volErr := r.resolveAndEnsureVolumes(launchCtx, td, task.TaskArn)
 	rt.taskVolumeNames = taskVolumeNames
 	if volErr != nil {
-		_, _ = r.svc.StopTaskRecord(task.TaskArn, volErr.Error())
+		_, _ = r.svc.StopTaskRecordWithCode(task.TaskArn, types.TaskStopCodeTaskFailedToStart, volErr.Error())
 		r.markRunningTaskStopping(rt)
 		r.setTaskStatusAfterLaunchFailure(task.TaskArn, rt)
 		r.completeLaunch(task.TaskArn, rt)
-		return nil, volErr
+		return r.taskAfterLaunchFailure(task), volErr
 	}
 
 	if err := r.startContainers(launchCtx, cluster, task, td, overrides, eventPayload, serviceName, resources, rt); err != nil {
-		_, _ = r.svc.StopTaskRecord(task.TaskArn, err.Error())
+		rt.mu.Lock()
+		essentialExited := rt.essentialExited != ""
+		rt.mu.Unlock()
+		if !essentialExited {
+			_, _ = r.svc.StopTaskRecordWithCode(task.TaskArn, types.TaskStopCodeTaskFailedToStart, err.Error())
+		}
 		r.markRunningTaskStopping(rt)
 		r.setTaskStatusAfterLaunchFailure(task.TaskArn, rt)
 		r.completeLaunch(task.TaskArn, rt)
 		r.stopContainerIDs(context.Background(), rt, r.taskContainerIDs(rt), fmt.Sprintf("(failed launch %s)", task.TaskArn))
-		return nil, err
+		return r.taskAfterLaunchFailure(task), err
 	}
 
 	remaining, stopping := r.completeLaunch(task.TaskArn, rt)
@@ -771,6 +794,9 @@ func (r *Runner) startContainers(ctx context.Context, cluster *types.Cluster, ta
 				return
 			}
 			if err := r.startContainer(ctx, cluster, task, td, cd, overrides, eventPayload, serviceName, resources[cd.Name], rt); err != nil {
+				// Like AWS, the container that failed to start carries the
+				// reason (e.g. a secret or image pull error), with no exit code.
+				_, _ = r.svc.SetContainerExitCode(task.TaskArn, cd.Name, nil, err.Error())
 				_, _ = r.svc.SetContainerStatus(task.TaskArn, cd.Name, types.TaskStatusStopped)
 				errCh <- err
 			}
@@ -996,6 +1022,15 @@ func (r *Runner) taskContainerIDs(rt *runningTask) []string {
 	return ids
 }
 
+// taskAfterLaunchFailure returns the latest record for a task whose launch
+// failed after its record was created, falling back to the original.
+func (r *Runner) taskAfterLaunchFailure(task *types.Task) *types.Task {
+	if refreshed, err := r.svc.GetTask(task.TaskArn); err == nil {
+		return refreshed
+	}
+	return task
+}
+
 func (r *Runner) setTaskStatusAfterLaunchFailure(taskArn string, rt *runningTask) {
 	if len(r.taskContainerIDs(rt)) > 0 {
 		if _, err := r.svc.SetTaskStatus(taskArn, types.TaskStatusStopping); err != nil {
@@ -1100,9 +1135,10 @@ func (r *Runner) recordTaskStoppedTrace(taskArn string, rt *runningTask) {
 
 	rt.mu.Lock()
 	stopRequested := rt.stopRequested
+	essentialExited := rt.essentialExited
 	rt.mu.Unlock()
 	stopRequested = stopRequested || r.stopped.Load()
-	if stopRequested {
+	if stopRequested && essentialExited == "" {
 		meta["stopRequested"] = "true"
 	}
 
@@ -1111,7 +1147,13 @@ func (r *Runner) recordTaskStoppedTrace(taskArn string, rt *runningTask) {
 		if rt.essential != nil && !rt.essential[c.Name] {
 			continue
 		}
-		if !stopRequested && (c.ExitCode == nil || *c.ExitCode != 0) {
+		// When an essential container's exit stopped the task, only that
+		// container decides the outcome; its siblings were stopped because
+		// of it.
+		if essentialExited != "" && c.Name != essentialExited {
+			continue
+		}
+		if (essentialExited != "" || !stopRequested) && (c.ExitCode == nil || *c.ExitCode != 0) {
 			status = "error"
 		}
 		if c.ExitCode != nil {
@@ -1618,6 +1660,7 @@ func (r *Runner) spawnLifecycle(taskArn, containerName, containerID, logGroup, s
 			log.Printf("[ecs] record container status for %s/%s: %v", taskArn, containerName, err)
 		}
 		r.logContainerExit(logGroup, streamName, containerName, ec, reason, rt)
+		r.handleEssentialContainerExit(taskArn, containerName, rt)
 
 		// Drain: let the pump finish on its own for a bounded grace period
 		// (Docker's follow stream normally ends shortly after exit), then
@@ -1676,13 +1719,48 @@ func (r *Runner) logContainerExit(logGroup, streamName, containerName string, ec
 	}})
 }
 
+// handleEssentialContainerExit applies AWS's essential-container rule: when
+// an essential container exits on its own (not because the task was already
+// being stopped), the task is marked stopped with stopCode
+// EssentialContainerExited and every other container is stopped. A
+// non-essential container exiting leaves the task running.
+func (r *Runner) handleEssentialContainerExit(taskArn, containerName string, rt *runningTask) {
+	rt.mu.Lock()
+	essential := rt.essential == nil || rt.essential[containerName]
+	if !essential || rt.stopRequested || rt.essentialExited != "" || r.stopped.Load() {
+		rt.mu.Unlock()
+		return
+	}
+	rt.essentialExited = containerName
+	rt.stopRequested = true
+	others := make([]string, 0, len(rt.containerIDs))
+	for name, id := range rt.containerIDs {
+		if name != containerName {
+			others = append(others, id)
+		}
+	}
+	rt.mu.Unlock()
+
+	if _, err := r.svc.StopTaskRecordWithCode(taskArn, types.TaskStopCodeEssentialContainerExited, "Essential container in task exited"); err != nil {
+		log.Printf("[ecs] mark task %s stopped after essential container %s exited: %v", taskArn, containerName, err)
+	}
+	if len(others) == 0 {
+		return
+	}
+	// Asynchronous so this container's own log drain and removal are not
+	// held up by its siblings' stop timeouts.
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		r.stopContainerIDs(context.Background(), rt, others, fmt.Sprintf("(essential container %s exited in %s)", containerName, taskArn))
+	}()
+}
+
 // onContainerFinished decrements the task's remaining-container count and,
 // once every container has exited, flips the task record to STOPPED and
-// drops the runner's local bookkeeping for it. Multi-container tasks are
-// treated uniformly here: the task is STOPPED only when *all* its
-// containers have exited, not when the first (possibly non-essential) one
-// does — a deliberate simplification of AWS's "essential container" rule,
-// which this runner does not implement.
+// drops the runner's local bookkeeping for it. An essential container's exit
+// has already stopped the siblings (handleEssentialContainerExit), so this
+// only has to wait for them to be gone.
 func (r *Runner) onContainerFinished(taskArn string) {
 	r.mu.Lock()
 	rt, ok := r.tasks[taskArn]
@@ -1699,7 +1777,9 @@ func (r *Runner) onContainerFinished(taskArn string) {
 		return
 	}
 	if rt.serviceKey != "" {
-		if current, getErr := r.svc.GetTask(taskArn); getErr == nil && current.DesiredStatus == types.TaskDesiredStatusRunning {
+		// An essential container exiting also marks the task desired-stopped,
+		// but it is still the task ending on its own, not a requested stop.
+		if current, getErr := r.svc.GetTask(taskArn); getErr == nil && (current.DesiredStatus == types.TaskDesiredStatusRunning || current.StopCode == types.TaskStopCodeEssentialContainerExited) {
 			if taskRanStabilityWindow(current) {
 				// The task stayed up at least serviceStabilityWindow before
 				// exiting: treat it as a healthy instance reaching a normal
@@ -1866,7 +1946,7 @@ func (r *Runner) reconcileService(ctx context.Context, cluster *types.Cluster, s
 	// the current definition only after this task is no longer active.
 	for _, task := range activeTasks {
 		if task.TaskDefinitionArn != svc.TaskDefinitionArn {
-			if err := r.StopTask(ctx, cluster.ClusterArn, task.TaskArn, "rolling deployment to new task definition"); err != nil {
+			if err := r.stopTask(ctx, cluster.ClusterArn, task.TaskArn, types.TaskStopCodeServiceSchedulerInitiated, "rolling deployment to new task definition"); err != nil {
 				log.Printf("[ecs] reconcile: stop old task %s for service %s: %v", task.TaskArn, svc.ServiceName, err)
 			}
 			return
@@ -2022,7 +2102,7 @@ func (r *Runner) stopServiceTasks(ctx context.Context, cluster *types.Cluster, s
 	}
 	candidates := append(old, current...)
 	for i := 0; i < count && i < len(candidates); i++ {
-		if err := r.StopTask(ctx, cluster.ClusterArn, candidates[i].TaskArn, "scaling down to desired count"); err != nil {
+		if err := r.stopTask(ctx, cluster.ClusterArn, candidates[i].TaskArn, types.TaskStopCodeServiceSchedulerInitiated, "scaling down to desired count"); err != nil {
 			log.Printf("[ecs] reconcile: stop task %s: %v", candidates[i].TaskArn, err)
 		}
 	}

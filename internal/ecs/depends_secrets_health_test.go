@@ -92,6 +92,25 @@ func TestValidateDependsOnRejectsCycle(t *testing.T) {
 	}
 }
 
+func TestValidateDependsOnRejectsCompletionConditionOnEssentialContainer(t *testing.T) {
+	_, svc, _, _ := newTestRunner(t)
+	for _, condition := range []string{types.ContainerConditionComplete, types.ContainerConditionSuccess} {
+		_, err := svc.RegisterTaskDefinition(&types.RegisterTaskDefinitionInput{
+			Family: "essential-init",
+			ContainerDefinitions: []types.ContainerDefinition{
+				{Name: "init", Image: "example/init:latest"},
+				{Name: "app", Image: "example/app:latest", DependsOn: []types.ContainerDependency{
+					{ContainerName: "init", Condition: condition},
+				}},
+			},
+		})
+		var svcErr *ServiceError
+		if err == nil || !errors.As(err, &svcErr) || svcErr.Code != "ClientException" {
+			t.Fatalf("%s on essential container: expected ClientException, got %v", condition, err)
+		}
+	}
+}
+
 func TestValidateDependsOnAcceptsValidChain(t *testing.T) {
 	_, svc, _, _ := newTestRunner(t)
 	_, err := svc.RegisterTaskDefinition(&types.RegisterTaskDefinitionInput{
@@ -201,15 +220,16 @@ func TestDependsOnSuccessFailureStopsTaskWithoutStartingDependent(t *testing.T) 
 		if res.err != nil {
 			t.Fatalf("RunTask: %v", res.err)
 		}
-		// A container-launch failure (here, a dependsOn SUCCESS condition
-		// that was never met) is reported through Failures, not Tasks — the
-		// same convention TestPartialTaskLaunchStopsContainersAlreadyStarted
-		// establishes for an image-pull/create failure. RunTask does not
-		// return a PROVISIONING task that asynchronously goes STOPPED.
-		if len(res.out.Tasks) != 0 || len(res.out.Failures) != 1 {
+		// Like AWS, a container-launch failure (here, a dependsOn SUCCESS
+		// condition that was never met) returns the task, stopped with
+		// stopCode TaskFailedToStart, rather than a Failures entry.
+		if len(res.out.Tasks) != 1 || len(res.out.Failures) != 0 {
 			t.Fatalf("unexpected result: %+v", res.out)
 		}
-		taskArn := findTaskByFamily(t, svc, tdOut.TaskDefinition.Family)
+		if got := res.out.Tasks[0].StopCode; got != types.TaskStopCodeTaskFailedToStart {
+			t.Fatalf("StopCode = %q, want TaskFailedToStart", got)
+		}
+		taskArn := res.out.Tasks[0].TaskArn
 		waitForTaskDesiredStopped(t, svc, taskArn)
 		specs := eng.createdSpecs()
 		if len(specs) != 1 {
@@ -219,22 +239,6 @@ func TestDependsOnSuccessFailureStopsTaskWithoutStartingDependent(t *testing.T) 
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for RunTask")
 	}
-}
-
-// findTaskByFamily locates the (single, in these tests) task record launched
-// from a task definition family. RunTask's output does not carry a task ARN
-// for a launch that failed before completion (see wireFailure / the
-// TaskFailedToStart Failure entry), so tests that need to inspect the
-// record's final StoppedReason/DesiredStatus look it up directly.
-func findTaskByFamily(t *testing.T, svc *Service, family string) string {
-	t.Helper()
-	for _, task := range svc.store.ListTasks("") {
-		if strings.Contains(task.TaskDefinitionArn, "/"+family+":") {
-			return task.TaskArn
-		}
-	}
-	t.Fatalf("no task found for family %q", family)
-	return ""
 }
 
 // dockerNameForFamily mirrors containerDockerName's derivation for a task
@@ -377,15 +381,15 @@ func TestMissingSecretStopsTaskWithoutLeakingValueOrCrashingRunner(t *testing.T)
 	if err != nil {
 		t.Fatalf("RunTask should not itself error (failure is per-task): %v", err)
 	}
-	// A secret-resolution failure fails the container the same way an
-	// image-pull failure does: RunTask reports it through Failures, not as a
-	// task that later transitions to STOPPED (see
-	// TestPartialTaskLaunchStopsContainersAlreadyStarted). The task record
-	// itself is still created and persisted STOPPED, just not returned here.
-	if len(out.Tasks) != 0 || len(out.Failures) != 1 {
+	// A secret-resolution failure returns the task STOPPED with stopCode
+	// TaskFailedToStart, as AWS does, not a Failures entry.
+	if len(out.Tasks) != 1 || len(out.Failures) != 0 {
 		t.Fatalf("unexpected result: %+v", out)
 	}
-	taskArn := findTaskByFamily(t, svc, tdOut.TaskDefinition.Family)
+	if out.Tasks[0].StopCode != types.TaskStopCodeTaskFailedToStart {
+		t.Fatalf("StopCode = %q, want TaskFailedToStart", out.Tasks[0].StopCode)
+	}
+	taskArn := out.Tasks[0].TaskArn
 
 	waitForTaskDesiredStopped(t, svc, taskArn)
 	task, err := svc.GetTask(taskArn)
@@ -400,6 +404,9 @@ func TestMissingSecretStopsTaskWithoutLeakingValueOrCrashingRunner(t *testing.T)
 	}
 	if !strings.Contains(task.StoppedReason, "does-not-exist") {
 		t.Fatalf("StoppedReason = %q, want it to reference the valueFrom", task.StoppedReason)
+	}
+	if len(task.Containers) != 1 || !strings.Contains(task.Containers[0].Reason, "ResourceInitializationError") || task.Containers[0].ExitCode != nil {
+		t.Fatalf("containers = %+v, want the failed container to carry the reason and no exit code", task.Containers)
 	}
 
 	// No container was ever created — the secret failed before EnsureImageRef.

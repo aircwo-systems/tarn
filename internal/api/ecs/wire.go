@@ -302,6 +302,7 @@ type wireTask struct {
 	StartedAt         *float64            `json:"startedAt,omitempty"`
 	StoppedAt         *float64            `json:"stoppedAt,omitempty"`
 	StoppedReason     string              `json:"stoppedReason,omitempty"`
+	StopCode          string              `json:"stopCode,omitempty"`
 	CreatedAt         *float64            `json:"createdAt,omitempty"`
 	Tags              []wireTag           `json:"tags,omitempty"`
 	HealthStatus      string              `json:"healthStatus,omitempty"`
@@ -1040,6 +1041,7 @@ func wireTaskValue(value types.Task) wireTask {
 		StartedAt:         epochSecondsPtr(value.StartedAt),
 		StoppedAt:         epochSecondsPtr(value.StoppedAt),
 		StoppedReason:     value.StoppedReason,
+		StopCode:          value.StopCode,
 		CreatedAt:         epochSecondsOrNil(value.CreatedAt),
 		Tags:              wireTags(value.Tags),
 		HealthStatus:      value.HealthStatus,
