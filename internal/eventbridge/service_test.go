@@ -122,6 +122,87 @@ func TestPutRuleAndPutTargetsAndFire(t *testing.T) {
 	}
 }
 
+// Terraform creates sibling aws_cloudwatch_event_target resources in parallel;
+// concurrent PutTargets on one rule must not lose each other's writes.
+func TestConcurrentPutTargetsKeepsEveryTarget(t *testing.T) {
+	svc, _ := newService(t)
+	rule, err := svc.PutRule("concurrent-targets", "rate(1 minute)", "", "ENABLED", "", "default")
+	if err != nil {
+		t.Fatalf("PutRule: %v", err)
+	}
+
+	const n = 20
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			id := fmt.Sprintf("t%02d", i)
+			if _, err := svc.PutTargets(rule.Name, "default", []types.EventBridgeTarget{{ID: id, Arn: "processor"}}); err != nil {
+				t.Errorf("PutTargets %s: %v", id, err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	targets, _, err := svc.ListTargetsByRule(rule.Name, "default", 0, "")
+	if err != nil {
+		t.Fatalf("ListTargetsByRule: %v", err)
+	}
+	if len(targets) != n {
+		t.Fatalf("expected %d targets, got %d: %+v", n, len(targets), targets)
+	}
+}
+
+// A slow dispatch must not save its pre-dispatch rule snapshot over targets
+// added while it was running.
+func TestFireRuleKeepsTargetsAddedDuringDispatch(t *testing.T) {
+	svc, _ := newService(t)
+	runner := &fakeTaskRunner{started: make(chan struct{}), release: make(chan struct{})}
+	svc.SetTaskRunner(runner)
+
+	rule, err := svc.PutRule("fire-during-put", "rate(1 minute)", "", "ENABLED", "", "default")
+	if err != nil {
+		t.Fatalf("PutRule: %v", err)
+	}
+	if _, err := svc.PutTargets(rule.Name, "default", []types.EventBridgeTarget{{
+		ID:            "ecs",
+		Arn:           "arn:aws:ecs:us-east-1:000000000000:cluster/default",
+		EcsParameters: &types.EcsParameters{TaskDefinitionArn: "arn:aws:ecs:us-east-1:000000000000:task-definition/worker:1"},
+	}}); err != nil {
+		t.Fatalf("PutTargets: %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.FireRuleNow(rule.Name, nil)
+		done <- err
+	}()
+	<-runner.started
+	if _, err := svc.PutTargets(rule.Name, "default", []types.EventBridgeTarget{{ID: "late", Arn: "processor"}}); err != nil {
+		t.Fatalf("PutTargets during dispatch: %v", err)
+	}
+	close(runner.release)
+	if err := <-done; err != nil {
+		t.Fatalf("FireRuleNow: %v", err)
+	}
+
+	got, err := svc.DescribeRule(rule.Name, "default")
+	if err != nil {
+		t.Fatalf("DescribeRule: %v", err)
+	}
+	ids := make([]string, 0, len(got.Targets))
+	for _, target := range got.Targets {
+		ids = append(ids, target.ID)
+		if target.ID == "ecs" && target.LastInvokedAt == nil {
+			t.Fatalf("fired target lost its LastInvokedAt: %+v", target)
+		}
+	}
+	if len(ids) != 2 || got.LastResult == "" {
+		t.Fatalf("expected targets [ecs late] and a LastResult, got ids=%v lastResult=%q", ids, got.LastResult)
+	}
+}
+
 func TestEventBridgeECSTargetDispatchesTransformedEvent(t *testing.T) {
 	svc, _ := newService(t)
 	runner := &fakeTaskRunner{out: &types.RunTaskOutput{Tasks: []types.Task{{

@@ -354,6 +354,9 @@ func (s *Service) DeleteRule(name, eventBusName string, force bool) error {
 		return err
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	rule, err := s.store.GetRule(name)
 	if err != nil {
 		return notFoundError("Rule %s does not exist", name)
@@ -384,6 +387,9 @@ func (s *Service) setRuleState(name, eventBusName, state string) error {
 	if _, err := normalizeEventBusName(eventBusName); err != nil {
 		return err
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	rule, err := s.store.GetRule(name)
 	if err != nil {
@@ -419,6 +425,9 @@ func (s *Service) PutTargets(ruleName, eventBusName string, targets []types.Even
 	if _, err := normalizeEventBusName(eventBusName); err != nil {
 		return nil, err
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	rule, err := s.store.GetRule(ruleName)
 	if err != nil {
@@ -522,6 +531,9 @@ func (s *Service) RemoveTargets(ruleName, eventBusName string, targetIDs []strin
 		return nil, err
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	rule, err := s.store.GetRule(ruleName)
 	if err != nil {
 		return nil, notFoundError("Rule %s does not exist", ruleName)
@@ -620,6 +632,9 @@ func (s *Service) ListTagsForResource(resourceARN string) (map[string]string, er
 }
 
 func (s *Service) TagResource(resourceARN string, tags map[string]string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	rule, err := s.ruleByResourceARN(resourceARN)
 	if err != nil {
 		return err
@@ -643,6 +658,9 @@ func (s *Service) TagResource(resourceARN string, tags map[string]string) error 
 }
 
 func (s *Service) UntagResource(resourceARN string, tagKeys []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	rule, err := s.ruleByResourceARN(resourceARN)
 	if err != nil {
 		return err
@@ -1310,7 +1328,7 @@ func (s *Service) fireTargets(rule *types.EventBridgeRule, eventPayload []byte) 
 	} else {
 		rule.LastResult = "OK"
 	}
-	_ = s.store.SaveRule(rule)
+	_ = s.saveRuleRunMetadata(rule, false)
 
 	if s.traceStore != nil {
 		traceID := uuid.NewString()[:8]
@@ -1333,6 +1351,37 @@ func (s *Service) fireTargets(rule *types.EventBridgeRule, eventPayload []byte) 
 
 func (s *Service) FireRuleNow(ruleName string, sessionMeta map[string]string) (*FireResult, error) {
 	return s.fireRule(ruleName, false, sessionMeta)
+}
+
+// saveRuleRunMetadata persists the run results recorded on ran (a snapshot
+// taken before dispatch) onto the rule's current stored record. Dispatch can
+// take seconds (e.g. an ECS RunTask), and saving the stale snapshot wholesale
+// would discard targets, state or tags changed by API calls meanwhile.
+func (s *Service) saveRuleRunMetadata(ran *types.EventBridgeRule, withNextRun bool) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	current, err := s.store.GetRule(ran.Name)
+	if err != nil {
+		// Deleted while firing: nothing to record.
+		return nil
+	}
+	current.LastRunAt = ran.LastRunAt
+	current.LastResult = ran.LastResult
+	if withNextRun && strings.ToUpper(current.State) == types.EventBridgeRuleStateEnabled {
+		current.NextRunAt = ran.NextRunAt
+	}
+	ranTargets := make(map[string]types.EventBridgeTarget, len(ran.Targets))
+	for _, target := range ran.Targets {
+		ranTargets[target.ID] = target
+	}
+	for i := range current.Targets {
+		if target, ok := ranTargets[current.Targets[i].ID]; ok {
+			current.Targets[i].LastInvokedAt = target.LastInvokedAt
+			current.Targets[i].LastResult = target.LastResult
+		}
+	}
+	return s.store.SaveRule(current)
 }
 
 func (s *Service) fireRule(ruleName string, scheduled bool, sessionMeta map[string]string) (*FireResult, error) {
@@ -1398,7 +1447,7 @@ func (s *Service) fireRule(ruleName string, scheduled bool, sessionMeta map[stri
 		}
 	}
 
-	if err := s.store.SaveRule(rule); err != nil {
+	if err := s.saveRuleRunMetadata(rule, scheduled); err != nil {
 		return nil, internalError("failed to update rule run metadata: %v", err)
 	}
 
