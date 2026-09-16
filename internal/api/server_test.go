@@ -186,6 +186,32 @@ func TestNewServerRegistersRoutes(t *testing.T) {
 	if cfg2.State != types.FunctionStateActive {
 		t.Fatalf("expected state active after second fetch, got %s", cfg2.State)
 	}
+
+	// Code signing config lives under a different API date prefix; it must not
+	// fall through to the S3 /{bucket}/{key...} routes (XML the SDK can't parse).
+	cscRec := httptest.NewRecorder()
+	handler.ServeHTTP(cscRec, httptest.NewRequest(http.MethodGet, "/2020-06-30/functions/foo/code-signing-config", nil))
+	if cscRec.Code != http.StatusOK {
+		t.Fatalf("code-signing-config GET status=%d body=%s", cscRec.Code, cscRec.Body.String())
+	}
+	var csc map[string]string
+	if err := json.Unmarshal(cscRec.Body.Bytes(), &csc); err != nil {
+		t.Fatalf("decode code-signing-config response: %v (body=%s)", err, cscRec.Body.String())
+	}
+	if csc["FunctionName"] != "foo" || csc["CodeSigningConfigArn"] != "" {
+		t.Fatalf("unexpected code-signing-config response: %+v", csc)
+	}
+
+	for _, path := range []string{
+		"/2020-06-30/functions/missing/code-signing-config",
+		"/2024-08-31/functions/foo/recursion-config",
+	} {
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusNotFound || !json.Valid(rec.Body.Bytes()) {
+			t.Fatalf("GET %s: want JSON 404, got status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+	}
 }
 
 func newTestServerForEB(t *testing.T) http.Handler {

@@ -426,6 +426,34 @@ func (h *Handler) DeleteFunctionConcurrency(w http.ResponseWriter, _ *http.Reque
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// GetFunctionCodeSigningConfig handles
+// GET /2020-06-30/functions/{name}/code-signing-config. Tarn has no code
+// signing configs, so an existing function reports an empty ARN, as AWS does
+// for a function with none attached.
+func (h *Handler) GetFunctionCodeSigningConfig(w http.ResponseWriter, r *http.Request) {
+	name := normalizeFunctionName(r.PathValue("name"))
+	fn, err := h.svc.GetFunction(name)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{
+		"CodeSigningConfigArn": "",
+		"FunctionName":         fn.FunctionName,
+	})
+}
+
+// DeleteFunctionCodeSigningConfig handles
+// DELETE /2020-06-30/functions/{name}/code-signing-config.
+func (h *Handler) DeleteFunctionCodeSigningConfig(w http.ResponseWriter, r *http.Request) {
+	name := normalizeFunctionName(r.PathValue("name"))
+	if _, err := h.svc.GetFunction(name); err != nil {
+		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // CreateAlias handles POST /2015-03-31/functions/{name}/aliases
 func (h *Handler) CreateAlias(w http.ResponseWriter, r *http.Request) {
 	name := normalizeFunctionName(r.PathValue("name"))

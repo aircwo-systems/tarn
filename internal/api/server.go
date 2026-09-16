@@ -282,14 +282,26 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /2017-10-31/functions/{name}/concurrency", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Lambda.DeleteFunctionConcurrency(w, r)
 	})
-	for _, method := range [...]string{
-		http.MethodGet, http.MethodPut, http.MethodPost,
-		http.MethodDelete, http.MethodPatch,
-	} {
-		m := method
-		mux.HandleFunc(m+" /2017-10-31/functions/{name}/{subpath...}", func(w http.ResponseWriter, r *http.Request) {
-			s.hs(r).Lambda.NotFound(w, r)
-		})
+	// Lambda 2020-06-30 code signing config — read by TF provider v6 on every
+	// aws_lambda_function refresh.
+	mux.HandleFunc("GET /2020-06-30/functions/{name}/code-signing-config", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Lambda.GetFunctionCodeSigningConfig(w, r)
+	})
+	mux.HandleFunc("DELETE /2020-06-30/functions/{name}/code-signing-config", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Lambda.DeleteFunctionCodeSigningConfig(w, r)
+	})
+	// Unemulated function sub-resources under other Lambda API date prefixes
+	// answer with a JSON ResourceNotFoundException instead of falling through
+	// to S3's XML NoSuchBucket, which SDKs cannot decode.
+	for _, prefix := range [...]string{"2017-10-31", "2019-09-25", "2019-09-30", "2020-06-30", "2021-07-20", "2021-10-31", "2024-08-31"} {
+		for _, method := range [...]string{
+			http.MethodGet, http.MethodPut, http.MethodPost,
+			http.MethodDelete, http.MethodPatch,
+		} {
+			mux.HandleFunc(method+" /"+prefix+"/functions/{name}/{subpath...}", func(w http.ResponseWriter, r *http.Request) {
+				s.hs(r).Lambda.NotFound(w, r)
+			})
+		}
 	}
 
 	// Object-level S3 operations: /{bucket}/{key...}
