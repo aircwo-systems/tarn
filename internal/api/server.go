@@ -244,6 +244,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /_tarn/admin/infrastructure", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.Infrastructure(w, r)
 	})
+	mux.HandleFunc("GET /_tarn/admin/infrastructure/services", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.ListUserServices(w, r)
+	})
+	mux.HandleFunc("PUT /_tarn/admin/infrastructure/services", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.SetUserServices(w, r)
+	})
 	mux.HandleFunc("POST /_tarn/admin/chaos", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.RunChaos(w, r)
 	})

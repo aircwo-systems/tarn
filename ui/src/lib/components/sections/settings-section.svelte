@@ -3,13 +3,14 @@
   import { onMount, untrack } from "svelte";
   import { fly } from "svelte/transition";
 
+  import type { UserService } from "$lib/types";
   import SectionHeader from "$lib/components/sections/section-header.svelte";
   import {
     getUISettings,
     getInfraSettings,
     getAccountSettings,
     setInfraEnabledKinds,
-    setInfraFrontendTargets,
+    setUserServices,
     setLogRetentionMinutes,
     setPersistenceEnabled,
     setPollingIntervalSeconds,
@@ -21,7 +22,6 @@
     sanitizeSchemaSourceDir,
     type ThemeMode,
     type InfraProbeKind,
-    type FrontendTarget,
   } from "$lib/state.svelte";
 
   let {
@@ -70,7 +70,7 @@
   let schemaSourceDir = $state(uiSettings.schemaSourceDir);
   let logRetention    = $state(uiSettings.logRetentionMinutes);
   let enabledKinds    = $state<InfraProbeKind[]>([...infraSettings.enabledKinds]);
-  let targets         = $state<FrontendTarget[]>(infraSettings.frontendTargets.map((t) => ({ ...t })));
+  let services        = $state<UserService[]>(infraSettings.userServices.map((svc) => ({ ...svc })));
 
   function reset() {
     pollingInterval = uiSettings.pollingIntervalSeconds;
@@ -79,17 +79,18 @@
     schemaSourceDir = uiSettings.schemaSourceDir;
     logRetention    = uiSettings.logRetentionMinutes;
     enabledKinds    = [...infraSettings.enabledKinds];
-    targets         = infraSettings.frontendTargets.map((t) => ({ ...t }));
+    services        = infraSettings.userServices.map((svc) => ({ ...svc }));
+    servicesError   = "";
   }
 
   const draftKey = () => JSON.stringify([
     pollingInterval, themeMode, persistence, sanitizeSchemaSourceDir(schemaSourceDir), logRetention,
-    [...enabledKinds].sort(), targets,
+    [...enabledKinds].sort(), services,
   ]);
   const storedKey = () => JSON.stringify([
     uiSettings.pollingIntervalSeconds, uiSettings.themeMode, uiSettings.persistenceEnabled,
     uiSettings.schemaSourceDir, uiSettings.logRetentionMinutes,
-    [...infraSettings.enabledKinds].sort(), infraSettings.frontendTargets,
+    [...infraSettings.enabledKinds].sort(), infraSettings.userServices,
   ]);
 
   const dirty = $derived(draftKey() !== storedKey());
@@ -109,14 +110,27 @@
   let savedFlash = $state(false);
   let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
-  function save() {
+  async function save() {
+    if (saving) return;
+    saving = true;
+    try {
+      // Validated server-side; bail before touching local settings so the draft stays intact.
+      // Saving services re-probes them on the server, so skip it when only other settings changed.
+      if (JSON.stringify(services) !== JSON.stringify(infraSettings.userServices)) {
+        await setUserServices(services);
+      }
+    } catch (err) {
+      servicesError = err instanceof Error ? err.message : "Could not save services";
+      return;
+    } finally {
+      saving = false;
+    }
     setPollingIntervalSeconds(pollingInterval);
     setThemeMode(themeMode);
     setPersistenceEnabled(persistence);
     setSchemaSourceDir(schemaSourceDir);
     setLogRetentionMinutes(logRetention);
     setInfraEnabledKinds(enabledKinds);
-    setInfraFrontendTargets(targets);
     reset(); // pick up any clamping/normalisation done by the setters
     savedFlash = true;
     clearTimeout(flashTimer);
@@ -150,15 +164,20 @@
 
   // ── Additional services ──────────────────────────────────────────
   let newTargetName = $state("");
-  let newTargetPort = $state("");
+  let newTargetUrl  = $state("");
+  let servicesError = $state("");
+  let saving        = $state(false);
 
+  // Bare ports mean a local service; anything else (host, IP, URL) is sent as typed
+  // and normalised by the server, which also reports what it could not parse.
   function addTarget() {
-    const name = newTargetName.trim();
-    const port = parseInt(newTargetPort, 10);
-    if (!name || isNaN(port) || port < 1 || port > 65535) return;
-    targets = [...targets, { id: crypto.randomUUID(), name, host: "localhost", port }];
+    let url = newTargetUrl.trim();
+    if (!url) return;
+    if (/^\d{1,5}$/.test(url)) url = `http://localhost:${url}`;
+    services = [...services, { name: newTargetName.trim(), url }];
+    servicesError = "";
     newTargetName = "";
-    newTargetPort = "";
+    newTargetUrl = "";
   }
 
   // ── Section index: scroll-spy with sliding pill ──────────────────
@@ -192,8 +211,19 @@
     activeSection = current;
   }
 
+  // Deep link from Services: "#settings?section=infra&add=service" jumps here and focuses the form.
+  let newServiceNameInput: HTMLInputElement | null = null;
+
   onMount(() => {
     requestAnimationFrame(() => (ready = true));
+    const params = new URLSearchParams(window.location.hash.split("?").slice(1).join("?"));
+    const section = params.get("section");
+    if (section && SECTIONS.some((s) => s.id === section)) {
+      requestAnimationFrame(() => {
+        jump(section);
+        if (params.get("add") === "service") newServiceNameInput?.focus();
+      });
+    }
     scrollRoot = root.closest("main");
     scrollRoot?.addEventListener("scroll", spy, { passive: true });
     return () => { scrollRoot?.removeEventListener("scroll", spy); clearTimeout(flashTimer); clearTimeout(jumping); };
@@ -368,13 +398,14 @@
         </div>
 
         <div class="subhead">Additional services</div>
-        {#if targets.length > 0}
+        <p class="hint">APIs and apps your functions call: a port, host:port, LAN IP or full URL (http, https, tcp). Probed by the Tarn server.</p>
+        {#if services.length > 0}
           <ul class="rows">
-            {#each targets as target (target.id)}
+            {#each services as target, i (i)}
               <li class="row" transition:fly={{ y: -4, duration: 160 }}>
-                <span class="row-main"><span class="row-title">{target.name}</span></span>
-                <span class="pill mono">localhost:{target.port}</span>
-                <button type="button" class="icon-btn danger" onclick={() => (targets = targets.filter((t) => t.id !== target.id))} aria-label="Remove {target.name}">
+                <span class="row-main"><span class="row-title">{target.name || "Unnamed"}</span></span>
+                <span class="pill mono" title={target.url}>{target.url}</span>
+                <button type="button" class="icon-btn danger" onclick={() => (services = services.filter((_, j) => j !== i))} aria-label="Remove {target.name || target.url}">
                   <TrashIcon size={12} />
                 </button>
               </li>
@@ -382,10 +413,11 @@
           </ul>
         {/if}
         <div class="add-row services">
-          <input class="field" placeholder="Service name" bind:value={newTargetName} onkeydown={(e) => e.key === "Enter" && addTarget()} />
-          <input class="field mono" type="number" min="1" max="65535" placeholder="Port" bind:value={newTargetPort} onkeydown={(e) => e.key === "Enter" && addTarget()} />
+          <input class="field" bind:this={newServiceNameInput} placeholder="Service name" bind:value={newTargetName} onkeydown={(e) => e.key === "Enter" && addTarget()} />
+          <input class="field mono" placeholder="8080, 192.168.1.20:3000 or https://api.lan/health" bind:value={newTargetUrl} onkeydown={(e) => e.key === "Enter" && addTarget()} />
           <button type="button" class="add-btn" onclick={addTarget} aria-label="Add service"><PlusIcon size={12} weight="bold" /></button>
         </div>
+        {#if servicesError}<p class="error">{servicesError}</p>{/if}
       </section>
 
       <!-- Instance -->
@@ -409,7 +441,7 @@
         <span class="savebar-dot"></span>
         <span class="savebar-text">Unsaved changes</span>
         <button type="button" class="pill pill-btn ghost" onclick={reset}>Discard</button>
-        <button type="button" class="pill pill-btn primary" onclick={save}>Save <kbd>⌘S</kbd></button>
+        <button type="button" class="pill pill-btn primary" disabled={saving} onclick={save}>{saving ? "Saving…" : "Save"} <kbd>⌘S</kbd></button>
       {:else}
         <CheckIcon size={12} weight="bold" class="text-[var(--accent-green)]" />
         <span class="savebar-text">Saved</span>
@@ -568,7 +600,9 @@
 
   .add-row { display: grid; gap: 6px; margin-top: 8px; }
   .add-row.accounts { grid-template-columns: 9rem minmax(0, 1fr) 30px; }
-  .add-row.services { grid-template-columns: minmax(0, 1fr) 6rem 30px; }
+  .add-row.services { grid-template-columns: 10rem minmax(0, 1fr) 30px; }
+  .row .pill { display: block; max-width: 55%; line-height: 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hint { margin: -2px 0 8px; font-size: 11px; color: var(--text-tertiary); }
   .add-btn {
     display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 8px;
     border: 1px solid var(--border-subtle); color: var(--text-secondary);

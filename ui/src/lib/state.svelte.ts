@@ -1,5 +1,5 @@
-import { fetchOverview, pruneOldLogs, setApiAccount } from "$lib/api";
-import type { InfraProbe, OverviewResponse } from "$lib/types";
+import { fetchOverview, fetchUserServices, pruneOldLogs, saveUserServices, setApiAccount } from "$lib/api";
+import type { InfraProbe, OverviewResponse, UserService } from "$lib/types";
 
 export type InfraProbeKind =
   | "docker"
@@ -18,8 +18,8 @@ const DEFAULT_INFRA_ENABLED_KINDS: InfraProbeKind[] = [
   "http",
 ];
 
-export interface FrontendTarget {
-  id: string;
+/** Shape of services saved in localStorage before they moved to the backend. */
+interface LegacyFrontendTarget {
   name: string;
   host: string;
   port: number;
@@ -59,8 +59,9 @@ let schemaSourceDir = $state("");
 let logRetentionMinutes = $state(DEFAULT_LOG_RETENTION_MINUTES);
 
 let infraEnabledKinds = $state<InfraProbeKind[]>([...DEFAULT_INFRA_ENABLED_KINDS]);
-let infraFrontendTargets = $state<FrontendTarget[]>([]);
-let infraFrontendResults = $state<InfraProbe[]>([]);
+let userServices = $state<UserService[]>([]);
+let userServicesLoaded = $state(false);
+let legacyFrontendTargets: LegacyFrontendTarget[] = [];
 
 export interface KnownAccount {
   id: string;
@@ -156,7 +157,7 @@ async function refreshDashboard() {
 export function startPolling() {
   initUISettings();
   refresh();
-  probeFrontendTargets();
+  loadUserServices();
   schedulePolling();
 }
 
@@ -187,11 +188,12 @@ export function getInfraSettings() {
     get enabledKinds() {
       return infraEnabledKinds;
     },
-    get frontendTargets() {
-      return infraFrontendTargets;
+    /** services registered on the backend; [] until the first load completes */
+    get userServices() {
+      return userServices;
     },
-    get frontendResults() {
-      return infraFrontendResults;
+    get userServicesLoaded() {
+      return userServicesLoaded;
     },
   };
 }
@@ -240,15 +242,17 @@ export function setInfraEnabledKinds(kinds: InfraProbeKind[]) {
   persistInfraSettings();
 }
 
-export function setInfraFrontendTargets(targets: FrontendTarget[]) {
-  infraFrontendTargets = targets;
-  persistInfraSettings();
-  probeFrontendTargets();
+/** Replaces the registered services on the backend. Throws with the server's validation message. */
+export async function setUserServices(services: UserService[]): Promise<void> {
+  userServices = await saveUserServices(services);
+  await refresh();
 }
 
+// Services the user registered are always shown; kind toggles only filter built-in probes.
 export function getVisibleInfra(backendInfra: InfraProbe[]): InfraProbe[] {
-  const filtered = backendInfra.filter((p) => (infraEnabledKinds as string[]).includes(p.kind));
-  return [...filtered, ...infraFrontendResults];
+  return backendInfra.filter(
+    (p) => p.source === "user" || (infraEnabledKinds as string[]).includes(p.kind),
+  );
 }
 
 export function setPollingIntervalSeconds(next: number) {
@@ -355,7 +359,6 @@ function schedulePolling() {
   pollHandle = setInterval(() => {
     if (!document.hidden) {
       refresh();
-      probeFrontendTargets();
       pruneLogsIfNeeded();
     }
   }, pollingIntervalSeconds * 1000);
@@ -513,7 +516,7 @@ function initInfraSettings() {
       infraEnabledKinds = parsed.enabledKinds.filter(isValidInfraKind);
     }
     if (Array.isArray(parsed.frontendTargets)) {
-      infraFrontendTargets = parsed.frontendTargets.filter(isValidFrontendTarget);
+      legacyFrontendTargets = parsed.frontendTargets.filter(isValidFrontendTarget);
     }
   } catch {
     // ignore corrupt data
@@ -524,7 +527,7 @@ function persistInfraSettings() {
   if (typeof localStorage === "undefined") return;
   localStorage.setItem(
     INFRA_SETTINGS_KEY,
-    JSON.stringify({ enabledKinds: infraEnabledKinds, frontendTargets: infraFrontendTargets }),
+    JSON.stringify({ enabledKinds: infraEnabledKinds }),
   );
 }
 
@@ -545,40 +548,25 @@ function persistProjectSettings() {
   localStorage.setItem(PROJECT_SETTINGS_KEY, JSON.stringify({ schemaSourceDir }));
 }
 
-async function probeFrontendTargets() {
-  if (typeof window === "undefined" || infraFrontendTargets.length === 0) {
-    infraFrontendResults = [];
-    return;
+async function loadUserServices() {
+  if (typeof window === "undefined") return;
+  try {
+    userServices = await fetchUserServices();
+    // One-time move of services saved in the browser before the backend owned them.
+    if (legacyFrontendTargets.length > 0) {
+      const known = new Set(userServices.map((svc) => svc.url));
+      const migrated = legacyFrontendTargets
+        .map((t) => ({ name: t.name, url: `http://${t.host}:${t.port}` }))
+        .filter((svc) => !known.has(svc.url));
+      legacyFrontendTargets = [];
+      if (migrated.length > 0) await setUserServices([...userServices, ...migrated]);
+      persistInfraSettings();
+    }
+  } catch {
+    // older servers have no services endpoint; keep the list empty
+  } finally {
+    userServicesLoaded = true;
   }
-  const results = await Promise.all(
-    infraFrontendTargets.map(async (target): Promise<InfraProbe> => {
-      const url = `http://${target.host}:${target.port}/`;
-      const start = performance.now();
-      try {
-        await fetch(url, { signal: AbortSignal.timeout(2000), mode: "no-cors" });
-        return {
-          name: target.name,
-          kind: "http",
-          host: target.host,
-          port: target.port,
-          status: "connected",
-          latencyMs: Math.round(performance.now() - start),
-          probedAt: new Date().toISOString(),
-        };
-      } catch {
-        return {
-          name: target.name,
-          kind: "http",
-          host: target.host,
-          port: target.port,
-          status: "refused",
-          latencyMs: 0,
-          probedAt: new Date().toISOString(),
-        };
-      }
-    }),
-  );
-  infraFrontendResults = results;
 }
 
 function initAccountSettings() {
@@ -640,17 +628,12 @@ function isValidInfraKind(v: unknown): v is InfraProbeKind {
   return typeof v === "string" && VALID_INFRA_KINDS.has(v as InfraProbeKind);
 }
 
-function isValidFrontendTarget(v: unknown): v is FrontendTarget {
+function isValidFrontendTarget(v: unknown): v is LegacyFrontendTarget {
   return (
     typeof v === "object" &&
     v !== null &&
-    "id" in v &&
-    typeof (v as FrontendTarget).id === "string" &&
-    "name" in v &&
-    typeof (v as FrontendTarget).name === "string" &&
-    "host" in v &&
-    typeof (v as FrontendTarget).host === "string" &&
-    "port" in v &&
-    typeof (v as FrontendTarget).port === "number"
+    typeof (v as LegacyFrontendTarget).name === "string" &&
+    typeof (v as LegacyFrontendTarget).host === "string" &&
+    typeof (v as LegacyFrontendTarget).port === "number"
   );
 }

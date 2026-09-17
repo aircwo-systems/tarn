@@ -1,4 +1,5 @@
 import type {
+  UserService,
   DisruptorRule,
   ECSTaskDefinitionDetail,
   ECSRunTaskResult,
@@ -741,4 +742,30 @@ async function extractJSONError(response: Response, fallback: string): Promise<s
   } catch {
     return fallback;
   }
+}
+
+export async function fetchUserServices(signal?: AbortSignal): Promise<UserService[]> {
+  const response = await fetch(endpoint("/_tarn/admin/infrastructure/services"), {
+    method: "GET",
+    headers: { Accept: "application/json", ...accountHeaders() },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `HTTP ${response.status}`));
+  }
+  const payload = (await response.json()) as { services?: UserService[] };
+  return Array.isArray(payload?.services) ? payload.services : [];
+}
+
+export async function saveUserServices(services: UserService[]): Promise<UserService[]> {
+  const response = await fetch(endpoint("/_tarn/admin/infrastructure/services"), {
+    method: "PUT",
+    headers: { "Content-Type": "application/json", Accept: "application/json", ...accountHeaders() },
+    body: JSON.stringify({ services }),
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `HTTP ${response.status}`));
+  }
+  const payload = (await response.json()) as { services?: UserService[] };
+  return Array.isArray(payload?.services) ? payload.services : [];
 }

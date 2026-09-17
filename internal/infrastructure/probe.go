@@ -17,6 +17,10 @@ type ProbeTarget struct {
 	Host string `json:"host"`
 	Port int    `json:"port"`
 	Kind string `json:"kind"` // "postgres", "redis", "mysql", "docker"
+	// URL is the full address probed for http/https targets; empty means the host root.
+	URL string `json:"url,omitempty"`
+	// Source is "user" for services registered through the admin API, empty for config targets.
+	Source string `json:"source,omitempty"`
 }
 
 // ProbeResult holds the outcome of a single probe.
@@ -30,17 +34,28 @@ type ProbeResult struct {
 	Version   string  `json:"version,omitempty"`
 	Error     string  `json:"error,omitempty"`
 	ProbedAt  string  `json:"probedAt"`
+	URL       string  `json:"url,omitempty"`
+	Source    string  `json:"source,omitempty"`
 }
 
 // Service manages infrastructure probing.
 type Service struct {
+	// enabled gates all background probing, including registered user services.
+	enabled bool
 	targets []ProbeTarget
 	results []ProbeResult
 	// injected holds externally supplied results (e.g. Docker) that ProbeAll must not overwrite.
 	injected []ProbeResult
-	mu      sync.RWMutex
-	cancel  context.CancelFunc
-	done    chan struct{}
+	// userTargets are services registered at runtime, persisted to userTargetsPath.
+	userTargets     []UserTarget
+	userTargetsPath string
+	// targetsGen bumps when targets change so a slow probe of an old target set
+	// cannot overwrite results from a newer one.
+	targetsGen uint64
+	resultsGen uint64
+	mu         sync.RWMutex
+	cancel     context.CancelFunc
+	done       chan struct{}
 }
 
 // NewService creates a probe service from a config target string.
@@ -48,7 +63,8 @@ type Service struct {
 // If targets is empty, defaults are used.
 func NewService(targets string, enabled bool) *Service {
 	s := &Service{
-		done: make(chan struct{}),
+		done:    make(chan struct{}),
+		enabled: enabled,
 	}
 	if !enabled {
 		return s
@@ -126,8 +142,9 @@ func kindDisplayName(kind string) string {
 }
 
 // Start begins background probing every 30 seconds.
+// When enabled it runs even with no targets so services registered later are picked up.
 func (s *Service) Start(ctx context.Context) {
-	if len(s.targets) == 0 {
+	if !s.enabled {
 		return
 	}
 	ctx, s.cancel = context.WithCancel(ctx)
@@ -160,9 +177,18 @@ func (s *Service) Stop() {
 
 // ProbeAll runs all probes concurrently and caches results.
 func (s *Service) ProbeAll(ctx context.Context) []ProbeResult {
-	results := make([]ProbeResult, len(s.targets))
+	s.mu.RLock()
+	targets := make([]ProbeTarget, 0, len(s.targets)+len(s.userTargets))
+	targets = append(targets, s.targets...)
+	for _, ut := range s.userTargets {
+		targets = append(targets, ut.probeTarget())
+	}
+	gen := s.targetsGen
+	s.mu.RUnlock()
+
+	results := make([]ProbeResult, len(targets))
 	var wg sync.WaitGroup
-	for i, target := range s.targets {
+	for i, target := range targets {
 		wg.Add(1)
 		go func(idx int, t ProbeTarget) {
 			defer wg.Done()
@@ -172,7 +198,10 @@ func (s *Service) ProbeAll(ctx context.Context) []ProbeResult {
 	wg.Wait()
 
 	s.mu.Lock()
-	s.results = results
+	if gen >= s.resultsGen {
+		s.results = results
+		s.resultsGen = gen
+	}
 	s.mu.Unlock()
 	return results
 }
@@ -204,7 +233,9 @@ func (s *Service) SetResult(r ProbeResult) {
 
 // Targets returns the configured probe targets.
 func (s *Service) Targets() []ProbeTarget {
-	return s.targets
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return append([]ProbeTarget(nil), s.targets...)
 }
 
 func probe(ctx context.Context, t ProbeTarget) ProbeResult {
@@ -219,6 +250,7 @@ func probe(ctx context.Context, t ProbeTarget) ProbeResult {
 		Host:     t.Host,
 		Port:     t.Port,
 		ProbedAt: now.UTC().Format(time.RFC3339),
+		Source:   t.Source,
 	}
 
 	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
@@ -246,7 +278,10 @@ func probe(ctx context.Context, t ProbeTarget) ProbeResult {
 }
 
 func probeHTTP(ctx context.Context, t ProbeTarget) ProbeResult {
-	targetURL := fmt.Sprintf("%s://%s:%d/", t.Kind, t.Host, t.Port)
+	targetURL := t.URL
+	if targetURL == "" {
+		targetURL = fmt.Sprintf("%s://%s/", t.Kind, net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port)))
+	}
 	now := time.Now()
 	result := ProbeResult{
 		Name:     t.Name,
@@ -254,6 +289,8 @@ func probeHTTP(ctx context.Context, t ProbeTarget) ProbeResult {
 		Host:     t.Host,
 		Port:     t.Port,
 		ProbedAt: now.UTC().Format(time.RFC3339),
+		URL:      t.URL,
+		Source:   t.Source,
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)

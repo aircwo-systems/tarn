@@ -109,7 +109,9 @@
     if (!nextTab) return;
     tabHistory.remember(window.location.hash);
     activeTab = nextTab;
-    window.location.hash = tabHistory.destination(nextTab);
+    // A caller can pass "settings?section=infra" to deep link inside the tab.
+    const qs = tab.replace(/^#/, "").split("?").slice(1).join("?");
+    window.location.hash = qs ? `#${nextTab}?${qs}` : tabHistory.destination(nextTab);
   }
 
   function openTrace(traceId: string) {
@@ -394,6 +396,7 @@
           initialTraceId={xrayInitialTraceId}
           {sidebarCollapsed}
           onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
+          onNavigate={setTab}
         />
       {:else if activeTab === "settings"}
         <SettingsSection

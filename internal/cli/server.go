@@ -399,6 +399,9 @@ func startServer(cfg *config.Config) error {
 	collector := trace.NewCollector()
 
 	infraSvc := infrastructure.NewService(cfg.InfraProbeTargets, cfg.InfraProbeEnabled)
+	if err := infraSvc.LoadUserTargets(filepath.Join(cfg.DataDir, "infra-services.json")); err != nil {
+		log.Printf("[infra] could not load registered services: %v", err)
+	}
 	infraSvc.Start(ctx)
 	defer infraSvc.Stop()
 

@@ -42,7 +42,7 @@ type Config struct {
 	LogsMaxEventsPerGroup int
 	// LogsPersistToDisk enables writing log events to disk.
 	LogsPersistToDisk bool
-	// InfraProbeEnabled enables infrastructure connectivity probing.
+	// InfraProbeEnabled enables infrastructure connectivity probing, including services registered from the console.
 	InfraProbeEnabled bool
 	// InfraProbeTargets is a comma-separated list of "kind:host:port" targets.
 	InfraProbeTargets string

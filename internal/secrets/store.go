@@ -13,9 +13,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	"github.com/google/uuid"
 )
 
 // Store is an in-memory secrets store.
@@ -130,6 +130,19 @@ func (s *Store) GetSecretValue(nameOrArn string) (*types.Secret, error) {
 	// Update in memory only — persisted on next write to avoid re-sealing all secrets on every read.
 	secret.LastAccessedDate = time.Now()
 	return cloneSecret(secret), nil
+}
+
+// PeekSecretString returns a secret's string value without recording an access,
+// for internal inspection such as dashboard link inference.
+func (s *Store) PeekSecretString(nameOrArn string) (string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	secret := s.resolve(nameOrArn)
+	if secret == nil {
+		return "", false
+	}
+	return secret.SecretString, true
 }
 
 // DescribeSecret retrieves secret metadata by name or ARN (no value).

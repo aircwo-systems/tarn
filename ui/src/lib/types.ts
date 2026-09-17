@@ -74,6 +74,17 @@ export interface InfraProbe {
   version?: string;
   error?: string;
   probedAt: string;
+  /** full probed URL for http(s) services registered from the console */
+  url?: string;
+  /** "user" when registered from the console */
+  source?: string;
+}
+
+/** A service registered from the console: an API, local app or LAN host. */
+export interface UserService {
+  name: string;
+  /** http(s)://host[:port][/path] or tcp://host:port */
+  url: string;
 }
 
 export interface FilterCriteriaFilter {

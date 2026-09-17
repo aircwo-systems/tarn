@@ -623,7 +623,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		StateMachines:       make([]stateMachineSummary, 0, len(stateMachines)),
 		ECS:                 ecsData,
 		Infrastructure:      infraResults,
-		Connections:         inferInfraConnections(functions, infraResults),
+		Connections:         inferInfraConnections(functions, infraResults, h.secretValueLookup(secrets)),
 		RecentTraces:        h.recentTraces(),
 		Warnings:            dynamoWarnings,
 	}
@@ -2445,6 +2445,68 @@ func (h *Handler) Infrastructure(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(results)
 }
 
+// secretValueLookup resolves env values that reference a secret by name or ARN.
+// Values are only read for secrets a function actually references.
+func (h *Handler) secretValueLookup(secrets []*types.Secret) secretValueLookup {
+	if h.secrets == nil || len(secrets) == 0 {
+		return nil
+	}
+	names := make(map[string]string, len(secrets)*2)
+	for _, sec := range secrets {
+		names[sec.Name] = sec.Name
+		if sec.ARN != "" {
+			names[sec.ARN] = sec.Name
+		}
+	}
+	return func(ref string) (string, string, bool) {
+		name, ok := names[ref]
+		if !ok {
+			return "", "", false
+		}
+		// Peek, not GetSecretValue: the overview polls, and must not count as secret access.
+		value, ok := h.secrets.PeekSecretString(name)
+		if !ok || value == "" {
+			return "", "", false
+		}
+		return name, value, true
+	}
+}
+
+// userServicesPayload is the body of GET/PUT /_tarn/admin/infrastructure/services.
+type userServicesPayload struct {
+	Services []infrasvc.UserTarget `json:"services"`
+}
+
+// ListUserServices returns services registered through the console.
+func (h *Handler) ListUserServices(w http.ResponseWriter, r *http.Request) {
+	if h.infra == nil {
+		writeError(w, http.StatusServiceUnavailable, "infrastructure service unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(userServicesPayload{Services: h.infra.UserTargets()})
+}
+
+// SetUserServices replaces the registered services and probes them.
+func (h *Handler) SetUserServices(w http.ResponseWriter, r *http.Request) {
+	if h.infra == nil {
+		writeError(w, http.StatusServiceUnavailable, "infrastructure service unavailable")
+		return
+	}
+	var req userServicesPayload
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	services, err := h.infra.SetUserTargets(r.Context(), req.Services)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(userServicesPayload{Services: services})
+}
+
 // RunChaos accepts a list of routes and fires one probe per route,
 // streaming each ProbeRound result as an NDJSON line.
 func (h *Handler) RunChaos(w http.ResponseWriter, r *http.Request) {
@@ -2782,26 +2844,56 @@ type connectionHint struct {
 	source string
 }
 
-func inferInfraConnections(functions []*types.FunctionConfig, probes []infrasvc.ProbeResult) []infraConnection {
+func inferInfraConnections(functions []*types.FunctionConfig, probes []infrasvc.ProbeResult, lookupSecret secretValueLookup) []infraConnection {
 	if len(functions) == 0 || len(probes) == 0 {
 		return nil
 	}
 
 	connections := make([]infraConnection, 0)
-	seen := make(map[string]struct{})
+	seen := make(map[string]int)
 
 	for _, fn := range functions {
 		hints := inferEnvConnectionHints(fn.Environment)
-		for _, hint := range hints {
+		evidence := make(map[int]string, len(hints))
+		envKeys := make([]string, 0, len(fn.Environment))
+		for key := range fn.Environment {
+			envKeys = append(envKeys, key)
+		}
+		sort.Strings(envKeys)
+		for _, key := range envKeys {
+			value := fn.Environment[key]
+			hints = append(hints, inferURLConnectionHints(value, key)...)
+			if lookupSecret == nil {
+				continue
+			}
+			if name, secret, ok := lookupSecret(strings.TrimSpace(value)); ok {
+				for _, hint := range inferSecretConnectionHints(name, secret) {
+					evidence[len(hints)] = "secret"
+					hints = append(hints, hint)
+				}
+			}
+		}
+		for i, hint := range hints {
 			for _, probe := range probes {
-				if !isDatabaseKind(probe.Kind) || !probeMatchesHint(probe, hint) {
+				if !isLinkableProbeKind(probe.Kind) || !serviceHintMatches(probe, hint) {
 					continue
 				}
+				ev := evidence[i]
+				if ev == "" {
+					ev = "env"
+				}
+				// One link per function and service. When several env vars or secrets point at
+				// the same service, keep a stable choice (secret first, then source name) so the
+				// polled overview doesn't flip between them.
 				key := fn.FunctionName + "|" + probe.Kind + "|" + normalizeConnectionHost(probe.Host) + "|" + strconv.Itoa(probe.Port)
-				if _, exists := seen[key]; exists {
+				if idx, exists := seen[key]; exists {
+					prev := connections[idx]
+					if preferLinkEvidence(ev, hint.source, prev.Evidence, prev.Source) {
+						connections[idx].Evidence, connections[idx].Source = ev, hint.source
+					}
 					continue
 				}
-				seen[key] = struct{}{}
+				seen[key] = len(connections)
 				connections = append(connections, infraConnection{
 					SourceFunction: fn.FunctionName,
 					TargetID:       infraProbeID(probe.Kind, probe.Host, probe.Port),
@@ -2809,7 +2901,7 @@ func inferInfraConnections(functions []*types.FunctionConfig, probes []infrasvc.
 					TargetKind:     probe.Kind,
 					TargetHost:     probe.Host,
 					TargetPort:     probe.Port,
-					Evidence:       "env",
+					Evidence:       ev,
 					Source:         hint.source,
 				})
 			}

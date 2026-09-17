@@ -18,10 +18,12 @@
     initialTraceId = "",
     sidebarCollapsed = false,
     onToggleSidebar = () => {},
+    onNavigate = (_tab: string) => {},
   }: {
     initialTraceId?: string;
     sidebarCollapsed?: boolean;
     onToggleSidebar?: () => void;
+    onNavigate?: (tab: string) => void;
   } = $props();
 
   const dashboard = getDashboard();
@@ -496,6 +498,23 @@
     if (s >= 400) return "status-warn";
     return "status-ok";
   }
+
+  // Links inferred from configuration (env vars, secret values), not observed calls.
+  // Tarn cannot see a lambda's outbound HTTP, so these are shown apart from the
+  // measured spans above: no duration, no status, no place in the waterfall.
+  const EXTERNAL_LINK_KINDS = new Set(["http", "https", "tcp"]);
+  const EVIDENCE_LABELS: Record<string, string> = { env: "env var", secret: "secret" };
+
+  const potentialCalls = $derived.by(() => {
+    if (!selectedTrace) return [];
+    const functions = new Set(
+      selectedTrace.spans.filter((s) => s.kind.toLowerCase() === "lambda").map((s) => s.name),
+    );
+    if (functions.size === 0) return [];
+    return (dashboard.data?.connections ?? []).filter(
+      (c) => functions.has(c.sourceFunction) && EXTERNAL_LINK_KINDS.has(c.targetKind.toLowerCase()),
+    );
+  });
 
   function spanBadge(span: TraceSpan): { label: string; colorClass: string } {
     if (span.status === "error")
@@ -1084,6 +1103,33 @@
                   </div>
                 {/each}
               </div>
+
+              {#if potentialCalls.length > 0}
+                <div class="potential">
+                  <p class="potential-label">
+                    Potential external calls
+                    <span class="potential-hint">from configuration, not observed</span>
+                  </p>
+                  {#each potentialCalls as c (c.sourceFunction + c.targetId + c.source)}
+                    <button
+                      type="button"
+                      class="potential-row"
+                      onclick={() => onNavigate(`services?id=${encodeURIComponent(c.targetId)}`)}
+                      title="Open {c.targetName} in Services"
+                    >
+                      <span class="potential-fn mono">{c.sourceFunction}</span>
+                      <span class="potential-arrow">&rarr;</span>
+                      <span class="potential-target mono">{c.targetName}</span>
+                      <span class="potential-addr mono">{c.targetHost}:{c.targetPort}</span>
+                      <span class="potential-evidence"
+                        >{EVIDENCE_LABELS[c.evidence] ?? c.evidence}{c.source
+                          ? ` · ${c.source.replace(/^secret:/, "")}`
+                          : ""}</span
+                      >
+                    </button>
+                  {/each}
+                </div>
+              {/if}
             </div>
           {:else}
             <div class="py-10 text-center">
@@ -1117,6 +1163,24 @@
       stroke-dashoffset: 0;
     }
   }
+
+  /* ─── Potential (inferred) external calls ─── */
+  .potential { margin-top: 14px; padding-top: 12px; border-top: 1px dashed var(--border-subtle); }
+  .potential-label {
+    display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
+    font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-tertiary);
+  }
+  .potential-hint { text-transform: none; letter-spacing: 0; font-size: 10.5px; opacity: 0.8; }
+  .potential-row {
+    display: flex; align-items: center; gap: 8px; width: 100%; height: 28px; padding: 0 8px;
+    border-radius: 8px; text-align: left; font-size: 11.5px; color: var(--text-secondary);
+    transition: background 120ms ease;
+  }
+  .potential-row:hover { background: var(--bg-element-hover); }
+  .potential-arrow { color: var(--text-tertiary); }
+  .potential-target { color: var(--text-primary); }
+  .potential-addr, .potential-evidence { color: var(--text-tertiary); font-size: 10.5px; }
+  .potential-addr { margin-left: auto; }
 
   /* ─── Tokens ─── */
   .xray :global(.tx-primary) { color: var(--text-primary); }

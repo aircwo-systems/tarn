@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { MagnifyingGlassIcon } from "phosphor-svelte";
+  import { MagnifyingGlassIcon, PlusIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
   import RcListRow from "$lib/components/rack/rc-list-row.svelte";
   import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
@@ -8,7 +8,7 @@
   import RcKv from "$lib/components/rack/rc-kv.svelte";
   import RcStat from "$lib/components/rack/rc-stat.svelte";
   import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import { getDashboard, getInfraSettings, getVisibleInfra } from "$lib/state.svelte";
+  import { getDashboard, getVisibleInfra } from "$lib/state.svelte";
   import { infraKindCssVar, normalizeTopologyInfraKind } from "$lib/components/topology/topology-canvas-theme";
   import type { InfraConnection, InfraProbe } from "$lib/types";
   import { formatDate, timeAgo } from "$lib/utils";
@@ -24,7 +24,6 @@
   } = $props();
 
   const dashboard = getDashboard();
-  const infraSettings = getInfraSettings();
 
   const KIND_LABELS: Record<string, string> = {
     docker: "Docker",
@@ -33,6 +32,12 @@
     mysql: "MySQL",
     mongodb: "MongoDB",
     http: "HTTP service",
+    tcp: "TCP service",
+  };
+
+  const EVIDENCE_LABELS: Record<string, string> = {
+    env: "env var",
+    secret: "secret value",
   };
 
   type Service = InfraProbe & { id: string; userAdded: boolean; usedBy: InfraConnection[] };
@@ -42,14 +47,13 @@
 
   const services = $derived.by<Service[]>(() => {
     const connections = dashboard.data?.connections ?? [];
-    const userTargets = infraSettings.frontendTargets;
     return getVisibleInfra(dashboard.data?.infrastructure ?? [])
       .map((p) => {
         const id = serviceId(p);
         return {
           ...p,
           id,
-          userAdded: userTargets.some((t) => t.host === p.host && t.port === p.port && t.name === p.name),
+          userAdded: p.source === "user",
           usedBy: connections.filter((c) => c.targetId === id),
         };
       })
@@ -85,11 +89,18 @@
 
   // Docker is probed over its socket, so it has no port worth showing.
   function address(s: InfraProbe): string {
+    if (s.url) return s.url.replace(/^https?:\/\//, "");
     return s.port > 0 ? `${s.host}:${s.port}` : normalizeTopologyInfraKind(s.kind) === "docker" ? "daemon socket" : s.host;
   }
 
   function kindLabel(kind: string): string {
-    return KIND_LABELS[normalizeTopologyInfraKind(kind)] ?? kind;
+    const k = kind.toLowerCase();
+    return KIND_LABELS[k === "https" ? "http" : k] ?? KIND_LABELS[normalizeTopologyInfraKind(kind)] ?? kind;
+  }
+
+  // Adding lives in settings; deep link straight to the infra form.
+  function openAddService() {
+    onNavigate("settings?section=infra&add=service");
   }
 
   function select(id: string) {
@@ -115,7 +126,8 @@
       ? [
           { label: "Name", value: selected.name },
           { label: "Kind", value: kindLabel(selected.kind) },
-          { label: "Address", value: address(selected), mono: true },
+          { label: "Address", value: selected.url || address(selected), mono: true },
+          { label: "Host", value: `${selected.host}:${selected.port}`, mono: true, dim: true },
           { label: "Source", value: selected.userAdded ? "Added in settings" : "Backend probe" },
           { label: "Version", value: selected.version || "--", mono: true, dim: true },
           { label: "Last probed", value: formatDate(selected.probedAt) },
@@ -130,7 +142,14 @@
     description="{services.length} service{services.length === 1 ? '' : 's'} · {userAddedCount} added by you · {connectedCount} reachable"
     {sidebarCollapsed}
     {onToggleSidebar}
-  />
+  >
+    {#snippet actions()}
+      <button type="button" class="add-service" onclick={openAddService}>
+        <PlusIcon size={12} weight="bold" />
+        Add service
+      </button>
+    {/snippet}
+  </SectionHeader>
 
   {#if dashboard.loading && !dashboard.data}
     <div class="layout">
@@ -142,7 +161,7 @@
     <div class="blank">
       <h2>No services yet</h2>
       <p>Enable probes or add your own services (APIs, local apps) in settings and they show up here.</p>
-      <button type="button" class="link" onclick={() => onNavigate("settings")}>Open settings</button>
+      <button type="button" class="link" onclick={openAddService}>Add a service</button>
     </div>
   {:else}
     <div class="layout">
@@ -221,15 +240,16 @@
                     <li>
                       <button type="button" class="link-row" onclick={() => onNavigate("functions")}>
                         <span class="mono">{c.sourceFunction}</span>
-                        <span class="evidence">{c.evidence}{c.source ? ` · ${c.source}` : ""}</span>
+                        <span class="evidence">{EVIDENCE_LABELS[c.evidence] ?? c.evidence}{c.source ? ` · ${c.source.replace(/^secret:/, "")}` : ""}</span>
                       </button>
                     </li>
                   {/each}
                 </ul>
               {:else}
                 <p class="note">
-                  No links detected yet. Links are inferred from function environment variables
-                  that point at this host and port.
+                  No links detected yet. A function links here when an env var, or a secret it
+                  references by name or ARN, contains this host and port. Hosts must match as
+                  written (an IP won't match a hostname for the same machine).
                 </p>
               {/if}
             </RcPanel>
@@ -276,6 +296,14 @@
     border: 1px solid var(--border-subtle); color: var(--text-tertiary);
   }
   .kind-bar { width: 3px; height: 14px; border-radius: 2px; }
+
+  .add-service {
+    display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 10px;
+    border-radius: 8px; border: 1px solid var(--border-subtle); font-size: 12px;
+    color: var(--text-primary); transition: border-color 120ms ease;
+  }
+  .add-service:hover { border-color: var(--border-default); }
+  .add-service:active { transform: scale(0.96); }
 
   .detail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
   .hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; padding: 4px 2px 2px; }

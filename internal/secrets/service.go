@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	"github.com/google/uuid"
 )
 
 // Service implements Secrets Manager business logic.
@@ -65,6 +65,11 @@ func (s *Service) CreateSecret(name, description, secretString string, secretBin
 // GetSecretValue retrieves a secret value by name or ARN.
 func (s *Service) GetSecretValue(nameOrArn string) (*types.Secret, error) {
 	return s.store.GetSecretValue(nameOrArn)
+}
+
+// PeekSecretString returns a secret's string value without updating LastAccessedDate.
+func (s *Service) PeekSecretString(nameOrArn string) (string, bool) {
+	return s.store.PeekSecretString(nameOrArn)
 }
 
 // DescribeSecret retrieves secret metadata.
