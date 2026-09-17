@@ -12,6 +12,7 @@ export const DASHBOARD_TABS = [
   "eventbridge",
   "stepfunctions",
   "storage",
+  "services",
   "logs",
   "xray",
   "settings",

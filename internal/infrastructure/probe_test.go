@@ -173,3 +173,20 @@ func TestSetResult(t *testing.T) {
 		t.Fatal("expected docker result to be set")
 	}
 }
+
+func TestSetResultSurvivesProbeAll(t *testing.T) {
+	svc := NewService("redis:127.0.0.1:1", true)
+	svc.SetResult(ProbeResult{Name: "Docker", Kind: "docker", Host: "localhost", Status: "connected"})
+
+	svc.ProbeAll(context.Background())
+
+	for _, r := range svc.Results() {
+		if r.Kind == "docker" {
+			if r.ProbedAt == "" {
+				t.Fatal("expected injected result to get a probedAt timestamp")
+			}
+			return
+		}
+	}
+	t.Fatal("expected docker result to survive a probe cycle")
+}

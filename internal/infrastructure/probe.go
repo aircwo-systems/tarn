@@ -36,6 +36,8 @@ type ProbeResult struct {
 type Service struct {
 	targets []ProbeTarget
 	results []ProbeResult
+	// injected holds externally supplied results (e.g. Docker) that ProbeAll must not overwrite.
+	injected []ProbeResult
 	mu      sync.RWMutex
 	cancel  context.CancelFunc
 	done    chan struct{}
@@ -179,25 +181,25 @@ func (s *Service) ProbeAll(ctx context.Context) []ProbeResult {
 func (s *Service) Results() []ProbeResult {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if s.results == nil {
-		return []ProbeResult{}
-	}
-	out := make([]ProbeResult, len(s.results))
-	copy(out, s.results)
-	return out
+	out := make([]ProbeResult, 0, len(s.injected)+len(s.results))
+	out = append(out, s.injected...)
+	return append(out, s.results...)
 }
 
 // SetResult sets a single probe result (used for Docker engine status injected externally).
 func (s *Service) SetResult(r ProbeResult) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, existing := range s.results {
+	if r.ProbedAt == "" {
+		r.ProbedAt = time.Now().UTC().Format(time.RFC3339)
+	}
+	for i, existing := range s.injected {
 		if existing.Kind == r.Kind && existing.Host == r.Host && existing.Port == r.Port {
-			s.results[i] = r
+			s.injected[i] = r
 			return
 		}
 	}
-	s.results = append(s.results, r)
+	s.injected = append(s.injected, r)
 }
 
 // Targets returns the configured probe targets.

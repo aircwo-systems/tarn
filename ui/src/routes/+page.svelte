@@ -15,6 +15,7 @@
     DatabaseIcon,
     FlowArrowIcon,
     CubeIcon,
+    PlugsConnectedIcon,
   } from "phosphor-svelte";
   import { onMount } from "svelte";
 
@@ -40,6 +41,7 @@
   import StorageSection from "$lib/components/sections/storage-section.svelte";
   import LogsSection from "$lib/components/sections/logs-section.svelte";
   import XraySection from "$lib/components/sections/xray-section.svelte";
+  import ServicesSection from "$lib/components/sections/services-section.svelte";
   import ChaosSection from "$lib/components/sections/chaos-section.svelte";
   import {
     infraKindCssVar,
@@ -257,6 +259,7 @@
         { id: "eventbridge",  label: "EventBridge",    icon: BridgeIcon,               count: countEventBridge   },
         { id: "stepfunctions", label: "Step Functions", icon: FlowArrowIcon,           count: countStateMachines },
         { id: "storage",      label: "Storage",        icon: HardDriveIcon,            count: countBuckets       },
+        { id: "services",     label: "Services",       icon: PlugsConnectedIcon,       count: activeServiceCount },
       ],
     },
     {
@@ -376,6 +379,8 @@
         <StepFunctionsSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "storage"}
         <StorageSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "services"}
+        <ServicesSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} onNavigate={setTab} />
       {:else if activeTab === "logs"}
         <LogsSection
           initialGroup={logsInitialGroup}
