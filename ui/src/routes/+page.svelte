@@ -64,8 +64,10 @@
   } from "$lib/filter-utils";
   import {
     TabNavigationHistory,
+    logStateFromLocation,
     tabFromHash,
     type DashboardTab,
+    type LogSortOrder,
   } from "$lib/navigation-history";
 
   const dashboard = getDashboard();
@@ -79,7 +81,10 @@
   let activeTab = $state<DashboardTab>("overview");
   let logsInitialGroup = $state("");
   let logsInitialTimestamp = $state("");
+  let logsInitialLevels = $state<string[]>([]);
+  let logsInitialPattern = $state("");
   let logsInitialStream = $state("");
+  let logsInitialOrder = $state<LogSortOrder>("desc");
   let xrayInitialTraceId = $state("");
 
   function readHash() {
@@ -90,13 +95,19 @@
     tabHistory.remember(window.location.hash);
     logsInitialGroup = "";
     logsInitialTimestamp = "";
+    logsInitialLevels = [];
+    logsInitialPattern = "";
     logsInitialStream = "";
+    logsInitialOrder = "desc";
     xrayInitialTraceId = "";
-    if (tab === "logs" && qs) {
-      const params = new URLSearchParams(qs);
-      logsInitialGroup = params.get("groups") ?? params.get("group") ?? "";
-      logsInitialTimestamp = params.get("ts") ?? "";
-      logsInitialStream = params.get("stream") ?? "";
+    if (tab === "logs") {
+      const logState = logStateFromLocation(window.location.hash);
+      logsInitialGroup = logState.group;
+      logsInitialTimestamp = logState.timestamp;
+      logsInitialLevels = logState.levels;
+      logsInitialPattern = logState.pattern;
+      logsInitialStream = logState.stream;
+      logsInitialOrder = logState.order;
     }
     if (tab === "xray" && qs) {
       const params = new URLSearchParams(qs);
@@ -387,7 +398,10 @@
         <LogsSection
           initialGroup={logsInitialGroup}
           initialTimestamp={logsInitialTimestamp}
+          initialLevels={logsInitialLevels}
+          initialPattern={logsInitialPattern}
           initialStream={logsInitialStream}
+          initialOrder={logsInitialOrder}
           {sidebarCollapsed}
           onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
         />

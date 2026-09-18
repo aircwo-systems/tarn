@@ -52,17 +52,28 @@
     type WaterfallRow,
   } from "$lib/trace-utils";
   import type { LogGroupSummary, LogEvent, RequestTrace } from "$lib/types";
+  import {
+    logLocationWithFilters,
+    type LogNavigationFilters,
+    type LogSortOrder,
+  } from "$lib/navigation-history";
 
   let {
     initialGroup = "",
     initialTimestamp = "",
+    initialLevels = [],
+    initialPattern = "",
     initialStream = "",
+    initialOrder = "desc",
     sidebarCollapsed = false,
     onToggleSidebar = () => {},
   }: {
     initialGroup?: string;
     initialTimestamp?: string;
+    initialLevels?: string[];
+    initialPattern?: string;
     initialStream?: string;
+    initialOrder?: LogSortOrder;
     sidebarCollapsed?: boolean;
     onToggleSidebar?: () => void;
   } = $props();
@@ -113,7 +124,7 @@
   let autoRefresh = $state(false);
   let groupSearch = $state("");
   let serviceFilter = $state("all");
-  let sortOrder = $state<"desc" | "asc">("desc");
+  let sortOrder = $state<LogSortOrder>("desc");
 
   // Log full-text scan state
   let scanResult = $state<LogScanResult | null>(null);
@@ -207,13 +218,13 @@
     if (initialTimestamp) highlightTimestamp = initialTimestamp;
   });
 
-  // Seed the stream filter from a deep link so the first load is scoped to the
-  // exact invocation's stream. Runs before the loadEvents effect below.
+  // Seed filters from the URL before the loadEvents effect below.
   $effect(() => {
-    if (initialStream) {
-      filterStream = initialStream;
-      showFilters = true;
-    }
+    filterLevels = initialLevels;
+    filterPattern = initialPattern;
+    filterStream = initialStream;
+    sortOrder = initialOrder;
+    if (initialStream) showFilters = true;
   });
 
   $effect(() => {
@@ -365,6 +376,24 @@
     selectedKey = null;
   }
 
+  function navigationFilters(): LogNavigationFilters {
+    return {
+      levels: filterLevels,
+      pattern: filterPattern,
+      stream: filterStream,
+      order: sortOrder,
+    };
+  }
+
+  function filteredLogLocation(hash: string): string {
+    return logLocationWithFilters(hash, navigationFilters());
+  }
+
+  function syncLogLocation(): void {
+    const nextHash = filteredLogLocation(window.location.hash);
+    history.replaceState(history.state, "", nextHash);
+  }
+
   function selectGroup(name: string, initialPattern?: string) {
     selectedGroup = name;
     if (initialPattern) {
@@ -375,7 +404,7 @@
     }
     resetPaging();
     highlightTimestamp = "";
-    window.location.hash = `logs?group=${encodeURIComponent(name)}`;
+    window.location.hash = filteredLogLocation(`#logs?group=${encodeURIComponent(name)}`);
   }
 
   function handleGroupClick(e: MouseEvent, group: LogGroupSummary, idx: number) {
@@ -457,7 +486,7 @@
     }
     resetPaging();
     highlightTimestamp = "";
-    window.location.hash = `logs?groups=${encodeURIComponent(selectedGroup)}`;
+    window.location.hash = filteredLogLocation(`#logs?groups=${encodeURIComponent(selectedGroup)}`);
     loadEvents();
   }
 
@@ -473,7 +502,7 @@
       selectedGroup = updated.join(",");
       resetPaging();
       highlightTimestamp = "";
-      window.location.hash = `logs?groups=${encodeURIComponent(selectedGroup)}`;
+      window.location.hash = filteredLogLocation(`#logs?groups=${encodeURIComponent(selectedGroup)}`);
       loadEvents();
     }
   }
@@ -508,6 +537,7 @@
 
   function applyFilters() {
     resetPaging();
+    syncLogLocation();
     loadEvents();
   }
 
@@ -527,6 +557,7 @@
 
   let patternTimer: ReturnType<typeof setTimeout> | null = null;
   function onPatternInput() {
+    syncLogLocation();
     if (patternTimer) clearTimeout(patternTimer);
     patternTimer = setTimeout(applyFilters, 280);
   }
