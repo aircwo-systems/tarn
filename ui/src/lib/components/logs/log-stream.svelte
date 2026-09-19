@@ -20,6 +20,7 @@
 
 <script lang="ts">
   import { ArrowUpIcon, ArrowDownIcon } from "phosphor-svelte";
+  import { buildFlexiblePatternRegex } from "$lib/json-format";
   import { onDestroy } from "svelte";
 
   const OVERSCAN = 12;
@@ -49,18 +50,21 @@
 
   function splitMatches(text: string, pattern?: string): { text: string; match: boolean }[] {
     if (!pattern || !pattern.trim()) return [{ text, match: false }];
-    const p = pattern.trim().toLowerCase();
-    const lower = text.toLowerCase();
+    const rx = buildFlexiblePatternRegex(pattern);
+    if (!rx) return [{ text, match: false }];
+
     const segments: { text: string; match: boolean }[] = [];
     let lastIdx = 0;
-    let idx = lower.indexOf(p, lastIdx);
-    while (idx !== -1) {
-      if (idx > lastIdx) {
-        segments.push({ text: text.slice(lastIdx, idx), match: false });
+    let m: RegExpExecArray | null;
+    while ((m = rx.exec(text)) !== null) {
+      if (m.index > lastIdx) {
+        segments.push({ text: text.slice(lastIdx, m.index), match: false });
       }
-      segments.push({ text: text.slice(idx, idx + p.length), match: true });
-      lastIdx = idx + p.length;
-      idx = lower.indexOf(p, lastIdx);
+      segments.push({ text: m[0], match: true });
+      lastIdx = m.index + m[0].length;
+      if (m[0].length === 0) {
+        rx.lastIndex++;
+      }
     }
     if (lastIdx < text.length) {
       segments.push({ text: text.slice(lastIdx), match: false });
@@ -322,7 +326,11 @@
           role="option"
           tabindex="-1"
           aria-selected={i === selectedIdx}
-          onclick={() => onSelect(ev, key)}
+          onclick={() => {
+            const sel = window.getSelection();
+            if (sel && sel.toString().trim().length > 0) return;
+            onSelect(ev, key);
+          }}
           onkeydown={() => {}}
         >
           <span class="log-tick" aria-hidden="true"></span>
@@ -379,6 +387,11 @@
     font-family: var(--font-ui-mono, var(--font-mono, monospace));
     font-size: 12px;
     contain: strict;
+  }
+
+  .log-scroller:focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: -2px;
   }
 
   .log-canvas {

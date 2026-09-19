@@ -678,6 +678,7 @@
             type="text"
             bind:value={searchQuery}
             placeholder="Filter by path, method..."
+            aria-label="Filter traces by path or method"
             class="field w-full"
           />
         </div>
@@ -689,6 +690,7 @@
               <button
                 type="button"
                 class="trace-row"
+                aria-current={isActive ? "true" : undefined}
                 onclick={() => (selectedTraceId = trace.id)}
               >
                 <div class="flex items-center gap-2 mb-1 min-w-0">
@@ -829,7 +831,7 @@
               >
                 {#each selectedTrace.spans as span, i (i)}
                   {#if i > 0}
-                    <span class="opacity-40 select-none">→</span>
+                    <span class="opacity-40 select-none" aria-hidden="true">→</span>
                   {/if}
                   <span style="color: {spanColor(span.kind)}"
                     >{spanKindLabel(span.kind)}</span
@@ -854,6 +856,8 @@
               </p>
               <div class="overflow-x-auto">
                 <svg
+                  role="img"
+                  aria-label="Request flow diagram"
                   viewBox="0 0 {cw} {FLOW_CH}"
                   width={cw}
                   height={FLOW_CH}

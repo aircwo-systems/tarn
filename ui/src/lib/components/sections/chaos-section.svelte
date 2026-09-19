@@ -896,6 +896,7 @@
                             <input
                               type="text"
                               placeholder="value"
+                              aria-label={`Override value for ${field}`}
                               value={getOverride(id, field)}
                               oninput={(e) =>
                                 setOverride(

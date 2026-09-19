@@ -229,11 +229,11 @@ body {
 
   --border-subtle: rgba(255, 255, 255, 0.08);
   --border-default: rgba(255, 255, 255, 0.14);
-  --border-focus: rgba(255, 255, 255, 0.35);
+  --border-focus: rgba(255, 255, 255, 0.65);
 
   --text-primary: #ffffff;
   --text-secondary: #888888;
-  --text-tertiary: #555555;
+  --text-tertiary: #999999;
 
   --accent-green: #34d399;
   --accent-red: #f87171;
@@ -302,11 +302,11 @@ body {
 
   --border-subtle: rgba(255, 255, 255, 0.08);
   --border-default: rgba(255, 255, 255, 0.14);
-  --border-focus: rgba(255, 255, 255, 0.35);
+  --border-focus: rgba(255, 255, 255, 0.65);
 
   --text-primary: #ffffff;
   --text-secondary: #888888;
-  --text-tertiary: #555555;
+  --text-tertiary: #999999;
 
   --accent-green: #34d399;
   --accent-red: #f87171;
@@ -318,12 +318,12 @@ body {
   --code-bg: rgba(255, 255, 255, 0.04);
   --lh-key: #7aa8c0;
   --lh-cls: #7fb5a4;
-  --lh-null: rgba(255, 255, 255, 0.22);
+  --lh-null: rgba(255, 255, 255, 0.45);
   --lh-bool: #8aa6c4;
   --lh-num: #a899bb;
-  --lh-str: rgba(255, 255, 255, 0.62);
+  --lh-str: rgba(255, 255, 255, 0.75);
   --lh-str-json: #9baa96;
-  --lh-punct: rgba(255, 255, 255, 0.18);
+  --lh-punct: rgba(255, 255, 255, 0.35);
 }
 
 /* Light Theme overrides for Modern Design System (from rack_console.html prototype) */
@@ -339,17 +339,28 @@ html.light,
 
   --border-subtle: rgba(0, 0, 0, 0.06);
   --border-default: rgba(0, 0, 0, 0.12);
-  --border-focus: rgba(0, 0, 0, 0.35);
+  --border-focus: rgba(0, 0, 0, 0.65);
 
   --text-primary: #121417;
   --text-secondary: #576070;
-  --text-tertiary: #8b95a5;
+  --text-tertiary: #576070;
 
-  --accent-green: #059669;
-  --accent-red: #dc2626;
+  --accent-green: #065f46;
+  --accent-red: #b91c1c;
   --accent-red-bg: #fef2f2;
-  --accent-amber: #d97706;
+  --accent-amber: #92400e;
   --accent-amber-bg: #fffbeb;
+
+  /* JSON / log syntax highlighting — light theme */
+  --code-bg: rgba(30, 50, 70, 0.04);
+  --lh-key: #1e5a78;
+  --lh-cls: #1a6a56;
+  --lh-null: rgba(0, 0, 0, 0.50);
+  --lh-bool: #1a4e7a;
+  --lh-num: #5a3a7a;
+  --lh-str: rgba(0, 0, 0, 0.70);
+  --lh-str-json: #2e5a2a;
+  --lh-punct: rgba(0, 0, 0, 0.40);
 }
 
 @theme inline {
@@ -490,4 +501,14 @@ html.light,
 
 .main-stage.sidebar-collapsed {
   margin-left: 8px;
+}
+
+/* Log search match highlighting */
+mark.log-search-match,
+.log-search-match {
+  background: rgba(245, 158, 11, 0.35);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+  font-weight: 600;
 }

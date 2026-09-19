@@ -2,6 +2,7 @@
   import { CaretDownIcon, CheckIcon, CopySimpleIcon } from "phosphor-svelte";
   import { Tabs, TabsList, TabsTrigger } from "$lib/components/ui/tabs";
   import VirtualizedCode from "$lib/components/common/virtualized-code.svelte";
+  import { highlightSearchText } from "$lib/json-format";
 
   let {
     raw,
@@ -16,6 +17,7 @@
     rawContentClass = "text-[11px] text-muted-foreground",
     formattedMaxHeightClass = "max-h-[55vh]",
     rawMaxHeightClass = "max-h-[40vh]",
+    highlightPattern = "",
   }: {
     raw: string;
     formatted?: string | null;
@@ -29,6 +31,7 @@
     rawContentClass?: string;
     formattedMaxHeightClass?: string;
     rawMaxHeightClass?: string;
+    highlightPattern?: string;
   } = $props();
 
   let formattedExpanded = $state(true);
@@ -38,6 +41,12 @@
 
   const hasFormatted = $derived(
     !!((formattedHtml && formattedHtml.trim()) || (formatted && formatted.trim())),
+  );
+
+  const rawHtml = $derived(
+    highlightPattern && highlightPattern.trim()
+      ? highlightSearchText(raw, highlightPattern)
+      : null,
   );
 
   $effect(() => {
@@ -111,6 +120,7 @@
       {#if !hasFormatted || activeView === "raw"}
         <VirtualizedCode
           text={raw}
+          html={rawHtml}
           contentClass={rawContentClass}
           maxHeightClass={rawMaxHeightClass}
         />
@@ -194,6 +204,7 @@
       <div class="border-t border-border">
         <VirtualizedCode
           text={raw}
+          html={rawHtml}
           contentClass={rawContentClass}
           maxHeightClass={rawMaxHeightClass}
         />

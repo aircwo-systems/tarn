@@ -35,6 +35,7 @@
   const baseClass = "bg-[var(--code-bg)] font-mono leading-relaxed";
 
   const lines = $derived(text ? text.split("\n") : [""]);
+  const htmlLines = $derived(html ? html.split("\n") : null);
   const lineCount = $derived(lines.length);
   const virtualize = $derived(lineCount > VIRTUALIZE_LINES);
   const hugePlain = $derived(!virtualize && text.length > HUGE_CHARS);
@@ -67,11 +68,15 @@
 
 {#if virtualize}
   <div class="relative">
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div
       bind:this={scrollEl}
       bind:clientHeight={viewportH}
       onscroll={onScroll}
-      class={`overflow-auto ${baseClass} ${contentClass} ${scrollerMaxH}`}
+      tabindex="0"
+      role="region"
+      aria-label="Code viewer"
+      class={`overflow-auto focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${baseClass} ${contentClass} ${scrollerMaxH}`}
     >
       <div class="relative" style={`height:${totalHeight}px`}>
         <div
@@ -82,7 +87,7 @@
             <div
               class="whitespace-pre px-3"
               style={`height:${LINE_HEIGHT}px;line-height:${LINE_HEIGHT}px`}
-            >{line}</div>
+            >{#if htmlLines && htmlLines[startIndex + i] !== undefined}{@html htmlLines[startIndex + i]}{:else}{line}{/if}</div>
           {/each}
         </div>
       </div>
@@ -90,17 +95,39 @@
     <div
       class="pointer-events-none absolute bottom-1.5 right-2 rounded border border-border/60 bg-background/80 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground/70 backdrop-blur-sm"
     >
-      {lineCount.toLocaleString()} lines · plain
+      {lineCount.toLocaleString()} lines{html ? "" : " · plain"}
     </div>
   </div>
 {:else if hugePlain}
-  <pre
-    class={`overflow-auto ${baseClass} px-3 py-3 whitespace-pre ${contentClass} ${scrollerMaxH}`}>{text}</pre>
+  {#if html}
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <div
+      tabindex="0"
+      role="region"
+      aria-label="Code viewer"
+      class={`overflow-auto focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${baseClass} px-3 py-3 whitespace-pre ${contentClass} ${scrollerMaxH}`}
+    >{@html html}</div>
+  {:else}
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+    <pre
+      tabindex="0"
+      role="region"
+      aria-label="Code viewer"
+      class={`overflow-auto focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${baseClass} px-3 py-3 whitespace-pre ${contentClass} ${scrollerMaxH}`}>{text}</pre>
+  {/if}
 {:else if html}
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <div
-    class={`overflow-auto ${baseClass} px-3 py-3 whitespace-pre-wrap break-all ${contentClass} ${maxHeightClass}`}
+    tabindex="0"
+    role="region"
+    aria-label="Code viewer"
+    class={`overflow-auto focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${baseClass} px-3 py-3 whitespace-pre-wrap break-all ${contentClass} ${maxHeightClass}`}
   >{@html html}</div>
 {:else}
+  <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
   <pre
-    class={`overflow-auto ${baseClass} px-3 py-3 whitespace-pre-wrap break-all ${contentClass} ${maxHeightClass}`}>{text}</pre>
+    tabindex="0"
+    role="region"
+    aria-label="Code viewer"
+    class={`overflow-auto focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring ${baseClass} px-3 py-3 whitespace-pre-wrap break-all ${contentClass} ${maxHeightClass}`}>{text}</pre>
 {/if}

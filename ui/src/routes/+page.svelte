@@ -292,6 +292,12 @@
 </script>
 
 <div class="flex h-svh overflow-hidden bg-[var(--bg-app)] font-sans text-foreground">
+  <a
+    href="#main-stage-content"
+    class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-3 focus:py-1.5 focus:bg-primary focus:text-primary-foreground focus:rounded-md focus:shadow-lg focus:outline-none focus:ring-2 focus:ring-ring font-medium text-xs"
+  >
+    Skip to main content
+  </a>
   <!-- ══════════════════════════════════════════════ SIDEBAR ══ -->
   <AppSidebar
     {navSections}
@@ -306,7 +312,7 @@
   <!-- ═══════════════════════════════════════════════════ MAIN ══ -->
   {#key activeTab}
     {#if activeTab === "overview"}
-    <main class="tab-content-view main-stage flex min-w-0 flex-1 flex-col overflow-hidden" class:sidebar-collapsed={sidebarCollapsed}>
+    <main id="main-stage-content" tabindex="-1" class="tab-content-view main-stage flex min-w-0 flex-1 flex-col overflow-hidden outline-none" class:sidebar-collapsed={sidebarCollapsed}>
       <div class="flex flex-1 flex-col overflow-hidden {canvasExpanded ? 'px-6 py-5' : 'px-4 py-4'}">
         <SectionHeader
           title="Overview"
@@ -315,7 +321,7 @@
           onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
         >
           {#snippet actions()}
-            <div class="flex shrink-0 items-center gap-1 font-mono text-[11px] text-muted-foreground/50">
+            <div class="flex shrink-0 items-center gap-1 font-mono text-[11px] text-muted-foreground">
               <span class="inline-block h-[5px] w-[5px] rounded-full bg-primary/70"></span>
               Poll {uiSettings.pollingIntervalSeconds}s
             </div>
@@ -369,7 +375,7 @@
       </div>
     </main>
     {:else}
-    <main class="tab-content-view main-stage min-w-0 flex-1 px-6 py-5 {activeTab === 'logs' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}" class:sidebar-collapsed={sidebarCollapsed}>
+    <main id="main-stage-content" tabindex="-1" class="tab-content-view main-stage min-w-0 flex-1 px-6 py-5 outline-none {activeTab === 'logs' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}" class:sidebar-collapsed={sidebarCollapsed}>
       {#if activeTab === "gateways"}
         <APIGatewaysSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "functions"}

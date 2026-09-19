@@ -666,3 +666,78 @@ func BenchmarkScanLogs(b *testing.B) {
 		}
 	}
 }
+
+func TestFlexibleWhitespacePatternMatching(t *testing.T) {
+	s := NewStore(100)
+	s.CreateGroup("/test/json")
+
+	now := time.Now().UTC()
+	s.PutLogEvents("/test/json", "stream-1", []LogEvent{
+		{Timestamp: now, Message: `{"level":"warn","message":"something failed","count":42}`, Level: LevelWARN},
+		{Timestamp: now.Add(time.Second), Message: `2026-04-01 12:00:00 [INFO] key = value processed`, Level: LevelINFO},
+	})
+
+	cases := []struct {
+		pattern string
+		match   bool
+	}{
+		{`"level": "warn"`, true},
+		{`"level":"warn"`, true},
+		{`"count":  42`, true},
+		{`"count":42`, true},
+		{`key=value`, true},
+		{`key = value`, true},
+		{`"level": "error"`, false},
+	}
+
+	for _, c := range cases {
+		events, total, _ := s.GetLogEvents("/test/json", &LogFilter{Pattern: c.pattern})
+		matched := total > 0 && len(events) > 0
+		if matched != c.match {
+			t.Errorf("GetLogEvents with pattern %q matched=%v, want %v", c.pattern, matched, c.match)
+		}
+
+		scan := s.ScanLogs(&LogScanFilter{Pattern: c.pattern})
+		scanMatched := scan.TotalMatches > 0
+		if scanMatched != c.match {
+			t.Errorf("ScanLogs with pattern %q matched=%v, want %v", c.pattern, scanMatched, c.match)
+		}
+	}
+}
+
+func TestMultiTermPatternMatching(t *testing.T) {
+	s := NewStore(100)
+	s.CreateGroup("/test/multi")
+
+	now := time.Now().UTC()
+	s.PutLogEvents("/test/multi", "stream-1", []LogEvent{
+		{Timestamp: now, Message: `{"level":"warn","message":"database timeout","status":500,"service":"orders-api"}`, Level: LevelWARN},
+		{Timestamp: now.Add(time.Second), Message: `{"level":"info","message":"database connected","status":200,"service":"orders-api"}`, Level: LevelINFO},
+		{Timestamp: now.Add(2 * time.Second), Message: `2026-04-01 12:00:00 [ERROR] orders-api failed with Internal Server Error`, Level: LevelERROR},
+	})
+
+	cases := []struct {
+		pattern string
+		count   int
+	}{
+		{`"level": "warn" "status": 500`, 1},
+		{`"status": 500 orders-api`, 1},
+		{`orders-api "status": 200`, 1},
+		{`orders-api 500`, 1},
+		{`orders-api failed`, 1},
+		{`orders-api "Internal Server Error"`, 1},
+		{`orders-api nonexistent`, 0},
+	}
+
+	for _, c := range cases {
+		events, total, _ := s.GetLogEvents("/test/multi", &LogFilter{Pattern: c.pattern})
+		if total != c.count || len(events) != c.count {
+			t.Errorf("GetLogEvents with pattern %q got total=%d, want %d", c.pattern, total, c.count)
+		}
+
+		scan := s.ScanLogs(&LogScanFilter{Pattern: c.pattern})
+		if scan.TotalMatches != c.count {
+			t.Errorf("ScanLogs with pattern %q got TotalMatches=%d, want %d", c.pattern, scan.TotalMatches, c.count)
+		}
+	}
+}

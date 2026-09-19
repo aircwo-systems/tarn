@@ -218,13 +218,35 @@
   aria-label="Rack navigation"
 >
   {#if !sidebarCollapsed}
-    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div
       class="sidebar-resizer"
-      title="Drag to resize sidebar (double click to reset)"
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize sidebar"
+      aria-valuenow={width}
+      aria-valuemin={180}
+      aria-valuemax={420}
+      tabindex="0"
+      title="Drag to resize sidebar (double click to reset, arrow keys to adjust)"
       onpointerdown={startResize}
       onpointermove={trackHandle}
       ondblclick={resetWidth}
+      onkeydown={(e) => {
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          width = Math.max(180, width - 10);
+          saveSidebarWidth(width);
+        } else if (e.key === "ArrowRight") {
+          e.preventDefault();
+          width = Math.min(420, width + 10);
+          saveSidebarWidth(width);
+        } else if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          resetWidth();
+        }
+      }}
     >
       <div class="resizer-line"></div>
       <div class="resizer-pill-handle" style:top={handleY === null ? undefined : `${handleY}px`}></div>
@@ -453,6 +475,20 @@
     cursor: col-resize;
     z-index: 40;
     touch-action: none;
+  }
+
+  .sidebar-resizer:focus-visible {
+    outline: none;
+  }
+
+  .sidebar-resizer:focus-visible .resizer-line {
+    background: var(--border-focus);
+    width: 2px;
+  }
+
+  .sidebar-resizer:focus-visible .resizer-pill-handle {
+    opacity: 1;
+    border-color: var(--border-focus);
   }
 
   /* 1px line flush with the stage's rounded corner tangents (8px margin + 14px radius + 1px) */

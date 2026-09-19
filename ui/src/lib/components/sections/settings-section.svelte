@@ -285,8 +285,10 @@
         </ul>
         <div class="add-row accounts">
           <input class="field mono" maxlength="12" inputmode="numeric" placeholder="012345678901"
+            aria-label="New AWS account ID"
             bind:value={newAccountId} onkeydown={(e) => e.key === "Enter" && handleAddAccount()} />
           <input class="field" placeholder="Label (optional)"
+            aria-label="Account label (optional)"
             bind:value={newAccountLabel} onkeydown={(e) => e.key === "Enter" && handleAddAccount()} />
           <button type="button" class="add-btn" onclick={handleAddAccount} aria-label="Add account"><PlusIcon size={12} weight="bold" /></button>
         </div>
@@ -377,7 +379,7 @@
             <span>Schema source</span>
             <small>Directory scanned for <code>schemas.ts</code> and event samples</small>
           </div>
-          <input class="field mono" placeholder="/path/to/lambda-repos" bind:value={schemaSourceDir}
+          <input class="field mono" placeholder="/path/to/lambda-repos" aria-label="Schema source directory" bind:value={schemaSourceDir}
             onblur={() => (schemaSourceDir = sanitizeSchemaSourceDir(schemaSourceDir))} />
         </div>
       </section>
@@ -413,8 +415,8 @@
           </ul>
         {/if}
         <div class="add-row services">
-          <input class="field" bind:this={newServiceNameInput} placeholder="Service name" bind:value={newTargetName} onkeydown={(e) => e.key === "Enter" && addTarget()} />
-          <input class="field mono" placeholder="8080, 192.168.1.20:3000 or https://api.lan/health" bind:value={newTargetUrl} onkeydown={(e) => e.key === "Enter" && addTarget()} />
+          <input class="field" bind:this={newServiceNameInput} placeholder="Service name" aria-label="New service name" bind:value={newTargetName} onkeydown={(e) => e.key === "Enter" && addTarget()} />
+          <input class="field mono" placeholder="8080, 192.168.1.20:3000 or https://api.lan/health" aria-label="New target URL or port" bind:value={newTargetUrl} onkeydown={(e) => e.key === "Enter" && addTarget()} />
           <button type="button" class="add-btn" onclick={addTarget} aria-label="Add service"><PlusIcon size={12} weight="bold" /></button>
         </div>
         {#if servicesError}<p class="error">{servicesError}</p>{/if}
