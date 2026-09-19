@@ -2,7 +2,6 @@
   import { untrack } from "svelte";
   import { PaperPlaneTiltIcon } from "phosphor-svelte";
   import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
   import { tryOperation, type TryOperationResponse } from "$lib/api";
   import { formatJSONForViewer } from "$lib/json-format";
 
@@ -147,22 +146,24 @@
         <span class="result-meta">{result.durationMs} ms</span>
         <span class="result-url" title={result.url}>{result.url}</span>
       </div>
+      <p class="block-label">
+        Response body{result.headers["Content-Type"] ? ` · ${result.headers["Content-Type"]}` : ""}
+      </p>
       {#if result.body}
-        {#if resultView}
-          <FormattedMessageViewer
-            raw={result.body}
-            formatted={resultView.formatted}
-            formattedHtml={resultView.formattedHtml}
-            formattedContentClass="text-[11px] text-foreground"
-            formattedMaxHeightClass="max-h-[20rem]"
-          />
-        {:else}
-          <pre class="raw">{result.body}</pre>
-        {/if}
+        <!-- highlightJSON output is HTML-escaped -->
+        <pre class="code">{#if resultView}{@html resultView.formattedHtml}{:else}{result.body}{/if}</pre>
         {#if result.truncated}<p class="note">Body truncated at 1 MB.</p>{/if}
       {:else}
         <p class="note">Empty body.</p>
       {/if}
+      <details class="headers">
+        <summary>Response headers · {Object.keys(result.headers).length}</summary>
+        <div class="header-rows">
+          {#each Object.entries(result.headers).sort(([a], [b]) => a.localeCompare(b)) as [k, v] (k)}
+            <div class="header-row"><span>{k}</span><span>{v}</span></div>
+          {/each}
+        </div>
+      </details>
     </div>
   {/if}
 </div>
@@ -170,7 +171,8 @@
 <style>
   .try { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; padding-top: 10px; border-top: 1px dashed var(--border-subtle); }
   .try-head { display: flex; align-items: center; gap: 8px; }
-  .block-label { flex: 1; font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); }
+  .try-head .block-label { flex: 1; }
+  .block-label { font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); }
 
   select, input, textarea {
     border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-stage); color: var(--text-primary);
@@ -203,7 +205,17 @@
   .result-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
   .result-meta { flex-shrink: 0; font: 11px var(--font-mono, ui-monospace, monospace); color: var(--text-secondary); }
   .result-url { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10.5px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); }
-  .raw { overflow-x: auto; max-height: 20rem; font: 11px/1.6 var(--font-mono, ui-monospace, monospace); color: var(--text-secondary); white-space: pre-wrap; }
+  .code {
+    overflow: auto; max-height: 20rem; padding: 8px 10px; border: 1px solid var(--border-subtle); border-radius: 8px;
+    background: var(--bg-stage); font: 11px/1.6 var(--font-mono, ui-monospace, monospace); color: var(--text-primary);
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .headers summary { cursor: pointer; font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); transition: color 120ms ease; }
+  .headers summary:hover { color: var(--text-secondary); }
+  .header-rows { display: flex; flex-direction: column; gap: 3px; margin-top: 6px; }
+  .header-row { display: flex; gap: 8px; font: 11px var(--font-mono, ui-monospace, monospace); }
+  .header-row span:first-child { flex-shrink: 0; color: var(--text-tertiary); }
+  .header-row span:last-child { color: var(--text-secondary); word-break: break-all; }
   .note { font-size: 11px; color: var(--text-tertiary); }
 
   @media (prefers-reduced-motion: reduce) { .result { animation: none; } }
