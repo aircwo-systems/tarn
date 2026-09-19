@@ -34,6 +34,7 @@
   import RcPanel from "$lib/components/rack/rc-panel.svelte";
   import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
   import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
+  import OpenAPITry from "./openapi-try.svelte";
   import { fetchOpenAPI } from "$lib/api";
   import { formatJSONForViewer } from "$lib/json-format";
   import { downloadJSON, parseTarget, slugify } from "$lib/postman";
@@ -236,6 +237,15 @@
                 {#if params.length === 0 && !media}
                   <p class="empty">No parameters or request body.</p>
                 {/if}
+
+                <OpenAPITry
+                  apiId={gateway.apiId}
+                  method={methodLabel(method)}
+                  {path}
+                  {params}
+                  hasBody={!!media}
+                  example={media?.example}
+                />
               </div>
             {/if}
           </div>
