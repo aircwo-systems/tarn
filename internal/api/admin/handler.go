@@ -24,6 +24,7 @@ import (
 	infrasvc "github.com/aircwo-systems/tarn/internal/infrastructure"
 	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	logssvc "github.com/aircwo-systems/tarn/internal/logs"
+	"github.com/aircwo-systems/tarn/internal/openapi"
 	s3svc "github.com/aircwo-systems/tarn/internal/s3"
 	secretssvc "github.com/aircwo-systems/tarn/internal/secrets"
 	snssvc "github.com/aircwo-systems/tarn/internal/sns"
@@ -778,244 +779,10 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// APIGW→SQS integration connections (added inside gateway loop below)
-
-	for _, api := range gateways {
-		routes, err := h.apigw.ListRoutes(api.APIID)
-		if err != nil {
-			resp.Warnings = append(resp.Warnings, "gateway routes unavailable for "+api.APIID)
-			routes = nil
-		}
-		integrations, err := h.apigw.ListIntegrations(api.APIID)
-		if err != nil {
-			resp.Warnings = append(resp.Warnings, "gateway integrations unavailable for "+api.APIID)
-			integrations = nil
-		}
-		stages, err := h.apigw.ListStages(api.APIID)
-		if err != nil {
-			resp.Warnings = append(resp.Warnings, "gateway stages unavailable for "+api.APIID)
-			stages = nil
-		}
-
-		routeKeys := make([]string, 0, len(routes))
-		for _, route := range routes {
-			routeKeys = append(routeKeys, route.RouteKey)
-		}
-		sort.Strings(routeKeys)
-
-		defaultStage := "$default"
-		invokeURL := ""
-		for _, stage := range stages {
-			if stage.StageName == "$default" {
-				defaultStage = stage.StageName
-				invokeURL = stage.InvokeURL
-				break
-			}
-		}
-		if invokeURL == "" {
-			invokeURL = api.APIEndpoint
-		}
-
-		// Build per-route integration detail for the UI
-		integByID := make(map[string]*types.APIGatewayIntegration, len(integrations))
-		for _, ig := range integrations {
-			integByID[ig.IntegrationID] = ig
-		}
-		routeDetails := make([]routeDetailSummary, 0, len(routes))
-		for _, route := range routes {
-			detail := routeDetailSummary{RouteKey: route.RouteKey}
-			if parts := strings.SplitN(route.RouteKey, " ", 2); len(parts) == 2 {
-				detail.Method = parts[0]
-				detail.Path = parts[1]
-			}
-			integID := strings.TrimPrefix(route.Target, "integrations/")
-			if ig, ok := integByID[integID]; ok {
-				detail.IntegrationType = ig.IntegrationType
-				switch {
-				case ig.SQSQueueName != "":
-					detail.IntegrationTarget = "sqs:" + ig.SQSQueueName
-				case ig.LambdaFunctionName != "":
-					detail.IntegrationTarget = "lambda:" + ig.LambdaFunctionName
-				}
-				if len(ig.RequestParameters) > 0 {
-					detail.RequestParameters = ig.RequestParameters
-				}
-			}
-			routeDetails = append(routeDetails, detail)
-		}
-
-		resp.Gateways = append(resp.Gateways, gatewaySummary{
-			APIID:        api.APIID,
-			Name:         api.Name,
-			Description:  api.Description,
-			ProtocolType: api.ProtocolType,
-			Version:      "v2",
-			Arn:          api.APIArn,
-			ApiEndpoint:  api.APIEndpoint,
-			DefaultStage: defaultStage,
-			InvokeURL:    invokeURL,
-			Routes:       len(routes),
-			Integrations: len(integrations),
-			Stages:       len(stages),
-			Tags:         cloneStringMap(api.Tags),
-			TagCount:     len(api.Tags),
-			RouteKeys:    routeKeys,
-			RouteDetails: routeDetails,
-		})
-
-		// APIGW→SQS and APIGW→Lambda connections
-		for _, integ := range integrations {
-			if integ.IntegrationType == "AWS" && integ.SQSQueueName != "" {
-				resp.Connections = append(resp.Connections, infraConnection{
-					SourceFunction: api.APIID,
-					TargetID:       integ.SQSQueueName,
-					TargetName:     integ.SQSQueueName,
-					TargetKind:     "apigw-sqs",
-					Evidence:       "integration",
-					Source:         integ.IntegrationID,
-				})
-			}
-			if integ.IntegrationType == "AWS_PROXY" && integ.LambdaFunctionName != "" {
-				resp.Connections = append(resp.Connections, infraConnection{
-					SourceFunction: api.APIID,
-					TargetID:       integ.LambdaFunctionName,
-					TargetName:     integ.LambdaFunctionName,
-					TargetKind:     "apigw-lambda",
-					Evidence:       "integration",
-					Source:         integ.IntegrationID,
-				})
-			}
-		}
-	}
-	// API Gateway v1 (REST APIs)
-	for _, v1api := range v1APIs {
-		stages, err := h.apigwv1.ListStages(v1api.ID)
-		if err != nil {
-			resp.Warnings = append(resp.Warnings, "v1 gateway stages unavailable for "+v1api.ID)
-			stages = nil
-		}
-		integrations, err := h.apigwv1.ListIntegrations(v1api.ID)
-		if err != nil {
-			resp.Warnings = append(resp.Warnings, "v1 gateway integrations unavailable for "+v1api.ID)
-			integrations = nil
-		}
-		resources, err := h.apigwv1.ListResources(v1api.ID)
-		if err != nil {
-			resp.Warnings = append(resp.Warnings, "v1 gateway resources unavailable for "+v1api.ID)
-			resources = nil
-		}
-
-		defaultStage := ""
-		invokeURL := ""
-		if len(stages) > 0 {
-			defaultStage = stages[0].StageName
-			invokeURL = stages[0].InvokeURL
-		}
-
-		// Collect route-like paths from resources (non-root)
-		routeKeys := make([]string, 0)
-		for _, res := range resources {
-			if res.Path != "/" {
-				routeKeys = append(routeKeys, res.Path)
-			}
-		}
-		sort.Strings(routeKeys)
-
-		// Build per-route integration detail for the UI
-		resourcePathByID := make(map[string]string, len(resources))
-		for _, res := range resources {
-			resourcePathByID[res.ID] = res.Path
-		}
-		// Cache event examples per Lambda function to avoid re-reading the zip
-		// for every route that targets the same function.
-		lambdaEvents := make(map[string]map[string]json.RawMessage)
-		v1RouteDetails := make([]routeDetailSummary, 0, len(integrations))
-		for _, integ := range integrations {
-			resPath := resourcePathByID[integ.ResourceID]
-			detail := routeDetailSummary{
-				RouteKey:        integ.MethodHTTPMethod + " " + resPath,
-				Method:          integ.MethodHTTPMethod,
-				Path:            resPath,
-				IntegrationType: integ.Type,
-			}
-			switch {
-			case integ.SQSQueueName != "":
-				detail.IntegrationTarget = "sqs:" + integ.SQSQueueName
-			case integ.LambdaFunctionName != "":
-				detail.IntegrationTarget = "lambda:" + integ.LambdaFunctionName
-			}
-			if len(integ.RequestTemplates) > 0 {
-				detail.RequestTemplates = integ.RequestTemplates
-			}
-			// Fetch method-level request parameters (required headers, query params, body flag).
-			if method, err := h.apigwv1.GetMethod(v1api.ID, integ.ResourceID, integ.MethodHTTPMethod); err == nil && len(method.RequestParameters) > 0 {
-				detail.MethodRequestParams = method.RequestParameters
-			}
-			// Populate body example from the Lambda's events/ folder.
-			if integ.LambdaFunctionName != "" {
-				if _, cached := lambdaEvents[integ.LambdaFunctionName]; !cached {
-					lambdaEvents[integ.LambdaFunctionName] = h.lambda.GetEventExamples(integ.LambdaFunctionName)
-				}
-				if example := pickBodyExample(lambdaEvents[integ.LambdaFunctionName], integ.MethodHTTPMethod); example != nil {
-					detail.BodyExample = example
-				}
-			}
-			v1RouteDetails = append(v1RouteDetails, detail)
-		}
-		sort.Slice(v1RouteDetails, func(i, j int) bool {
-			return v1RouteDetails[i].RouteKey < v1RouteDetails[j].RouteKey
-		})
-
-		resp.Gateways = append(resp.Gateways, gatewaySummary{
-			APIID:        v1api.ID,
-			Name:         v1api.Name,
-			Description:  v1api.Description,
-			ProtocolType: "REST",
-			Version:      "v1",
-			Arn:          v1api.APIArn,
-			ApiEndpoint:  invokeURL,
-			DefaultStage: defaultStage,
-			InvokeURL:    invokeURL,
-			Routes:       len(resources) - 1, // exclude root
-			Integrations: len(integrations),
-			Stages:       len(stages),
-			Tags:         cloneStringMap(v1api.Tags),
-			TagCount:     len(v1api.Tags),
-			RouteKeys:    routeKeys,
-			RouteDetails: v1RouteDetails,
-		})
-
-		// APIGW v1 → SQS/Lambda connections
-		for _, integ := range integrations {
-			if integ.SQSQueueName != "" {
-				resp.Connections = append(resp.Connections, infraConnection{
-					SourceFunction: v1api.ID,
-					TargetID:       integ.SQSQueueName,
-					TargetName:     integ.SQSQueueName,
-					TargetKind:     "apigw-sqs",
-					Evidence:       "integration",
-					Source:         integ.ResourceID + ":" + integ.MethodHTTPMethod,
-				})
-			}
-			if integ.LambdaFunctionName != "" {
-				resp.Connections = append(resp.Connections, infraConnection{
-					SourceFunction: v1api.ID,
-					TargetID:       integ.LambdaFunctionName,
-					TargetName:     integ.LambdaFunctionName,
-					TargetKind:     "apigw-lambda",
-					Evidence:       "integration",
-					Source:         integ.ResourceID + ":" + integ.MethodHTTPMethod,
-				})
-			}
-		}
-	}
-
-	sort.Slice(resp.Gateways, func(i, j int) bool {
-		if resp.Gateways[i].Name == resp.Gateways[j].Name {
-			return resp.Gateways[i].APIID < resp.Gateways[j].APIID
-		}
-		return resp.Gateways[i].Name < resp.Gateways[j].Name
-	})
+	gatewaySummaries, gatewayConns, gatewayWarnings := h.collectGateways()
+	resp.Gateways = append(resp.Gateways, gatewaySummaries...)
+	resp.Connections = append(resp.Connections, gatewayConns...)
+	resp.Warnings = append(resp.Warnings, gatewayWarnings...)
 
 	for _, fn := range functions {
 		metrics := h.lambda.GetFunctionMetrics(fn.FunctionName)
@@ -3251,4 +3018,315 @@ func isLocalAlias(host string) bool {
 	default:
 		return false
 	}
+}
+
+// collectGateways builds UI summaries for every v2 and v1 API Gateway, plus the
+// gateway→integration connections used by the topology view.
+func (h *Handler) collectGateways() (summaries []gatewaySummary, conns []infraConnection, warnings []string) {
+	gateways := h.apigw.ListAPIs()
+	var v1APIs []*types.RestAPI
+	if h.apigwv1 != nil {
+		v1APIs = h.apigwv1.ListAPIs()
+	}
+	for _, api := range gateways {
+		routes, err := h.apigw.ListRoutes(api.APIID)
+		if err != nil {
+			warnings = append(warnings, "gateway routes unavailable for "+api.APIID)
+			routes = nil
+		}
+		integrations, err := h.apigw.ListIntegrations(api.APIID)
+		if err != nil {
+			warnings = append(warnings, "gateway integrations unavailable for "+api.APIID)
+			integrations = nil
+		}
+		stages, err := h.apigw.ListStages(api.APIID)
+		if err != nil {
+			warnings = append(warnings, "gateway stages unavailable for "+api.APIID)
+			stages = nil
+		}
+
+		routeKeys := make([]string, 0, len(routes))
+		for _, route := range routes {
+			routeKeys = append(routeKeys, route.RouteKey)
+		}
+		sort.Strings(routeKeys)
+
+		defaultStage := "$default"
+		invokeURL := ""
+		for _, stage := range stages {
+			if stage.StageName == "$default" {
+				defaultStage = stage.StageName
+				invokeURL = stage.InvokeURL
+				break
+			}
+		}
+		if invokeURL == "" {
+			invokeURL = api.APIEndpoint
+		}
+
+		// Build per-route integration detail for the UI
+		integByID := make(map[string]*types.APIGatewayIntegration, len(integrations))
+		for _, ig := range integrations {
+			integByID[ig.IntegrationID] = ig
+		}
+		routeDetails := make([]routeDetailSummary, 0, len(routes))
+		for _, route := range routes {
+			detail := routeDetailSummary{RouteKey: route.RouteKey}
+			if parts := strings.SplitN(route.RouteKey, " ", 2); len(parts) == 2 {
+				detail.Method = parts[0]
+				detail.Path = parts[1]
+			}
+			integID := strings.TrimPrefix(route.Target, "integrations/")
+			if ig, ok := integByID[integID]; ok {
+				detail.IntegrationType = ig.IntegrationType
+				switch {
+				case ig.SQSQueueName != "":
+					detail.IntegrationTarget = "sqs:" + ig.SQSQueueName
+				case ig.LambdaFunctionName != "":
+					detail.IntegrationTarget = "lambda:" + ig.LambdaFunctionName
+				}
+				if len(ig.RequestParameters) > 0 {
+					detail.RequestParameters = ig.RequestParameters
+				}
+			}
+			routeDetails = append(routeDetails, detail)
+		}
+
+		summaries = append(summaries, gatewaySummary{
+			APIID:        api.APIID,
+			Name:         api.Name,
+			Description:  api.Description,
+			ProtocolType: api.ProtocolType,
+			Version:      "v2",
+			Arn:          api.APIArn,
+			ApiEndpoint:  api.APIEndpoint,
+			DefaultStage: defaultStage,
+			InvokeURL:    invokeURL,
+			Routes:       len(routes),
+			Integrations: len(integrations),
+			Stages:       len(stages),
+			Tags:         cloneStringMap(api.Tags),
+			TagCount:     len(api.Tags),
+			RouteKeys:    routeKeys,
+			RouteDetails: routeDetails,
+		})
+
+		// APIGW→SQS and APIGW→Lambda connections
+		for _, integ := range integrations {
+			if integ.IntegrationType == "AWS" && integ.SQSQueueName != "" {
+				conns = append(conns, infraConnection{
+					SourceFunction: api.APIID,
+					TargetID:       integ.SQSQueueName,
+					TargetName:     integ.SQSQueueName,
+					TargetKind:     "apigw-sqs",
+					Evidence:       "integration",
+					Source:         integ.IntegrationID,
+				})
+			}
+			if integ.IntegrationType == "AWS_PROXY" && integ.LambdaFunctionName != "" {
+				conns = append(conns, infraConnection{
+					SourceFunction: api.APIID,
+					TargetID:       integ.LambdaFunctionName,
+					TargetName:     integ.LambdaFunctionName,
+					TargetKind:     "apigw-lambda",
+					Evidence:       "integration",
+					Source:         integ.IntegrationID,
+				})
+			}
+		}
+	}
+	// API Gateway v1 (REST APIs)
+	for _, v1api := range v1APIs {
+		stages, err := h.apigwv1.ListStages(v1api.ID)
+		if err != nil {
+			warnings = append(warnings, "v1 gateway stages unavailable for "+v1api.ID)
+			stages = nil
+		}
+		integrations, err := h.apigwv1.ListIntegrations(v1api.ID)
+		if err != nil {
+			warnings = append(warnings, "v1 gateway integrations unavailable for "+v1api.ID)
+			integrations = nil
+		}
+		resources, err := h.apigwv1.ListResources(v1api.ID)
+		if err != nil {
+			warnings = append(warnings, "v1 gateway resources unavailable for "+v1api.ID)
+			resources = nil
+		}
+
+		defaultStage := ""
+		invokeURL := ""
+		if len(stages) > 0 {
+			defaultStage = stages[0].StageName
+			invokeURL = stages[0].InvokeURL
+		}
+
+		// Collect route-like paths from resources (non-root)
+		routeKeys := make([]string, 0)
+		for _, res := range resources {
+			if res.Path != "/" {
+				routeKeys = append(routeKeys, res.Path)
+			}
+		}
+		sort.Strings(routeKeys)
+
+		// Build per-route integration detail for the UI
+		resourcePathByID := make(map[string]string, len(resources))
+		for _, res := range resources {
+			resourcePathByID[res.ID] = res.Path
+		}
+		// Cache event examples per Lambda function to avoid re-reading the zip
+		// for every route that targets the same function.
+		lambdaEvents := make(map[string]map[string]json.RawMessage)
+		v1RouteDetails := make([]routeDetailSummary, 0, len(integrations))
+		for _, integ := range integrations {
+			resPath := resourcePathByID[integ.ResourceID]
+			detail := routeDetailSummary{
+				RouteKey:        integ.MethodHTTPMethod + " " + resPath,
+				Method:          integ.MethodHTTPMethod,
+				Path:            resPath,
+				IntegrationType: integ.Type,
+			}
+			switch {
+			case integ.SQSQueueName != "":
+				detail.IntegrationTarget = "sqs:" + integ.SQSQueueName
+			case integ.LambdaFunctionName != "":
+				detail.IntegrationTarget = "lambda:" + integ.LambdaFunctionName
+			}
+			if len(integ.RequestTemplates) > 0 {
+				detail.RequestTemplates = integ.RequestTemplates
+			}
+			// Fetch method-level request parameters (required headers, query params, body flag).
+			if method, err := h.apigwv1.GetMethod(v1api.ID, integ.ResourceID, integ.MethodHTTPMethod); err == nil && len(method.RequestParameters) > 0 {
+				detail.MethodRequestParams = method.RequestParameters
+			}
+			// Populate body example from the Lambda's events/ folder.
+			if integ.LambdaFunctionName != "" {
+				if _, cached := lambdaEvents[integ.LambdaFunctionName]; !cached {
+					lambdaEvents[integ.LambdaFunctionName] = h.lambda.GetEventExamples(integ.LambdaFunctionName)
+				}
+				if example := pickBodyExample(lambdaEvents[integ.LambdaFunctionName], integ.MethodHTTPMethod); example != nil {
+					detail.BodyExample = example
+				}
+			}
+			v1RouteDetails = append(v1RouteDetails, detail)
+		}
+		sort.Slice(v1RouteDetails, func(i, j int) bool {
+			return v1RouteDetails[i].RouteKey < v1RouteDetails[j].RouteKey
+		})
+
+		summaries = append(summaries, gatewaySummary{
+			APIID:        v1api.ID,
+			Name:         v1api.Name,
+			Description:  v1api.Description,
+			ProtocolType: "REST",
+			Version:      "v1",
+			Arn:          v1api.APIArn,
+			ApiEndpoint:  invokeURL,
+			DefaultStage: defaultStage,
+			InvokeURL:    invokeURL,
+			Routes:       len(resources) - 1, // exclude root
+			Integrations: len(integrations),
+			Stages:       len(stages),
+			Tags:         cloneStringMap(v1api.Tags),
+			TagCount:     len(v1api.Tags),
+			RouteKeys:    routeKeys,
+			RouteDetails: v1RouteDetails,
+		})
+
+		// APIGW v1 → SQS/Lambda connections
+		for _, integ := range integrations {
+			if integ.SQSQueueName != "" {
+				conns = append(conns, infraConnection{
+					SourceFunction: v1api.ID,
+					TargetID:       integ.SQSQueueName,
+					TargetName:     integ.SQSQueueName,
+					TargetKind:     "apigw-sqs",
+					Evidence:       "integration",
+					Source:         integ.ResourceID + ":" + integ.MethodHTTPMethod,
+				})
+			}
+			if integ.LambdaFunctionName != "" {
+				conns = append(conns, infraConnection{
+					SourceFunction: v1api.ID,
+					TargetID:       integ.LambdaFunctionName,
+					TargetName:     integ.LambdaFunctionName,
+					TargetKind:     "apigw-lambda",
+					Evidence:       "integration",
+					Source:         integ.ResourceID + ":" + integ.MethodHTTPMethod,
+				})
+			}
+		}
+	}
+
+	sort.Slice(summaries, func(i, j int) bool {
+		if summaries[i].Name == summaries[j].Name {
+			return summaries[i].APIID < summaries[j].APIID
+		}
+		return summaries[i].Name < summaries[j].Name
+	})
+	return summaries, conns, warnings
+}
+
+// OpenAPI returns a generated OpenAPI 3.1 document for one API Gateway.
+// With ?download=1 the response is served as an attachment.
+func (h *Handler) OpenAPI(w http.ResponseWriter, r *http.Request) {
+	apiID := r.PathValue("apiId")
+	summaries, _, _ := h.collectGateways()
+	for _, gw := range summaries {
+		if gw.APIID != apiID {
+			continue
+		}
+		doc := openapi.Build(openAPIInput(gw))
+		if r.URL.Query().Get("download") == "1" {
+			w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", gw.APIID+".openapi.json"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(doc)
+		return
+	}
+	writeError(w, http.StatusNotFound, "gateway not found: "+apiID)
+}
+
+// openAPIInput maps a gateway summary onto the OpenAPI generator's input.
+func openAPIInput(gw gatewaySummary) openapi.API {
+	api := openapi.API{
+		ID:          gw.APIID,
+		Name:        gw.Name,
+		Description: gw.Description,
+		Version:     gw.Version,
+		Stage:       gw.DefaultStage,
+		InvokeURL:   gw.InvokeURL,
+	}
+	for _, d := range gw.RouteDetails {
+		api.Routes = append(api.Routes, openapi.Route{
+			RouteKey:          d.RouteKey,
+			Method:            d.Method,
+			Path:              d.Path,
+			IntegrationType:   d.IntegrationType,
+			IntegrationTarget: d.IntegrationTarget,
+			Params:            methodRequestParams(d.MethodRequestParams),
+			RequestExample:    d.BodyExample,
+		})
+	}
+	return api
+}
+
+// methodRequestParams converts v1 "method.request.{header|querystring|path}.X"
+// declarations into client-facing OpenAPI parameters.
+func methodRequestParams(decl map[string]bool) []openapi.Param {
+	locations := map[string]string{"header": "header", "querystring": "query", "path": "path"}
+	var out []openapi.Param
+	for key, required := range decl {
+		rest, ok := strings.CutPrefix(key, "method.request.")
+		if !ok {
+			continue
+		}
+		loc, name, ok := strings.Cut(rest, ".")
+		if in, known := locations[loc]; ok && known && name != "" {
+			out = append(out, openapi.Param{Name: name, In: in, Required: required})
+		}
+	}
+	return out
 }

@@ -13,6 +13,7 @@
     buildPostmanEnvironment,
     downloadJSON,
   } from "$lib/postman";
+  import OpenAPIViewer from "./openapi-viewer.svelte";
 
   let {
     gateway,
@@ -214,7 +215,11 @@
     {/if}
   </RcPanel>
 
-  <RcPanel title="Configuration" index={1}>
+  {#key gateway.apiId}
+    <OpenAPIViewer {gateway} index={1} />
+  {/key}
+
+  <RcPanel title="Configuration" index={2}>
     <RcKv items={config} />
     {#if tags.length > 0}
       <div class="tags">

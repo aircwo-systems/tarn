@@ -73,3 +73,5 @@ ui-dev:
 
 ui-build:
 	cd ui && bun run build
+	find internal/api/ui-dist -mindepth 1 ! -name .gitkeep -delete
+	cp -R ui/build/. internal/api/ui-dist/

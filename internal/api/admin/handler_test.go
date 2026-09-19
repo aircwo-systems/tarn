@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,7 @@ import (
 	infrasvc "github.com/aircwo-systems/tarn/internal/infrastructure"
 	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	logssvc "github.com/aircwo-systems/tarn/internal/logs"
+	"github.com/aircwo-systems/tarn/internal/openapi"
 	s3svc "github.com/aircwo-systems/tarn/internal/s3"
 	secretssvc "github.com/aircwo-systems/tarn/internal/secrets"
 	snssvc "github.com/aircwo-systems/tarn/internal/sns"
@@ -1056,5 +1059,65 @@ func TestScanLogsEndpoint(t *testing.T) {
 	}
 	if res.Groups[1].GroupName != "/aws/lambda/auth" || res.Groups[1].MatchCount != 1 {
 		t.Fatalf("expected auth second with 1 match, got %+v", res.Groups[1])
+	}
+}
+
+func TestOpenAPIServesGatewaySpec(t *testing.T) {
+	h := newTestHandler(t)
+	api, err := h.apigw.CreateAPI("orders-http-api", "test api", "HTTP", "", nil)
+	if err != nil {
+		t.Fatalf("create api: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/openapi/"+api.APIID+"?download=1", nil)
+	req.SetPathValue("apiId", api.APIID)
+	rec := httptest.NewRecorder()
+	h.OpenAPI(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if cd := rec.Header().Get("Content-Disposition"); !strings.Contains(cd, api.APIID+".openapi.json") {
+		t.Fatalf("Content-Disposition = %q", cd)
+	}
+	var doc map[string]any
+	if err := json.NewDecoder(rec.Body).Decode(&doc); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if doc["openapi"] != "3.1.0" || doc["x-tarn-api-id"] != api.APIID {
+		t.Fatalf("unexpected doc: %v", doc)
+	}
+	if title, _ := doc["info"].(map[string]any)["title"].(string); title != "orders-http-api" {
+		t.Fatalf("title = %q", title)
+	}
+}
+
+func TestOpenAPIUnknownGateway(t *testing.T) {
+	h := newTestHandler(t)
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/openapi/nope", nil)
+	req.SetPathValue("apiId", "nope")
+	rec := httptest.NewRecorder()
+	h.OpenAPI(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestMethodRequestParams(t *testing.T) {
+	got := methodRequestParams(map[string]bool{
+		"method.request.header.X-Api-Key":  true,
+		"method.request.querystring.limit": false,
+		"method.request.path.id":           true,
+		"method.request.body.whatever":     true,
+		"integration.request.header.X":     true,
+	})
+	sort.Slice(got, func(i, j int) bool { return got[i].Name < got[j].Name })
+	want := []openapi.Param{
+		{Name: "X-Api-Key", In: "header", Required: true},
+		{Name: "id", In: "path", Required: true},
+		{Name: "limit", In: "query"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v, want %+v", got, want)
 	}
 }
