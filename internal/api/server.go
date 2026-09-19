@@ -250,6 +250,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /_tarn/admin/infrastructure/services", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.SetUserServices(w, r)
 	})
+	mux.HandleFunc("GET /_tarn/admin/openapi/{apiId}", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.OpenAPI(w, r)
+	})
 	mux.HandleFunc("POST /_tarn/admin/chaos", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.RunChaos(w, r)
 	})

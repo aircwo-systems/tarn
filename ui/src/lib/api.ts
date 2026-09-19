@@ -152,6 +152,18 @@ export async function fetchSecretValue(
   };
 }
 
+export async function fetchOpenAPI(apiId: string, signal?: AbortSignal): Promise<unknown> {
+  const response = await fetch(endpoint(`/_tarn/admin/openapi/${encodeURIComponent(apiId)}`), {
+    method: "GET",
+    headers: { Accept: "application/json", ...accountHeaders() },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load OpenAPI spec: HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function fetchLogGroups(signal?: AbortSignal): Promise<LogGroupSummary[]> {
   const response = await fetch(endpoint("/_tarn/admin/logs/groups"), {
     method: "GET",
