@@ -1,4 +1,8 @@
-import { highlightJSON } from "$lib/json-format";
+import {
+  highlightJSON,
+  renderTokensWithHighlight,
+  type SyntaxToken,
+} from "$lib/json-format";
 
 export interface ParsedSpringBootLog {
   pid: string;
@@ -137,11 +141,7 @@ export function tryFormatInlineJSON(msg: string): {
   return { isJSON: false, formatted: msg };
 }
 
-// ── Syntax highlighting ───────────────────────────────────────────────
-
-function escapeHTML(s: string): string {
-  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-}
+// ── Syntax highlighting ─────────────────────────────────────────────
 
 const H = {
   key: "color:var(--lh-key)",
@@ -153,75 +153,88 @@ const H = {
   punct: "color:var(--lh-punct)",
 };
 
-function jtsValue(rawVal: string): string {
+function tokenizeJtsValue(
+  rawVal: string,
+  tokens: SyntaxToken[],
+): void {
   const hasComma = rawVal.endsWith(",");
   const v = hasComma ? rawVal.slice(0, -1) : rawVal;
-  const comma = hasComma ? `<span style="${H.punct}">,</span>` : "";
-  if (v === "null") return `<span style="${H.null_}">null</span>` + comma;
-  if (v === "true" || v === "false")
-    return `<span style="${H.bool}">${escapeHTML(v)}</span>` + comma;
-  if (/^-?\d+(\.\d+)?([Ee][+-]?\d+)?[fFdDlL]?$/.test(v))
-    return `<span style="${H.num}">${escapeHTML(v)}</span>` + comma;
-  const cm = v.match(/^([A-Z][a-zA-Z0-9$_]*)([({].*)$/);
-  if (cm)
-    return (
-      `<span style="${H.cls}">${escapeHTML(cm[1])}</span><span style="${H.punct}">${escapeHTML(cm[2])}</span>` +
-      comma
-    );
-  if (v === "{" || v === "[")
-    return `<span style="${H.punct}">${escapeHTML(v)}</span>` + comma;
-  return `<span style="${H.str}">${escapeHTML(v)}</span>` + comma;
+
+  if (v === "null") {
+    tokens.push({ text: v, style: H.null_ });
+  } else if (v === "true" || v === "false") {
+    tokens.push({ text: v, style: H.bool });
+  } else if (/^-?\d+(\.\d+)?([Ee][+-]?\d+)?[fFdDlL]?$/.test(v)) {
+    tokens.push({ text: v, style: H.num });
+  } else {
+    const cm = v.match(/^([A-Z][a-zA-Z0-9$_]*)([({].*)$/);
+    if (cm) {
+      tokens.push({ text: cm[1], style: H.cls });
+      tokens.push({ text: cm[2], style: H.punct });
+    } else if (v === "{" || v === "[") {
+      tokens.push({ text: v, style: H.punct });
+    } else {
+      tokens.push({ text: v, style: H.str });
+    }
+  }
+
+  if (hasComma) {
+    tokens.push({ text: ",", style: H.punct });
+  }
 }
 
-function highlightJavaToString(text: string): string {
+function tokenizeJavaToStringLine(line: string): SyntaxToken[] {
+  const m = line.match(/^(\s*)([\s\S]*)$/);
+  const indent = m?.[1] ?? "";
+  const content = m?.[2] ?? "";
+  const tokens: SyntaxToken[] = [];
+  if (indent) tokens.push({ text: indent });
+  if (!content) return tokens;
+
+  // Closing bracket lines
+  if (/^[)\]}]+,?$/.test(content)) {
+    tokens.push({ text: content, style: H.punct });
+    return tokens;
+  }
+
+  // key: value
+  const kv = content.match(/^([a-z_$][a-zA-Z0-9_$]*)(: )([\s\S]*)$/);
+  if (kv) {
+    tokens.push({ text: kv[1], style: H.key });
+    tokens.push({ text: kv[2], style: H.punct });
+    tokenizeJtsValue(kv[3], tokens);
+    return tokens;
+  }
+
+  // ClassName( or ClassName{
+  const cls = content.match(/^([A-Z][a-zA-Z0-9$_]*)([({,]?.*)$/);
+  if (cls) {
+    tokens.push({ text: cls[1], style: H.cls });
+    if (cls[2]) tokens.push({ text: cls[2], style: H.punct });
+    return tokens;
+  }
+
+  if (content === "{" || content === "[") {
+    tokens.push({ text: content, style: H.punct });
+    return tokens;
+  }
+
+  tokens.push({ text: content });
+  return tokens;
+}
+
+export function highlightJavaToString(text: string, searchPattern?: string): string {
   return text
     .split("\n")
     .map((line) => {
-      const m = line.match(/^(\s*)([\s\S]*)$/);
-      const indent = m?.[1] ?? "";
-      const content = m?.[2] ?? "";
-      if (!content) return escapeHTML(indent);
-      // Closing bracket lines
-      if (/^[)\}]+,?$/.test(content)) {
-        return (
-          escapeHTML(indent) +
-          `<span style="${H.punct}">${escapeHTML(content)}</span>`
-        );
-      }
-      // key: value
-      const kv = content.match(/^([a-z_$][a-zA-Z0-9_$]*)(: )([\s\S]*)$/);
-      if (kv) {
-        return (
-          escapeHTML(indent) +
-          `<span style="${H.key}">${escapeHTML(kv[1])}</span>` +
-          `<span style="${H.punct}">: </span>` +
-          jtsValue(kv[3])
-        );
-      }
-      // ClassName( or ClassName{
-      const cls = content.match(/^([A-Z][a-zA-Z0-9$_]*)([({,]?.*)$/);
-      if (cls) {
-        return (
-          escapeHTML(indent) +
-          `<span style="${H.cls}">${escapeHTML(cls[1])}</span>` +
-          (cls[2]
-            ? `<span style="${H.punct}">${escapeHTML(cls[2])}</span>`
-            : "")
-        );
-      }
-      if (content === "{" || content === "[") {
-        return (
-          escapeHTML(indent) +
-          `<span style="${H.punct}">${escapeHTML(content)}</span>`
-        );
-      }
-      return escapeHTML(indent) + escapeHTML(content);
+      const tokens = tokenizeJavaToStringLine(line);
+      return renderTokensWithHighlight(tokens, searchPattern);
     })
     .join("\n");
 }
 
-export function highlightFormatted(text: string): string {
+export function highlightFormatted(text: string, searchPattern?: string): string {
   return looksLikeJSON(text)
-    ? highlightJSON(text)
-    : highlightJavaToString(text);
+    ? highlightJSON(text, searchPattern)
+    : highlightJavaToString(text, searchPattern);
 }

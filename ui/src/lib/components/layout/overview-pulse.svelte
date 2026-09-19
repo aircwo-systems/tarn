@@ -134,9 +134,9 @@
       class="flex items-baseline gap-1 font-light leading-none"
       style="font-size:20px;letter-spacing:-0.03em;color:var(--color-accent)"
     >
-      {throughput || "—"}<span class="text-[11px] font-medium tracking-normal text-muted-foreground/50">req/min</span>
+      {throughput || "—"}<span class="text-[11px] font-medium tracking-normal text-muted-foreground">req/min</span>
     </div>
-    <div class="text-[11px] tracking-[0.02em] text-muted-foreground/50">Throughput</div>
+    <div class="text-[11px] tracking-[0.02em] text-muted-foreground">Throughput</div>
     <div class="mt-1">
       <SparkBar bars={sparkThru} color="var(--color-accent)" currentOpacity={0.22} scaleWithHeight />
     </div>
@@ -145,9 +145,9 @@
   <!-- Avg latency -->
   <div class="flex flex-1 flex-col gap-0.5 border-r border-border px-5 first:pl-0 last:border-r-0 last:pr-0">
     <div class="flex items-baseline gap-1 font-light leading-none" style="font-size:20px;letter-spacing:-0.03em">
-      {avgLatency}<span class="text-[11px] font-medium tracking-normal text-muted-foreground/50">ms</span>
+      {avgLatency}<span class="text-[11px] font-medium tracking-normal text-muted-foreground">ms</span>
     </div>
-    <div class="text-[11px] tracking-[0.02em] text-muted-foreground/50">Avg Latency</div>
+    <div class="text-[11px] tracking-[0.02em] text-muted-foreground">Avg Latency</div>
     <div class="mt-1">
       <SparkBar bars={sparkLatency} color="var(--color-text-muted)" currentOpacity={0.15} filledOpacity={0.35} />
     </div>
@@ -156,9 +156,9 @@
   <!-- p95 latency -->
   <div class="flex flex-1 flex-col gap-0.5 border-r border-border px-5 first:pl-0 last:border-r-0 last:pr-0">
     <div class="flex items-baseline gap-1 font-light leading-none" style="font-size:20px;letter-spacing:-0.03em">
-      {p95Latency}<span class="text-[11px] font-medium tracking-normal text-muted-foreground/50">ms</span>
+      {p95Latency}<span class="text-[11px] font-medium tracking-normal text-muted-foreground">ms</span>
     </div>
-    <div class="text-[11px] tracking-[0.02em] text-muted-foreground/50">p95 Latency</div>
+    <div class="text-[11px] tracking-[0.02em] text-muted-foreground">p95 Latency</div>
     <div class="mt-1">
       <SparkBar bars={sparkP95} color="var(--color-text-muted)" currentOpacity={0.15} filledOpacity={0.3} />
     </div>
@@ -170,9 +170,9 @@
       class="flex items-baseline gap-1 font-light leading-none"
       style="font-size:20px;letter-spacing:-0.03em;color:{errorCount > 0 ? 'var(--color-red)' : 'inherit'}"
     >
-      {errorCount}<span class="text-[11px] font-medium tracking-normal text-muted-foreground/50">errors</span>
+      {errorCount}<span class="text-[11px] font-medium tracking-normal text-muted-foreground">errors</span>
     </div>
-    <div class="text-[11px] tracking-[0.02em] text-muted-foreground/50">Last 5 min</div>
+    <div class="text-[11px] tracking-[0.02em] text-muted-foreground">Last 5 min</div>
     <div class="mt-1">
       <SparkBar bars={sparkErrors} color="var(--color-red)" currentOpacity={0.2} filledOpacity={0.55} />
     </div>
@@ -184,9 +184,9 @@
       class="flex items-baseline gap-1 font-light leading-none"
       style="font-size:20px;letter-spacing:-0.03em;color:var(--color-accent)"
     >
-      {activeServiceCount}<span class="text-[11px] font-medium tracking-normal text-muted-foreground/50">services</span>
+      {activeServiceCount}<span class="text-[11px] font-medium tracking-normal text-muted-foreground">services</span>
     </div>
-    <div class="text-[11px] tracking-[0.02em] text-muted-foreground/50">Active</div>
+    <div class="text-[11px] tracking-[0.02em] text-muted-foreground">Active</div>
     {#if infraLegend.length > 0}
       <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1">
         {#each infraLegend as item (item.kind)}

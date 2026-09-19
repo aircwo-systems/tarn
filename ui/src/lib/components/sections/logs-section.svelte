@@ -22,6 +22,7 @@
   import { untrack } from "svelte";
   import SectionHeader from "./section-header.svelte";
   import LogStream, { keyEvents } from "$lib/components/logs/log-stream.svelte";
+  import LogSelectionPrompt from "$lib/components/logs/log-selection-prompt.svelte";
   import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
   import {
     fetchLogGroups,
@@ -34,7 +35,7 @@
     type LogScanResult,
     type LogGroupScanResult,
   } from "$lib/api";
-  import { highlightJSON } from "$lib/json-format";
+  import { highlightJSON, highlightSearchText, formatFilterTerm, splitFilterTerms } from "$lib/json-format";
   import {
     parseSpringBootLog,
     looksLikeJSON,
@@ -555,6 +556,31 @@
     applyFilters();
   }
 
+  let searchInputEl = $state<HTMLInputElement | null>(null);
+
+  function handleFilterBySelection(text: string) {
+    filterPattern = text;
+    applyFilters();
+    searchInputEl?.focus();
+  }
+
+  function handleAddToFilter(text: string) {
+    const formatted = formatFilterTerm(text);
+    if (!formatted) return;
+
+    if (!filterPattern || !filterPattern.trim()) {
+      filterPattern = formatted;
+    } else {
+      const current = filterPattern.trim();
+      const terms = splitFilterTerms(current);
+      if (!terms.some((t) => t.toLowerCase() === formatted.toLowerCase())) {
+        filterPattern = `${current} ${formatted}`;
+      }
+    }
+    applyFilters();
+    searchInputEl?.focus();
+  }
+
   let patternTimer: ReturnType<typeof setTimeout> | null = null;
   function onPatternInput() {
     syncLogLocation();
@@ -673,7 +699,7 @@
   const panelIsComplex = $derived(selectedEvent ? isComplexMessage(selectedEvent.message) : false);
   const panelFormattedMessage = $derived(panelIsComplex ? computeFormattedMessage(panelDisplayMessage) : null);
   const panelHighlightedHtml = $derived(
-    panelFormattedMessage !== null ? highlightFormatted(panelFormattedMessage) : null,
+    panelFormattedMessage !== null ? highlightFormatted(panelFormattedMessage, filterPattern) : null,
   );
 
   function groupDisplayName(name: string): string {
@@ -920,8 +946,10 @@
       <label class="rc-search">
         <MagnifyingGlassIcon size={13} class="shrink-0 text-[var(--text-tertiary)]" />
         <input
+          bind:this={searchInputEl}
           type="text"
           placeholder="Filter messages"
+          aria-label="Filter log messages"
           bind:value={filterPattern}
           oninput={onPatternInput}
           onkeydown={(e) => {
@@ -1094,6 +1122,7 @@
                         raw={ev.message}
                         formatted={panelHighlightedHtml === null ? panelDisplayMessage : panelFormattedMessage}
                         formattedHtml={panelHighlightedHtml}
+                        highlightPattern={filterPattern}
                         variant="tabs"
                         formattedContentClass="text-[12px] text-foreground"
                         rawContentClass="text-[11px] text-muted-foreground"
@@ -1101,9 +1130,9 @@
                         rawMaxHeightClass="max-h-[40vh]"
                       />
                     {:else if looksLikeJSON(ev.message) && tryFormatInlineJSON(ev.message).isJSON}
-                      <pre class="rc-code max-h-[55vh] overflow-y-auto">{@html highlightJSON(tryFormatInlineJSON(ev.message).formatted)}</pre>
+                      <pre class="rc-code max-h-[55vh] overflow-y-auto">{@html highlightJSON(tryFormatInlineJSON(ev.message).formatted, filterPattern)}</pre>
                     {:else}
-                      <pre class="rc-code">{ev.message}</pre>
+                      <pre class="rc-code">{@html highlightSearchText(ev.message, filterPattern)}</pre>
                     {/if}
                   </section>
 
@@ -1216,6 +1245,12 @@
         </div>
       {/if}
     {/if}
+
+    <LogSelectionPrompt
+      onFilter={handleFilterBySelection}
+      onAddToFilter={handleAddToFilter}
+      activeFilter={filterPattern}
+    />
   </div>
 {:else}
   <!-- ── Groups list ──────────────────────────────────────────────── -->
@@ -1229,9 +1264,9 @@
     <div class="rc-querybar">
       <label class="rc-search">
         <MagnifyingGlassIcon size={13} class="shrink-0 text-[var(--text-tertiary)]" />
-        <input type="text" placeholder="Search logs (e.g. correlation-id) or groups" bind:value={groupSearch} />
+        <input type="text" placeholder="Search logs (e.g. correlation-id) or groups" aria-label="Search logs or log groups" bind:value={groupSearch} />
         {#if scanning}
-          <span class="rc-mono text-[10.5px] text-[var(--text-tertiary)] animate-pulse shrink-0">Scanning...</span>
+          <span role="status" aria-live="polite" class="rc-mono text-[10.5px] text-[var(--text-tertiary)] animate-pulse shrink-0">Scanning...</span>
         {:else if groupSearch.trim()}
           <button type="button" class="rc-search-clear" aria-label="Clear search" onclick={() => { groupSearch = ""; }}>
             <XIcon size={11} />

@@ -2,10 +2,12 @@ package logs
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 // LogLevel represents log severity.
@@ -55,11 +57,12 @@ type LogGroupSummary struct {
 
 // LogFilter specifies criteria for querying log events.
 type LogFilter struct {
-	StartTime  *time.Time
-	EndTime    *time.Time
-	Level      LogLevel
-	Pattern    string
-	StreamName string
+	StartTime     *time.Time
+	EndTime       *time.Time
+	Level         LogLevel
+	Pattern       string
+	patternMatcher *PatternMatcher
+	StreamName    string
 	Order      string
 	Limit      int
 	Offset     int        // Deprecated: use Cursor for pagination
@@ -216,6 +219,10 @@ func (s *Store) GetLogEvents(groupName string, filter *LogFilter) ([]LogEvent, i
 		return nil, 0, false
 	}
 
+	if filter != nil && filter.Pattern != "" && filter.patternMatcher == nil {
+		filter.patternMatcher = CompilePatternMatcher(filter.Pattern)
+	}
+
 	// Collect matching events from ring buffer (oldest first)
 	var matched []LogEvent
 	start := (g.head - g.count + g.maxEvents) % g.maxEvents
@@ -244,9 +251,13 @@ func (s *Store) ScanLogs(filter *LogScanFilter) *LogScanResult {
 	var startTime, endTime *time.Time
 	maxSamples := 3
 	var allowedGroups map[string]struct{}
+	var patternMatcher *PatternMatcher
 
 	if filter != nil {
 		pattern = strings.TrimSpace(filter.Pattern)
+		if pattern != "" {
+			patternMatcher = CompilePatternMatcher(pattern)
+		}
 		level = filter.Level
 		startTime = filter.StartTime
 		endTime = filter.EndTime
@@ -301,7 +312,7 @@ func (s *Store) ScanLogs(filter *LogScanFilter) *LogScanResult {
 			if endTime != nil && evt.Timestamp.After(*endTime) {
 				continue
 			}
-			if pattern != "" && !ContainsFold(evt.Message, pattern) {
+			if pattern != "" && !matchesPattern(evt.Message, pattern, patternMatcher) {
 				continue
 			}
 
@@ -451,6 +462,10 @@ func (s *Store) PruneOlderThan(cutoff time.Time) int {
 func (s *Store) GetAllLogEvents(filter *LogFilter) ([]LogEvent, int, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
+	if filter != nil && filter.Pattern != "" && filter.patternMatcher == nil {
+		filter.patternMatcher = CompilePatternMatcher(filter.Pattern)
+	}
 
 	var all []LogEvent
 
@@ -612,6 +627,150 @@ func ContainsFold(s, substr string) bool {
 	return false
 }
 
+var colonEqualReplacer = regexp.MustCompile(`([:=,])`)
+
+// CompileFlexiblePattern converts a search pattern into a regex that matches
+// case-insensitively while tolerating whitespace variations (e.g. around colons,
+// commas, quotes, and between words).
+func CompileFlexiblePattern(pattern string) *regexp.Regexp {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return nil
+	}
+
+	inner := pattern
+	hasOuterQuotes := false
+	if len(inner) >= 2 && strings.HasPrefix(inner, `"`) && strings.HasSuffix(inner, `"`) && !strings.Contains(inner[1:len(inner)-1], `"`) {
+		inner = inner[1 : len(inner)-1]
+		hasOuterQuotes = true
+	}
+
+	punct := func(r rune) bool {
+		switch r {
+		case ':', ';', ',', '{', '}', '[', ']', '(', ')', '"', '\x27', '`', '=', '<', '>', '&', '|', '/', '\\', '+', '-', '*':
+			return true
+		}
+		return false
+	}
+
+	var parts []string
+	runes := []rune(inner)
+	n := len(runes)
+
+	i := 0
+	for i < n {
+		if unicode.IsSpace(runes[i]) {
+			start := i
+			for i < n && unicode.IsSpace(runes[i]) {
+				i++
+			}
+			prevPunct := start > 0 && punct(runes[start-1])
+			nextPunct := i < n && punct(runes[i])
+
+			if prevPunct || nextPunct {
+				parts = append(parts, `\s*`)
+			} else {
+				parts = append(parts, `\s+`)
+			}
+		} else {
+			start := i
+			for i < n && !unicode.IsSpace(runes[i]) {
+				i++
+			}
+			chunk := string(runes[start:i])
+			escaped := regexp.QuoteMeta(chunk)
+			escaped = colonEqualReplacer.ReplaceAllString(escaped, `\s*$1\s*`)
+			parts = append(parts, escaped)
+		}
+	}
+
+	body := strings.Join(parts, "")
+	if hasOuterQuotes {
+		body = `"?` + body + `"?`
+	}
+
+	re, err := regexp.Compile("(?i)" + body)
+	if err != nil {
+		return nil
+	}
+	return re
+}
+
+var termRe = regexp.MustCompile(`(?:(?:(?:"(?:[^"\\]|\\.)*")|[^\s:=]+)\s*[:=]\s*(?:(?:"(?:[^"\\]|\\.)*")|\S+))|(?:"(?:[^"\\]|\\.)*")|\S+`)
+
+// SplitPatternTerms splits a search query into individual terms while respecting
+// quoted phrases and key-value constructs like "key": "value" or key:value.
+func SplitPatternTerms(pattern string) []string {
+	pattern = strings.TrimSpace(pattern)
+	if pattern == "" {
+		return nil
+	}
+	matches := termRe.FindAllString(pattern, -1)
+	if len(matches) == 0 {
+		return []string{pattern}
+	}
+	return matches
+}
+
+// PatternMatcher supports multiple search terms with AND semantics and flexible whitespace.
+type PatternMatcher struct {
+	terms   []string
+	regexps []*regexp.Regexp
+}
+
+// CompilePatternMatcher creates a multi-term matcher for a search query.
+func CompilePatternMatcher(pattern string) *PatternMatcher {
+	terms := SplitPatternTerms(pattern)
+	if len(terms) == 0 {
+		return nil
+	}
+	var res PatternMatcher
+	for _, t := range terms {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		res.terms = append(res.terms, t)
+		res.regexps = append(res.regexps, CompileFlexiblePattern(t))
+	}
+	if len(res.terms) == 0 {
+		return nil
+	}
+	return &res
+}
+
+// Matches checks whether message matches all terms in the pattern matcher.
+func (pm *PatternMatcher) Matches(message string) bool {
+	if pm == nil || len(pm.terms) == 0 {
+		return true
+	}
+	for i, term := range pm.terms {
+		if ContainsFold(message, term) {
+			continue
+		}
+		rx := pm.regexps[i]
+		if rx != nil && rx.MatchString(message) {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func matchesPattern(message, pattern string, pm *PatternMatcher) bool {
+	if pattern == "" {
+		return true
+	}
+	if pm != nil {
+		return pm.Matches(message)
+	}
+	if ContainsFold(message, pattern) {
+		return true
+	}
+	single := CompileFlexiblePattern(pattern)
+	return single != nil && single.MatchString(message)
+}
+
 func matchesFilter(evt LogEvent, filter *LogFilter) bool {
 	if filter == nil {
 		return true
@@ -628,7 +787,7 @@ func matchesFilter(evt LogEvent, filter *LogFilter) bool {
 	if filter.EndTime != nil && evt.Timestamp.After(*filter.EndTime) {
 		return false
 	}
-	if filter.Pattern != "" && !ContainsFold(evt.Message, filter.Pattern) {
+	if filter.Pattern != "" && !matchesPattern(evt.Message, filter.Pattern, filter.patternMatcher) {
 		return false
 	}
 	return true
