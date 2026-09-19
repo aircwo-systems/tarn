@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -3069,6 +3071,7 @@ func (h *Handler) collectGateways() (summaries []gatewaySummary, conns []infraCo
 		for _, ig := range integrations {
 			integByID[ig.IntegrationID] = ig
 		}
+		lambdaEvents := make(map[string]map[string]json.RawMessage)
 		routeDetails := make([]routeDetailSummary, 0, len(routes))
 		for _, route := range routes {
 			detail := routeDetailSummary{RouteKey: route.RouteKey}
@@ -3087,6 +3090,13 @@ func (h *Handler) collectGateways() (summaries []gatewaySummary, conns []infraCo
 				}
 				if len(ig.RequestParameters) > 0 {
 					detail.RequestParameters = ig.RequestParameters
+				}
+				// Populate body example from the Lambda's events/ folder.
+				if fn := ig.LambdaFunctionName; fn != "" && detail.Method != "" {
+					if _, cached := lambdaEvents[fn]; !cached {
+						lambdaEvents[fn] = h.lambda.GetEventExamples(fn)
+					}
+					detail.BodyExample = pickBodyExample(lambdaEvents[fn], detail.Method)
 				}
 			}
 			routeDetails = append(routeDetails, detail)
@@ -3329,4 +3339,117 @@ func methodRequestParams(decl map[string]bool) []openapi.Param {
 		}
 	}
 	return out
+}
+
+// tryRequest is a request sent from the API spec viewer's "Try it" panel.
+type tryRequest struct {
+	Method  string            `json:"method"`
+	Path    string            `json:"path"` // resolved path, relative to the gateway invoke URL
+	Query   map[string]string `json:"query,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    string            `json:"body,omitempty"`
+}
+
+type tryResponse struct {
+	Status     int               `json:"status"`
+	Headers    map[string]string `json:"headers"`
+	Body       string            `json:"body"`
+	Truncated  bool              `json:"truncated,omitempty"`
+	DurationMs int64             `json:"durationMs"`
+	URL        string            `json:"url"`
+}
+
+const tryMaxBody = 1 << 20
+
+// TryOperation sends one request to a gateway's own invoke URL on behalf of
+// the UI. Sending server-side avoids browser CORS limits; the target is always
+// the gateway's invoke URL, never a caller-supplied host.
+func (h *Handler) TryOperation(w http.ResponseWriter, r *http.Request) {
+	apiID := r.PathValue("apiId")
+	var req tryRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, tryMaxBody)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
+		return
+	}
+	method := strings.ToUpper(strings.TrimSpace(req.Method))
+	if method == "" || strings.ContainsAny(method, " \t\r\n") {
+		writeError(w, http.StatusBadRequest, "method is required")
+		return
+	}
+	if !strings.HasPrefix(req.Path, "/") || strings.Contains(req.Path, "://") {
+		writeError(w, http.StatusBadRequest, "path must start with /")
+		return
+	}
+
+	var invokeURL string
+	summaries, _, _ := h.collectGateways()
+	for _, gw := range summaries {
+		if gw.APIID == apiID {
+			invokeURL = gw.InvokeURL
+			break
+		}
+	}
+	if invokeURL == "" {
+		writeError(w, http.StatusNotFound, "gateway not found: "+apiID)
+		return
+	}
+	base, err := url.Parse(invokeURL)
+	if err != nil || base.Host == "" {
+		writeError(w, http.StatusInternalServerError, "gateway has no usable invoke URL")
+		return
+	}
+	if host := base.Hostname(); host == "0.0.0.0" || host == "::" {
+		base.Host = net.JoinHostPort("127.0.0.1", base.Port())
+	}
+	target := *base
+	target.Path = strings.TrimSuffix(base.Path, "/") + req.Path
+	target.RawPath = ""
+	q := url.Values{}
+	for k, v := range req.Query {
+		q.Set(k, v)
+	}
+	target.RawQuery = q.Encode()
+
+	var body io.Reader
+	if req.Body != "" {
+		body = strings.NewReader(req.Body)
+	}
+	out, err := http.NewRequestWithContext(r.Context(), method, target.String(), body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "build request: "+err.Error())
+		return
+	}
+	for k, v := range req.Headers {
+		out.Header.Set(k, v)
+	}
+	if req.Body != "" && out.Header.Get("Content-Type") == "" {
+		out.Header.Set("Content-Type", "application/json")
+	}
+	out.Header.Set("User-Agent", "Tarn-TryIt/1.0")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	start := time.Now()
+	resp, err := client.Do(out)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, "request failed: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, tryMaxBody+1))
+
+	result := tryResponse{
+		Status:     resp.StatusCode,
+		Headers:    make(map[string]string, len(resp.Header)),
+		DurationMs: time.Since(start).Milliseconds(),
+		URL:        target.String(),
+	}
+	if len(raw) > tryMaxBody {
+		raw, result.Truncated = raw[:tryMaxBody], true
+	}
+	result.Body = string(raw)
+	for k := range resp.Header {
+		result.Headers[k] = resp.Header.Get(k)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
 }

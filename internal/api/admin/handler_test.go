@@ -1121,3 +1121,33 @@ func TestMethodRequestParams(t *testing.T) {
 		t.Fatalf("got %+v, want %+v", got, want)
 	}
 }
+
+func TestTryOperationValidation(t *testing.T) {
+	h := newTestHandler(t)
+	api, err := h.apigw.CreateAPI("orders-http-api", "", "HTTP", "", nil)
+	if err != nil {
+		t.Fatalf("create api: %v", err)
+	}
+
+	cases := []struct {
+		name, apiID, body string
+		want              int
+	}{
+		{"bad json", api.APIID, `{`, http.StatusBadRequest},
+		{"missing method", api.APIID, `{"path":"/x"}`, http.StatusBadRequest},
+		{"relative path", api.APIID, `{"method":"GET","path":"x"}`, http.StatusBadRequest},
+		{"absolute url smuggled", api.APIID, `{"method":"GET","path":"/http://evil.example/"}`, http.StatusBadRequest},
+		{"unknown gateway", "nope", `{"method":"GET","path":"/x"}`, http.StatusNotFound},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/_tarn/admin/openapi/"+tc.apiID+"/try", strings.NewReader(tc.body))
+			req.SetPathValue("apiId", tc.apiID)
+			rec := httptest.NewRecorder()
+			h.TryOperation(rec, req)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body.String())
+			}
+		})
+	}
+}

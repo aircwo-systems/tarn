@@ -164,6 +164,41 @@ export async function fetchOpenAPI(apiId: string, signal?: AbortSignal): Promise
   return response.json();
 }
 
+export interface TryOperationRequest {
+  method: string;
+  path: string;
+  query?: Record<string, string>;
+  headers?: Record<string, string>;
+  body?: string;
+}
+
+export interface TryOperationResponse {
+  status: number;
+  headers: Record<string, string>;
+  body: string;
+  truncated?: boolean;
+  durationMs: number;
+  url: string;
+}
+
+export async function tryOperation(
+  apiId: string,
+  request: TryOperationRequest,
+  signal?: AbortSignal,
+): Promise<TryOperationResponse> {
+  const response = await fetch(endpoint(`/_tarn/admin/openapi/${encodeURIComponent(apiId)}/try`), {
+    method: "POST",
+    headers: { Accept: "application/json", "Content-Type": "application/json", ...accountHeaders() },
+    body: JSON.stringify(request),
+    signal,
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data.error ?? `Request failed: HTTP ${response.status}`);
+  }
+  return data as TryOperationResponse;
+}
+
 export async function fetchLogGroups(signal?: AbortSignal): Promise<LogGroupSummary[]> {
   const response = await fetch(endpoint("/_tarn/admin/logs/groups"), {
     method: "GET",
