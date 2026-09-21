@@ -55,11 +55,17 @@ tarn update --version v0.4.0  # install a specific release, including rollbacks
 
 `tarn update` downloads the release archive and checks it against `checksums.txt`. It then swaps the binary in place and restores the old one if the new binary fails to start. It only updates binaries in `~/.tarn/bin` (or `TARN_INSTALL_DIR`); for local builds it tells you to rebuild instead. Restart a running server afterwards with `tarn stop && tarn start`.
 
+Set `TARN_DISABLE_UPDATE_CHECK=1` to stop `tarn start` and `tarn version` from checking GitHub for new releases.
+
 To uninstall, run `rm -rf ~/.tarn/bin` and delete the `# tarn` line from your shell rc file. `~/.tarn/data` holds emulator state; remove it too if you want a clean slate.
 
 ## From Releases
 
-Download the pre-built binary for your platform:
+Download the pre-built binary for your platform. Each archive contains a single `tarn` binary; move it somewhere on your `PATH`. Verify it against the release's `checksums.txt` with `shasum -a 256 -c checksums.txt --ignore-missing`.
+
+::: warning macOS browser downloads
+Downloading the archive in a browser marks it as quarantined, and macOS will refuse to open it ("Apple could not verify tarn is free of malware"). Use the install script or the `curl` commands below instead, or clear the flag with `xattr -d com.apple.quarantine ./tarn`.
+:::
 
 <ReleaseDownloadTabs />
 
@@ -129,12 +135,12 @@ open http://127.0.0.1:4566
 Check that Tarn is working:
 
 ```bash
-./tarn version
+tarn version
 ```
 
 Release binary output: `tarn <DocsVersionCode />`
 
-Source builds may report the repository development version instead.
+Source builds report the repository development version instead; run them as `./build/tarn version`.
 
 ## Optional: Install `awslocal`
 

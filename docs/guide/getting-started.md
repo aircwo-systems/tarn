@@ -6,7 +6,7 @@ Welcome to Tarn! This guide will help you get up and running in minutes.
 Tarn is under active development. Expect breaking changes as we finalize the MVP.
 
 Known limitations:
-- EventBridge: Scheduled rules only; event patterns are not supported yet
+- EventBridge: Default-bus rules and custom events; ECS and Lambda targets are local-only
 - S3: Path-style only; virtual-hosted style is not supported
 
 Learn more about what we want to build with Tarn in the [project roadmap](https://github.com/aircwo-systems/tarn/blob/develop-docs/ROADMAP.md).
@@ -16,15 +16,17 @@ Learn more about what we want to build with Tarn in the [project roadmap](https:
 
 ### Prerequisites
 
-- **Go 1.26+** (for building from source)
+- **macOS or Linux** (arm64 or amd64)
 - **Docker** (required for Lambda execution)
 
 ### Installation
 
 ```bash
-# Build from source
-make build && make start
+curl -fsSL https://aircwo-systems.github.io/tarn/install.sh | sh
+tarn start
 ```
+
+This installs `tarn` to `~/.tarn/bin` and adds it to your `PATH`. Open a new terminal before running `tarn start`. See [Installation](./installation.md) for Windows, pinned versions, and building from source.
 
 The server will start on `http://127.0.0.1:4566`
 

@@ -22,10 +22,16 @@ const tabs: DownloadTab[] = [
       `curl -L https://github.com/aircwo-systems/tarn/releases/download/${version}/tarn-darwin-amd64.tar.gz \\\n  | tar xz`
   },
   {
-    label: 'Linux',
+    label: 'Linux x64',
     shell: 'bash',
     command: (version) =>
       `curl -L https://github.com/aircwo-systems/tarn/releases/download/${version}/tarn-linux-amd64.tar.gz \\\n  | tar xz`
+  },
+  {
+    label: 'Linux ARM',
+    shell: 'bash',
+    command: (version) =>
+      `curl -L https://github.com/aircwo-systems/tarn/releases/download/${version}/tarn-linux-arm64.tar.gz \\\n  | tar xz`
   },
   {
     label: 'Windows',
