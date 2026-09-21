@@ -603,7 +603,7 @@
   .add-row { display: grid; gap: 6px; margin-top: 8px; }
   .add-row.accounts { grid-template-columns: 9rem minmax(0, 1fr) 30px; }
   .add-row.services { grid-template-columns: 10rem minmax(0, 1fr) 30px; }
-  .row .pill { display: block; max-width: 55%; line-height: 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .row .pill { max-width: 55%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hint { margin: -2px 0 8px; font-size: 11px; color: var(--text-tertiary); }
   .add-btn {
     display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 8px;
