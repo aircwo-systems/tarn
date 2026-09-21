@@ -49,6 +49,9 @@ jobs:
             echo "DOCS_VERSION=$TAG" >> "$GITHUB_ENV"
           fi
 
+      - name: Publish install script
+        run: cp scripts/install.sh docs/public/install.sh
+
       - name: Build docs
         working-directory: docs
         run: bun run docs:build

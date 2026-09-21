@@ -77,3 +77,6 @@ __debug_bin*
 # Scratch files
 /hello.txt
 /test.sh
+
+# Copied from scripts/install.sh at docs deploy time
+/docs/public/install.sh

@@ -5,10 +5,45 @@ Get Tarn up and running on your system.
 ::: info Distribution Roadmap
 The current release is <DocsVersionCode />.
 
-Prebuilt Docker images, a Homebrew tap, and a one-line installer script are planned for future releases. For now, the primary install paths are release binaries or building Tarn from source.
+Prebuilt Docker images and a Homebrew tap are planned for future releases. For now, use the install script, a release binary, or build Tarn from source.
 
 See the [project roadmap](https://github.com/aircwo-systems/tarn/blob/develop-docs/ROADMAP.md) for the broader direction.
 :::
+
+## Install Script (Recommended)
+
+Install the latest release for macOS or Linux (arm64 or amd64):
+
+```bash
+curl -fsSL https://aircwo-systems.github.io/tarn/install.sh | sh
+```
+
+The script:
+
+- installs `tarn` to `~/.tarn/bin` without `sudo`
+- checks the download against the release's `checksums.txt`
+- adds `~/.tarn/bin` to your `PATH` in `~/.zshrc`, `~/.bashrc`/`~/.bash_profile`, or fish `conf.d`
+
+Because `curl` downloads the binary rather than a browser, macOS doesn't quarantine it. You don't need `chmod` or `xattr`, and this works on managed Macs. Open a new terminal afterwards and run `tarn start`. Re-run the same command to upgrade.
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TARN_VERSION` | `latest` | Install a specific tag, e.g. `v0.2.0` |
+| `TARN_INSTALL_DIR` | `~/.tarn/bin` | Install location |
+| `TARN_NO_MODIFY_PATH` | unset | Set to `1` to leave shell rc files untouched |
+
+```bash
+curl -fsSL https://aircwo-systems.github.io/tarn/install.sh | TARN_VERSION=v0.2.0 sh
+```
+
+To read the script before running it:
+
+```bash
+curl -fsSL -o install.sh https://aircwo-systems.github.io/tarn/install.sh
+less install.sh && sh install.sh
+```
+
+To uninstall, run `rm -rf ~/.tarn/bin` and delete the `# tarn` line from your shell rc file. `~/.tarn/data` holds emulator state; remove it too if you want a clean slate.
 
 ## From Releases
 
