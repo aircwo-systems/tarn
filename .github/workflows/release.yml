@@ -41,8 +41,12 @@ jobs:
         include:
           - goos: linux
             goarch: amd64
+          - goos: linux
+            goarch: arm64
           - goos: darwin
             goarch: arm64
+          - goos: darwin
+            goarch: amd64
           - goos: windows
             goarch: amd64
 
@@ -99,16 +103,23 @@ jobs:
           merge-multiple: true
       
       - name: Package Release
+        # Each archive holds a single binary named `tarn` (or `tarn.exe`) at
+        # its root so users and scripts/install.sh don't have to rename it.
         run: |
           mkdir ./to-upload
           for f in ./raw-bins/tarn-*; do
             name=$(basename "$f")
+            stage=$(mktemp -d)
             if [[ "$name" == *.exe ]]; then
-              zip "./to-upload/${name%.exe}.zip" "$f"
+              cp "$f" "$stage/tarn.exe"
+              (cd "$stage" && zip -q "$GITHUB_WORKSPACE/to-upload/${name%.exe}.zip" tarn.exe)
             else
-              tar -czvf "./to-upload/${name}.tar.gz" "$f"
+              cp "$f" "$stage/tarn"
+              chmod 755 "$stage/tarn"
+              tar -czf "./to-upload/${name}.tar.gz" -C "$stage" tarn
             fi
           done
+          (cd ./to-upload && sha256sum * > checksums.txt)
 
       - name: Create Release
         uses: softprops/action-gh-release@v2

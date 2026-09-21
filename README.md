@@ -30,9 +30,11 @@ See [GitHub issues](https://github.com/aircwo-systems/tarn/issues) for planned f
 ## Quick Start
 
 ```bash
-make build
-./build/tarn start
+curl -fsSL https://aircwo-systems.github.io/tarn/install.sh | sh
+tarn start
 ```
+
+macOS and Linux, no `sudo`, no quarantine workaround. Or build from source with `make build && ./build/tarn start`.
 
 Endpoint: `http://127.0.0.1:4566`
 
