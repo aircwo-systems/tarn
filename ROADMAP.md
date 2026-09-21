@@ -14,19 +14,19 @@ Tarn should be easier to download, trust, install, and run without manual setup 
 
 ### Priorities
 
-- Publish cleaner release assets for every supported OS and architecture
+- ~~Publish cleaner release assets for every supported OS and architecture~~ (done: darwin/linux arm64+amd64, windows amd64)
 - Introduce better install paths:
   - Homebrew tap
-  - installer script
+  - ~~installer script~~ (done: `curl -fsSL https://aircwo-systems.github.io/tarn/install.sh | sh`)
   - prebuilt Docker image
 - Reduce platform friction on macOS:
   - signed binaries
-  - notarization
-  - fewer manual `chmod` and quarantine removal steps
+  - notarization (needed for browser downloads)
+  - ~~fewer manual `chmod` and quarantine removal steps~~ (done via the install script)
 - Improve release metadata:
-  - checksums
-  - clearer versioned download URLs
-  - simpler upgrade guidance
+  - ~~checksums~~ (done: `checksums.txt` per release)
+  - signed provenance (cosign / build attestations)
+  - ~~simpler upgrade guidance~~ (done: `tarn update`)
 
 ### Outcome
 
