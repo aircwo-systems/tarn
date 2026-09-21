@@ -174,6 +174,11 @@
     requestAnimationFrame(() => syncActivePill(false));
   }
 
+  function saveSidebarWidth(next: number) {
+    width = Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, next));
+    localStorage.setItem(WIDTH_KEY, String(width));
+  }
+
   function resetWidth() {
     width = DEFAULT_WIDTH;
     localStorage.setItem(WIDTH_KEY, String(width));
@@ -226,8 +231,8 @@
       aria-orientation="vertical"
       aria-label="Resize sidebar"
       aria-valuenow={width}
-      aria-valuemin={180}
-      aria-valuemax={420}
+      aria-valuemin={MIN_WIDTH}
+      aria-valuemax={MAX_WIDTH}
       tabindex="0"
       title="Drag to resize sidebar (double click to reset, arrow keys to adjust)"
       onpointerdown={startResize}
@@ -236,12 +241,10 @@
       onkeydown={(e) => {
         if (e.key === "ArrowLeft") {
           e.preventDefault();
-          width = Math.max(180, width - 10);
-          saveSidebarWidth(width);
+          saveSidebarWidth(width - 10);
         } else if (e.key === "ArrowRight") {
           e.preventDefault();
-          width = Math.min(420, width + 10);
-          saveSidebarWidth(width);
+          saveSidebarWidth(width + 10);
         } else if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           resetWidth();
