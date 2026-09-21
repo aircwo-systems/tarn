@@ -12,6 +12,7 @@
     BridgeIcon,
     ScrollIcon,
     DetectiveIcon,
+    StackIcon,
     DatabaseIcon,
     FlowArrowIcon,
     CubeIcon,
@@ -41,6 +42,7 @@
   import StorageSection from "$lib/components/sections/storage-section.svelte";
   import LogsSection from "$lib/components/sections/logs-section.svelte";
   import XraySection from "$lib/components/sections/xray-section.svelte";
+  import StackSection from "$lib/components/sections/stack-section.svelte";
   import ServicesSection from "$lib/components/sections/services-section.svelte";
   import ChaosSection from "$lib/components/sections/chaos-section.svelte";
   import {
@@ -281,6 +283,7 @@
       items: [
         { id: "logs", label: "Logs",   icon: ScrollIcon,    count: null, pulse: logPulse },
         { id: "xray", label: "Traces", icon: DetectiveIcon, count: null },
+        { id: "stack", label: "Stack", icon: StackIcon, count: null },
       ],
     },
     {
@@ -418,6 +421,8 @@
           onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
           onNavigate={setTab}
         />
+      {:else if activeTab === "stack"}
+        <StackSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} onNavigate={setTab} />
       {:else if activeTab === "settings"}
         <SettingsSection
           instanceInfo={dashboard.data?.config ?? null}
