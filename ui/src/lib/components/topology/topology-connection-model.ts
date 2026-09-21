@@ -252,6 +252,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       x: CONNECTION_CANVAS.colGateway,
       y: distributedColumnY(i, gateways.length, 170, 790, dynamicCanvasH),
       label: trimLabel(gw.name, 13),
+      fullLabel: gw.name,
       sub: `${gw.routes} routes`,
       kind: "gateway",
     }),
@@ -263,6 +264,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       x: CONNECTION_CANVAS.colEventBridge,
       y: distributedColumnY(i, eventBridgeTargetCounts.size, 140, 770, dynamicCanvasH),
       label: trimLabel(ruleName, 13),
+      fullLabel: ruleName,
       sub: `${targetCount} target${targetCount === 1 ? "" : "s"}`,
       kind: "eventbridge",
     }),
@@ -274,6 +276,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       x: CONNECTION_CANVAS.colTopic,
       y: distributedColumnY(i, topics.length, 140, 740, dynamicCanvasH),
       label: trimLabel(t.name, 13),
+      fullLabel: t.name,
       sub: `${t.subscriptions} sub`,
       kind: "topic",
     }),
@@ -285,6 +288,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       x: CONNECTION_CANVAS.colQueue,
       y: distributedColumnY(i, queues.length, 150, 855, dynamicCanvasH),
       label: trimLabel(q.name, 13),
+      fullLabel: q.name,
       sub: `${q.approxVisible + q.approxInFlight + q.approxDelayed} msg`,
       kind: "queue",
     }),
@@ -296,6 +300,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       x: CONNECTION_CANVAS.colDynamodb,
       y: distributedColumnY(i, dynamodbTables.length, 170, 900, dynamicCanvasH),
       label: trimLabel(table.name, 13),
+      fullLabel: table.name,
       sub: table.streamEnabled
         ? `${table.itemCount} item · stream`
         : `${table.itemCount} item`,
@@ -309,6 +314,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       x: CONNECTION_CANVAS.colFunction,
       y: distributedColumnY(i, functions.length, 170, 915, dynamicCanvasH),
       label: trimLabel(fn.name, 13),
+      fullLabel: fn.name,
       sub: fn.runtime,
       kind: "function",
     }),
@@ -320,6 +326,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       x: CONNECTION_CANVAS.colBucket,
       y: distributedColumnY(i, buckets.length, 120, 1080, dynamicCanvasH),
       label: trimLabel(b.name, 13),
+      fullLabel: b.name,
       sub: `${b.objects} obj`,
       kind: "bucket",
       bucket: b,
@@ -332,6 +339,7 @@ export function buildTopologyGraph(input: BuildTopologyGraphInput): TopologyGrap
       x: CONNECTION_CANVAS.colSecret,
       y: distributedColumnY(i, secrets.length, 190, 985, dynamicCanvasH),
       label: trimLabel(s.name, 13),
+      fullLabel: s.name,
       sub: `v${s.versionId.slice(0, 6)}`,
       kind: "secret",
     }),
@@ -1704,6 +1712,7 @@ function buildInfraNodes(
       x: position.x,
       y: position.y,
       label: trimLabel(probe.name, 13),
+      fullLabel: probe.name,
       sub:
         probe.version && probe.version.length > 0
           ? probe.version

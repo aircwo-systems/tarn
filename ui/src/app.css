@@ -93,6 +93,21 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
+:root {
+  /* Stack view — one token per resource kind. Kept apart from --chart-*,
+     which the sidebar, charts and accent also consume. */
+  --stack-gateway: #facc15;
+  --stack-eventbridge: #60a5fa;
+  --stack-topic: #c084fc;
+  --stack-queue: #f59e0b;
+  --stack-function: #a3e635;
+  --stack-dynamodb: #ec4899;
+  --stack-bucket: #94a3b8;
+  --stack-secret: #2dd4bf;
+  --stack-extension: #2dd4bf;
+  --stack-infra: #a78bfa;
+}
+
 /* Light mode overrides */
 .light {
   --color-bg: #f8fafb;
@@ -134,6 +149,18 @@
   --topology-infra-mongodb: var(--topology-external-mongodb);
   --topology-infra-docker: var(--topology-external-docker);
   --topology-infra-default: var(--topology-external-default);
+
+  /* Stack kinds — AA on #f8fafb for tinted text, AA-large for borders. */
+  --stack-gateway: #a16207;
+  --stack-eventbridge: #1d4ed8;
+  --stack-topic: #7e22ce;
+  --stack-queue: #b45309;
+  --stack-function: #4d7c0f;
+  --stack-dynamodb: #be185d;
+  --stack-bucket: #475569;
+  --stack-secret: #0f766e;
+  --stack-extension: #0f766e;
+  --stack-infra: #6d28d9;
 
   --color-background: #f8fafb;
   --color-foreground: #0f1720;

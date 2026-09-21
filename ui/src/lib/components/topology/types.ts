@@ -29,6 +29,8 @@ export type ConnectionNode = {
   x: number;
   y: number;
   label: string;
+  /** Untrimmed name; `label` is shortened for the canvas. */
+  fullLabel?: string;
   sub: string;
   kind: NodeKind;
   status?: string;

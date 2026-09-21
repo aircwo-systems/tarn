@@ -15,6 +15,7 @@ export const DASHBOARD_TABS = [
   "services",
   "logs",
   "xray",
+  "stack",
   "settings",
 ] as const;
 
