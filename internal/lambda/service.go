@@ -520,7 +520,7 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	}
 
 	if fn.State != types.FunctionStateActive {
-		err := fmt.Errorf("function %s is not active (state: %s)", fn.FunctionName, fn.State)
+		err := fmt.Errorf("function %s is not active (state: %s): %w", fn.FunctionName, fn.State, ErrFunctionNotReady)
 		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, err.Error())
 		return nil, err
 	}
@@ -705,7 +705,7 @@ func (s *Service) acquireContainer(ctx context.Context, fn *types.FunctionConfig
 
 		// At the concurrency cap with everything busy — wait for a release.
 		if time.Now().After(deadline) {
-			err := fmt.Errorf("no execution environment available for %s within %s (concurrency cap %d reached)", fn.FunctionName, containerAcquireTimeout, maxConc)
+			err := fmt.Errorf("no execution environment available for %s within %s (concurrency cap %d reached): %w", fn.FunctionName, containerAcquireTimeout, maxConc, ErrTooManyRequests)
 			s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, err.Error())
 			return nil, false, err
 		}

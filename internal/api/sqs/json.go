@@ -14,6 +14,7 @@ package sqs
 import (
 	"encoding/json"
 	"errors"
+	"github.com/google/uuid"
 	"io"
 	"log"
 	"net/http"
@@ -533,7 +534,8 @@ func (h *Handler) jsonListQueueTags(w http.ResponseWriter, body []byte) {
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/x-amz-json-1.0")
+	w.Header().Set("X-Amzn-RequestId", uuid.NewString())
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
@@ -576,6 +578,7 @@ func writeJSONError(w http.ResponseWriter, status int, code, message string) {
 	// content type.
 	w.Header().Set("Content-Type", "application/x-amz-json-1.0")
 	w.Header().Set("X-Amzn-Errortype", code)
+	w.Header().Set("X-Amzn-RequestId", uuid.NewString())
 	// SQS is awsQueryCompatible: AWS also sends the legacy query error code,
 	// which the SDK surfaces as ErrorCode() and the Terraform provider matches
 	// on (e.g. AWS.SimpleQueueService.NonExistentQueue in its delete waiter).

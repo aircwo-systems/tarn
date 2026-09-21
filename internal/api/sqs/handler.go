@@ -2,10 +2,12 @@ package sqs
 
 import (
 	"encoding/base64"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -539,20 +541,34 @@ func (h *Handler) listQueueTags(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var tagsXML string
+	resp := listQueueTagsResponse{Xmlns: xmlNS, RequestID: uuid.New().String()}
 	for k, v := range tags {
-		tagsXML += fmt.Sprintf("    <entry>\n      <key>%s</key>\n      <value>%s</value>\n    </entry>\n", k, v)
+		resp.Tags = append(resp.Tags, xmlTag{Key: k, Value: v})
 	}
+	sort.Slice(resp.Tags, func(i, j int) bool { return resp.Tags[i].Key < resp.Tags[j].Key })
 
-	body := fmt.Sprintf(`<ListQueueTagsResponse xmlns="%s">
-  <ListQueueTagsResult>
-%s  </ListQueueTagsResult>
-  <ResponseMetadata>
-    <RequestId>%s</RequestId>
-  </ResponseMetadata>
-</ListQueueTagsResponse>`, xmlNS, tagsXML, uuid.New().String())
+	out, err := xml.Marshal(resp)
+	if err != nil {
+		writeXMLError(w, 500, "InternalError", err.Error())
+		return
+	}
+	body := string(out)
 
 	writeXML(w, 200, body)
+}
+
+// listQueueTagsResponse mirrors the AWS ListQueueTags XML shape, where each
+// tag is a <Tag><Key/><Value/></Tag> element inside the result.
+type listQueueTagsResponse struct {
+	XMLName   xml.Name `xml:"ListQueueTagsResponse"`
+	Xmlns     string   `xml:"xmlns,attr"`
+	Tags      []xmlTag `xml:"ListQueueTagsResult>Tag"`
+	RequestID string   `xml:"ResponseMetadata>RequestId"`
+}
+
+type xmlTag struct {
+	Key   string `xml:"Key"`
+	Value string `xml:"Value"`
 }
 
 // --- Helpers ---

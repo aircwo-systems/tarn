@@ -365,3 +365,29 @@ func TestCreateFunctionWithImageUriInfersImagePackageType(t *testing.T) {
 		t.Fatalf("expected PackageType Image, got %q", resp.PackageType)
 	}
 }
+
+func TestInvokeMissingFunctionReturnsResourceNotFound(t *testing.T) {
+	h := newLambdaHandler(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/2015-03-31/functions/nope/invocations", strings.NewReader(`{}`))
+	req.SetPathValue("name", "nope")
+	rec := httptest.NewRecorder()
+	h.Invoke(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body %s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Amzn-ErrorType"); got != "ResourceNotFoundException" {
+		t.Fatalf("X-Amzn-ErrorType = %q", got)
+	}
+	if rec.Header().Get("X-Amzn-RequestId") == "" {
+		t.Fatal("missing X-Amzn-RequestId")
+	}
+	var body map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["Type"] != "User" || body["__type"] != "ResourceNotFoundException" || body["Message"] == "" {
+		t.Fatalf("unexpected error body: %v", body)
+	}
+}

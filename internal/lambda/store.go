@@ -92,7 +92,7 @@ func (s *Store) GetFunction(name string) (*types.FunctionConfig, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("function %s not found", name)
+			return nil, fmt.Errorf("%w: %s", ErrFunctionNotFound, name)
 		}
 		return nil, err
 	}
@@ -143,7 +143,7 @@ func (s *Store) DeleteFunction(name string) error {
 	fnDir := filepath.Join(s.cfg.FunctionsDir(), name)
 	if _, err := os.Stat(fnDir); err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("function %s not found", name)
+			return fmt.Errorf("%w: %s", ErrFunctionNotFound, name)
 		}
 		return err
 	}
