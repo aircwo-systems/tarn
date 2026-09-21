@@ -57,7 +57,7 @@ The low-to-medium follow-up work is complete in this worktree:
 
 | Item | Status | Current behavior |
 |---|---|---|
-| ECS Docker E2E coverage | Implemented in the E2E harness | [`test/e2e_test.go`](../../test/e2e_test.go) includes `TestECSDockerTaskE2E` and `TestECSFullPipelineE2E` (EventBridge → ECS Node task → SQS → Lambda). The broad CI test command includes the package; it skips when Docker is unavailable. |
+| ECS Docker E2E coverage | Implemented in the E2E harness | [`test/e2e_test.go`](https://github.com/aircwo-systems/tarn/blob/develop-mvp/test/e2e_test.go) includes `TestECSDockerTaskE2E` and `TestECSFullPipelineE2E` (EventBridge → ECS Node task → SQS → Lambda). The broad CI test command includes the package; it skips when Docker is unavailable. |
 | `ListTaskDefinitions` | Implemented | The ECS handler exposes family-prefix/status filtering, sort order, and pagination backed by the persisted task-definition store. |
 | CPU and memory enforcement | Implemented locally | ECS CPU units and MiB memory values map to Docker CPU shares/NanoCPUs and memory limits/reservations. Task-level values are distributed across containers without explicit values. |
 | Network-mode handling | Implemented locally | `bridge`, `host`, `none`, and local `awsvpc` behavior map to Docker settings; unsupported port/network combinations are rejected. |
