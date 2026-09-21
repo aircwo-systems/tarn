@@ -3,6 +3,7 @@ package lambda
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -267,6 +268,7 @@ func (h *Handler) DeleteFunction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
 		return
 	}
+	setRequestID(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -390,10 +392,14 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "ServiceException", err.Error())
+		status, code := invokeErrorCode(err)
+		writeError(w, status, code, err.Error())
 		return
 	}
 
+	if output.RequestID != "" {
+		w.Header().Set("X-Amzn-RequestId", output.RequestID)
+	}
 	if output.FunctionError != "" {
 		w.Header().Set("X-Amz-Function-Error", output.FunctionError)
 	}
@@ -405,6 +411,7 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	setRequestID(w)
 	w.WriteHeader(output.StatusCode)
 	w.Write(output.Payload)
 }
@@ -424,6 +431,7 @@ func (h *Handler) PutFunctionConcurrency(w http.ResponseWriter, r *http.Request)
 
 // DeleteFunctionConcurrency handles DELETE /2017-10-31/functions/{name}/concurrency.
 func (h *Handler) DeleteFunctionConcurrency(w http.ResponseWriter, _ *http.Request) {
+	setRequestID(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -452,6 +460,7 @@ func (h *Handler) DeleteFunctionCodeSigningConfig(w http.ResponseWriter, r *http
 		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
 		return
 	}
+	setRequestID(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -592,6 +601,7 @@ func (h *Handler) DeleteAlias(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Unlock()
 
+	setRequestID(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -718,6 +728,7 @@ func (h *Handler) RemovePermission(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Unlock()
 
+	setRequestID(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -824,6 +835,7 @@ func (h *Handler) TagResource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
 		return
 	}
+	setRequestID(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -841,6 +853,7 @@ func (h *Handler) UntagResource(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
 		return
 	}
+	setRequestID(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -945,6 +958,7 @@ func (h *Handler) DeleteLayerVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	setRequestID(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1065,18 +1079,51 @@ func (h *Handler) fetchS3Code(bucket, key string) ([]byte, error) {
 // --- Helpers ---
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
+	setRequestID(w)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(v)
 }
 
+// writeError emits the Lambda REST-JSON error shape. smithy-go resolves the
+// typed exception from the X-Amzn-ErrorType header first, then the body Type
+// or __type fields; we set all of them so every SDK finds the code.
 func writeError(w http.ResponseWriter, status int, code string, message string) {
+	setRequestID(w)
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Amzn-ErrorType", code)
 	w.WriteHeader(status)
+	errType := "User"
+	if status >= 500 {
+		errType = "Service"
+	}
 	json.NewEncoder(w).Encode(map[string]string{
 		"__type":  code,
+		"Type":    errType,
 		"Message": message,
+		"message": message,
 	})
+}
+
+// setRequestID sets X-Amzn-RequestId unless the handler already supplied one.
+func setRequestID(w http.ResponseWriter) {
+	if w.Header().Get("X-Amzn-RequestId") == "" {
+		w.Header().Set("X-Amzn-RequestId", uuid.NewString())
+	}
+}
+
+// invokeErrorCode maps an Invoke service error to its AWS status and code.
+func invokeErrorCode(err error) (int, string) {
+	switch {
+	case errors.Is(err, lambdasvc.ErrFunctionNotFound):
+		return http.StatusNotFound, "ResourceNotFoundException"
+	case errors.Is(err, lambdasvc.ErrFunctionNotReady):
+		return http.StatusBadGateway, "ResourceNotReadyException"
+	case errors.Is(err, lambdasvc.ErrTooManyRequests):
+		return http.StatusTooManyRequests, "TooManyRequestsException"
+	default:
+		return http.StatusInternalServerError, "ServiceException"
+	}
 }
 
 func normalizeFunctionName(name string) string {

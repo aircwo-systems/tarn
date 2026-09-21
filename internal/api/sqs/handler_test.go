@@ -225,3 +225,49 @@ func TestQuerySendMessage_PreservesBinaryAttributes(t *testing.T) {
 		t.Fatalf("expected BinaryValue data, got %q", string(attr.BinaryValue))
 	}
 }
+
+func TestListQueueTagsUsesAWSTagShape(t *testing.T) {
+	h := newTestHandler(t)
+	if _, err := h.svc.CreateQueue("tagged", nil, map[string]string{"team": "a&b", "env": "dev"}); err != nil {
+		t.Fatalf("failed to create queue: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("Action=ListQueueTags&QueueUrl=http://localhost:4566/000000000000/tagged"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.Dispatch(rec, req)
+
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, body)
+	}
+	for _, want := range []string{
+		"<Tag><Key>env</Key><Value>dev</Value></Tag>",
+		"<Tag><Key>team</Key><Value>a&amp;b</Value></Tag>",
+		"<RequestId>",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %q in %s", want, body)
+		}
+	}
+}
+
+func TestJSONSuccessUsesAWSJSONHeaders(t *testing.T) {
+	h := newTestHandler(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"QueueName":"hdr"}`))
+	req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+	req.Header.Set("X-Amz-Target", "AmazonSQS.CreateQueue")
+	rec := httptest.NewRecorder()
+	h.Dispatch(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/x-amz-json-1.0" {
+		t.Fatalf("Content-Type = %q", got)
+	}
+	if rec.Header().Get("X-Amzn-RequestId") == "" {
+		t.Fatal("missing X-Amzn-RequestId")
+	}
+}
