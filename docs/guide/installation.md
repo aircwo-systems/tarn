@@ -24,7 +24,7 @@ The script:
 - checks the download against the release's `checksums.txt`
 - adds `~/.tarn/bin` to your `PATH` in `~/.zshrc`, `~/.bashrc`/`~/.bash_profile`, or fish `conf.d`
 
-Because `curl` downloads the binary rather than a browser, macOS doesn't quarantine it. You don't need `chmod` or `xattr`, and this works on managed Macs. Open a new terminal afterwards and run `tarn start`. Re-run the same command to upgrade.
+Because `curl` downloads the binary rather than a browser, macOS doesn't quarantine it. You don't need `chmod` or `xattr`, and this works on managed Macs. Open a new terminal afterwards and run `tarn start`.
 
 | Variable | Default | Purpose |
 |---|---|---|
@@ -42,6 +42,18 @@ To read the script before running it:
 curl -fsSL -o install.sh https://aircwo-systems.github.io/tarn/install.sh
 less install.sh && sh install.sh
 ```
+
+### Updating
+
+`tarn version` shows when a newer release is available. To install it:
+
+```bash
+tarn update                   # latest release
+tarn update --check           # show what would change, download nothing
+tarn update --version v0.4.0  # install a specific release, including rollbacks
+```
+
+`tarn update` downloads the release archive and checks it against `checksums.txt`. It then swaps the binary in place and restores the old one if the new binary fails to start. It only updates binaries in `~/.tarn/bin` (or `TARN_INSTALL_DIR`); for local builds it tells you to rebuild instead. Restart a running server afterwards with `tarn stop && tarn start`.
 
 To uninstall, run `rm -rf ~/.tarn/bin` and delete the `# tarn` line from your shell rc file. `~/.tarn/data` holds emulator state; remove it too if you want a clean slate.
 

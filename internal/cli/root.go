@@ -87,6 +87,7 @@ Flush provisioned resources:
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newFlushCmd())
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newUpdateCmd())
 	root.AddCommand(lambda.NewLambdaCmd())
 	root.AddCommand(s3cli.NewS3Cmd())
 	root.AddCommand(sqs.NewSQSCmd())
