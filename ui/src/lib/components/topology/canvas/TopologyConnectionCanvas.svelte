@@ -3,7 +3,6 @@
   import {
     MagnifyingGlassMinusIcon,
     MagnifyingGlassPlusIcon,
-    SquaresFourIcon,
   } from "phosphor-svelte";
   import { Canvas, type CanvasResizeEvent } from "svelte-canvas";
   import Button from "$lib/components/ui/button/button.svelte";
@@ -62,7 +61,6 @@
       _position: NodePosition,
     ) => {},
     onNodeOverrideChange = (_id: string, _override: NodeOverride) => {},
-    onAutoOrganize = () => {},
     onNavigate = (_tab: string) => {},
   }: {
     model: TopologyGraphModel;
@@ -79,7 +77,6 @@
       position: NodePosition,
     ) => void;
     onNodeOverrideChange?: (id: string, override: NodeOverride) => void;
-    onAutoOrganize?: () => void;
     onNavigate?: (tab: string) => void;
   } = $props();
 
@@ -502,12 +499,6 @@
     event.preventDefault();
     event.stopPropagation();
     zoomViewportBy(factor);
-  }
-
-  function handleOrganizePointerDown(event: PointerEvent) {
-    event.preventDefault();
-    event.stopPropagation();
-    onAutoOrganize();
   }
 
   function handleWheel(event: WheelEvent) {
@@ -965,17 +956,6 @@
         class="absolute bottom-3 left-3 z-20 flex flex-col gap-1"
       >
         <div class="flex flex-col gap-1">
-          <Button
-            variant="secondary"
-            size="icon"
-            class="h-9 w-9 rounded-xl shadow-lg"
-            aria-label="Organise canvas layout"
-            title="Organise canvas layout"
-            onclick={onAutoOrganize}
-            onpointerdown={handleOrganizePointerDown}
-          >
-            <SquaresFourIcon size={18} />
-          </Button>
           <Button
             variant="secondary"
             size="icon"
