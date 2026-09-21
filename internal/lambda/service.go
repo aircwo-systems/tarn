@@ -574,8 +574,10 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	if err != nil {
 		return nil, err
 	}
-	// Return the environment to the pool when this invocation finishes.
-	defer s.engine.Release(info)
+	// Return the environment to the pool when this invocation finishes. The
+	// closure reads info at return time because a dead warm container may be
+	// replaced below.
+	defer func() { s.engine.Release(info) }()
 
 	s.pool.Touch(fn.FunctionName)
 
@@ -598,6 +600,23 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	s.logInvocationBoundary(logGroup, logStream, fmt.Sprintf("START RequestId: %s Version: %s", requestID, fn.Version))
 
 	output, err := s.invokeWithRetry(invokeCtx, info, input, coldStart)
+	if err != nil && !coldStart && isTransientRIEInvokeError(err) {
+		// The warm container's runtime is gone (JVM crash, OOM kill, Docker
+		// restart). Drop it from the pool so later invokes don't keep hitting
+		// the dead port, then retry once on a fresh environment.
+		output, err = s.recoverDeadWarmContainer(invokeCtx, &info, err, warmRecovery{
+			remove: func(dead *engine.ContainerInfo) {
+				s.ingestContainerLogs(fn.FunctionName, dead)
+				_ = s.engine.RemoveContainer(context.Background(), dead.ID)
+			},
+			reacquire: func() (*engine.ContainerInfo, bool, error) {
+				return s.acquireContainer(ctx, fn, codeDir, layerDirs)
+			},
+			invoke: func(next *engine.ContainerInfo, cold bool) (*types.InvokeOutput, error) {
+				return s.invokeWithRetry(invokeCtx, next, input, cold)
+			},
+		})
+	}
 	if err != nil {
 		s.logInvocationBoundary(logGroup, logStream, fmt.Sprintf("END RequestId: %s", requestID))
 		wrapped := fmt.Errorf("invocation failed: %w", err)
@@ -767,6 +786,44 @@ func (s *Service) invokeWithRetry(ctx context.Context, info *engine.ContainerInf
 	}
 
 	return nil, fmt.Errorf("invoke retry loop exhausted for %s", input.FunctionName)
+}
+
+// warmRecovery holds the steps used to replace a dead warm container.
+type warmRecovery struct {
+	remove    func(dead *engine.ContainerInfo)
+	reacquire func() (*engine.ContainerInfo, bool, error)
+	invoke    func(info *engine.ContainerInfo, coldStart bool) (*types.InvokeOutput, error)
+}
+
+// recoverDeadWarmContainer removes the dead container *info, acquires a
+// replacement (stored back into *info so the caller releases the right one)
+// and retries the invocation once.
+func (s *Service) recoverDeadWarmContainer(ctx context.Context, info **engine.ContainerInfo, cause error, r warmRecovery) (*types.InvokeOutput, error) {
+	dead := *info
+	log.Printf("[lambda] warm container %s for %s unreachable (%v); removing and retrying on a fresh environment", shortID(dead.ID), dead.FunctionName, cause)
+	if s.logsSvc != nil {
+		s.logsSvc.LogSystemEvent(logssvc.LevelWARN, fmt.Sprintf("Removed unreachable container for %s: %v", dead.FunctionName, cause))
+	}
+	r.remove(dead)
+	// Nothing left to release for the removed container.
+	*info = nil
+
+	if err := ctx.Err(); err != nil {
+		return nil, cause
+	}
+	next, coldStart, err := r.reacquire()
+	if err != nil {
+		return nil, fmt.Errorf("%w (replacement container failed: %v)", cause, err)
+	}
+	*info = next
+	return r.invoke(next, coldStart)
+}
+
+func shortID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
 
 func isTransientRIEInvokeError(err error) bool {
