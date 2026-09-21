@@ -37,6 +37,7 @@ Start the server:
 	root.AddCommand(newStatusCmd())
 	root.AddCommand(newFlushCmd())
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newUpdateCmd())
 	root.AddCommand(mcpcli.NewMCPCmd(version))
 
 	root.PersistentFlags().String("host", "0.0.0.0", "API server bind address")

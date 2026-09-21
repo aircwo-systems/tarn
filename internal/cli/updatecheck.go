@@ -76,7 +76,7 @@ func maybePrintUpdateNotice(out io.Writer, dataDir, currentVersion string) {
 		if err != nil || !result.Outdated {
 			return
 		}
-		_, _ = fmt.Fprintf(out, "Update available: tarn %s -> %s (%s)\n", result.CurrentVersion, result.LatestVersion, result.ReleaseURL)
+		_, _ = fmt.Fprintf(out, "Update available: tarn %s -> %s (run `tarn update`)\n", result.CurrentVersion, result.LatestVersion)
 	}()
 }
 
@@ -99,6 +99,7 @@ func runVersionUpdateCheck(cmd *cobra.Command, out io.Writer, currentVersion str
 		if strings.TrimSpace(result.ReleaseURL) != "" {
 			_, _ = fmt.Fprintf(out, "Release notes: %s\n", result.ReleaseURL)
 		}
+		_, _ = fmt.Fprintln(out, "Run `tarn update` to install it.")
 		return nil
 	}
 
