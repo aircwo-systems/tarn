@@ -50,7 +50,6 @@
       _position: InfraNodePosition,
     ) => {},
     onNodeOverrideChange = (_id: string, _override: NodeOverride) => {},
-    onAutoOrganize = () => {},
     onNavigate = (_tab: string) => {},
   }: {
     gateways?: GatewaySummary[];
@@ -78,7 +77,6 @@
       position: InfraNodePosition,
     ) => void;
     onNodeOverrideChange?: (id: string, override: NodeOverride) => void;
-    onAutoOrganize?: () => void;
     onNavigate?: (tab: string) => void;
   } = $props();
 
@@ -187,7 +185,6 @@
     {onGatewayClick}
     {onNodePositionChange}
     {onNodeOverrideChange}
-    {onAutoOrganize}
     {onNavigate}
     onNodeHover={handleNodeHover}
     onNodeLeave={handleNodeLeave}

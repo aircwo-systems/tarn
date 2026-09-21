@@ -473,11 +473,6 @@
     viewportResetToken += 1;
   }
 
-  function organizeCanvasLayout() {
-    allNodePositions = {};
-    resetCanvasViewport();
-  }
-
   function handleShortcutKeydown(event: KeyboardEvent) {
     if (!canvasExpanded || viewMode !== "connections") return;
     if (!(event.metaKey || event.ctrlKey)) return;
@@ -609,7 +604,6 @@
             onGatewayClick={openGateway}
             onNodePositionChange={setNodePosition}
             onNodeOverrideChange={setNodeOverride}
-            onAutoOrganize={organizeCanvasLayout}
             {onNavigate}
           />
         {/if}
