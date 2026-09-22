@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { ArrowUpRightIcon } from "phosphor-svelte";
   import SparkBar from "$lib/components/common/spark-bar.svelte";
   import type { SparkBar as SparkBarData } from "$lib/components/common/spark-bar.svelte";
   import type { RequestTrace } from "$lib/types";
@@ -7,10 +8,12 @@
     recentTraces,
     activeServiceCount,
     infraLegend,
+    onNavigate,
   }: {
     recentTraces: RequestTrace[];
     activeServiceCount: number;
     infraLegend: { kind: string; label: string; count: number; color: string }[];
+    onNavigate?: (tab: string) => void;
   } = $props();
 
   // ── Pulse metrics ─────────────────────────────────────────────
@@ -177,6 +180,12 @@
       scaleWithHeight: false,
     },
   ]);
+
+  function openServices(event: MouseEvent) {
+    if (!onNavigate) return;
+    event.preventDefault();
+    onNavigate("services");
+  }
 </script>
 
 <section class="overview-pulse" aria-label="Overview metrics">
@@ -206,15 +215,27 @@
       <span class="metric-value">{activeServiceCount}</span>
       <span class="metric-unit">services</span>
     </div>
-    <div class="metric-helper">reachable now</div>
-    <div class="service-legend" aria-label="Active service breakdown">
+    <div
+      class="service-bar"
+      role="img"
+      aria-label={`Active service breakdown: ${infraLegend.map((item) => `${item.count} ${item.label}`).join(", ") || "none"}`}
+    >
       {#each infraLegend as item (item.kind)}
-        <div class="legend-item">
-          <span class="legend-dot" style:background={item.color}></span>
-          <span class="legend-count">{item.count}</span>
-          <span>{item.label}</span>
-        </div>
+        <span
+          class="service-bar-segment"
+          style:background={item.color}
+          style:flex-grow={item.count}
+          title={`${item.count} ${item.label}`}
+          aria-hidden="true"
+        ></span>
       {/each}
+    </div>
+    <div class="service-footer">
+      <span class="service-status">reachable now</span>
+      <a class="services-link" href="#services" onclick={openServices}>
+        View services
+        <ArrowUpRightIcon size={10} aria-hidden="true" />
+      </a>
     </div>
   </div>
 </section>
@@ -298,37 +319,57 @@
     margin-top: 9px;
   }
 
-  .service-legend {
+  .service-bar {
     display: flex;
-    min-height: 18px;
-    flex-wrap: wrap;
-    align-content: flex-start;
-    gap: 4px 10px;
-    margin-top: 9px;
+    height: 6px;
+    gap: 2px;
+    margin-top: 11px;
+    overflow: hidden;
+    border-radius: 3px;
+    background: var(--bg-element-hover);
   }
 
-  .legend-item {
-    display: inline-flex;
-    min-width: 0;
+  .service-bar-segment {
+    min-width: 4px;
+    height: 100%;
+    flex: 0 1 0;
+  }
+
+  .service-footer {
+    display: flex;
     align-items: center;
-    gap: 4px;
+    justify-content: space-between;
+    min-width: 0;
+    gap: 8px;
+    margin-top: 6px;
+  }
+
+  .service-status,
+  .services-link {
+    overflow: hidden;
     color: var(--text-tertiary);
     font-size: 10px;
     line-height: 1.2;
+    text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  .legend-dot {
-    width: 7px;
-    height: 7px;
+  .services-link {
+    display: inline-flex;
+    align-items: center;
     flex: 0 0 auto;
-    border-radius: 2px;
+    gap: 3px;
+    font-family: var(--font-ui-mono);
+    color: var(--accent-green);
+    text-decoration: none;
   }
 
-  .legend-count {
-    color: var(--text-primary);
+  .services-link:hover { color: var(--text-primary); }
+  .services-link:focus-visible { outline: 1px solid var(--border-focus); outline-offset: 3px; border-radius: 2px; }
+  .services-link :global(svg) { flex-shrink: 0; }
+
+  .service-status {
     font-family: var(--font-ui-mono);
-    font-variant-numeric: tabular-nums;
   }
 
   @media (max-width: 900px) {

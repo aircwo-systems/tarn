@@ -356,7 +356,7 @@
         {/if}
 
         {#if !canvasExpanded}
-          <OverviewPulse {recentTraces} {activeServiceCount} {infraLegend} />
+          <OverviewPulse {recentTraces} {activeServiceCount} {infraLegend} onNavigate={setTab} />
         {/if}
 
         <!-- Hero grid: topology + feed -->
