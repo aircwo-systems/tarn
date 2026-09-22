@@ -51,6 +51,7 @@
     { id: "dark",   label: "Dark",   icon: MoonIcon },
   ];
   const POLL_PRESETS = [2, 5, 10, 30];
+  const SHOW_PERSISTENCE_SETTING = false;
   const RETENTION_PRESETS = [
     { v: 30, label: "30m" }, { v: 60, label: "1h" }, { v: 360, label: "6h" }, { v: 1440, label: "24h" },
   ];
@@ -365,15 +366,18 @@
           <h2>Workspace</h2>
           <p>Session persistence and local sources used by Chaos Probe.</p>
         </header>
-        <div class="setting">
-          <div class="setting-label">
-            <span>Persistence</span>
-            <small>Keep configuration across Tarn sessions</small>
+        {#if SHOW_PERSISTENCE_SETTING}
+          <!-- Temporarily hidden until the frontend toggle is wired to backend persistence. -->
+          <div class="setting">
+            <div class="setting-label">
+              <span>Persistence</span>
+              <small>Keep configuration across Tarn sessions</small>
+            </div>
+            <button type="button" role="switch" aria-checked={persistence} aria-label="Persistence" class="switch" class:on={persistence} onclick={() => (persistence = !persistence)}>
+              <span class="knob"></span>
+            </button>
           </div>
-          <button type="button" role="switch" aria-checked={persistence} aria-label="Persistence" class="switch" class:on={persistence} onclick={() => (persistence = !persistence)}>
-            <span class="knob"></span>
-          </button>
-        </div>
+        {/if}
         <div class="setting stacked">
           <div class="setting-label">
             <span>Schema source</span>
