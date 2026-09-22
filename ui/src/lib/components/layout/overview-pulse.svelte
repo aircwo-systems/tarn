@@ -1,5 +1,4 @@
 <script lang="ts">
-  import { ArrowRightIcon } from "phosphor-svelte";
   import SparkBar from "$lib/components/common/spark-bar.svelte";
   import type { SparkBar as SparkBarData } from "$lib/components/common/spark-bar.svelte";
   import type { RequestTrace } from "$lib/types";
@@ -209,7 +208,13 @@
     </div>
   {/each}
 
-  <div class="metric services-metric" data-tone="green">
+  <a
+    class="metric services-metric"
+    data-tone="green"
+    href="#services"
+    onclick={openServices}
+    aria-label="View active services"
+  >
     <div class="metric-label">Active services</div>
     <div class="metric-value-row">
       <span class="metric-value">{activeServiceCount}</span>
@@ -230,13 +235,7 @@
         ></span>
       {/each}
     </div>
-    <div class="service-footer">
-      <a class="services-link" href="#services" onclick={openServices}>
-        View services
-        <ArrowRightIcon size={10} weight="bold" aria-hidden="true" />
-      </a>
-    </div>
-  </div>
+  </a>
 </section>
 
 <style>
@@ -258,6 +257,19 @@
   .metric:first-child { padding-left: 0; }
   .metric:last-child { padding-right: 0; border-right: 0; }
   .metric:hover { background: var(--bg-element-hover); }
+
+  .services-metric {
+    display: block;
+    cursor: pointer;
+    text-decoration: none;
+  }
+
+  .services-metric:focus-visible {
+    position: relative;
+    z-index: 1;
+    outline: 1px solid var(--border-focus);
+    outline-offset: -1px;
+  }
 
   .metric-label {
     overflow: hidden;
@@ -333,37 +345,6 @@
     height: 100%;
     flex: 0 1 0;
   }
-
-  .service-footer {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    min-width: 0;
-    gap: 8px;
-    margin-top: 6px;
-  }
-
-  .services-link {
-    overflow: hidden;
-    font-size: 10px;
-    line-height: 1.2;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .services-link {
-    display: inline-flex;
-    align-items: center;
-    flex: 0 0 auto;
-    gap: 3px;
-    font-family: var(--font-ui-mono);
-    color: var(--accent-green);
-    text-decoration: none;
-  }
-
-  .services-link:hover { color: var(--text-primary); }
-  .services-link:focus-visible { outline: 1px solid var(--border-focus); outline-offset: 3px; border-radius: 2px; }
-  .services-link :global(svg) { flex-shrink: 0; }
 
   @media (max-width: 900px) {
     .overview-pulse { grid-template-columns: repeat(2, minmax(0, 1fr)); }
