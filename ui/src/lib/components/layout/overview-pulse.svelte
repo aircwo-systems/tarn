@@ -29,6 +29,7 @@
   );
 
   const errorCount = $derived(recentTraces.filter((t) => t.status >= 500).length);
+  const hasTraceData = $derived(recentTraces.length > 0);
 
   const throughput = $derived(
     (() => {
@@ -125,78 +126,231 @@
       }),
     ),
   );
+
+  const metricCards = $derived([
+    {
+      id: "throughput",
+      label: "Throughput",
+      value: hasTraceData ? throughput : "—",
+      unit: hasTraceData ? "req/min" : "",
+      helper: "last 60 seconds",
+      bars: sparkThru,
+      color: "var(--accent-green)",
+      tone: "green",
+      scaleWithHeight: true,
+    },
+    {
+      id: "avg-latency",
+      label: "Avg latency",
+      value: hasTraceData ? avgLatency : "—",
+      unit: hasTraceData ? "ms" : "",
+      helper: "all recent traces",
+      bars: sparkLatency,
+      color: "var(--text-secondary)",
+      tone: "neutral",
+      scaleWithHeight: false,
+    },
+    {
+      id: "p95-latency",
+      label: "p95 latency",
+      value: hasTraceData ? p95Latency : "—",
+      unit: hasTraceData ? "ms" : "",
+      helper: "all recent traces",
+      bars: sparkP95,
+      color: "var(--text-secondary)",
+      tone: "neutral",
+      scaleWithHeight: false,
+    },
+    {
+      id: "errors",
+      label: "Errors",
+      value: hasTraceData ? errorCount : "—",
+      unit: hasTraceData ? "errors" : "",
+      helper: !hasTraceData
+        ? "waiting for traces"
+        : errorCount > 0
+          ? "last 5 minutes · attention needed"
+          : "last 5 minutes · no failures",
+      bars: sparkErrors,
+      color: "var(--accent-red)",
+      tone: errorCount > 0 ? "red" : "neutral",
+      scaleWithHeight: false,
+    },
+  ]);
 </script>
 
-<div class="flex items-stretch border-b border-border py-4">
-  <!-- Throughput -->
-  <div class="flex flex-1 flex-col gap-0.5 border-r border-border px-5 first:pl-0 last:border-r-0 last:pr-0">
-    <div
-      class="flex items-baseline gap-1 font-light leading-none"
-      style="font-size:20px;letter-spacing:-0.03em;color:var(--color-accent)"
-    >
-      {throughput || "—"}<span class="text-[11px] font-medium tracking-normal text-muted-foreground">req/min</span>
-    </div>
-    <div class="text-[11px] tracking-[0.02em] text-muted-foreground">Throughput</div>
-    <div class="mt-1">
-      <SparkBar bars={sparkThru} color="var(--color-accent)" currentOpacity={0.22} scaleWithHeight />
-    </div>
-  </div>
-
-  <!-- Avg latency -->
-  <div class="flex flex-1 flex-col gap-0.5 border-r border-border px-5 first:pl-0 last:border-r-0 last:pr-0">
-    <div class="flex items-baseline gap-1 font-light leading-none" style="font-size:20px;letter-spacing:-0.03em">
-      {avgLatency}<span class="text-[11px] font-medium tracking-normal text-muted-foreground">ms</span>
-    </div>
-    <div class="text-[11px] tracking-[0.02em] text-muted-foreground">Avg Latency</div>
-    <div class="mt-1">
-      <SparkBar bars={sparkLatency} color="var(--color-text-muted)" currentOpacity={0.15} filledOpacity={0.35} />
-    </div>
-  </div>
-
-  <!-- p95 latency -->
-  <div class="flex flex-1 flex-col gap-0.5 border-r border-border px-5 first:pl-0 last:border-r-0 last:pr-0">
-    <div class="flex items-baseline gap-1 font-light leading-none" style="font-size:20px;letter-spacing:-0.03em">
-      {p95Latency}<span class="text-[11px] font-medium tracking-normal text-muted-foreground">ms</span>
-    </div>
-    <div class="text-[11px] tracking-[0.02em] text-muted-foreground">p95 Latency</div>
-    <div class="mt-1">
-      <SparkBar bars={sparkP95} color="var(--color-text-muted)" currentOpacity={0.15} filledOpacity={0.3} />
-    </div>
-  </div>
-
-  <!-- Errors -->
-  <div class="flex flex-1 flex-col gap-0.5 border-r border-border px-5 first:pl-0 last:border-r-0 last:pr-0">
-    <div
-      class="flex items-baseline gap-1 font-light leading-none"
-      style="font-size:20px;letter-spacing:-0.03em;color:{errorCount > 0 ? 'var(--color-red)' : 'inherit'}"
-    >
-      {errorCount}<span class="text-[11px] font-medium tracking-normal text-muted-foreground">errors</span>
-    </div>
-    <div class="text-[11px] tracking-[0.02em] text-muted-foreground">Last 5 min</div>
-    <div class="mt-1">
-      <SparkBar bars={sparkErrors} color="var(--color-red)" currentOpacity={0.2} filledOpacity={0.55} />
-    </div>
-  </div>
-
-  <!-- Active services -->
-  <div class="flex flex-1 flex-col gap-0.5 px-5 first:pl-0 last:border-r-0 last:pr-0">
-    <div
-      class="flex items-baseline gap-1 font-light leading-none"
-      style="font-size:20px;letter-spacing:-0.03em;color:var(--color-accent)"
-    >
-      {activeServiceCount}<span class="text-[11px] font-medium tracking-normal text-muted-foreground">services</span>
-    </div>
-    <div class="text-[11px] tracking-[0.02em] text-muted-foreground">Active</div>
-    {#if infraLegend.length > 0}
-      <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1">
-        {#each infraLegend as item (item.kind)}
-          <div class="flex items-center gap-1 text-[10px] text-muted-foreground/60">
-            <span class="inline-block h-2.5 w-2.5 rounded-[2px]" style="background:{item.color};"></span>
-            <span class="tabular-nums text-foreground/90">{item.count}</span>
-            <span>{item.label}</span>
-          </div>
-        {/each}
+<section class="overview-pulse" aria-label="Overview metrics">
+  {#each metricCards as metric (metric.id)}
+    <div class="metric" data-tone={metric.tone}>
+      <div class="metric-label">{metric.label}</div>
+      <div class="metric-value-row">
+        <span class="metric-value">{metric.value}</span>
+        {#if metric.unit}<span class="metric-unit">{metric.unit}</span>{/if}
       </div>
-    {/if}
+      <div class="metric-helper">{metric.helper}</div>
+      <div class="metric-chart" role="img" aria-label={`${metric.label} trend`}>
+        <SparkBar
+          bars={metric.bars}
+          color={metric.color}
+          currentOpacity={metric.tone === "red" ? 0.2 : 0.18}
+          filledOpacity={metric.tone === "red" ? 0.55 : 0.34}
+          scaleWithHeight={metric.scaleWithHeight}
+        />
+      </div>
+    </div>
+  {/each}
+
+  <div class="metric services-metric" data-tone="green">
+    <div class="metric-label">Active services</div>
+    <div class="metric-value-row">
+      <span class="metric-value">{activeServiceCount}</span>
+      <span class="metric-unit">services</span>
+    </div>
+    <div class="metric-helper">reachable now</div>
+    <div class="service-legend" aria-label="Active service breakdown">
+      {#each infraLegend as item (item.kind)}
+        <div class="legend-item">
+          <span class="legend-dot" style:background={item.color}></span>
+          <span class="legend-count">{item.count}</span>
+          <span>{item.label}</span>
+        </div>
+      {/each}
+    </div>
   </div>
-</div>
+</section>
+
+<style>
+  .overview-pulse {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    min-width: 0;
+    border-top: 1px solid var(--border-subtle);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .metric {
+    min-width: 0;
+    padding: 14px 16px 12px;
+    border-right: 1px solid var(--border-subtle);
+    transition: background 120ms ease;
+  }
+
+  .metric:first-child { padding-left: 0; }
+  .metric:last-child { padding-right: 0; border-right: 0; }
+  .metric:hover { background: var(--bg-element-hover); }
+
+  .metric-label {
+    overflow: hidden;
+    color: var(--text-tertiary);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+
+  .metric-value-row {
+    display: flex;
+    align-items: baseline;
+    min-width: 0;
+    gap: 5px;
+    margin-top: 5px;
+  }
+
+  .metric-value {
+    overflow: hidden;
+    color: var(--text-primary);
+    font-family: var(--font-ui-mono);
+    font-size: 20px;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .metric[data-tone="green"] .metric-value { color: var(--accent-green); }
+  .metric[data-tone="red"] .metric-value { color: var(--accent-red); }
+
+  .metric-unit {
+    overflow: hidden;
+    color: var(--text-secondary);
+    font-family: var(--font-ui-mono);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .metric-helper {
+    overflow: hidden;
+    margin-top: 4px;
+    color: var(--text-tertiary);
+    font-size: 10.5px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .metric-chart {
+    min-height: 18px;
+    margin-top: 9px;
+  }
+
+  .service-legend {
+    display: flex;
+    min-height: 18px;
+    flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 4px 10px;
+    margin-top: 9px;
+  }
+
+  .legend-item {
+    display: inline-flex;
+    min-width: 0;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-tertiary);
+    font-size: 10px;
+    line-height: 1.2;
+    white-space: nowrap;
+  }
+
+  .legend-dot {
+    width: 7px;
+    height: 7px;
+    flex: 0 0 auto;
+    border-radius: 2px;
+  }
+
+  .legend-count {
+    color: var(--text-primary);
+    font-family: var(--font-ui-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (max-width: 900px) {
+    .overview-pulse { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .metric { border-top: 1px solid var(--border-subtle); border-right: 0; }
+    .metric:nth-child(-n + 2) { border-top: 0; }
+    .metric:nth-child(odd) { border-right: 1px solid var(--border-subtle); }
+    .metric:nth-child(5) { grid-column: 1 / -1; border-right: 0; }
+    .metric:nth-child(2), .metric:nth-child(4), .metric:nth-child(5) { padding-right: 0; }
+    .metric:nth-child(3), .metric:nth-child(5) { padding-left: 0; }
+  }
+
+  @media (max-width: 540px) {
+    .overview-pulse { grid-template-columns: minmax(0, 1fr); }
+    .metric,
+    .metric:first-child,
+    .metric:last-child { padding-right: 0; padding-left: 0; border-right: 0; }
+    .metric:first-child { border-top: 0; }
+    .metric:nth-child(5) { grid-column: auto; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .metric { transition: none; }
+  }
+</style>
