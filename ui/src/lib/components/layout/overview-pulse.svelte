@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { ArrowUpRightIcon } from "phosphor-svelte";
+  import { ArrowRightIcon } from "phosphor-svelte";
   import SparkBar from "$lib/components/common/spark-bar.svelte";
   import type { SparkBar as SparkBarData } from "$lib/components/common/spark-bar.svelte";
   import type { RequestTrace } from "$lib/types";
@@ -231,10 +231,9 @@
       {/each}
     </div>
     <div class="service-footer">
-      <span class="service-status">reachable now</span>
       <a class="services-link" href="#services" onclick={openServices}>
         View services
-        <ArrowUpRightIcon size={10} aria-hidden="true" />
+        <ArrowRightIcon size={10} weight="bold" aria-hidden="true" />
       </a>
     </div>
   </div>
@@ -338,16 +337,14 @@
   .service-footer {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     min-width: 0;
     gap: 8px;
     margin-top: 6px;
   }
 
-  .service-status,
   .services-link {
     overflow: hidden;
-    color: var(--text-tertiary);
     font-size: 10px;
     line-height: 1.2;
     text-overflow: ellipsis;
@@ -367,10 +364,6 @@
   .services-link:hover { color: var(--text-primary); }
   .services-link:focus-visible { outline: 1px solid var(--border-focus); outline-offset: 3px; border-radius: 2px; }
   .services-link :global(svg) { flex-shrink: 0; }
-
-  .service-status {
-    font-family: var(--font-ui-mono);
-  }
 
   @media (max-width: 900px) {
     .overview-pulse { grid-template-columns: repeat(2, minmax(0, 1fr)); }
