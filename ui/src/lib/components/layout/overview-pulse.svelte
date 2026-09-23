@@ -5,11 +5,13 @@
 
   let {
     recentTraces,
+    traceBuckets,
     activeServiceCount,
     infraLegend,
     onNavigate,
   }: {
     recentTraces: RequestTrace[];
+    traceBuckets: { traces: RequestTrace[]; startMs: number; endMs: number }[];
     activeServiceCount: number;
     infraLegend: { kind: string; label: string; count: number; color: string }[];
     onNavigate?: (tab: string) => void;
@@ -43,10 +45,6 @@
     })(),
   );
 
-  // ── Sparklines: 12 × 15-min buckets = 3 h rolling window ─────
-  const BUCKET_N = 12;
-  const BUCKET_MS = 15 * 60 * 1000;
-
   function fmtBucketLabel(startMs: number, endMs: number): string {
     const fmt = (ms: number) => {
       const d = new Date(ms);
@@ -55,29 +53,9 @@
     return `${fmt(startMs)}–${fmt(endMs)}`;
   }
 
-  const traceBuckets = $derived(
-    (() => {
-      const now = Date.now();
-      const windowStart = now - BUCKET_N * BUCKET_MS;
-      const buckets: { traces: RequestTrace[]; startMs: number; endMs: number }[] =
-        Array.from({ length: BUCKET_N }, (_, i) => ({
-          traces: [],
-          startMs: windowStart + i * BUCKET_MS,
-          endMs: windowStart + (i + 1) * BUCKET_MS,
-        }));
-      for (const t of recentTraces) {
-        const ms = new Date(t.startedAt).getTime();
-        if (isNaN(ms) || ms < windowStart) continue;
-        const idx = Math.min(Math.floor((ms - windowStart) / BUCKET_MS), BUCKET_N - 1);
-        buckets[idx].traces.push(t);
-      }
-      return buckets;
-    })(),
-  );
-
   function normBars(values: number[], labels: string[]): SparkBarData[] {
     const max = Math.max(...values, 1);
-    return values.map((v, i) => ({ h: Math.round((v / max) * 100), current: i === BUCKET_N - 1, label: labels[i] }));
+    return values.map((v, i) => ({ h: Math.round((v / max) * 100), current: i === values.length - 1, label: labels[i] }));
   }
 
   const sparkThru = $derived(
@@ -167,12 +145,12 @@
       id: "errors",
       label: "Errors",
       value: hasTraceData ? errorCount : "—",
-      unit: hasTraceData ? "errors" : "",
+      unit: hasTraceData ? `error${errorCount === 1 ? "" : "s"}` : "",
       helper: !hasTraceData
         ? "waiting for traces"
         : errorCount > 0
-          ? "last 5 minutes · attention needed"
-          : "last 5 minutes · no failures",
+          ? "recent traces · attention needed"
+          : "recent traces · no failures",
       bars: sparkErrors,
       color: "var(--accent-red)",
       tone: errorCount > 0 ? "red" : "neutral",
@@ -360,7 +338,8 @@
     .overview-pulse { grid-template-columns: minmax(0, 1fr); }
     .metric,
     .metric:first-child,
-    .metric:last-child { padding-right: 0; padding-left: 0; border-right: 0; }
+    .metric:last-child { padding-right: 0; padding-left: 0; }
+    .metric:nth-child(odd) { border-right: 0; }
     .metric:first-child { border-top: 0; }
     .metric:nth-child(5) { grid-column: auto; }
   }

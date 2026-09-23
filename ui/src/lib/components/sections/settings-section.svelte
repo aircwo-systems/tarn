@@ -12,7 +12,6 @@
     setInfraEnabledKinds,
     setUserServices,
     setLogRetentionMinutes,
-    setPersistenceEnabled,
     setPollingIntervalSeconds,
     setSchemaSourceDir,
     setThemeMode,
@@ -51,7 +50,6 @@
     { id: "dark",   label: "Dark",   icon: MoonIcon },
   ];
   const POLL_PRESETS = [2, 5, 10, 30];
-  const SHOW_PERSISTENCE_SETTING = false;
   const RETENTION_PRESETS = [
     { v: 30, label: "30m" }, { v: 60, label: "1h" }, { v: 360, label: "6h" }, { v: 1440, label: "24h" },
   ];
@@ -67,7 +65,6 @@
   // ── Drafts: edits stay local until saved ─────────────────────────
   let pollingInterval = $state(uiSettings.pollingIntervalSeconds);
   let themeMode       = $state<ThemeMode>(uiSettings.themeMode);
-  let persistence     = $state(uiSettings.persistenceEnabled);
   let schemaSourceDir = $state(uiSettings.schemaSourceDir);
   let logRetention    = $state(uiSettings.logRetentionMinutes);
   let enabledKinds    = $state<InfraProbeKind[]>([...infraSettings.enabledKinds]);
@@ -76,7 +73,6 @@
   function reset() {
     pollingInterval = uiSettings.pollingIntervalSeconds;
     themeMode       = uiSettings.themeMode;
-    persistence     = uiSettings.persistenceEnabled;
     schemaSourceDir = uiSettings.schemaSourceDir;
     logRetention    = uiSettings.logRetentionMinutes;
     enabledKinds    = [...infraSettings.enabledKinds];
@@ -85,11 +81,11 @@
   }
 
   const draftKey = () => JSON.stringify([
-    pollingInterval, themeMode, persistence, sanitizeSchemaSourceDir(schemaSourceDir), logRetention,
+    pollingInterval, themeMode, sanitizeSchemaSourceDir(schemaSourceDir), logRetention,
     [...enabledKinds].sort(), services,
   ]);
   const storedKey = () => JSON.stringify([
-    uiSettings.pollingIntervalSeconds, uiSettings.themeMode, uiSettings.persistenceEnabled,
+    uiSettings.pollingIntervalSeconds, uiSettings.themeMode,
     uiSettings.schemaSourceDir, uiSettings.logRetentionMinutes,
     [...infraSettings.enabledKinds].sort(), infraSettings.userServices,
   ]);
@@ -128,7 +124,6 @@
     }
     setPollingIntervalSeconds(pollingInterval);
     setThemeMode(themeMode);
-    setPersistenceEnabled(persistence);
     setSchemaSourceDir(schemaSourceDir);
     setLogRetentionMinutes(logRetention);
     setInfraEnabledKinds(enabledKinds);
@@ -364,20 +359,8 @@
       <section id="settings-workspace" class="panel">
         <header>
           <h2>Workspace</h2>
-          <p>Session persistence and local sources used by Chaos Probe.</p>
+          <p>Local sources used by Chaos Probe.</p>
         </header>
-        {#if SHOW_PERSISTENCE_SETTING}
-          <!-- Temporarily hidden until the frontend toggle is wired to backend persistence. -->
-          <div class="setting">
-            <div class="setting-label">
-              <span>Persistence</span>
-              <small>Keep configuration across Tarn sessions</small>
-            </div>
-            <button type="button" role="switch" aria-checked={persistence} aria-label="Persistence" class="switch" class:on={persistence} onclick={() => (persistence = !persistence)}>
-              <span class="knob"></span>
-            </button>
-          </div>
-        {/if}
         <div class="setting stacked">
           <div class="setting-label">
             <span>Schema source</span>
@@ -634,19 +617,6 @@
   .segmented button:hover { color: var(--text-secondary); }
   .segmented button.on { color: var(--text-primary); }
 
-  /* Switch */
-  .switch {
-    position: relative; width: 34px; height: 20px; border-radius: 8px; flex-shrink: 0;
-    border: 1px solid var(--border-default); background: var(--bg-app);
-    transition: background 180ms ease, border-color 180ms ease;
-  }
-  .switch .knob {
-    position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 4px;
-    background: var(--text-tertiary); transition: transform 240ms var(--ease-snappy), background 180ms ease;
-  }
-  .switch.on { background: color-mix(in srgb, var(--accent-green) 22%, transparent); border-color: color-mix(in srgb, var(--accent-green) 55%, transparent); }
-  .switch.on .knob { transform: translateX(14px); background: var(--accent-green); }
-
   /* KV */
   .kv { display: grid; grid-template-columns: 7rem 1fr; row-gap: 6px; font-size: 12px; }
   .kv dt { color: var(--text-tertiary); }
@@ -666,6 +636,6 @@
 
   @media (prefers-reduced-motion: reduce) {
     .panel, .savebar-dot { animation: none; }
-    .index-pill, .segmented-pill, .switch .knob { transition: none; }
+    .index-pill, .segmented-pill { transition: none; }
   }
 </style>

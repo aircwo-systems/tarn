@@ -27,6 +27,7 @@
   import ActivityFeed from "$lib/components/layout/activity-feed.svelte";
   import SectionHeader from "$lib/components/sections/section-header.svelte";
   import type { SparkBar as SparkBarData } from "$lib/components/common/spark-bar.svelte";
+  import type { RequestTrace } from "$lib/types";
   import TopologyCanvas from "$lib/components/topology/topology-canvas.svelte";
   import SettingsSection from "$lib/components/sections/settings-section.svelte";
   import APIGatewaysSection from "$lib/components/sections/api-gateways-section.svelte";
@@ -225,8 +226,8 @@
     (() => {
       const now = Date.now();
       const windowStart = now - BUCKET_N * BUCKET_MS;
-      const buckets = Array.from({ length: BUCKET_N }, (_, i) => ({
-        traces: [] as typeof recentTraces,
+      const buckets: { traces: RequestTrace[]; startMs: number; endMs: number }[] = Array.from({ length: BUCKET_N }, (_, i) => ({
+        traces: [],
         startMs: windowStart + i * BUCKET_MS,
         endMs: windowStart + (i + 1) * BUCKET_MS,
       }));
@@ -356,7 +357,7 @@
         {/if}
 
         {#if !canvasExpanded}
-          <OverviewPulse {recentTraces} {activeServiceCount} {infraLegend} onNavigate={setTab} />
+          <OverviewPulse {recentTraces} {traceBuckets} {activeServiceCount} {infraLegend} onNavigate={setTab} />
         {/if}
 
         <!-- Hero grid: topology + feed -->
