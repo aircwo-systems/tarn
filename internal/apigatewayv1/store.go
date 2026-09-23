@@ -122,6 +122,9 @@ func (s *Store) Init() error {
 }
 
 func newRecord(api *types.RestAPI) *restAPIRecord {
+	if api.APIStatus == "" {
+		api.APIStatus = "AVAILABLE"
+	}
 	return &restAPIRecord{
 		api:                  api,
 		resources:            make(map[string]*types.RestResource),

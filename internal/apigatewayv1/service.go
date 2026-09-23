@@ -115,6 +115,7 @@ func (s *Service) CreateAPI(name, description string, tags map[string]string) (*
 	api := &types.RestAPI{
 		ID:             apiID,
 		Name:           name,
+		APIStatus:      "AVAILABLE",
 		Description:    description,
 		RootResourceID: rootID,
 		APIArn:         fmt.Sprintf("arn:aws:apigateway:%s::/restapis/%s", s.cfg.Region, apiID),

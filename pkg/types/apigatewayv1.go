@@ -44,6 +44,7 @@ func (u *UnixTime) UnmarshalJSON(data []byte) error {
 type RestAPI struct {
 	ID             string            `json:"id"`
 	Name           string            `json:"name"`
+	APIStatus      string            `json:"apiStatus"`
 	Description    string            `json:"description,omitempty"`
 	RootResourceID string            `json:"rootResourceId"`
 	APIArn         string            `json:"apiArn,omitempty"`
