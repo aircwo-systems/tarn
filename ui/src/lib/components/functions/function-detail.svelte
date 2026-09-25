@@ -7,6 +7,7 @@
   import FunctionInvocations from "./function-invocations.svelte";
   import FunctionLinksList, { type LinkItem } from "./function-links-list.svelte";
   import FunctionLogs from "./function-logs.svelte";
+  import FunctionEnvironment from "./function-environment.svelte";
   import {
     configuredCallers,
     dependencies,
@@ -204,6 +205,9 @@
       </div>
     {/if}
   </RcPanel>
+  {#key fn.lastModified}
+    <FunctionEnvironment name={fn.name} keys={fn.environmentKeys ?? []} />
+  {/key}
 </div>
 
 <style>

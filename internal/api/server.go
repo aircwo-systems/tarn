@@ -190,6 +190,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /_tarn/admin/overview", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.Overview(w, r)
 	})
+	mux.HandleFunc("GET /_tarn/admin/functions/{name}/environment", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.FunctionEnvironment(w, r)
+	})
 	mux.HandleFunc("GET /_tarn/admin/secrets/{name}/value", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.SecretValue(w, r)
 	})

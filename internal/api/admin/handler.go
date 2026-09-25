@@ -3,6 +3,7 @@ package admin
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -386,6 +387,7 @@ type functionSummary struct {
 	Layers            int               `json:"layers"`
 	Tags              map[string]string `json:"tags,omitempty"`
 	TagCount          int               `json:"tagCount"`
+	EnvironmentKeys   []string          `json:"environmentKeys"`
 }
 
 type infraConnection struct {
@@ -787,6 +789,11 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	resp.Warnings = append(resp.Warnings, gatewayWarnings...)
 
 	for _, fn := range functions {
+		environmentKeys := make([]string, 0, len(fn.Environment))
+		for key := range fn.Environment {
+			environmentKeys = append(environmentKeys, key)
+		}
+		sort.Strings(environmentKeys)
 		metrics := h.lambda.GetFunctionMetrics(fn.FunctionName)
 		var lastInvokedAt *time.Time
 		if !metrics.LastInvokedAt.IsZero() {
@@ -809,6 +816,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 			Layers:            len(fn.Layers),
 			Tags:              cloneStringMap(fn.Tags),
 			TagCount:          len(fn.Tags),
+			EnvironmentKeys:   environmentKeys,
 		})
 	}
 	sort.Slice(resp.Functions, func(i, j int) bool { return resp.Functions[i].Name < resp.Functions[j].Name })
@@ -1330,6 +1338,34 @@ func (h *Handler) bucketPreviewObjects(bucket string, limit int) []s3BucketObjec
 		})
 	}
 	return previews
+}
+
+// FunctionEnvironment returns variable values for one function on demand.
+func (h *Handler) FunctionEnvironment(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "function name is required")
+		return
+	}
+	fn, err := h.lambda.GetFunction(name)
+	if err != nil {
+		if errors.Is(err, lambdasvc.ErrFunctionNotFound) {
+			writeError(w, http.StatusNotFound, "function not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to load function environment")
+		return
+	}
+	variables := cloneStringMap(fn.Environment)
+	if variables == nil {
+		variables = map[string]string{}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"name":      fn.FunctionName,
+		"variables": variables,
+	})
 }
 
 // SecretValue returns a single secret value by secret name.

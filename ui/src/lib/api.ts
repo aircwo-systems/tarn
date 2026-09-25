@@ -9,6 +9,7 @@ import type {
   QueueMessagesResponse,
   QueueMessageSummary,
   SecretValueResult,
+  FunctionEnvironmentResult,
   LogGroupSummary,
   LogEventsResponse,
   LogEvent,
@@ -150,6 +151,25 @@ export async function fetchSecretValue(
     value: payload.value ?? "",
     valueType: payload.valueType ?? "string",
   };
+}
+
+export async function fetchFunctionEnvironment(
+  functionName: string,
+  signal?: AbortSignal,
+): Promise<FunctionEnvironmentResult> {
+  const path = `/_tarn/admin/functions/${encodeURIComponent(functionName)}/environment`;
+  const response = await fetch(endpoint(path), {
+    method: "GET",
+    headers: {
+      Accept: "application/json",
+      ...accountHeaders(),
+    },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(`Failed to load function environment: HTTP ${response.status}`);
+  }
+  return (await response.json()) as FunctionEnvironmentResult;
 }
 
 export async function fetchOpenAPI(apiId: string, signal?: AbortSignal): Promise<unknown> {

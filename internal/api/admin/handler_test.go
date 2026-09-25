@@ -370,6 +370,69 @@ func TestOverviewIncludesResourceTags(t *testing.T) {
 	}
 }
 
+func TestFunctionEnvironmentIsFetchedOnDemand(t *testing.T) {
+	h := newTestHandler(t)
+	_, err := h.lambda.CreateFunction(context.Background(), &types.FunctionConfig{
+		FunctionName: "env-function",
+		Runtime:      types.RuntimeNodeJS20,
+		Handler:      "index.handler",
+		Role:         "arn:aws:iam::000000000000:role/lambda-role",
+		Environment:  map[string]string{"Z_SECRET": "sensitive-value", "A_MODE": "local"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	overview := httptest.NewRecorder()
+	h.Overview(overview, httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil))
+	if overview.Code != http.StatusOK {
+		t.Fatalf("overview status=%d body=%s", overview.Code, overview.Body.String())
+	}
+	if strings.Contains(overview.Body.String(), "sensitive-value") {
+		t.Fatal("overview exposed an environment value")
+	}
+	var summary struct {
+		Functions []struct {
+			EnvironmentKeys []string `json:"environmentKeys"`
+		} `json:"functions"`
+	}
+	if err := json.Unmarshal(overview.Body.Bytes(), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if len(summary.Functions) != 1 || !reflect.DeepEqual(summary.Functions[0].EnvironmentKeys, []string{"A_MODE", "Z_SECRET"}) {
+		t.Fatalf("environment keys = %+v", summary.Functions)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/functions/env-function/environment", nil)
+	req.SetPathValue("name", "env-function")
+	rec := httptest.NewRecorder()
+	h.FunctionEnvironment(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("environment status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("cache control = %q", rec.Header().Get("Cache-Control"))
+	}
+	var detail struct {
+		Name      string            `json:"name"`
+		Variables map[string]string `json:"variables"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &detail); err != nil {
+		t.Fatal(err)
+	}
+	if detail.Name != "env-function" || !reflect.DeepEqual(detail.Variables, map[string]string{"A_MODE": "local", "Z_SECRET": "sensitive-value"}) {
+		t.Fatalf("environment detail = %+v", detail)
+	}
+
+	missing := httptest.NewRequest(http.MethodGet, "/_tarn/admin/functions/missing/environment", nil)
+	missing.SetPathValue("name", "missing")
+	missingRec := httptest.NewRecorder()
+	h.FunctionEnvironment(missingRec, missing)
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("missing function status=%d body=%s", missingRec.Code, missingRec.Body.String())
+	}
+}
+
 func TestOverviewIncludesQueueProcessedCount(t *testing.T) {
 	h := newTestHandler(t)
 

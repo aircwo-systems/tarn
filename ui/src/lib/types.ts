@@ -230,6 +230,12 @@ export interface FunctionSummary {
   layers: number;
   tags?: Record<string, string>;
   tagCount: number;
+  environmentKeys?: string[];
+}
+
+export interface FunctionEnvironmentResult {
+  name: string;
+  variables: Record<string, string>;
 }
 
 export interface QueueSummary {
