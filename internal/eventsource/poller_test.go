@@ -23,12 +23,14 @@ type mockSQS struct {
 	processed    map[string]int64
 	receiveErr   error
 	receiveCalls int
+	visTimeouts  []int
 }
 
 func (m *mockSQS) ReceiveMessage(queueName string, maxCount, visTimeout, waitTimeSec int) ([]*types.SQSMessage, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.receiveCalls++
+	m.visTimeouts = append(m.visTimeouts, visTimeout)
 	if m.receiveErr != nil {
 		return nil, m.receiveErr
 	}
@@ -40,6 +42,19 @@ func (m *mockSQS) ReceiveMessage(queueName string, maxCount, visTimeout, waitTim
 	result := m.messages[:count]
 	m.messages = m.messages[count:]
 	return result, nil
+}
+
+func TestPollerUsesQueueVisibilityTimeout(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	store := NewStore(cfg)
+	mapping := &types.EventSourceMapping{UUID: "visibility", QueueName: "queue", FunctionName: "function", BatchSize: 1}
+	sqsMock := &mockSQS{}
+	p := newPoller(mapping, sqsMock, nil, &mockLambda{}, store, nil, nil)
+	p.poll()
+	if len(sqsMock.visTimeouts) != 1 || sqsMock.visTimeouts[0] != -1 {
+		t.Fatalf("receive visibility timeouts = %v, want queue default (-1)", sqsMock.visTimeouts)
+	}
 }
 
 func (m *mockSQS) DeleteMessage(queueName, receiptHandle string) error {

@@ -164,7 +164,7 @@ func (p *poller) poll() {
 	}
 	pollStart := time.Now()
 
-	msgs, err := p.sqs.ReceiveMessage(p.mapping.QueueName, p.mapping.BatchSize, 30, 1)
+	msgs, err := p.sqs.ReceiveMessage(p.mapping.QueueName, p.mapping.BatchSize, -1, 1)
 	if err != nil {
 		if isNotFoundError(err) {
 			p.disableWithError(err)

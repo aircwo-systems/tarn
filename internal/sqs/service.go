@@ -224,7 +224,7 @@ func (s *Service) MoveToDLQIfExceeded(srcQueue string, msg *types.SQSMessage) (b
 		DataType:    "Number",
 		StringValue: strconv.Itoa(msg.ApproximateReceiveCount),
 	}
-	if _, err := s.SendMessage(dlqName, msg.Body, 0, dlqAttrs, "", ""); err != nil {
+	if _, err := s.SendMessage(dlqName, msg.Body, 0, dlqAttrs, msg.MessageGroupId, msg.MessageDeduplicationId); err != nil {
 		return false, "", fmt.Errorf("send to DLQ %q: %w", dlqName, err)
 	}
 	if err := s.DeleteMessage(srcQueue, msg.ReceiptHandle); err != nil {

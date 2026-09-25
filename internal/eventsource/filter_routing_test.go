@@ -18,6 +18,69 @@ type recordingLambda struct {
 	payloads  [][]byte
 }
 
+type partialFailureLambda struct {
+	messageID string
+	called    int
+}
+
+func (l *partialFailureLambda) Invoke(_ context.Context, _ *types.InvokeInput) (*types.InvokeOutput, error) {
+	l.called++
+	payload, _ := json.Marshal(map[string]any{
+		"batchItemFailures": []map[string]string{{"itemIdentifier": l.messageID}},
+	})
+	return &types.InvokeOutput{StatusCode: 200, Payload: payload}, nil
+}
+
+func TestFailedFIFOMessageReachesFIFODeadLetterQueue(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	sqs := sqssvc.NewService(cfg)
+	if err := sqs.Init(); err != nil {
+		t.Fatal(err)
+	}
+	dlq, err := sqs.CreateQueue("failed-dlq.fifo", map[string]string{"FifoQueue": "true"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = sqs.CreateQueue("events.fifo", map[string]string{
+		"FifoQueue":         "true",
+		"VisibilityTimeout": "1",
+		"RedrivePolicy":     `{"deadLetterTargetArn":"` + dlq.QueueArn + `","maxReceiveCount":3}`,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg, err := sqs.SendMessage("events.fifo", `{"fails":true}`, 0, nil, "group-1", "dedup-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lambda := &partialFailureLambda{messageID: msg.MessageId}
+	store := NewStore(cfg)
+	p := newPoller(&types.EventSourceMapping{
+		UUID:           "failed-fifo",
+		QueueName:      "events.fifo",
+		FunctionName:   "handler",
+		EventSourceArn: "arn:aws:sqs:us-east-1:000000000000:events.fifo",
+		BatchSize:      1,
+	}, sqs, nil, lambda, store, nil, nil)
+	for attempt := range 3 {
+		if attempt > 0 {
+			time.Sleep(1100 * time.Millisecond)
+		}
+		p.poll()
+	}
+	if lambda.called != 3 {
+		t.Fatalf("lambda invocations = %d, want 3", lambda.called)
+	}
+	dlqMessages, err := sqs.PeekMessages("failed-dlq.fifo", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(dlqMessages) != 1 || dlqMessages[0].MessageGroupId != "group-1" {
+		t.Fatalf("DLQ messages = %+v, want one message in group-1", dlqMessages)
+	}
+}
+
 func (r *recordingLambda) Invoke(_ context.Context, input *types.InvokeInput) (*types.InvokeOutput, error) {
 	r.mu.Lock()
 	r.functions = append(r.functions, input.FunctionName)
