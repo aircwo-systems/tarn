@@ -19,7 +19,7 @@
 </script>
 
 <script lang="ts">
-  import { ArrowUpIcon, ArrowDownIcon } from "phosphor-svelte";
+  import { ArrowUpIcon, ArrowDownIcon, PushPinIcon } from "phosphor-svelte";
   import { buildFlexiblePatternRegex } from "$lib/json-format";
   import { onDestroy } from "svelte";
 
@@ -35,6 +35,8 @@
     showGroup = false,
     showStream = true,
     highlightPattern = "",
+    pinnedKeys = new Set<string>(),
+    onTogglePin,
     onSelect,
   }: {
     events: LogEvent[];
@@ -45,6 +47,8 @@
     showGroup?: boolean;
     showStream?: boolean;
     highlightPattern?: string;
+    pinnedKeys?: Set<string>;
+    onTogglePin?: (event: LogEvent, key: string) => void;
     onSelect: (event: LogEvent, key: string) => void;
   } = $props();
 
@@ -318,6 +322,7 @@
           id="log-row-{i}"
           class="log-row"
           class:selected={i === selectedIdx}
+          class:pinned={pinnedKeys.has(key)}
           class:highlight={key === highlightKey}
           class:fresh={age < FRESH_MS}
           data-level={ev.level}
@@ -334,6 +339,7 @@
           onkeydown={() => {}}
         >
           <span class="log-tick" aria-hidden="true"></span>
+          {#if pinnedKeys.has(key)}<span class="log-pin-tick" aria-hidden="true"></span>{/if}
           <span class="log-time">{compactTime(ev.timestamp)}</span>
           <span class="log-level">{levelTag(ev.level)}</span>
           {#if showGroup}
@@ -348,6 +354,18 @@
               {ev.message.length > 400 ? ev.message.slice(0, 400) : ev.message}
             {/if}
           </span>
+          {#if onTogglePin}
+            <button
+              type="button"
+              class="log-pin"
+              class:pinned={pinnedKeys.has(key)}
+              aria-label={pinnedKeys.has(key) ? "Unpin log event" : "Pin log event"}
+              aria-pressed={pinnedKeys.has(key)}
+              title={pinnedKeys.has(key) ? "Unpin log" : "Pin log"}
+              onclick={(e) => { e.stopPropagation(); onTogglePin?.(ev, key); }}
+              onkeydown={(e) => e.stopPropagation()}
+            ><PushPinIcon size={13} weight={pinnedKeys.has(key) ? "fill" : "regular"} /></button>
+          {/if}
           {#if showStream && ev.streamName && !showGroup}
             <span class="log-stream-name" title={ev.streamName}>{ev.streamName.slice(-12)}</span>
           {/if}
@@ -484,6 +502,21 @@
   .log-row.selected .log-tick { opacity: 0; }
   .log-row.selected { padding-left: 16px; }
 
+  .log-pin-tick {
+    position: absolute;
+    left: 3px;
+    top: 9px;
+    width: 2px;
+    height: 6px;
+    border-radius: 2px;
+    background: var(--accent-amber);
+  }
+
+  .log-row.pinned:is([data-level="ERROR"], [data-level="WARN"]) { padding-left: 14px; }
+  .log-row.pinned:is([data-level="ERROR"], [data-level="WARN"]) .log-pin-tick { left: 8px; }
+  .log-row.selected.pinned { padding-left: 22px; }
+  .log-row.selected.pinned .log-pin-tick { left: 14px; }
+
   .log-time {
     color: var(--text-tertiary);
     font-variant-numeric: tabular-nums;
@@ -544,6 +577,26 @@
     color: var(--text-tertiary);
     opacity: 0.7;
   }
+
+  .log-pin {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    border: 0;
+    background: transparent;
+    color: var(--text-tertiary);
+    opacity: 0;
+    cursor: pointer;
+  }
+
+  .log-row:hover .log-pin,
+  .log-pin:focus-visible { opacity: 1; }
+  .log-pin:hover,
+  .log-pin.pinned { color: var(--accent-amber); }
+  .log-pin:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
 
   @container (max-width: 640px) {
     .log-stream-name { display: none; }

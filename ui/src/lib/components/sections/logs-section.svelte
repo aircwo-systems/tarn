@@ -14,12 +14,14 @@
     CaretRightIcon,
     CheckIcon,
     PlusIcon,
+    PushPinIcon,
   } from "phosphor-svelte";
   import { fly } from "svelte/transition";
   import { Skeleton } from "$lib/components/ui/skeleton";
   import EmptyState from "$lib/components/common/empty-state.svelte";
   import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
   import { untrack } from "svelte";
+  import { tick } from "svelte";
   import SectionHeader from "./section-header.svelte";
   import LogStream, { keyEvents } from "$lib/components/logs/log-stream.svelte";
   import LogSelectionPrompt from "$lib/components/logs/log-selection-prompt.svelte";
@@ -53,6 +55,7 @@
     type WaterfallRow,
   } from "$lib/trace-utils";
   import type { LogGroupSummary, LogEvent, RequestTrace } from "$lib/types";
+  import { nextPinnedIndex, pinEventKey, pinEventSnapshot, pinnedLogId, pinnedLogRow, pinsForView, readPinnedLogs, savePinnedLogs, type PinnedLog } from "$lib/pinned-logs";
   import {
     logLocationWithFilters,
     type LogNavigationFilters,
@@ -111,6 +114,9 @@
   let eventsTotal = $state(0);
   let eventsLoading = $state(false);
   let eventsError = $state("");
+  let pinnedLogs = $state<PinnedLog[]>([]);
+  let pinError = $state("");
+  let pinsOnly = $state(false);
 
   // Filters
   // Selected levels; empty = all. Sent as a comma set (level=ERROR,WARN).
@@ -195,11 +201,15 @@
   const isAllGroup = $derived(selectedGroup === ALL_GROUP);
   const keys = $derived(keyEvents(events));
   const isFirstPage = $derived(!eventsCursor);
-  const isLive = $derived(autoRefresh && isFirstPage);
+  const isLive = $derived(autoRefresh && isFirstPage && !pinsOnly);
 
   // ── Lifecycle ────────────────────────────────────────────────────────
   $effect(() => {
     loadGroups();
+  });
+
+  $effect(() => {
+    pinnedLogs = readPinnedLogs();
   });
 
   $effect(() => {
@@ -247,6 +257,21 @@
     const idx = events.findIndex((e) => e.timestamp === highlightTimestamp);
     return idx >= 0 ? keys[idx] : null;
   });
+  const pinnedIds = $derived(new Set(pinnedLogs.map((pin) => pin.id)));
+  const scopedPins = $derived(pinsForView(pinnedLogs, isAllGroup ? null : selectedGroupList, sortOrder));
+  const pinRows = $derived(scopedPins.map((pin) => pinnedLogRow(pin, isAllGroup || isMultiGroup)));
+  const displayEvents = $derived(pinsOnly ? pinRows.map((row) => row.event) : events);
+  const displayKeys = $derived(pinsOnly ? pinRows.map((row) => row.key) : keys);
+  const pinnedKeys = $derived(new Set(displayKeys.filter((key, index) => {
+    const group = groupForEvent(displayEvents[index]);
+    return group && pinnedIds.has(pinnedLogId(group, pinEventKey(group, displayEvents[index], key)));
+  })));
+  const selectedIsPinned = $derived(
+    !!selectedEvent && !!selectedKey && pinnedIds.has(pinnedLogId(
+      groupForEvent(selectedEvent),
+      pinEventKey(groupForEvent(selectedEvent), selectedEvent, selectedKey),
+    )),
+  );
 
   // Scroll to and select the deep-linked event once it's loaded (once per link,
   // so live merges don't keep yanking the reader back).
@@ -400,6 +425,7 @@
 
   function selectGroup(name: string, initialPattern?: string) {
     selectedGroup = name;
+    pinsOnly = false;
     checkedGroups = name && name !== ALL_GROUP ? [name] : [];
     if (initialPattern) {
       filterPattern = initialPattern;
@@ -499,6 +525,7 @@
 
   function backToGroups() {
     selectedGroup = "";
+    pinsOnly = false;
     clearGroupSelection();
     events = [];
     eventsTotal = 0;
@@ -561,8 +588,14 @@
     patternTimer = setTimeout(applyFilters, 280);
   }
 
-  function toggleSort() {
+  async function toggleSort() {
     sortOrder = sortOrder === "desc" ? "asc" : "desc";
+    if (pinsOnly) {
+      await tick();
+      const index = displayKeys.indexOf(selectedKey ?? "");
+      if (index >= 0) stream?.scrollToIndex(index);
+      return;
+    }
     applyFilters();
   }
 
@@ -625,6 +658,76 @@
   function selectEvent(event: LogEvent, key: string) {
     selectedEvent = event;
     selectedKey = key;
+  }
+
+  function groupForEvent(event: LogEvent): string {
+    if (!isAllGroup && !isMultiGroup) return selectedGroup;
+    return [...groups.map((group) => group.name), ...selectedGroupList]
+      .filter((name) => event.streamName.startsWith(`${name}/`))
+      .sort((a, b) => b.length - a.length)[0] ?? "";
+  }
+
+  function togglePin(event: LogEvent, key: string) {
+    const group = groupForEvent(event);
+    if (!group) {
+      pinError = "Could not identify this event's log group";
+      return;
+    }
+    const id = pinnedLogId(group, pinEventKey(group, event, key));
+    const next = pinnedIds.has(id)
+      ? pinnedLogs.filter((pin) => pin.id !== id)
+      : [{ id, group, event: pinEventSnapshot(group, event) }, ...pinnedLogs];
+    try {
+      savePinnedLogs(next);
+      pinnedLogs = next;
+      pinError = "";
+      if (pinsOnly && selectedEvent && selectedKey && pinnedLogId(groupForEvent(selectedEvent), pinEventKey(groupForEvent(selectedEvent), selectedEvent, selectedKey)) === id) closeDetail();
+    } catch {
+      pinError = "Could not save pinned logs in this browser";
+    }
+  }
+
+  function openPin(pin: PinnedLog) {
+    selectGroup(pin.group);
+    pinsOnly = true;
+    selectedEvent = pin.event;
+    selectedKey = pin.id.slice(pin.group.length + 1);
+  }
+
+  async function togglePinsOnly() {
+    pinsOnly = !pinsOnly;
+    if (pinsOnly) {
+      autoRefresh = false;
+      if (!selectedIsPinned) closeDetail();
+      await tick();
+      const index = displayKeys.indexOf(selectedKey ?? "");
+      if (index >= 0) stream?.scrollToIndex(index);
+    }
+  }
+
+  async function nextPin() {
+    if (scopedPins.length === 0) return;
+    const currentId = selectedEvent && selectedKey
+      ? pinnedLogId(groupForEvent(selectedEvent), pinEventKey(groupForEvent(selectedEvent), selectedEvent, selectedKey))
+      : "";
+    const index = nextPinnedIndex(scopedPins, currentId);
+    pinsOnly = true;
+    autoRefresh = false;
+    await tick();
+    selectEvent(displayEvents[index], displayKeys[index]);
+    await tick();
+    stream?.scrollToIndex(index);
+  }
+
+  function unpin(pin: PinnedLog) {
+    try {
+      const next = pinnedLogs.filter((item) => item.id !== pin.id);
+      savePinnedLogs(next);
+      pinnedLogs = next;
+      pinError = "";
+    } catch {
+      pinError = "Could not save pinned logs in this browser";
+    }
   }
 
   function closeDetail() {
@@ -717,34 +820,36 @@
   const selectedGroupIsLambda = $derived(selectedGroup.startsWith("/aws/lambda/"));
   const hasNextPage = $derived(!!nextCursor);
   const hasPrevPage = $derived(prevCursors.length > 0 || !!eventsCursor);
-  const hasPagination = $derived(!isLive && (hasNextPage || hasPrevPage));
+  const hasPagination = $derived(!pinsOnly && !isLive && (hasNextPage || hasPrevPage));
   const pageInfo = $derived(
-    events.length > 0 ? `${events.length.toLocaleString()} of ${eventsTotal.toLocaleString()} events` : "No events",
+    pinsOnly
+      ? `${scopedPins.length.toLocaleString()} pinned ${scopedPins.length === 1 ? "event" : "events"}`
+      : events.length > 0 ? `${events.length.toLocaleString()} of ${eventsTotal.toLocaleString()} events` : "No events",
   );
 
   // Level mix of the loaded window, for the quick-filter chips.
   const levelCounts = $derived.by(() => {
     const counts: Record<string, number> = { ERROR: 0, WARN: 0, INFO: 0, DEBUG: 0 };
-    for (const ev of events) counts[ev.level] = (counts[ev.level] ?? 0) + 1;
+    for (const ev of displayEvents) counts[ev.level] = (counts[ev.level] ?? 0) + 1;
     return counts;
   });
 
   // Level chips only earn their space once logs mix levels. Stay visible while
   // a level filter is active so the user can always clear it.
   const showLevelChips = $derived(
-    filterLevels.length > 0 || Object.values(levelCounts).filter((n) => n > 0).length > 1,
+    !pinsOnly && (filterLevels.length > 0 || Object.values(levelCounts).filter((n) => n > 0).length > 1),
   );
 
   // ── Timeline ribbon: loaded events bucketed across their time span ──
   const RIBBON_BUCKETS = 72;
   const ribbon = $derived.by(() => {
-    const n = events.length;
+    const n = displayEvents.length;
     if (n === 0) return null;
     let min = Infinity;
     let max = -Infinity;
     const times = new Float64Array(n);
     for (let i = 0; i < n; i++) {
-      const t = Date.parse(events[i].timestamp);
+      const t = Date.parse(displayEvents[i].timestamp);
       times[i] = t;
       if (t < min) min = t;
       if (t > max) max = t;
@@ -756,7 +861,7 @@
     for (let i = 0; i < n; i++) {
       const b = Math.min(RIBBON_BUCKETS - 1, Math.floor(((times[i] - min) / span) * RIBBON_BUCKETS));
       counts[b]++;
-      if (events[i].level === "ERROR") errors[b]++;
+      if (displayEvents[i].level === "ERROR") errors[b]++;
       if (firstIdx[b] < 0) firstIdx[b] = i;
     }
     const peak = Math.max(...counts);
@@ -844,13 +949,14 @@
   }}
 />
 
-{#snippet toolButton(label: string, icon: any, onclick: () => void, opts: { active?: boolean; spin?: boolean; disabled?: boolean; tone?: "danger"; title?: string } = {})}
+{#snippet toolButton(label: string, icon: any, onclick: () => void, opts: { active?: boolean; pressed?: boolean; spin?: boolean; disabled?: boolean; tone?: "danger"; title?: string } = {})}
   {@const Icon = icon}
   <button
     type="button"
     {onclick}
     disabled={opts.disabled}
     title={opts.title}
+    aria-pressed={opts.pressed}
     class="rc-tool"
     class:active={opts.active}
     class:danger={opts.tone === "danger"}
@@ -884,13 +990,14 @@
       {/snippet}
 
       {#snippet actions()}
-        <div class="flex shrink-0 items-center gap-1.5">
+        <div class="flex flex-wrap items-center justify-end gap-1.5">
           <button
             type="button"
             class="rc-live"
             class:on={autoRefresh}
+            disabled={pinsOnly}
             onclick={() => (autoRefresh = !autoRefresh)}
-            title={autoRefresh ? "Stop tailing" : "Tail new events"}
+            title={pinsOnly ? "Show all events to tail logs" : autoRefresh ? "Stop tailing" : "Tail new events"}
           >
             <span class="rc-live-dot" aria-hidden="true"></span>
             {autoRefresh ? "Live" : "Tail"}
@@ -901,20 +1008,30 @@
           {@render toolButton(sortOrder === "desc" ? "Newest" : "Oldest", sortOrder === "desc" ? SortDescendingIcon : SortAscendingIcon, toggleSort, {
             title: sortOrder === "desc" ? "Showing newest first" : "Showing oldest first",
           })}
-          {@render toolButton("Filters", FunnelIcon, () => (showFilters = !showFilters), { active: showFilters || !!filterStream })}
+          {@render toolButton("Next pin", CaretRightIcon, nextPin, {
+            disabled: scopedPins.length === 0,
+            title: scopedPins.length > 0 ? `Go to next of ${scopedPins.length} pinned logs` : "No pins in this log selection",
+          })}
+          {@render toolButton("Pins only", PushPinIcon, togglePinsOnly, {
+            active: pinsOnly,
+            pressed: pinsOnly,
+            title: pinsOnly ? "Show all log events" : "Show saved pins in this log selection",
+          })}
+          {@render toolButton("Filters", FunnelIcon, () => (showFilters = !showFilters), { active: !pinsOnly && (showFilters || !!filterStream), disabled: pinsOnly })}
           {#if !isAllGroup && !isMultiGroup}
             {@render toolButton("Clear", TrashIcon, handleClearLogs, {
               tone: "danger",
-              disabled: clearing || events.length === 0,
+              disabled: pinsOnly || clearing || events.length === 0,
               title: "Clear all logs in this group",
             })}
           {/if}
-          {@render toolButton("Refresh", ArrowsClockwiseIcon, () => loadEvents(), { spin: eventsLoading, disabled: eventsLoading })}
+          {@render toolButton("Refresh", ArrowsClockwiseIcon, () => loadEvents(), { spin: eventsLoading, disabled: pinsOnly || eventsLoading })}
         </div>
       {/snippet}
     </SectionHeader>
 
     <!-- Query bar: search + level chips -->
+    {#if !pinsOnly}
     <div class="rc-querybar">
       <label class="rc-search">
         <MagnifyingGlassIcon size={13} class="shrink-0 text-[var(--text-tertiary)]" />
@@ -958,6 +1075,7 @@
       </div>
       {/if}
     </div>
+    {/if}
 
     {#if isMultiGroup}
       <div class="rc-selection-chips">
@@ -986,7 +1104,7 @@
       </div>
     {/if}
 
-    {#if showFilters}
+    {#if showFilters && !pinsOnly}
       <div class="rc-filters">
         <label class="rc-field">
           <span>Stream</span>
@@ -1013,16 +1131,19 @@
     {#if eventsError}
       <div class="rc-error">{eventsError}</div>
     {/if}
+    {#if pinError}
+      <div class="rc-error" role="alert">{pinError}</div>
+    {/if}
 
-    {#if eventsLoading && events.length === 0}
+    {#if !pinsOnly && eventsLoading && events.length === 0}
       <div class="rc-panel flex-1 space-y-1.5">
         {#each Array(14) as _, i (i)}
           <Skeleton class="h-4 w-full" />
         {/each}
       </div>
-    {:else if events.length === 0 && !eventsError}
-      <EmptyState message="No log events found. Try adjusting your filters or invoke a function." icon={ScrollIcon} />
-    {:else if events.length > 0}
+    {:else if displayEvents.length === 0 && !eventsError && !selectedEvent}
+      <EmptyState message={pinsOnly ? "No pinned logs in this selection. Pin a log row to see it here." : "No log events found. Try adjusting your filters or invoke a function."} icon={pinsOnly ? PushPinIcon : ScrollIcon} />
+    {:else if displayEvents.length > 0 || selectedEvent}
       {#snippet streamPanel()}
         <div class="flex h-full min-h-0 flex-col">
           {#if ribbon}
@@ -1055,14 +1176,16 @@
           <div class="min-h-0 flex-1">
             <LogStream
               bind:this={stream}
-              {events}
-              {keys}
+              events={displayEvents}
+              keys={displayKeys}
               {selectedKey}
-              {highlightKey}
-              highlightPattern={filterPattern}
+              highlightKey={pinsOnly ? null : highlightKey}
+              highlightPattern={pinsOnly ? "" : filterPattern}
               order={sortOrder}
               showGroup={isAllGroup || isMultiGroup}
               showStream={!selectedEvent}
+              {pinnedKeys}
+              onTogglePin={togglePin}
               onSelect={selectEvent}
             />
           </div>
@@ -1082,6 +1205,16 @@
                 <div class="rc-detail-head">
                   <span class="rc-badge" data-level={ev.level}>{ev.level}</span>
                   <span class="rc-mono truncate text-[11px] text-[var(--text-tertiary)]">{formatCompactTime(ev.timestamp)}</span>
+                  <button
+                    type="button"
+                    class="rc-detail-pin"
+                    class:pinned={selectedIsPinned}
+                    aria-pressed={selectedIsPinned}
+                    onclick={() => togglePin(ev, selectedKey ?? keyEvents([ev])[0])}
+                  >
+                    <PushPinIcon size={12} weight={selectedIsPinned ? "fill" : "regular"} />
+                    {selectedIsPinned ? "Pinned" : "Pin log"}
+                  </button>
                   <button type="button" onclick={closeDetail} class="rc-icon-btn ml-auto" aria-label="Close detail panel">
                     <XIcon size={13} />
                   </button>
@@ -1233,6 +1366,28 @@
         {@render toolButton("Refresh", ArrowsClockwiseIcon, loadGroups, { spin: groupsLoading, disabled: groupsLoading })}
       {/snippet}
     </SectionHeader>
+
+    {#if pinError}
+      <div class="rc-error" role="alert">{pinError}</div>
+    {/if}
+
+    {#if pinnedLogs.length > 0}
+      <section class="rc-pins" aria-label="Pinned logs">
+        <div class="rc-pins-head"><PushPinIcon size={12} weight="fill" /> Pinned logs <span>{pinnedLogs.length}</span></div>
+        <div class="rc-pins-list">
+          {#each pinnedLogs as pin (pin.id)}
+            <div class="rc-pin-row">
+              <button type="button" class="rc-pin-open" onclick={() => openPin(pin)} title="Open pinned log in {pin.group}">
+                <span class="rc-pin-time">{formatDetailTimestamp(pin.event.timestamp)}</span>
+                <span class="rc-pin-group">{groupDisplayName(pin.group)}</span>
+                <span class="rc-pin-message">{pin.event.message}</span>
+              </button>
+              <button type="button" class="rc-pin-remove" onclick={() => unpin(pin)} aria-label="Unpin log from {pin.group}" title="Unpin log"><XIcon size={12} /></button>
+            </div>
+          {/each}
+        </div>
+      </section>
+    {/if}
 
     <div class="rc-querybar">
       <label class="rc-search">
@@ -1442,6 +1597,37 @@
 {/if}
 
 <style>
+  .rc-detail-pin,
+  .rc-pin-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    border: 0;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+  }
+  .rc-detail-pin { font-size: 11px; padding: 4px 6px; }
+  .rc-detail-pin:hover,
+  .rc-detail-pin.pinned,
+  .rc-pin-remove:hover { color: var(--accent-amber); }
+  .rc-detail-pin:focus-visible,
+  .rc-pin-open:focus-visible,
+  .rc-pin-remove:focus-visible { outline: 2px solid var(--border-focus); outline-offset: -2px; }
+  .rc-pins { border: 1px solid var(--border-subtle); min-height: 0; flex-shrink: 0; }
+  .rc-pins-head { display: flex; align-items: center; gap: 6px; padding: 7px 10px; color: var(--accent-amber); font-size: 11px; font-weight: 600; border-bottom: 1px solid var(--border-subtle); }
+  .rc-pins-head span { color: var(--text-tertiary); font-weight: 400; }
+  .rc-pins-list { max-height: 160px; overflow-y: auto; }
+  .rc-pin-row { display: flex; align-items: stretch; border-bottom: 1px solid var(--border-subtle); }
+  .rc-pin-row:last-child { border-bottom: 0; }
+  .rc-pin-open { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1; padding: 7px 10px; border: 0; background: transparent; color: var(--text-secondary); text-align: left; cursor: pointer; }
+  .rc-pin-open:hover { background: var(--bg-element-hover); }
+  .rc-pin-time { flex-shrink: 0; color: var(--text-tertiary); font: 10px var(--font-ui-mono, monospace); }
+  .rc-pin-group { flex-shrink: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 11px; }
+  .rc-pin-message { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font: 11px var(--font-ui-mono, monospace); }
+  .rc-pin-remove { width: 32px; flex-shrink: 0; }
+  @media (max-width: 640px) { .rc-pin-time { display: none; } }
   .rc-mono {
     font-family: var(--font-ui-mono, var(--font-mono, monospace));
   }
@@ -1465,14 +1651,14 @@
   }
 
   .rc-tool:hover:not(:disabled),
-  .rc-live:hover {
+  .rc-live:hover:not(:disabled) {
     color: var(--text-primary);
     border-color: var(--border-default);
     background: var(--bg-element-hover);
   }
 
   .rc-tool:active:not(:disabled),
-  .rc-live:active {
+  .rc-live:active:not(:disabled) {
     transform: scale(0.97);
   }
 
@@ -1487,7 +1673,8 @@
     border-color: color-mix(in srgb, var(--accent-red) 35%, transparent);
   }
 
-  .rc-tool:disabled {
+  .rc-tool:disabled,
+  .rc-live:disabled {
     opacity: 0.4;
     cursor: not-allowed;
   }
