@@ -124,13 +124,7 @@ func (h *Handler) deleteQueue(w http.ResponseWriter, r *http.Request) {
 	// Idempotent: ignore not-found (matches real AWS behavior).
 	_ = h.svc.DeleteQueue(name)
 
-	body := fmt.Sprintf(`<DeleteQueueResponse xmlns="%s">
-  <ResponseMetadata>
-    <RequestId>%s</RequestId>
-  </ResponseMetadata>
-</DeleteQueueResponse>`, xmlNS, uuid.New().String())
-
-	writeXML(w, 200, body)
+	emptyOK(w, "DeleteQueue")
 }
 
 func (h *Handler) listQueues(w http.ResponseWriter, r *http.Request) {
@@ -221,13 +215,7 @@ func (h *Handler) setQueueAttributes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := fmt.Sprintf(`<SetQueueAttributesResponse xmlns="%s">
-  <ResponseMetadata>
-    <RequestId>%s</RequestId>
-  </ResponseMetadata>
-</SetQueueAttributesResponse>`, xmlNS, uuid.New().String())
-
-	writeXML(w, 200, body)
+	emptyOK(w, "SetQueueAttributes")
 }
 
 func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
@@ -387,13 +375,7 @@ func (h *Handler) deleteMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := fmt.Sprintf(`<DeleteMessageResponse xmlns="%s">
-  <ResponseMetadata>
-    <RequestId>%s</RequestId>
-  </ResponseMetadata>
-</DeleteMessageResponse>`, xmlNS, uuid.New().String())
-
-	writeXML(w, 200, body)
+	emptyOK(w, "DeleteMessage")
 }
 
 func (h *Handler) deleteMessageBatch(w http.ResponseWriter, r *http.Request) {
@@ -446,13 +428,7 @@ func (h *Handler) changeMessageVisibility(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	body := fmt.Sprintf(`<ChangeMessageVisibilityResponse xmlns="%s">
-  <ResponseMetadata>
-    <RequestId>%s</RequestId>
-  </ResponseMetadata>
-</ChangeMessageVisibilityResponse>`, xmlNS, uuid.New().String())
-
-	writeXML(w, 200, body)
+	emptyOK(w, "ChangeMessageVisibility")
 }
 
 func (h *Handler) purgeQueue(w http.ResponseWriter, r *http.Request) {
@@ -467,13 +443,7 @@ func (h *Handler) purgeQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := fmt.Sprintf(`<PurgeQueueResponse xmlns="%s">
-  <ResponseMetadata>
-    <RequestId>%s</RequestId>
-  </ResponseMetadata>
-</PurgeQueueResponse>`, xmlNS, uuid.New().String())
-
-	writeXML(w, 200, body)
+	emptyOK(w, "PurgeQueue")
 }
 
 func (h *Handler) tagQueue(w http.ResponseWriter, r *http.Request) {
@@ -489,13 +459,7 @@ func (h *Handler) tagQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := fmt.Sprintf(`<TagQueueResponse xmlns="%s">
-  <ResponseMetadata>
-    <RequestId>%s</RequestId>
-  </ResponseMetadata>
-</TagQueueResponse>`, xmlNS, uuid.New().String())
-
-	writeXML(w, 200, body)
+	emptyOK(w, "TagQueue")
 }
 
 func (h *Handler) untagQueue(w http.ResponseWriter, r *http.Request) {
@@ -519,13 +483,7 @@ func (h *Handler) untagQueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := fmt.Sprintf(`<UntagQueueResponse xmlns="%s">
-  <ResponseMetadata>
-    <RequestId>%s</RequestId>
-  </ResponseMetadata>
-</UntagQueueResponse>`, xmlNS, uuid.New().String())
-
-	writeXML(w, 200, body)
+	emptyOK(w, "UntagQueue")
 }
 
 func (h *Handler) listQueueTags(w http.ResponseWriter, r *http.Request) {

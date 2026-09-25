@@ -144,8 +144,7 @@ func (h *Handler) deleteTopic(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := fmt.Sprintf(`<DeleteTopicResponse xmlns="%s"><ResponseMetadata><RequestId>%s</RequestId></ResponseMetadata></DeleteTopicResponse>`, xmlNS, requestID())
-	writeXML(w, http.StatusOK, body)
+	emptyOK(w, "DeleteTopic")
 }
 
 func (h *Handler) listTopics(w http.ResponseWriter) {
@@ -195,8 +194,7 @@ func (h *Handler) setTopicAttributes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := fmt.Sprintf(`<SetTopicAttributesResponse xmlns="%s"><ResponseMetadata><RequestId>%s</RequestId></ResponseMetadata></SetTopicAttributesResponse>`, xmlNS, requestID())
-	writeXML(w, http.StatusOK, body)
+	emptyOK(w, "SetTopicAttributes")
 }
 
 func (h *Handler) subscribe(w http.ResponseWriter, r *http.Request) {
@@ -237,8 +235,7 @@ func (h *Handler) unsubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := fmt.Sprintf(`<UnsubscribeResponse xmlns="%s"><ResponseMetadata><RequestId>%s</RequestId></ResponseMetadata></UnsubscribeResponse>`, xmlNS, requestID())
-	writeXML(w, http.StatusOK, body)
+	emptyOK(w, "Unsubscribe")
 }
 
 func (h *Handler) listSubscriptions(w http.ResponseWriter) {
@@ -296,8 +293,7 @@ func (h *Handler) setSubscriptionAttributes(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	body := fmt.Sprintf(`<SetSubscriptionAttributesResponse xmlns="%s"><ResponseMetadata><RequestId>%s</RequestId></ResponseMetadata></SetSubscriptionAttributesResponse>`, xmlNS, requestID())
-	writeXML(w, http.StatusOK, body)
+	emptyOK(w, "SetSubscriptionAttributes")
 }
 
 func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {
@@ -406,8 +402,7 @@ func (h *Handler) tagResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := fmt.Sprintf(`<TagResourceResponse xmlns="%s"><ResponseMetadata><RequestId>%s</RequestId></ResponseMetadata></TagResourceResponse>`, xmlNS, requestID())
-	writeXML(w, http.StatusOK, body)
+	emptyOK(w, "TagResource")
 }
 
 func (h *Handler) untagResource(w http.ResponseWriter, r *http.Request) {
@@ -429,8 +424,7 @@ func (h *Handler) untagResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body := fmt.Sprintf(`<UntagResourceResponse xmlns="%s"><ResponseMetadata><RequestId>%s</RequestId></ResponseMetadata></UntagResourceResponse>`, xmlNS, requestID())
-	writeXML(w, http.StatusOK, body)
+	emptyOK(w, "UntagResource")
 }
 
 func (h *Handler) listTagsForResource(w http.ResponseWriter, r *http.Request) {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -49,6 +50,33 @@ func TestDispatchUnknownXMLActionReturnsEmptyOK(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "<UnknownThingResponse") {
 		t.Fatalf("expected empty OK response shape, got: %s", rec.Body.String())
+	}
+}
+
+func TestEmptyQueryResponsesIncludeResult(t *testing.T) {
+	h := newTestHandler(t)
+	queue, err := h.svc.CreateQueue("empty-result-queue", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"SetQueueAttributes", "TagQueue", "UntagQueue", "PurgeQueue", "DeleteQueue"} {
+		t.Run(action, func(t *testing.T) {
+			form := url.Values{"Action": {action}, "QueueUrl": {queue.QueueUrl}}
+			if action == "TagQueue" {
+				form.Set("Tag.1.Key", "k")
+				form.Set("Tag.1.Value", "v")
+			}
+			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			rec := httptest.NewRecorder()
+			h.Dispatch(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), "<"+action+"Result/>") {
+				t.Fatalf("%sResult node missing: %s", action, rec.Body.String())
+			}
+		})
 	}
 }
 
