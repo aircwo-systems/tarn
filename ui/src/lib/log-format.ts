@@ -65,13 +65,21 @@ export function formatJavaToString(str: string): string {
   return result.trim();
 }
 
-/** Recursively unescape JSON string values that are themselves JSON. */
+/** Expand JSON strings and JSON payloads appended to log messages. */
 export function deepUnescapeJSON(val: unknown): unknown {
   if (typeof val === "string") {
     const t = val.trim();
     if (t.startsWith("{") || t.startsWith("[")) {
       try {
         return deepUnescapeJSON(JSON.parse(t));
+      } catch {
+        /* look for JSON after a text prefix */
+      }
+    }
+    const embedded = t.match(/^([\s\S]+?)\s+(\{[\s\S]*\}|\[[\s\S]*\])$/);
+    if (embedded) {
+      try {
+        return { text: embedded[1], payload: deepUnescapeJSON(JSON.parse(embedded[2])) };
       } catch {
         return val;
       }
@@ -88,6 +96,17 @@ export function deepUnescapeJSON(val: unknown): unknown {
 }
 
 export function computeFormattedMessage(content: string): string | null {
+  const invokeError = content.match(/^Invoke Error[ \t]+([\s\S]+)$/);
+  if (invokeError) {
+    try {
+      const parsed = JSON.parse(invokeError[1]);
+      if (parsed && typeof parsed === "object") {
+        return `Invoke Error\n${JSON.stringify(deepUnescapeJSON(parsed), null, 2)}`;
+      }
+    } catch {
+      /* not JSON */
+    }
+  }
   // JSON first — with recursive unescape of stringified nested JSON
   try {
     const parsed = JSON.parse(content);
@@ -234,7 +253,7 @@ export function highlightJavaToString(text: string, searchPattern?: string): str
 }
 
 export function highlightFormatted(text: string, searchPattern?: string): string {
-  return looksLikeJSON(text)
+  return looksLikeJSON(text) || text.startsWith("Invoke Error\n")
     ? highlightJSON(text, searchPattern)
     : highlightJavaToString(text, searchPattern);
 }
