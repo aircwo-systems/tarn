@@ -34,22 +34,6 @@ func (wp *WarmPool) Stop() {
 	close(wp.stopCh)
 }
 
-// Touch updates the last-invoked time for a function's containers, keeping the
-// whole pool warm. (Per-container LastInvoked is also maintained on acquire and
-// release; this is a coarse keep-alive bump.)
-func (wp *WarmPool) Touch(functionName string) {
-	wp.mu.Lock()
-	defer wp.mu.Unlock()
-
-	wp.engine.mu.Lock()
-	defer wp.engine.mu.Unlock()
-
-	now := time.Now()
-	for _, info := range wp.engine.containers[functionName] {
-		info.LastInvoked = now
-	}
-}
-
 // reaper periodically checks for idle containers and removes them.
 func (wp *WarmPool) reaper() {
 	ticker := time.NewTicker(30 * time.Second)

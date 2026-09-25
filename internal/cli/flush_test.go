@@ -2,14 +2,100 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/docker/docker/api/types/container"
 	"github.com/spf13/cobra"
 )
+
+type fakeFlushDocker struct {
+	containers []container.Summary
+	removed    []string
+}
+
+func (d *fakeFlushDocker) ContainerList(_ context.Context, opts container.ListOptions) ([]container.Summary, error) {
+	if !opts.All {
+		panic("flush must list stopped Docker containers")
+	}
+	return d.containers, nil
+}
+
+func (d *fakeFlushDocker) ContainerRemove(_ context.Context, id string, opts container.RemoveOptions) error {
+	if opts.Force {
+		panic("flush must not force-remove a container that may have started")
+	}
+	d.removed = append(d.removed, id)
+	return nil
+}
+
+func (d *fakeFlushDocker) Close() error { return nil }
+
+func TestRunFlushPrunesOnlyStoppedTarnLambdaContainers(t *testing.T) {
+	const endpoint = "http://tarn.test"
+	t.Setenv("TARN_ENDPOINT", endpoint)
+	prevHTTP := cliHTTPClient
+	cliHTTPClient = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.String() != endpoint+"/_tarn/admin/overview" {
+			t.Errorf("unexpected Tarn request: %s %s", r.Method, r.URL)
+			return jsonResponse(http.StatusNotFound, "")
+		}
+		return jsonResponse(http.StatusOK, `{"config":{"accountId":"000000000000"}}`)
+	})}
+	defer func() { cliHTTPClient = prevHTTP }()
+
+	docker := &fakeFlushDocker{containers: []container.Summary{
+		{ID: "legacy", Names: []string{"/openstack-lambda-r10-worker-1772917900916"}, Image: "public.ecr.aws/lambda/nodejs:24", State: "exited"},
+		{ID: "current", Names: []string{"/tarn-lambda-r10-worker-1790321878042"}, Image: "public.ecr.aws/lambda/python:3.13", State: "created"},
+		{ID: "running", Names: []string{"/tarn-lambda-r10-worker-1790321878043"}, Image: "public.ecr.aws/lambda/nodejs:24", State: "running"},
+		{ID: "other-group", Names: []string{"/tarn-lambda-other-worker-1790321878044"}, Image: "public.ecr.aws/lambda/nodejs:24", State: "exited"},
+		{ID: "other-image", Names: []string{"/tarn-lambda-r10-worker-1790321878045"}, Image: "node:20-alpine", State: "exited"},
+		{ID: "other-name", Names: []string{"/someone-else-lambda-r10-1790321878046"}, Image: "public.ecr.aws/lambda/nodejs:24", State: "exited"},
+	}}
+	prevDocker := newFlushDockerClient
+	newFlushDockerClient = func() (flushDockerClient, error) { return docker, nil }
+	defer func() { newFlushDockerClient = prevDocker }()
+
+	cmd := &cobra.Command{Use: "tarn"}
+	cmd.SetContext(context.Background())
+	var out bytes.Buffer
+	opts := flushOptions{PruneLambdaContainers: true, Group: "r10", DryRun: true}
+	if err := runFlush(cmd, &out, opts); err != nil {
+		t.Fatal(err)
+	}
+	if len(docker.removed) != 0 {
+		t.Fatalf("dry run removed Docker containers: %v", docker.removed)
+	}
+	if !strings.Contains(out.String(), "legacy") || !strings.Contains(out.String(), "current") || strings.Contains(out.String(), "running") {
+		t.Fatalf("unexpected Docker dry-run plan: %s", out.String())
+	}
+
+	out.Reset()
+	opts.DryRun = false
+	if err := runFlush(cmd, &out, opts); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(docker.removed, ","); got != "legacy,current" {
+		t.Fatalf("removed %s, want legacy,current", got)
+	}
+}
+
+func TestRunFlushRejectsDockerPruningWithUnsupportedSelectors(t *testing.T) {
+	cmd := &cobra.Command{Use: "tarn"}
+	var out bytes.Buffer
+	for _, opts := range []flushOptions{
+		{PruneLambdaContainers: true, TagFilter: "feature=r10"},
+		{PruneLambdaContainers: true, AccountID: "111111111111"},
+	} {
+		if err := runFlush(cmd, &out, opts); err == nil {
+			t.Fatalf("expected selector error for %+v", opts)
+		}
+	}
+}
 
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 

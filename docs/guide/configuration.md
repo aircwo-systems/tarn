@@ -128,6 +128,29 @@ See the [Terraform guide](/guide/terraform) for the full provider configuration.
 
 Switch accounts from the **Settings** dialog (gear icon in the sidebar). Add any 12-digit account ID, give it a label, and click **Switch** — the dashboard immediately reloads data for that account. The active account ID is shown in the sidebar footer.
 
+## Flush
+
+`tarn flush` deletes resources from the running Tarn instance. Use `--dry-run`
+to preview the full deletion plan. Add `--group` to select resources by name,
+`--tag` to select resources by tag, or `--storage` to include S3 buckets and
+objects.
+
+Add `--prune-lambda-containers` to also remove stopped Tarn Lambda containers
+from Docker, including containers left by earlier server runs. This option
+recognizes both `tarn-lambda-*` and older `openstack-lambda-*` names. It never
+removes running containers. The option requires access to the local Docker daemon.
+
+```bash
+tarn flush --prune-lambda-containers --dry-run  # Preview Tarn resources and Docker containers
+tarn flush --prune-lambda-containers            # Delete the resources and stopped containers
+tarn flush --group cert-delete --prune-lambda-containers --dry-run
+```
+
+`--group` narrows the Docker selection by container name. Docker containers
+cannot be filtered by Tarn resource tags or a non-default account, so
+`--prune-lambda-containers` cannot be combined with `--tag` or a non-default
+`--account`.
+
 ## Infrastructure Probing
 
 Infrastructure probing is enabled by default. Tarn can probe common local dependencies such as PostgreSQL, Redis, MySQL, and MongoDB, which is useful when frontend applications or local dashboards need a quick view of what backing services are reachable in a development environment.

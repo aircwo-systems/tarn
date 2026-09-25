@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -9,19 +10,36 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
+	"time"
 
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/client"
 	"github.com/spf13/cobra"
 )
 
 var cliHTTPClient = http.DefaultClient
 
 type flushOptions struct {
-	TagFilter string
-	Group     string
-	DryRun    bool
-	Storage   bool
-	AccountID string
+	TagFilter             string
+	Group                 string
+	DryRun                bool
+	Storage               bool
+	AccountID             string
+	PruneLambdaContainers bool
+}
+
+var lambdaContainerName = regexp.MustCompile(`^/(?:tarn|openstack)-lambda-.+-[0-9]{13}$`)
+
+type flushDockerClient interface {
+	ContainerList(context.Context, container.ListOptions) ([]container.Summary, error)
+	ContainerRemove(context.Context, string, container.RemoveOptions) error
+	Close() error
+}
+
+var newFlushDockerClient = func() (flushDockerClient, error) {
+	return client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 }
 
 type ecsFlushCluster struct {
@@ -157,12 +175,16 @@ Use --tag to scope deletion to a feature slice such as feature=r10.
 Use --group to scope deletion to resources whose NAME matches a prefix/substring
 (e.g. a Terraform name_prefix like cert-delete), independent of tags.
 --tag and --group combine (a resource must match both when both are given).
-Use --storage to also purge S3 bucket contents and delete buckets.`,
+Use --storage to also purge S3 bucket contents and delete buckets.
+Use --prune-lambda-containers to remove stopped Tarn Lambda Docker containers,
+including leftovers from earlier server runs. This option cannot use --tag or
+a non-default --account.`,
 		Example: `  tarn flush
   tarn flush --storage
   tarn flush --tag feature=r10
   tarn flush --group cert-delete
   tarn flush --group multi-delete --storage
+  tarn flush --prune-lambda-containers --dry-run
   tarn flush --tag r10 --dry-run`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runFlush(cmd, os.Stdout, opts)
@@ -173,6 +195,7 @@ Use --storage to also purge S3 bucket contents and delete buckets.`,
 	cmd.Flags().StringVar(&opts.Group, "group", "", "Filter resources by name prefix/substring, e.g. cert-delete")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Print resources that would be deleted without deleting them")
 	cmd.Flags().BoolVar(&opts.Storage, "storage", false, "Also flush S3 buckets and objects")
+	cmd.Flags().BoolVar(&opts.PruneLambdaContainers, "prune-lambda-containers", false, "Also remove stopped Tarn Lambda Docker containers")
 	cmd.Flags().StringVar(&opts.AccountID, "account", "", "12-digit account ID to flush (overrides TARN_ACCOUNT_ID)")
 	return cmd
 }
@@ -181,6 +204,14 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	endpoint := getCLIEndpoint(cmd)
 
 	accountID := resolveFlushAccountID(opts.AccountID)
+	if opts.PruneLambdaContainers {
+		if strings.TrimSpace(opts.TagFilter) != "" {
+			return fmt.Errorf("--prune-lambda-containers cannot be combined with --tag: Docker containers have no function tags")
+		}
+		if accountID != "000000000000" {
+			return fmt.Errorf("--prune-lambda-containers cannot be combined with a non-default account: legacy containers have no account label")
+		}
+	}
 	if accountID != "000000000000" {
 		saved := cliHTTPClient
 		cliHTTPClient = &http.Client{Transport: &accountRoundTripper{
@@ -269,8 +300,23 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		opts.TagFilter,
 		opts.Group,
 	)
+	var docker flushDockerClient
+	var lambdaContainers []container.Summary
+	if opts.PruneLambdaContainers {
+		docker, err = newFlushDockerClient()
+		if err != nil {
+			return fmt.Errorf("connect to Docker for Lambda container pruning: %w", err)
+		}
+		defer docker.Close()
+		ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+		lambdaContainers, err = listStoppedLambdaContainers(ctx, docker, opts.Group)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
 
-	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredEventBridgeRules) + len(filteredNotificationBuckets) + len(filteredBuckets) + len(filteredStateMachines) + len(filteredECSClusters) + len(filteredECSServices) + len(filteredECSTasks) + len(filteredECSTaskDefinitions)
+	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredEventBridgeRules) + len(filteredNotificationBuckets) + len(filteredBuckets) + len(filteredStateMachines) + len(filteredECSClusters) + len(filteredECSServices) + len(filteredECSTasks) + len(filteredECSTaskDefinitions) + len(lambdaContainers)
 	selectorDesc := flushSelectorDescription(opts)
 	if total == 0 {
 		if selectorDesc != "" {
@@ -302,6 +348,12 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	}
 	if err := printECSFlushPlan(out, filteredECSClusters, filteredECSServices, filteredECSTasks, filteredECSTaskDefinitions); err != nil {
 		return err
+	}
+	if len(lambdaContainers) > 0 {
+		_, _ = fmt.Fprintln(out, "Stopped Lambda Docker Containers:")
+		for _, c := range lambdaContainers {
+			_, _ = fmt.Fprintf(out, "  - %s (%s)\n", c.Names[0], c.ID[:min(12, len(c.ID))])
+		}
 	}
 	if opts.DryRun {
 		_, _ = fmt.Fprintln(out, "Dry run only. No resources were deleted.")
@@ -442,6 +494,17 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		}
 		_, _ = fmt.Fprintf(out, "Deleted S3 Bucket: %s\n", bucket.Name)
 	}
+	for _, c := range lambdaContainers {
+		ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
+		// Docker rejects removal if this container started after the list call.
+		err := docker.ContainerRemove(ctx, c.ID, container.RemoveOptions{})
+		cancel()
+		if err != nil && !client.IsErrNotFound(err) {
+			recordFailure("Lambda Docker container", c.Names[0], err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Removed Lambda Docker Container: %s\n", c.Names[0])
+	}
 
 	if len(failures) == 0 {
 		_, _ = fmt.Fprintln(out, "Flush complete.")
@@ -450,6 +513,30 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 
 	_, _ = fmt.Fprintf(out, "Flush completed with %d warning(s).\n", len(failures))
 	return fmt.Errorf("flush completed with %d warning(s)", len(failures))
+}
+
+func listStoppedLambdaContainers(ctx context.Context, docker flushDockerClient, group string) ([]container.Summary, error) {
+	all, err := docker.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("list Docker containers for Lambda pruning: %w", err)
+	}
+	selected := make([]container.Summary, 0)
+	for _, c := range all {
+		if c.State != "exited" && c.State != "dead" && c.State != "created" {
+			continue
+		}
+		if !strings.HasPrefix(c.Image, "public.ecr.aws/lambda/") {
+			continue
+		}
+		for _, name := range c.Names {
+			if lambdaContainerName.MatchString(name) && matchesGroupName(name, group) {
+				c.Names = []string{name}
+				selected = append(selected, c)
+				break
+			}
+		}
+	}
+	return selected, nil
 }
 
 func fetchFlushOverview(endpoint string) (*flushOverview, error) {

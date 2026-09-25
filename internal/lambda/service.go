@@ -579,8 +579,6 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	// replaced below.
 	defer func() { s.engine.Release(info) }()
 
-	s.pool.Touch(fn.FunctionName)
-
 	// Identify this invocation: a fresh request id plus the log group/stream the
 	// container's output is ingested into (the stream name mirrors the truncated
 	// container id used by ingestContainerLogs). These let callers deep-link to
