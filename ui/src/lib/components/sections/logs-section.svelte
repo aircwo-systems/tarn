@@ -207,11 +207,14 @@
       selectedGroup = initialGroup;
       if (initialGroup.includes(",")) {
         checkedGroups = initialGroup.split(",").filter(Boolean);
-      } else if (initialGroup !== ALL_GROUP) {
-        checkedGroups = [initialGroup];
+      } else {
+        checkedGroups = initialGroup === ALL_GROUP ? [] : [initialGroup];
       }
       eventsCursor = null;
       prevCursors = [];
+    } else {
+      selectedGroup = "";
+      checkedGroups = [];
     }
   });
 
@@ -397,11 +400,9 @@
 
   function selectGroup(name: string, initialPattern?: string) {
     selectedGroup = name;
+    checkedGroups = name && name !== ALL_GROUP ? [name] : [];
     if (initialPattern) {
       filterPattern = initialPattern;
-    }
-    if (name && name !== ALL_GROUP && !checkedGroups.includes(name)) {
-      checkedGroups = [name];
     }
     resetPaging();
     highlightTimestamp = "";
@@ -411,37 +412,8 @@
   function handleGroupClick(e: MouseEvent, group: LogGroupSummary, idx: number) {
     const isCheckbox = (e.target as HTMLElement)?.closest(".rc-checkbox") !== null;
 
-    if (e.shiftKey) {
+    if (isCheckbox) {
       e.preventDefault();
-      window.getSelection()?.removeAllRanges();
-      if (lastClickedIdx === null || lastClickedIdx === undefined) {
-        lastClickedIdx = idx;
-        if (!checkedGroups.includes(group.name)) {
-          checkedGroups = [...checkedGroups, group.name];
-        }
-      } else {
-        const start = Math.min(lastClickedIdx, idx);
-        const end = Math.max(lastClickedIdx, idx);
-        const rangeNames = filteredGroups.slice(start, end + 1).map((g) => g.name);
-        const set = new Set([...checkedGroups, ...rangeNames]);
-        checkedGroups = Array.from(set);
-        lastClickedIdx = idx;
-      }
-      return;
-    }
-
-    if (e.metaKey || e.ctrlKey || isCheckbox) {
-      e.preventDefault();
-      if (checkedGroups.includes(group.name)) {
-        checkedGroups = checkedGroups.filter((n) => n !== group.name);
-      } else {
-        checkedGroups = [...checkedGroups, group.name];
-      }
-      lastClickedIdx = idx;
-      return;
-    }
-
-    if (checkedGroups.length > 0) {
       if (checkedGroups.includes(group.name)) {
         checkedGroups = checkedGroups.filter((n) => n !== group.name);
       } else {
@@ -527,6 +499,7 @@
 
   function backToGroups() {
     selectedGroup = "";
+    clearGroupSelection();
     events = [];
     eventsTotal = 0;
     resetPaging();
