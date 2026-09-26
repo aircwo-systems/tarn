@@ -8,18 +8,19 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/internal/persist"
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // Store persists REST API (v1) state.
 type Store struct {
-	mu    sync.RWMutex
-	dirty atomic.Bool
-	apis  map[string]*restAPIRecord
-	cfg   *config.Config
+	mu      sync.RWMutex
+	dirty   atomic.Bool
+	flusher *persist.Flusher
+	apis    map[string]*restAPIRecord
+	cfg     *config.Config
 }
 
 type restAPIRecord struct {
@@ -72,7 +73,7 @@ func (s *Store) Init() error {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return nil
 	}
-	go s.startFlusher()
+	s.flusher = persist.StartFlusher(&s.dirty, s.flushToDisk)
 	if err := os.MkdirAll(s.cfg.APIGatewayV1Dir(), 0755); err != nil {
 		return fmt.Errorf("create apigatewayv1 dir: %w", err)
 	}
@@ -570,15 +571,17 @@ func (s *Store) GetAllIntegrationsForAPI(apiID string) ([]*types.RestIntegration
 	return s.ListIntegrations(apiID)
 }
 
-func (s *Store) startFlusher() {
-	t := time.NewTicker(250 * time.Millisecond)
-	defer t.Stop()
-	for range t.C {
-		if s.dirty.Swap(false) {
-			s.flushToDisk()
-		}
+// Flush writes pending state to disk now.
+func (s *Store) Flush() {
+	if s.flusher != nil {
+		s.flusher.Flush()
+		return
 	}
+	s.flushToDisk()
 }
+
+// Close stops the background flusher after writing any pending state.
+func (s *Store) Close() { s.flusher.Close() }
 
 func (s *Store) flushToDisk() {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {

@@ -1544,3 +1544,6 @@ func (s *Service) ListTagsForResource(in *types.ListTagsForResourceInput) (*type
 	}
 	return &types.ListTagsForResourceOutput{Tags: cloneTags(get())}, nil
 }
+
+// Close stops background persistence after writing any pending state.
+func (s *Service) Close() { s.store.Close() }

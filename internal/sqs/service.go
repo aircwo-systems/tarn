@@ -272,3 +272,6 @@ func cloneMessageAttributes(src map[string]*types.MessageAttribute) map[string]*
 	}
 	return cloned
 }
+
+// Close stops background persistence after writing any pending state.
+func (s *Service) Close() { s.store.Close() }

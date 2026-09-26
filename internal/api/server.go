@@ -490,9 +490,12 @@ func (s *Server) Start() error {
 }
 
 // Shutdown gracefully stops the server and all per-account background workers.
+// In-flight requests drain first so their writes land before each account's
+// stop hook persists final state.
 func (s *Server) Shutdown(ctx context.Context) error {
+	err := s.httpServer.Shutdown(ctx)
 	s.registry.StopAll()
-	return s.httpServer.Shutdown(ctx)
+	return err
 }
 
 // postAccountDispatch routes POST /{account}/{queue} between S3 and SQS.

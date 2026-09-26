@@ -559,3 +559,6 @@ func evalNumericFilter(conds any, attrValue string) bool {
 	}
 	return true
 }
+
+// Close stops background persistence after writing any pending state.
+func (s *Service) Close() { s.store.Close() }

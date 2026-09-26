@@ -1201,3 +1201,6 @@ func isTransientInvokeError(err error) bool {
 		strings.Contains(s, "connection reset") ||
 		strings.Contains(s, "broken pipe")
 }
+
+// Close stops background persistence after writing any pending state.
+func (s *Service) Close() { s.store.Close() }

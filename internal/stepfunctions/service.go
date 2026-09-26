@@ -1105,3 +1105,6 @@ func lambdaNameFromARNOrName(s string) string {
 	}
 	return s
 }
+
+// Close stops background persistence after writing any pending state.
+func (s *Service) Close() { s.store.Close() }

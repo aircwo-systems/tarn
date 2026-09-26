@@ -358,6 +358,15 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 		esmSvc.Stop()
 		eventbridgeSvc.Stop()
 		stepFunctionsSvc.Stop()
+
+		// Workers are stopped, so no more writes: persist what the 250ms
+		// flushers have not written yet.
+		for _, c := range []interface{ Close() }{
+			sqsSvc, snsSvc, dynamoSvc, secretsSvc, gatewaySvc, gatewayV1Svc,
+			esmSvc, eventbridgeSvc, stepFunctionsSvc, ecsSvc,
+		} {
+			c.Close()
+		}
 	}
 
 	return api.NewAccountBundle(hs, stop), nil

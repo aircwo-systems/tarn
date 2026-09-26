@@ -132,3 +132,6 @@ func (s *Service) GetRecords(iterator string, limit int) ([]map[string]any, stri
 func (s *Service) StreamBatch(streamArn, lastSequence string, limit int) ([]*types.StreamRecord, string, error) {
 	return s.store.StreamBatch(streamArn, lastSequence, limit)
 }
+
+// Close stops background persistence after writing any pending state.
+func (s *Service) Close() { s.store.Close() }

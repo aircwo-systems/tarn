@@ -1942,3 +1942,6 @@ func cloneTags(src map[string]string) map[string]string {
 	}
 	return out
 }
+
+// Close stops background persistence after writing any pending state.
+func (s *Service) Close() { s.store.Close() }

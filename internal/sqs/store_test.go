@@ -798,3 +798,38 @@ func TestInitToleratesTrailingGarbageInStateFile(t *testing.T) {
 		t.Fatalf("expected queue to load from tolerant decoder: %v", err)
 	}
 }
+
+func TestCloseWritesStateAcknowledgedJustBeforeShutdown(t *testing.T) {
+	cfg := &config.Config{
+		Host:               "localhost",
+		Port:               4566,
+		Region:             "us-east-1",
+		AccountID:          "000000000000",
+		DataDir:            t.TempDir(),
+		PersistenceEnabled: true,
+	}
+	s := NewStore(cfg)
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateQueue("orders", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SendMessage("orders", "last-before-shutdown", 0, nil, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	s.Close() // immediately, well inside the 250ms flush interval
+
+	reloaded := NewStore(cfg)
+	if err := reloaded.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer reloaded.Close()
+	msgs, err := reloaded.ReceiveMessage("orders", 10, 30)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 || msgs[0].Body != "last-before-shutdown" {
+		t.Fatalf("message acknowledged before shutdown was lost: got %v", bodies(msgs))
+	}
+}

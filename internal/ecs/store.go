@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/internal/persist"
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
@@ -18,9 +19,10 @@ import (
 // persistence, following the same layout and locking discipline as
 // internal/eventbridge/store.go.
 type Store struct {
-	mu    sync.RWMutex
-	dirty atomic.Bool
-	cfg   *config.Config
+	mu      sync.RWMutex
+	dirty   atomic.Bool
+	flusher *persist.Flusher
+	cfg     *config.Config
 
 	clusters map[string]*types.Cluster // key: cluster name
 
@@ -47,7 +49,7 @@ func (s *Store) Init() error {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return nil
 	}
-	go s.startFlusher()
+	s.flusher = persist.StartFlusher(&s.dirty, s.flushToDisk)
 
 	if err := os.MkdirAll(s.cfg.ECSDir(), 0o755); err != nil {
 		return fmt.Errorf("create ecs dir: %w", err)
@@ -416,15 +418,17 @@ func (s *Store) persist() error {
 	return nil
 }
 
-func (s *Store) startFlusher() {
-	t := time.NewTicker(250 * time.Millisecond)
-	defer t.Stop()
-	for range t.C {
-		if s.dirty.Swap(false) {
-			s.flushToDisk()
-		}
+// Flush writes pending state to disk now.
+func (s *Store) Flush() {
+	if s.flusher != nil {
+		s.flusher.Flush()
+		return
 	}
+	s.flushToDisk()
 }
+
+// Close stops the background flusher after writing any pending state.
+func (s *Store) Close() { s.flusher.Close() }
 
 func (s *Store) flushToDisk() {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {

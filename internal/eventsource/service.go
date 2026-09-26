@@ -413,3 +413,6 @@ func normalizeSourceType(mapping *types.EventSourceMapping) string {
 	}
 	return "sqs"
 }
+
+// Close stops background persistence after writing any pending state.
+func (s *Service) Close() { s.store.Close() }

@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/internal/persist"
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
@@ -18,6 +18,7 @@ import (
 type Store struct {
 	mu       sync.RWMutex
 	dirty    atomic.Bool
+	flusher  *persist.Flusher
 	cfg      *config.Config
 	mappings map[string]*types.EventSourceMapping
 }
@@ -35,7 +36,7 @@ func (store *Store) Init() error {
 	if !store.cfg.PersistenceEnabled {
 		return nil
 	}
-	go store.startFlusher()
+	store.flusher = persist.StartFlusher(&store.dirty, store.flushToDisk)
 
 	dir := store.cfg.EventSourceDir()
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -133,17 +134,17 @@ func (store *Store) persist() error {
 	return nil
 }
 
-func (store *Store) Flush() { store.flushToDisk() }
-
-func (store *Store) startFlusher() {
-	t := time.NewTicker(250 * time.Millisecond)
-	defer t.Stop()
-	for range t.C {
-		if store.dirty.Swap(false) {
-			store.flushToDisk()
-		}
+// Flush writes pending state to disk now.
+func (store *Store) Flush() {
+	if store.flusher != nil {
+		store.flusher.Flush()
+		return
 	}
+	store.flushToDisk()
 }
+
+// Close stops the background flusher after writing any pending state.
+func (store *Store) Close() { store.flusher.Close() }
 
 func (store *Store) flushToDisk() {
 	if !store.cfg.PersistenceEnabled {

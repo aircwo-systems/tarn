@@ -119,3 +119,6 @@ func randomHex(n int) string {
 	_, _ = rand.Read(b)
 	return fmt.Sprintf("%x", b)[:n]
 }
+
+// Close stops background persistence after writing any pending state.
+func (s *Service) Close() { s.store.Close() }
