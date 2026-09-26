@@ -145,6 +145,10 @@ type Server struct {
 }
 
 // NewServer creates a new API server.
+// serverWriteTimeout must outlast the longest synchronous Lambda invoke
+// (15 minute function timeout) plus a cold start of up to 60 seconds.
+const serverWriteTimeout = 17 * time.Minute
+
 func NewServer(cfg *config.Config, registry *HandlerRegistry, logsSvc *logssvc.Service, collector *tracesvc.Collector) *Server {
 	s := &Server{
 		cfg:       cfg,
@@ -157,11 +161,13 @@ func NewServer(cfg *config.Config, registry *HandlerRegistry, logsSvc *logssvc.S
 	s.registerRoutes(mux)
 
 	s.httpServer = &http.Server{
-		Addr:         fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
-		Handler:      s.withLogging(mux),
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 300 * time.Second, // Lambda can run up to 15 min
-		IdleTimeout:  120 * time.Second,
+		Addr:    fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
+		Handler: s.withLogging(mux),
+		// Only the headers are time-boxed: a whole-request ReadTimeout would
+		// cut large S3 uploads on slow links.
+		ReadHeaderTimeout: 10 * time.Second,
+		WriteTimeout:      serverWriteTimeout,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	return s

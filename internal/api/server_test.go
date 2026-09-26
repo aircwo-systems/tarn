@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	adminhandler "github.com/aircwo-systems/tarn/internal/api/admin"
 	apigatewayhandler "github.com/aircwo-systems/tarn/internal/api/apigateway"
@@ -104,6 +105,23 @@ func newTestHTTPHandlerWithConfig(t *testing.T, cfg *config.Config) http.Handler
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 	return s.withLogging(mux)
+}
+
+func TestServerTimeoutsAllowMaxLambdaDuration(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	s := NewServer(cfg, NewHandlerRegistry(nil), logs.NewService(cfg), nil)
+
+	const maxLambdaInvoke = 15*time.Minute + time.Minute // function timeout + cold start
+	if s.httpServer.WriteTimeout < maxLambdaInvoke {
+		t.Fatalf("WriteTimeout %s cuts synchronous invokes shorter than %s", s.httpServer.WriteTimeout, maxLambdaInvoke)
+	}
+	if s.httpServer.ReadTimeout != 0 {
+		t.Fatalf("ReadTimeout %s would cut large uploads; bound headers only", s.httpServer.ReadTimeout)
+	}
+	if s.httpServer.ReadHeaderTimeout == 0 {
+		t.Fatal("ReadHeaderTimeout must be set")
+	}
 }
 
 func TestNewServerRegistersRoutes(t *testing.T) {
