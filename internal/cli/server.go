@@ -385,12 +385,15 @@ func startServer(cfg *config.Config) error {
 	if dockerPingErr != nil {
 		log.Printf("WARNING: %v", dockerPingErr)
 		log.Println("Lambda functions requiring Docker will not work until Docker is available.")
+	} else if n, err := eng.SweepOrphanedLambdaContainers(ctx); err != nil {
+		log.Printf("WARNING: could not sweep orphaned Lambda containers: %v", err)
+	} else if n > 0 {
+		log.Printf("[engine] removed %d orphaned Lambda container(s) from a previous run", n)
 	}
 
 	// Warm pool is shared so containers can be reused across accounts
 	pool := engine.NewWarmPool(eng, cfg.LambdaKeepAliveMS)
 	pool.Start()
-	defer pool.Stop()
 
 	// Shared services. Logs are NOT shared — each account gets its own logs
 	// service inside initAccountBundle so log groups stay account-specific.
@@ -516,21 +519,34 @@ func startServer(cfg *config.Config) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
+	// Start returns as soon as Shutdown is called, so the caller must wait on
+	// shutdownDone before returning; otherwise deferred eng.Close() closes the
+	// Docker client mid-cleanup and warm containers are left running.
+	shutdownDone := make(chan struct{})
 	go func() {
+		defer close(shutdownDone)
 		<-sigCh
+		// A second Ctrl-C force-quits instead of waiting on cleanup.
+		signal.Stop(sigCh)
 		log.Println("\nShutting down Tarn...")
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer shutdownCancel()
 		if secretsProxyServer != nil {
-			if err := secretsProxyServer.Shutdown(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			if err := secretsProxyServer.Shutdown(shutdownCtx); err != nil && !errors.Is(err, context.Canceled) {
 				log.Printf("[secrets-proxy] shutdown error: %v", err)
 			}
 		}
-		server.Shutdown(ctx)
-		eng.Cleanup(ctx)
+		_ = server.Shutdown(shutdownCtx)
+		pool.Stop()
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cleanupCancel()
+		eng.Cleanup(cleanupCtx)
 		cancel()
 	}()
 
 	err = server.Start()
-	if err != nil && err.Error() == "http: Server closed" {
+	if errors.Is(err, http.ErrServerClosed) {
+		<-shutdownDone
 		return nil
 	}
 	return err

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +25,39 @@ import (
 )
 
 const rieContainerPort = "8080/tcp"
+
+// Docker labels applied to every Lambda execution container. The port label
+// scopes ownership to one Tarn instance, so a startup sweep never touches
+// containers belonging to another Tarn running against the same Docker daemon.
+const (
+	labelManaged       = "tarn.managed"
+	labelManagedLambda = "lambda"
+	labelPort          = "tarn.port"
+	labelAccount       = "tarn.account"
+	labelFunction      = "tarn.function"
+)
+
+// containerRemoveTimeout bounds a single Docker remove issued after the
+// container has already been dropped from tracking.
+const containerRemoveTimeout = 30 * time.Second
+
+// lambdaOwnerLabels selects the Lambda containers owned by a Tarn instance
+// listening on port.
+func lambdaOwnerLabels(port int) map[string]string {
+	return map[string]string{
+		labelManaged: labelManagedLambda,
+		labelPort:    strconv.Itoa(port),
+	}
+}
+
+// lambdaContainerLabels labels a new Lambda container with its owner and,
+// for inspection, the function and account it serves.
+func lambdaContainerLabels(port int, accountID, functionName string) map[string]string {
+	labels := lambdaOwnerLabels(port)
+	labels[labelAccount] = accountID
+	labels[labelFunction] = functionName
+	return labels
+}
 
 // ContainerInfo holds metadata about a running Lambda container.
 type ContainerInfo struct {
@@ -300,6 +334,7 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 		Env:          env,
 		ExposedPorts: exposedPorts,
 		Cmd:          []string{fn.Handler},
+		Labels:       lambdaContainerLabels(e.cfg.Port, accountID, fn.FunctionName),
 	}
 	if len(entrypoint) > 0 {
 		containerCfg.Entrypoint = entrypoint
@@ -461,7 +496,9 @@ func (e *Engine) StopContainer(ctx context.Context, containerID string, timeoutS
 }
 
 // RemoveContainer removes a single container (by ID) and drops it from its
-// function's pool.
+// function's pool. The Docker removal ignores ctx cancellation: once the
+// container is untracked, an aborted remove would orphan it for good (for
+// example when the invoking HTTP client disconnects during a cold start).
 func (e *Engine) RemoveContainer(ctx context.Context, containerID string) error {
 	e.mu.Lock()
 	for name, pool := range e.containers {
@@ -477,7 +514,29 @@ func (e *Engine) RemoveContainer(ctx context.Context, containerID string) error 
 	}
 	e.mu.Unlock()
 
-	return e.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerRemoveTimeout)
+	defer cancel()
+	return e.client.ContainerRemove(removeCtx, containerID, container.RemoveOptions{Force: true})
+}
+
+// SweepOrphanedLambdaContainers force-removes Lambda containers left behind
+// by a previous run of this Tarn instance (crash, kill -9, closed terminal).
+// Call at startup, before any invoke creates a container, so every match is
+// an orphan. Returns the number removed.
+func (e *Engine) SweepOrphanedLambdaContainers(ctx context.Context) (int, error) {
+	orphans, err := e.ListContainersByLabel(ctx, lambdaOwnerLabels(e.cfg.Port))
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, c := range orphans {
+		if err := e.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true}); err != nil && !client.IsErrNotFound(err) {
+			log.Printf("[engine] failed to remove orphaned Lambda container %s: %v", shortID(c.ID), err)
+			continue
+		}
+		removed++
+	}
+	return removed, nil
 }
 
 // EvictContainer stops and removes ALL of a function's containers synchronously.
@@ -570,17 +629,29 @@ func readContainerLogStream(reader io.Reader) (string, error) {
 }
 
 // Cleanup stops and removes all managed containers across every function pool.
+// Containers are untracked under the lock, then stopped and removed in
+// parallel so shutdown time doesn't grow with pool size.
 func (e *Engine) Cleanup(ctx context.Context) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
+	var all []*ContainerInfo
 	for name, pool := range e.containers {
-		for _, info := range pool {
-			_ = e.client.ContainerStop(ctx, info.ID, container.StopOptions{})
-			_ = e.client.ContainerRemove(ctx, info.ID, container.RemoveOptions{Force: true})
-		}
+		all = append(all, pool...)
 		delete(e.containers, name)
 	}
+	e.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for _, info := range all {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			_ = e.StopContainer(ctx, id, 0)
+			if err := e.client.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err != nil && !client.IsErrNotFound(err) {
+				log.Printf("[engine] failed to remove Lambda container %s: %v", shortID(id), err)
+			}
+		}(info.ID)
+	}
+	wg.Wait()
 	e.cleanupTaskPayloadFiles()
 }
 
@@ -672,6 +743,13 @@ func rewritePostgresURL(rawURL string, proxyPort int) (newURL, upstream, dbName 
 	}
 	u.Host = fmt.Sprintf("localhost:%d", proxyPort)
 	return jdbcPrefix + u.String(), upstream, dbName, true
+}
+
+func shortID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
 
 func sanitizeName(name string) string {
