@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aircwo-systems/tarn/pkg/types"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -84,7 +85,7 @@ func TestReadContainerLogStreamPreservesInterleaving(t *testing.T) {
 		want.WriteString(record.line)
 	}
 
-	got, err := readContainerLogStream(bytes.NewReader(mux.Bytes()))
+	got, _, err := logFramesAfter(bytes.NewReader(mux.Bytes()), time.Time{})
 	if err != nil {
 		t.Fatalf("read container log stream: %v", err)
 	}

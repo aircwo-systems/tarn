@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"log"
@@ -21,7 +22,6 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 )
 
@@ -661,49 +661,47 @@ func (e *Engine) ContainerLogsSince(ctx context.Context, containerID string, sin
 	}
 	defer func() { _ = reader.Close() }()
 
-	raw, err := readContainerLogStream(reader)
-	if err != nil {
-		return "", since, err
-	}
-	text, last := logLinesAfter(raw, since)
-	return text, last, nil
+	return logFramesAfter(reader, since)
 }
 
-// logLinesAfter keeps lines of Docker timestamped output that are strictly
-// newer than since (Docker's own since filter is inclusive) and strips the
-// timestamp prefix. Lines without a parseable timestamp are kept as-is.
-func logLinesAfter(raw string, since time.Time) (string, time.Time) {
+// logFramesAfter reads Docker's multiplexed log stream, where every frame is
+// one log entry prefixed with its RFC3339Nano timestamp and a space. It keeps
+// entries strictly newer than since (Docker's own since filter is inclusive),
+// strips each entry's timestamp, and preserves stdout/stderr interleaving.
+// Working per frame matters for lines over 16 KB: Docker stores those as
+// several partial entries, each with its own timestamp, and they must be
+// rejoined without the timestamps in between. Entries without a parseable
+// timestamp are kept whole.
+func logFramesAfter(r io.Reader, since time.Time) (string, time.Time, error) {
 	var b strings.Builder
 	last := since
-	for _, line := range strings.SplitAfter(raw, "\n") {
-		if line == "" {
-			continue
+	var header [8]byte
+	for {
+		if _, err := io.ReadFull(r, header[:]); err != nil {
+			if err == io.EOF {
+				return b.String(), last, nil
+			}
+			return b.String(), last, err
 		}
-		stamp, rest, ok := strings.Cut(line, " ")
-		ts, err := time.Parse(time.RFC3339Nano, stamp)
+		frame := make([]byte, binary.BigEndian.Uint32(header[4:]))
+		if _, err := io.ReadFull(r, frame); err != nil {
+			return b.String(), last, err
+		}
+
+		stamp, entry, ok := bytes.Cut(frame, []byte(" "))
+		ts, err := time.Parse(time.RFC3339Nano, string(stamp))
 		if !ok || err != nil {
-			b.WriteString(line)
+			b.Write(frame)
 			continue
 		}
 		if !ts.After(since) {
 			continue
 		}
-		b.WriteString(rest)
+		b.Write(entry)
 		if ts.After(last) {
 			last = ts
 		}
 	}
-	return b.String(), last
-}
-
-func readContainerLogStream(reader io.Reader) (string, error) {
-	// Preserve stdout/stderr interleaving by writing both streams to the same
-	// destination buffer in the order frames are read.
-	var combined bytes.Buffer
-	if _, err := stdcopy.StdCopy(&combined, &combined, reader); err != nil {
-		return "", err
-	}
-	return combined.String(), nil
 }
 
 // Cleanup stops and removes all managed containers across every function pool.

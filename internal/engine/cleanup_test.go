@@ -261,3 +261,22 @@ func TestContainerLogsSinceReadsOnlyNewOutput(t *testing.T) {
 		t.Fatalf("read with no new output = %q, want empty", text)
 	}
 }
+
+func TestContainerLogsSinceJoinsPartialEntriesOfLongLines(t *testing.T) {
+	eng, fake := newFakeEngine(t, 4566)
+	// Docker's json-file driver splits lines over 16 KB into partial entries,
+	// each carrying its own timestamp; only the last ends in a newline.
+	head := strings.Repeat("a", 16*1024)
+	fake.logLines = []string{
+		"2026-09-26T10:00:00.000000001Z " + head,
+		"2026-09-26T10:00:00.000000002Z tailEND\n",
+	}
+
+	text, _, err := eng.ContainerLogsSince(context.Background(), "c1", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != head+"tailEND\n" {
+		t.Fatalf("long line not rejoined cleanly: len=%d, suffix %q", len(text), text[max(0, len(text)-60):])
+	}
+}
