@@ -47,6 +47,21 @@ export function pinnedLogRow(pin: PinnedLog, showGroup: boolean): { event: LogEv
   };
 }
 
+export function pinContextRows(
+  pin: PinnedLog,
+  older: LogEvent[],
+  newer: LogEvent[],
+  showGroup: boolean,
+  order: "asc" | "desc",
+): { events: LogEvent[]; selectedIndex: number; selectedKey: string } {
+  const { event: selected, key: selectedKey } = pinnedLogRow(pin, showGroup);
+  const direction = order === "desc" ? -1 : 1;
+  const events = [...older, selected, ...newer].sort(
+    (a, b) => direction * (Date.parse(a.timestamp) - Date.parse(b.timestamp)),
+  );
+  return { events, selectedIndex: events.indexOf(selected), selectedKey };
+}
+
 export function nextPinnedIndex(pins: PinnedLog[], currentId: string): number {
   if (pins.length === 0) return -1;
   return (pins.findIndex((pin) => pin.id === currentId) + 1) % pins.length;

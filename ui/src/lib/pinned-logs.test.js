@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { nextPinnedIndex, pinEventKey, pinEventSnapshot, pinnedLogId, pinnedLogRow, pinsForView, readPinnedLogs, savePinnedLogs } from "./pinned-logs";
+import { nextPinnedIndex, pinContextRows, pinEventKey, pinEventSnapshot, pinnedLogId, pinnedLogRow, pinsForView, readPinnedLogs, savePinnedLogs } from "./pinned-logs";
 
 describe("pinned log identity", () => {
   test("finds the same event in aggregated and group views", () => {
@@ -67,5 +67,22 @@ describe("pinned log identity", () => {
     const row = pinnedLogRow(pin, true);
     expect(row.event.streamName).toBe(`${group}/stream-1`);
     expect(pinEventKey(group, row.event, row.key)).toBe(key);
+  });
+
+  test("places a pin between surrounding logs in either sort order", () => {
+    const group = "/aws/lambda/orders";
+    const event = (time, message) => ({ timestamp: `2026-09-25T12:00:${time}Z`, message, level: "INFO", streamName: "stream-1" });
+    const pin = { id: pinnedLogId(group, "saved-key"), group, event: event("02", "pinned") };
+    const older = [event("01", "before")];
+    const newer = [event("03", "after")];
+
+    const ascending = pinContextRows(pin, older, newer, false, "asc");
+    expect(ascending.events.map((row) => row.message)).toEqual(["before", "pinned", "after"]);
+    expect(ascending.selectedIndex).toBe(1);
+    expect(ascending.selectedKey).toBe("saved-key");
+
+    const descending = pinContextRows(pin, older, newer, true, "desc");
+    expect(descending.events.map((row) => row.message)).toEqual(["after", "pinned", "before"]);
+    expect(descending.events[descending.selectedIndex].streamName).toBe(`${group}/stream-1`);
   });
 });

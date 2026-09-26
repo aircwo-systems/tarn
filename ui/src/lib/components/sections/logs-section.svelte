@@ -55,7 +55,7 @@
     type WaterfallRow,
   } from "$lib/trace-utils";
   import type { LogGroupSummary, LogEvent, RequestTrace } from "$lib/types";
-  import { nextPinnedIndex, pinEventKey, pinEventSnapshot, pinnedLogId, pinnedLogRow, pinsForView, readPinnedLogs, savePinnedLogs, type PinnedLog } from "$lib/pinned-logs";
+  import { nextPinnedIndex, pinContextRows, pinEventKey, pinEventSnapshot, pinnedLogId, pinnedLogRow, pinsForView, readPinnedLogs, savePinnedLogs, type PinnedLog } from "$lib/pinned-logs";
   import {
     logLocationWithFilters,
     type LogNavigationFilters,
@@ -117,6 +117,8 @@
   let pinnedLogs = $state<PinnedLog[]>([]);
   let pinError = $state("");
   let pinsOnly = $state(false);
+  let contextSelection = $state<{ index: number; key: string; pinId: string } | null>(null);
+  let pendingPin: PinnedLog | null = null;
 
   // Filters
   // Selected levels; empty = all. Sent as a comma set (level=ERROR,WARN).
@@ -199,7 +201,13 @@
 
 
   const isAllGroup = $derived(selectedGroup === ALL_GROUP);
-  const keys = $derived(keyEvents(events));
+  const keys = $derived.by(() => {
+    const result = keyEvents(events);
+    if (contextSelection && contextSelection.index < result.length) {
+      result[contextSelection.index] = contextSelection.key;
+    }
+    return result;
+  });
   const isFirstPage = $derived(!eventsCursor);
   const isLive = $derived(autoRefresh && isFirstPage && !pinsOnly);
 
@@ -242,7 +250,12 @@
   });
 
   $effect(() => {
-    if (selectedGroup) untrack(() => loadEvents());
+    if (selectedGroup) untrack(() => {
+      const pin = pendingPin;
+      pendingPin = null;
+      if (pin) void loadPinContext(pin);
+      else void loadEvents();
+    });
   });
 
   // Live tail: merge newest events into the buffer rather than replacing it.
@@ -333,6 +346,8 @@
     if (!selectedGroup) return;
     // A background tick never interrupts a user-initiated load.
     if (opts.merge && eventsController) return;
+    // Merges shift row indexes, so any pin context position is stale either way.
+    contextSelection = null;
     eventsController?.abort();
     const ctrl = new AbortController();
     eventsController = ctrl;
@@ -376,6 +391,71 @@
     }
   }
 
+  async function loadPinContext(pin: PinnedLog) {
+    const group = selectedGroup;
+    if (!group) return;
+    const selectedGroups = [...selectedGroupList];
+    const showGroup = group === ALL_GROUP || selectedGroups.length > 1;
+    eventsController?.abort();
+    const ctrl = new AbortController();
+    eventsController = ctrl;
+    eventsLoading = true;
+    eventsError = "";
+    pinError = "";
+    autoRefresh = false;
+    pinsOnly = false;
+    filterLevels = [];
+    filterPattern = "";
+    filterStream = "";
+    showFilters = false;
+    highlightTimestamp = "";
+    resetPaging();
+    events = [];
+    eventsTotal = 0;
+    const groupParam = selectedGroups.length > 1 ? "groups" : "group";
+    history.replaceState(
+      history.state,
+      "",
+      filteredLogLocation(`#logs?${groupParam}=${encodeURIComponent(group)}`),
+    );
+
+    const fetchSide = (order: LogSortOrder) => {
+      const params: FetchLogEventsParams = {
+        limit: Math.max(1, Math.floor(eventsLimit / 2)),
+        order,
+        cursor: pin.event.timestamp,
+      };
+      if (group === ALL_GROUP) return fetchAllLogEvents(params, ctrl.signal);
+      if (selectedGroups.length > 1) {
+        return fetchAllLogEvents({ ...params, groups: selectedGroups }, ctrl.signal);
+      }
+      return fetchLogEvents(group, params, ctrl.signal);
+    };
+
+    try {
+      const [older, newer] = await Promise.all([fetchSide("desc"), fetchSide("asc")]);
+      if (ctrl.signal.aborted || selectedGroup !== group) return;
+      // Cursor pages exclude the timestamp itself; insert the saved pin between them.
+      const context = pinContextRows(pin, older.events ?? [], newer.events ?? [], showGroup, sortOrder);
+      events = context.events;
+      eventsTotal = Math.max(older.total ?? 0, newer.total ?? 0, events.length);
+      contextSelection = { index: context.selectedIndex, key: context.selectedKey, pinId: pin.id };
+      selectedEvent = events[context.selectedIndex];
+      selectedKey = context.selectedKey;
+      await tick();
+      if (!ctrl.signal.aborted) stream?.scrollToIndex(context.selectedIndex);
+    } catch (err) {
+      if (!ctrl.signal.aborted) {
+        eventsError = err instanceof Error ? err.message : "Failed to load logs around pin";
+      }
+    } finally {
+      if (eventsController === ctrl) {
+        eventsController = null;
+        eventsLoading = false;
+      }
+    }
+  }
+
   function mergeEvents(current: LogEvent[], fetched: LogEvent[]): LogEvent[] {
     if (fetched.length === 0) return current;
     const known = new Set(keyEvents(current));
@@ -401,6 +481,7 @@
     eventsCursor = null;
     prevCursors = [];
     nextCursor = null;
+    contextSelection = null;
     selectedEvent = null;
     selectedKey = null;
   }
@@ -590,6 +671,15 @@
 
   async function toggleSort() {
     sortOrder = sortOrder === "desc" ? "asc" : "desc";
+    if (contextSelection && !pinsOnly) {
+      const index = events.length - 1 - contextSelection.index;
+      events = [...events].reverse();
+      contextSelection = { index, key: contextSelection.key, pinId: contextSelection.pinId };
+      syncLogLocation();
+      await tick();
+      stream?.scrollToIndex(index);
+      return;
+    }
     if (pinsOnly) {
       await tick();
       const index = displayKeys.indexOf(selectedKey ?? "");
@@ -688,10 +778,12 @@
   }
 
   function openPin(pin: PinnedLog) {
-    selectGroup(pin.group);
-    pinsOnly = true;
-    selectedEvent = pin.event;
-    selectedKey = pin.id.slice(pin.group.length + 1);
+    if (!selectedGroup || (selectedGroup !== ALL_GROUP && !selectedGroupList.includes(pin.group))) {
+      pendingPin = pin;
+      selectGroup(pin.group);
+      return;
+    }
+    void loadPinContext(pin);
   }
 
   async function togglePinsOnly() {
@@ -707,16 +799,14 @@
 
   async function nextPin() {
     if (scopedPins.length === 0) return;
-    const currentId = selectedEvent && selectedKey
+    const selectedId = selectedEvent && selectedKey
       ? pinnedLogId(groupForEvent(selectedEvent), pinEventKey(groupForEvent(selectedEvent), selectedEvent, selectedKey))
       : "";
+    const currentId = scopedPins.some((pin) => pin.id === selectedId)
+      ? selectedId
+      : contextSelection?.pinId ?? "";
     const index = nextPinnedIndex(scopedPins, currentId);
-    pinsOnly = true;
-    autoRefresh = false;
-    await tick();
-    selectEvent(displayEvents[index], displayKeys[index]);
-    await tick();
-    stream?.scrollToIndex(index);
+    await loadPinContext(scopedPins[index]);
   }
 
   function unpin(pin: PinnedLog) {
@@ -820,10 +910,12 @@
   const selectedGroupIsLambda = $derived(selectedGroup.startsWith("/aws/lambda/"));
   const hasNextPage = $derived(!!nextCursor);
   const hasPrevPage = $derived(prevCursors.length > 0 || !!eventsCursor);
-  const hasPagination = $derived(!pinsOnly && !isLive && (hasNextPage || hasPrevPage));
+  const hasPagination = $derived(!pinsOnly && !contextSelection && !isLive && (hasNextPage || hasPrevPage));
   const pageInfo = $derived(
     pinsOnly
       ? `${scopedPins.length.toLocaleString()} pinned ${scopedPins.length === 1 ? "event" : "events"}`
+      : contextSelection
+      ? `${events.length.toLocaleString()} ${events.length === 1 ? "event" : "events"} around pin`
       : events.length > 0 ? `${events.length.toLocaleString()} of ${eventsTotal.toLocaleString()} events` : "No events",
   );
 
@@ -1009,7 +1101,7 @@
             title: sortOrder === "desc" ? "Showing newest first" : "Showing oldest first",
           })}
           {@render toolButton("Next pin", CaretRightIcon, nextPin, {
-            disabled: scopedPins.length === 0,
+            disabled: eventsLoading || scopedPins.length === 0,
             title: scopedPins.length > 0 ? `Go to next of ${scopedPins.length} pinned logs` : "No pins in this log selection",
           })}
           {@render toolButton("Pins only", PushPinIcon, togglePinsOnly, {
