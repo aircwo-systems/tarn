@@ -127,6 +127,8 @@ Ordered by expected impact. P0 means it degrades or breaks under sustained load 
 
 ### P0-1: Lambda log ingestion re-reads the whole container log on every invoke
 
+**Status: partly fixed** (`e768249`, `5ebf541`). Tarn now asks Docker only for output since the last ingested line, the Tail result covers only the current invocation, and Docker log files are capped at 10 MB × 2. Docker still decodes its log file from the start on every read, so the per-invoke cost is bounded by the cap (about 20 MB) rather than removed. Following each container's log stream once is the complete fix.
+
 `invokeWithRetry` calls `ingestContainerLogs` after every invoke (`lambda/service.go:765`). That calls `ContainerLogs` with no `Since` (`engine/container.go`), downloads the container's full stdout/stderr from Docker, and slices it by a byte offset. A warm container lives for up to 10 minutes, so invoke N transfers and demuxes all output from invokes 1 through N-1. The cost grows quadratically over the container's life. `LogType: Tail` reads the full log a second time.
 
 Lambda containers are also created without `LogConfig`, so Docker's json-file logs grow without bound on the user's disk.
@@ -152,6 +154,8 @@ Fix: when a poll returns a full batch, poll again immediately. Run up to `Scalin
 
 ### P0-4: SQS FIFO delivers the next message of a group while an earlier one is in flight
 
+**Status: fixed** (`5b21464`).
+
 This is a correctness bug. `ReceiveMessage` (`sqs/store.go:437`) skips invisible messages with `continue` *before* it records the group in `seenGroups`. The in-flight message therefore doesn't block its group.
 
 Reproduced:
@@ -166,6 +170,8 @@ Fix: mark the group as seen for every non-deleted, unexpired message in the grou
 
 ### P0-5: HTTP WriteTimeout (300s) is shorter than the Lambda maximum (900s)
 
+**Status: fixed** (`5e349c5`).
+
 `api/server.go:163` has the comment "Lambda can run up to 15 min", but the value is 5 minutes. Synchronous invokes over 5 minutes have their connection cut.
 
 `ReadTimeout` of 30s also cuts large S3 uploads on slow links.
@@ -173,6 +179,8 @@ Fix: mark the group as seen for every non-deleted, unexpired message in the grou
 Fix: `WriteTimeout: 0` with per-handler deadlines via `http.ResponseController`, or at least 15m+. Use `ReadHeaderTimeout` instead of `ReadTimeout`.
 
 ### P1-1: DynamoDB and SQS persistence rewrites the whole state every 250ms
+
+**Status: flush on shutdown fixed** (`7ccabc3`) for all ten JSON-snapshot stores, with snapshot writes serialized. Whole-state rewrites remain open.
 
 Any write marks the store dirty. Every 250ms the flusher `json.Marshal`s the *entire* store and rewrites one file (`dynamodb/store.go:158`, `sqs/store.go:983`). For DynamoDB the marshal runs under `s.mu.RLock`, so all writers stall for the whole marshal. Both the stall and the disk I/O grow with total data size, not with write rate. A 200 MB table under steady writes means about 800 MB/s of serialization.
 
