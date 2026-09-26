@@ -134,10 +134,7 @@
     />
   </div>
 
-  <RcPanel title="Messages" description="Live payloads currently on this queue." index={0}>
-    {#snippet actions()}
-      <button type="button" class="btn ghost" onclick={onrefresh} disabled={loading}>Refresh</button>
-    {/snippet}
+  <RcPanel title="Messages" description="Live payloads currently on this queue." index={0} flat>
     {#if error}
       <p class="error">{error}</p>
     {/if}
@@ -250,8 +247,6 @@
   .btn:hover:not(:disabled) { color: var(--text-primary); border-color: var(--border-default); background: var(--bg-element-hover); }
   .btn:active:not(:disabled) { transform: scale(0.96); }
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-  .btn.ghost { height: 24px; padding: 0 9px; font-size: 11px; border-color: transparent; }
-  .btn.ghost:hover:not(:disabled) { border-color: var(--border-subtle); }
   .btn:focus-visible { outline: 1px solid var(--border-focus); outline-offset: 2px; }
 
   .stats {
