@@ -444,15 +444,22 @@ func (s *Store) ReceiveMessage(name string, maxCount, visTimeout int) ([]*types.
 		if m.ExpiresAt <= now {
 			continue
 		}
+
+		// FIFO: the oldest live message heads its group. While it is in flight
+		// or delayed, nothing behind it in the same group may be delivered.
+		if q.config.FifoQueue {
+			if seenGroups[m.MessageGroupId] {
+				continue
+			}
+			if m.VisibleAt > now || m.DelayUntil > now {
+				seenGroups[m.MessageGroupId] = true
+				continue
+			}
+		}
 		if m.VisibleAt > now {
 			continue
 		}
 		if m.DelayUntil > now {
-			continue
-		}
-
-		// FIFO: ensure ordering within message groups
-		if q.config.FifoQueue && seenGroups[m.MessageGroupId] {
 			continue
 		}
 

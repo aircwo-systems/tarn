@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 func newTestStore() *Store {
@@ -366,6 +367,41 @@ func TestFIFOOrdering(t *testing.T) {
 	if msgs[0].Body != "A" {
 		t.Fatalf("expected first message 'A', got %q", msgs[0].Body)
 	}
+}
+
+func TestFIFOInFlightMessageBlocksItsGroup(t *testing.T) {
+	s := newTestStore()
+	s.CreateQueue("order.fifo", map[string]string{"FifoQueue": "true"}, nil)
+	s.SendMessage("order.fifo", "A1", 0, nil, "A", "a1")
+	s.SendMessage("order.fifo", "A2", 0, nil, "A", "a2")
+	s.SendMessage("order.fifo", "B1", 0, nil, "B", "b1")
+
+	first, _ := s.ReceiveMessage("order.fifo", 1, 30)
+	if len(first) != 1 || first[0].Body != "A1" {
+		t.Fatalf("expected A1 first, got %v", bodies(first))
+	}
+
+	// A1 is in flight, so group A is blocked; only group B can be served.
+	second, _ := s.ReceiveMessage("order.fifo", 10, 30)
+	if got := bodies(second); len(got) != 1 || got[0] != "B1" {
+		t.Fatalf("expected only B1 while A1 in flight, got %v", got)
+	}
+
+	if err := s.DeleteMessage("order.fifo", first[0].ReceiptHandle); err != nil {
+		t.Fatal(err)
+	}
+	third, _ := s.ReceiveMessage("order.fifo", 10, 30)
+	if got := bodies(third); len(got) != 1 || got[0] != "A2" {
+		t.Fatalf("expected A2 after A1 deleted, got %v", got)
+	}
+}
+
+func bodies(msgs []*types.SQSMessage) []string {
+	out := make([]string, 0, len(msgs))
+	for _, m := range msgs {
+		out = append(out, m.Body)
+	}
+	return out
 }
 
 func TestFIFODeduplication(t *testing.T) {
