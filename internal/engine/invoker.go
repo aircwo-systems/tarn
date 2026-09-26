@@ -3,7 +3,6 @@ package engine
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
 	"log"
@@ -119,31 +118,6 @@ func (inv *Invoker) Invoke(ctx context.Context, hostPort string, input *types.In
 	// The RIE sets this header when the function returns an error
 	if fnErr := resp.Header.Get("X-Amz-Function-Error"); fnErr != "" {
 		output.FunctionError = fnErr
-	}
-
-	return output, nil
-}
-
-// InvokeWithLogs invokes the function and also captures logs if requested.
-func (inv *Invoker) InvokeWithLogs(ctx context.Context, eng *Engine, info *ContainerInfo, input *types.InvokeInput) (*types.InvokeOutput, error) {
-	output, err := inv.Invoke(ctx, info.HostPort, input)
-	if err != nil {
-		return nil, err
-	}
-
-	// Capture logs if LogType is Tail
-	if input.LogType == "Tail" {
-		logCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		logs, logErr := eng.ContainerLogs(logCtx, info.ID)
-		if logErr == nil && logs != "" {
-			// AWS returns last 4KB base64-encoded
-			logBytes := []byte(logs)
-			if len(logBytes) > 4096 {
-				logBytes = logBytes[len(logBytes)-4096:]
-			}
-			output.LogResult = base64.StdEncoding.EncodeToString(logBytes)
-		}
 	}
 
 	return output, nil

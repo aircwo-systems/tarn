@@ -2,6 +2,7 @@ package lambda
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -31,7 +32,7 @@ type Service struct {
 	startMu sync.Map // per-function mutex to prevent duplicate cold starts
 
 	logCursorMu sync.Mutex
-	logCursors  map[string]int
+	logCursors  map[string]time.Time // container ID -> timestamp of last ingested line
 	metricsMu   sync.RWMutex
 	metrics     map[string]*FunctionMetrics
 }
@@ -63,7 +64,7 @@ func NewService(cfg *config.Config, store *Store, eng *engine.Engine, pool *engi
 		pool:       pool,
 		invoker:    engine.NewInvoker(),
 		logsSvc:    logsSvc,
-		logCursors: make(map[string]int),
+		logCursors: make(map[string]time.Time),
 		metrics:    make(map[string]*FunctionMetrics),
 	}
 }
@@ -761,9 +762,12 @@ func (s *Service) invokeWithRetry(ctx context.Context, info *engine.ContainerInf
 	}
 
 	for attempt := 1; attempt <= attempts; attempt++ {
-		output, err := s.invoker.InvokeWithLogs(ctx, s.engine, info, input)
-		s.ingestContainerLogs(input.FunctionName, info)
+		output, err := s.invoker.Invoke(ctx, info.HostPort, input)
+		newLogs := s.ingestContainerLogs(input.FunctionName, info)
 		if err == nil {
+			if input.LogType == "Tail" {
+				output.LogResult = tailLogResult(newLogs)
+			}
 			return output, nil
 		}
 
@@ -919,29 +923,45 @@ func (s *Service) evictWarmContainer(functionName string) {
 	s.engine.EvictContainerAsync(functionName)
 }
 
-func (s *Service) ingestContainerLogs(functionName string, info *engine.ContainerInfo) {
+// ingestContainerLogs moves output the container wrote since the last ingest
+// into the function's log group and returns it.
+func (s *Service) ingestContainerLogs(functionName string, info *engine.ContainerInfo) string {
 	if s.logsSvc == nil || s.engine == nil || info == nil {
-		return
+		return ""
 	}
 
 	logCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	rawLogs, err := s.engine.ContainerLogs(logCtx, info.ID)
-	if err != nil || rawLogs == "" {
-		return
+	s.logCursorMu.Lock()
+	since := s.logCursors[info.ID]
+	s.logCursorMu.Unlock()
+
+	newLogs, last, err := s.engine.ContainerLogsSince(logCtx, info.ID, since)
+	if err != nil || newLogs == "" {
+		return ""
 	}
 
-	newLogs := s.consumeNewContainerLogs(info.ID, rawLogs)
-	if newLogs == "" {
-		return
-	}
+	s.logCursorMu.Lock()
+	s.logCursors[info.ID] = last
+	s.logCursorMu.Unlock()
 
 	streamName := info.ID
 	if len(streamName) > 12 {
 		streamName = streamName[:12]
 	}
 	s.logsSvc.IngestContainerLogs(functionName, streamName, newLogs)
+	return newLogs
+}
+
+// tailLogResult encodes an invocation's log output the way Invoke returns it
+// for LogType Tail: the last 4 KB, base64 encoded.
+func tailLogResult(logs string) string {
+	const maxTailBytes = 4096
+	if len(logs) > maxTailBytes {
+		logs = logs[len(logs)-maxTailBytes:]
+	}
+	return base64.StdEncoding.EncodeToString([]byte(logs))
 }
 
 func (s *Service) logFunctionRuntimeEvent(functionName string, level logssvc.LogLevel, message string) {
@@ -963,20 +983,6 @@ func (s *Service) logFunctionRuntimeEvent(functionName string, level logssvc.Log
 		Source:    logssvc.SourceRuntime,
 	}})
 	s.logsSvc.LogSystemEvent(level, fmt.Sprintf("%s: %s", functionName, message))
-}
-
-func (s *Service) consumeNewContainerLogs(containerID, rawLogs string) string {
-	s.logCursorMu.Lock()
-	defer s.logCursorMu.Unlock()
-
-	offset := s.logCursors[containerID]
-	if offset < 0 || offset > len(rawLogs) {
-		offset = 0
-	}
-
-	newLogs := rawLogs[offset:]
-	s.logCursors[containerID] = len(rawLogs)
-	return newLogs
 }
 
 func (s *Service) clearLogCursor(containerID string) {

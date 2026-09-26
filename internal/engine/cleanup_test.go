@@ -5,15 +5,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/pkg/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 )
 
 // fakeDocker is a minimal Docker Engine API server that records the calls
@@ -23,8 +26,14 @@ type fakeDocker struct {
 	listed    []container.Summary
 	listQuery filters.Args
 	created   container.Config
+	host      container.HostConfig
 	stopped   []string
 	removed   []string
+
+	// logLines are "<RFC3339Nano timestamp> <message>\n" entries served by
+	// the logs endpoint; logSince records each request's since parameter.
+	logLines []string
+	logSince []string
 }
 
 func (f *fakeDocker) handler(w http.ResponseWriter, r *http.Request) {
@@ -39,9 +48,29 @@ func (f *fakeDocker) handler(w http.ResponseWriter, r *http.Request) {
 		f.listQuery, _ = filters.FromJSON(r.URL.Query().Get("filters"))
 		_ = json.NewEncoder(w).Encode(f.listed)
 	case r.Method == http.MethodPost && path == "/containers/create":
-		_ = json.NewDecoder(r.Body).Decode(&f.created)
+		var req container.CreateRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Config != nil {
+			f.created = *req.Config
+		}
+		if req.HostConfig != nil {
+			f.host = *req.HostConfig
+		}
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"Id":"created-id"}`))
+	case r.Method == http.MethodGet && strings.HasSuffix(path, "/logs"):
+		since := r.URL.Query().Get("since")
+		f.logSince = append(f.logSince, since)
+		out := stdcopy.NewStdWriter(w, stdcopy.Stdout)
+		for _, line := range f.logLines {
+			stamp, _, _ := strings.Cut(line, " ")
+			ts, _ := time.Parse(time.RFC3339Nano, stamp)
+			// Docker's since filter is inclusive.
+			if since != "" && ts.Before(parseDockerSince(since)) {
+				continue
+			}
+			_, _ = out.Write([]byte(line))
+		}
 	case r.Method == http.MethodPost && strings.HasSuffix(path, "/stop"):
 		f.stopped = append(f.stopped, strings.TrimSuffix(strings.TrimPrefix(path, "/containers/"), "/stop"))
 		w.WriteHeader(http.StatusNoContent)
@@ -51,6 +80,15 @@ func (f *fakeDocker) handler(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+// parseDockerSince parses the "<seconds>.<nanoseconds>" form the Docker client
+// sends for LogsOptions.Since.
+func parseDockerSince(v string) time.Time {
+	sec, nsec, _ := strings.Cut(v, ".")
+	s, _ := strconv.ParseInt(sec, 10, 64)
+	n, _ := strconv.ParseInt(nsec, 10, 64)
+	return time.Unix(s, n)
 }
 
 func newFakeEngine(t *testing.T, port int) (*Engine, *fakeDocker) {
@@ -168,5 +206,58 @@ func TestSweepLegacyLambdaContainersRemovesOnlyStoppedUnlabelled(t *testing.T) {
 	}
 	if strings.Join(fake.removed, ",") != "old-tarn,old-openstack" {
 		t.Fatalf("removed %v", fake.removed)
+	}
+}
+
+func TestCreateContainerCapsDockerLogFiles(t *testing.T) {
+	eng, fake := newFakeEngine(t, 4566)
+	fn := &types.FunctionConfig{FunctionName: "orders", Runtime: types.RuntimeNodeJS20, Handler: "index.handler", MemorySize: 128}
+
+	if _, err := eng.CreateContainer(context.Background(), fn, t.TempDir(), nil, "111111111111"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := fake.host.LogConfig
+	if cfg.Type != "json-file" || cfg.Config["max-size"] == "" || cfg.Config["max-file"] == "" {
+		t.Fatalf("Lambda container log files must be capped, got %+v", cfg)
+	}
+}
+
+func TestContainerLogsSinceReadsOnlyNewOutput(t *testing.T) {
+	eng, fake := newFakeEngine(t, 4566)
+	fake.logLines = []string{
+		"2026-09-26T10:00:00.000000001Z START\n",
+		"2026-09-26T10:00:00.000000002Z first invoke\n",
+	}
+	ctx := context.Background()
+
+	text, last, err := eng.ContainerLogsSince(ctx, "c1", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "START\nfirst invoke\n" {
+		t.Fatalf("first read = %q", text)
+	}
+	if fake.logSince[0] != "" {
+		t.Fatalf("first read should not filter, sent since=%q", fake.logSince[0])
+	}
+
+	fake.logLines = append(fake.logLines, "2026-09-26T10:00:01.5Z second invoke\n")
+	text, last, err = eng.ContainerLogsSince(ctx, "c1", last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "second invoke\n" {
+		t.Fatalf("second read = %q, want only the new line (the boundary line must not repeat)", text)
+	}
+	if fake.logSince[1] == "" {
+		t.Fatal("second read must ask Docker for output since the last line")
+	}
+
+	text, _, err = eng.ContainerLogsSince(ctx, "c1", last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text != "" {
+		t.Fatalf("read with no new output = %q, want empty", text)
 	}
 }

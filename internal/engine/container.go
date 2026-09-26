@@ -369,6 +369,13 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 			},
 		},
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
+		// Warm containers live for minutes under sustained load; cap Docker's
+		// on-disk log so it can't grow without bound. Tarn ingests output
+		// incrementally after each invoke, so rotation loses nothing it needs.
+		LogConfig: container.LogConfig{
+			Type:   "json-file",
+			Config: map[string]string{"max-size": "10m", "max-file": "2"},
+		},
 	}
 
 	name := fmt.Sprintf("tarn-lambda-%s-%d", sanitizeName(fn.FunctionName), time.Now().UnixMilli())
@@ -638,36 +645,55 @@ func (e *Engine) GetContainer(functionName string) (*ContainerInfo, bool) {
 	return pool[0], true
 }
 
-// ContainerLogs retrieves stdout/stderr logs from a container.
-// Docker multiplexes stdout/stderr with 8-byte headers; stdcopy demuxes them.
-func (e *Engine) ContainerLogs(ctx context.Context, containerID string) (string, error) {
-	reader, err := e.client.ContainerLogs(ctx, containerID, container.LogsOptions{
-		ShowStdout: true,
-		ShowStderr: true,
-		Timestamps: false,
-	})
+// ContainerLogsSince returns the container's stdout/stderr written after since
+// (all output when since is zero), with Docker's timestamps stripped, and the
+// timestamp of the last line returned. Passing that timestamp back on the next
+// call reads only new output, so each read costs the new output rather than
+// the container's whole log history.
+func (e *Engine) ContainerLogsSince(ctx context.Context, containerID string, since time.Time) (string, time.Time, error) {
+	opts := container.LogsOptions{ShowStdout: true, ShowStderr: true, Timestamps: true}
+	if !since.IsZero() {
+		opts.Since = since.Format(time.RFC3339Nano)
+	}
+	reader, err := e.client.ContainerLogs(ctx, containerID, opts)
 	if err != nil {
-		return "", err
+		return "", since, err
 	}
 	defer func() { _ = reader.Close() }()
 
-	logs, err := readContainerLogStream(reader)
+	raw, err := readContainerLogStream(reader)
 	if err != nil {
-		// Fallback: some container configs use raw stream (no mux headers)
-		var raw strings.Builder
-		reader2, err2 := e.client.ContainerLogs(ctx, containerID, container.LogsOptions{
-			ShowStdout: true,
-			ShowStderr: true,
-		})
-		if err2 != nil {
-			return "", err2
-		}
-		defer func() { _ = reader2.Close() }()
-		_, _ = io.Copy(&raw, reader2)
-		return raw.String(), nil
+		return "", since, err
 	}
+	text, last := logLinesAfter(raw, since)
+	return text, last, nil
+}
 
-	return logs, nil
+// logLinesAfter keeps lines of Docker timestamped output that are strictly
+// newer than since (Docker's own since filter is inclusive) and strips the
+// timestamp prefix. Lines without a parseable timestamp are kept as-is.
+func logLinesAfter(raw string, since time.Time) (string, time.Time) {
+	var b strings.Builder
+	last := since
+	for _, line := range strings.SplitAfter(raw, "\n") {
+		if line == "" {
+			continue
+		}
+		stamp, rest, ok := strings.Cut(line, " ")
+		ts, err := time.Parse(time.RFC3339Nano, stamp)
+		if !ok || err != nil {
+			b.WriteString(line)
+			continue
+		}
+		if !ts.After(since) {
+			continue
+		}
+		b.WriteString(rest)
+		if ts.After(last) {
+			last = ts
+		}
+	}
+	return b.String(), last
 }
 
 func readContainerLogStream(reader io.Reader) (string, error) {

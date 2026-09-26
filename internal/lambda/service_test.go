@@ -2,6 +2,7 @@ package lambda
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 	"testing"
@@ -95,29 +96,17 @@ func TestUpdateFunctionsPopulateLastUpdateStatus(t *testing.T) {
 	}
 }
 
-func TestConsumeNewContainerLogs(t *testing.T) {
-	svc := &Service{
-		logCursors: make(map[string]int),
+func TestTailLogResultKeepsLast4KBOfInvocation(t *testing.T) {
+	short := "START\nhello\nEND\n"
+	got, _ := base64.StdEncoding.DecodeString(tailLogResult(short))
+	if string(got) != short {
+		t.Fatalf("short log = %q, want it whole", got)
 	}
 
-	first := svc.consumeNewContainerLogs("container-1", "line-1\nline-2\n")
-	if first != "line-1\nline-2\n" {
-		t.Fatalf("first consume = %q, want full log payload", first)
-	}
-
-	second := svc.consumeNewContainerLogs("container-1", "line-1\nline-2\n")
-	if second != "" {
-		t.Fatalf("second consume = %q, want empty delta", second)
-	}
-
-	third := svc.consumeNewContainerLogs("container-1", "line-1\nline-2\nline-3\n")
-	if third != "line-3\n" {
-		t.Fatalf("third consume = %q, want only appended payload", third)
-	}
-
-	reset := svc.consumeNewContainerLogs("container-1", "line-a\n")
-	if reset != "line-a\n" {
-		t.Fatalf("reset consume = %q, want full payload after truncation", reset)
+	long := strings.Repeat("x", 5000) + "tail-marker"
+	got, _ = base64.StdEncoding.DecodeString(tailLogResult(long))
+	if len(got) != 4096 || !strings.HasSuffix(string(got), "tail-marker") {
+		t.Fatalf("long log kept %d bytes ending %q, want the last 4096", len(got), string(got[len(got)-11:]))
 	}
 }
 
