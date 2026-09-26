@@ -146,3 +146,27 @@ func TestCleanupStopsAndRemovesEveryPool(t *testing.T) {
 		t.Fatalf("pools still tracked: %v", eng.containers)
 	}
 }
+
+func TestSweepLegacyLambdaContainersRemovesOnlyStoppedUnlabelled(t *testing.T) {
+	eng, fake := newFakeEngine(t, 4566)
+	lambdaImage := "public.ecr.aws/lambda/nodejs:20"
+	fake.listed = []container.Summary{
+		{ID: "old-tarn", Names: []string{"/tarn-lambda-orders-1790340836404"}, Image: lambdaImage, State: "exited"},
+		{ID: "old-openstack", Names: []string{"/openstack-lambda-billing-1772917465172"}, Image: lambdaImage, State: "created"},
+		{ID: "old-running", Names: []string{"/tarn-lambda-live-1790340836404"}, Image: lambdaImage, State: "running"},
+		{ID: "labelled", Names: []string{"/tarn-lambda-orders-1790340836405"}, Image: lambdaImage, State: "exited", Labels: map[string]string{labelManaged: labelManagedLambda}},
+		{ID: "other-image", Names: []string{"/tarn-lambda-orders-1790340836406"}, Image: "node:20", State: "exited"},
+		{ID: "user-container", Names: []string{"/my-postgres"}, Image: "postgres", State: "exited"},
+	}
+
+	names, err := eng.SweepLegacyLambdaContainers(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(names, ",") != "tarn-lambda-orders-1790340836404,openstack-lambda-billing-1772917465172" {
+		t.Fatalf("names = %v", names)
+	}
+	if strings.Join(fake.removed, ",") != "old-tarn,old-openstack" {
+		t.Fatalf("removed %v", fake.removed)
+	}
+}

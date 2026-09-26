@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +37,13 @@ const (
 	labelAccount       = "tarn.account"
 	labelFunction      = "tarn.function"
 )
+
+// LambdaContainerName matches Docker names of Lambda containers created by
+// Tarn (and its former name, OpenStack), labelled or not.
+var LambdaContainerName = regexp.MustCompile(`^/(?:tarn|openstack)-lambda-.+-[0-9]{13}$`)
+
+// lambdaImagePrefix is the registry path of every AWS Lambda base image.
+const lambdaImagePrefix = "public.ecr.aws/lambda/"
 
 // containerRemoveTimeout bounds a single Docker remove issued after the
 // container has already been dropped from tracking.
@@ -537,6 +545,50 @@ func (e *Engine) SweepOrphanedLambdaContainers(ctx context.Context) (int, error)
 		removed++
 	}
 	return removed, nil
+}
+
+// SweepLegacyLambdaContainers removes stopped Lambda containers created by
+// Tarn versions that predate ownership labels. Running ones are left alone:
+// without labels they may belong to another Tarn instance still using them.
+// Returns the names of the containers removed.
+func (e *Engine) SweepLegacyLambdaContainers(ctx context.Context) ([]string, error) {
+	all, err := e.client.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers: %w", err)
+	}
+	var removed []string
+	for _, c := range all {
+		name, ok := legacyStoppedLambdaName(c)
+		if !ok {
+			continue
+		}
+		if err := e.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{}); err != nil && !client.IsErrNotFound(err) {
+			log.Printf("[engine] failed to remove stopped Lambda container %s: %v", name, err)
+			continue
+		}
+		removed = append(removed, name)
+	}
+	return removed, nil
+}
+
+// legacyStoppedLambdaName reports whether c is a stopped, unlabelled Lambda
+// container from an older Tarn, returning its name without the leading slash.
+func legacyStoppedLambdaName(c container.Summary) (string, bool) {
+	if _, labelled := c.Labels[labelManaged]; labelled {
+		return "", false
+	}
+	if c.State != "exited" && c.State != "dead" && c.State != "created" {
+		return "", false
+	}
+	if !strings.HasPrefix(c.Image, lambdaImagePrefix) {
+		return "", false
+	}
+	for _, name := range c.Names {
+		if LambdaContainerName.MatchString(name) {
+			return strings.TrimPrefix(name, "/"), true
+		}
+	}
+	return "", false
 }
 
 // EvictContainer stops and removes ALL of a function's containers synchronously.

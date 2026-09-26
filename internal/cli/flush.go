@@ -10,10 +10,10 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/aircwo-systems/tarn/internal/engine"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/spf13/cobra"
@@ -29,8 +29,6 @@ type flushOptions struct {
 	AccountID             string
 	PruneLambdaContainers bool
 }
-
-var lambdaContainerName = regexp.MustCompile(`^/(?:tarn|openstack)-lambda-.+-[0-9]{13}$`)
 
 type flushDockerClient interface {
 	ContainerList(context.Context, container.ListOptions) ([]container.Summary, error)
@@ -529,7 +527,7 @@ func listStoppedLambdaContainers(ctx context.Context, docker flushDockerClient, 
 			continue
 		}
 		for _, name := range c.Names {
-			if lambdaContainerName.MatchString(name) && matchesGroupName(name, group) {
+			if engine.LambdaContainerName.MatchString(name) && matchesGroupName(name, group) {
 				c.Names = []string{name}
 				selected = append(selected, c)
 				break

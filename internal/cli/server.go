@@ -390,6 +390,13 @@ func startServer(cfg *config.Config) error {
 	} else if n > 0 {
 		log.Printf("[engine] removed %d orphaned Lambda container(s) from a previous run", n)
 	}
+	if dockerPingErr == nil {
+		if names, err := eng.SweepLegacyLambdaContainers(ctx); err != nil {
+			log.Printf("WARNING: could not flush stopped Lambda containers: %v", err)
+		} else if len(names) > 0 {
+			log.Printf("[engine] flushed %d stopped Lambda container(s) left by an older Tarn version: %s", len(names), strings.Join(names, ", "))
+		}
+	}
 
 	// Warm pool is shared so containers can be reused across accounts
 	pool := engine.NewWarmPool(eng, cfg.LambdaKeepAliveMS)
