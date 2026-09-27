@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -286,12 +287,16 @@ func (s *Store) CreateTable(input *types.DynamoDBTable) (*types.DynamoDBTable, e
 }
 
 func (s *Store) DescribeTable(name string) (*types.DynamoDBTable, error) {
-	state, err := s.getTable(name)
+	var out *types.DynamoDBTable
+	err := s.readTable(name, func(state *tableState) error {
+		out = cloneTable(state.Table)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	normalizeTableCompatibility(state.Table)
-	return cloneTable(state.Table), nil
+	normalizeTableCompatibility(out)
+	return out, nil
 }
 
 func (s *Store) ListTables(limit int, exclusiveStart string) ([]string, string, error) {
@@ -416,19 +421,21 @@ func (s *Store) UntagResource(resource string, tagKeys []string) error {
 }
 
 func (s *Store) ListTagsOfResource(resource string) ([]types.DynamoDBTag, error) {
-	state, err := s.getTable(resource)
-	if err != nil {
-		return nil, err
-	}
-	return cloneTags(state.Table.Tags), nil
+	var out []types.DynamoDBTag
+	err := s.readTable(resource, func(state *tableState) error {
+		out = cloneTags(state.Table.Tags)
+		return nil
+	})
+	return out, err
 }
 
 func (s *Store) DescribeTimeToLive(name string) (map[string]any, error) {
-	state, err := s.getTable(name)
-	if err != nil {
-		return nil, err
-	}
-	return timeToLiveDescription(state), nil
+	var out map[string]any
+	err := s.readTable(name, func(state *tableState) error {
+		out = timeToLiveDescription(state)
+		return nil
+	})
+	return out, err
 }
 
 func (s *Store) UpdateTimeToLive(name, attributeName string, enabled bool) (map[string]any, error) {
@@ -463,11 +470,12 @@ func (s *Store) UpdateTimeToLive(name, attributeName string, enabled bool) (map[
 }
 
 func (s *Store) DescribeContinuousBackups(name string) (map[string]any, error) {
-	state, err := s.getTable(name)
-	if err != nil {
-		return nil, err
-	}
-	return continuousBackupsDescription(state), nil
+	var out map[string]any
+	err := s.readTable(name, func(state *tableState) error {
+		out = continuousBackupsDescription(state)
+		return nil
+	})
+	return out, err
 }
 
 func (s *Store) UpdateContinuousBackups(name string, enabled bool) (map[string]any, error) {
@@ -495,11 +503,12 @@ func (s *Store) UpdateContinuousBackups(name string, enabled bool) (map[string]a
 }
 
 func (s *Store) DescribeContributorInsights(name, indexName string) (map[string]any, error) {
-	state, err := s.getTable(name)
-	if err != nil {
-		return nil, err
-	}
-	return contributorInsightsDescription(state, indexName), nil
+	var out map[string]any
+	err := s.readTable(name, func(state *tableState) error {
+		out = contributorInsightsDescription(state, indexName)
+		return nil
+	})
+	return out, err
 }
 
 func (s *Store) UpdateContributorInsights(name, indexName, action string) (map[string]any, error) {
@@ -542,11 +551,12 @@ func (s *Store) UpdateContributorInsights(name, indexName, action string) (map[s
 }
 
 func (s *Store) DescribeKinesisStreamingDestination(name string) (map[string]any, error) {
-	state, err := s.getTable(name)
-	if err != nil {
-		return nil, err
-	}
-	return kinesisStreamingDestinationDescription(state), nil
+	var out map[string]any
+	err := s.readTable(name, func(state *tableState) error {
+		out = kinesisStreamingDestinationDescription(state)
+		return nil
+	})
+	return out, err
 }
 
 func (s *Store) EnableKinesisStreamingDestination(name, streamArn string) (map[string]any, error) {
@@ -671,21 +681,23 @@ func (s *Store) GetItem(
 	projection string,
 	names map[string]string,
 ) (*getItemResult, error) {
-	state, err := s.getTable(tableName)
+	var out map[string]any
+	err := s.readTable(tableName, func(state *tableState) error {
+		keyID, err := serializeKey(key, state.Table.KeySchema)
+		if err != nil {
+			return err
+		}
+		if item, ok := state.Items[keyID]; ok {
+			out = cloneItem(item.Item)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	keyID, err := serializeKey(key, state.Table.KeySchema)
-	if err != nil {
-		return nil, err
-	}
-	s.mu.RLock()
-	item, ok := state.Items[keyID]
-	s.mu.RUnlock()
-	if !ok {
+	if out == nil {
 		return &getItemResult{}, nil
 	}
-	out := cloneItem(item.Item)
 	if projection != "" {
 		out, err = applyProjectionExpression(out, projection, names)
 		if err != nil {
@@ -850,23 +862,28 @@ func (s *Store) Scan(
 	limit int,
 	exclusiveStartKey map[string]any,
 ) (*scanResult, error) {
-	state, err := s.getTable(tableName)
-	if err != nil {
-		return nil, err
-	}
-	var projectionDef *types.DynamoDBProjection
-	if indexName != "" {
-		_, idxProj, idxErr := lookupIndex(state.Table, indexName)
-		if idxErr != nil {
-			return nil, idxErr
+	var (
+		keySchema     []types.DynamoDBKeySchemaElement
+		projectionDef *types.DynamoDBProjection
+		views         []itemView
+	)
+	err := s.readTable(tableName, func(state *tableState) error {
+		keySchema = slices.Clone(state.Table.KeySchema)
+		if indexName != "" {
+			_, idxProj, err := lookupIndex(state.Table, indexName)
+			if err != nil {
+				return err
+			}
+			projectionDef = idxProj
 		}
-		projectionDef = idxProj
-	}
-	views, err := s.collectSortedItems(state, indexName, false)
+		var err error
+		views, err = s.collectSortedItems(state, indexName, false)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
-	start := findExclusiveStart(views, state.Table.KeySchema, exclusiveStartKey)
+	start := findExclusiveStart(views, keySchema, exclusiveStartKey)
 	items := make([]map[string]any, 0)
 	count := 0
 	var lastKey map[string]any
@@ -888,7 +905,7 @@ func (s *Store) Scan(
 		count++
 		item := cloneItem(view.item)
 		if projectionDef != nil {
-			item = applyIndexProjection(item, *projectionDef, state.Table.KeySchema)
+			item = applyIndexProjection(item, *projectionDef, keySchema)
 		}
 		if projection != "" {
 			item, err = applyProjectionExpression(item, projection, names)
@@ -925,19 +942,24 @@ func (s *Store) Query(
 	if strings.TrimSpace(keyCondition) == "" {
 		return nil, validationError("Query condition missed key schema element")
 	}
-	state, err := s.getTable(tableName)
+	var (
+		keySchema     []types.DynamoDBKeySchemaElement
+		projectionDef *types.DynamoDBProjection
+		views         []itemView
+	)
+	err := s.readTable(tableName, func(state *tableState) error {
+		keySchema = slices.Clone(state.Table.KeySchema)
+		var err error
+		if _, projectionDef, err = lookupIndex(state.Table, indexName); err != nil {
+			return err
+		}
+		views, err = s.collectSortedItems(state, indexName, !scanIndexForward)
+		return err
+	})
 	if err != nil {
 		return nil, err
 	}
-	_, projectionDef, err := lookupIndex(state.Table, indexName)
-	if err != nil {
-		return nil, err
-	}
-	views, err := s.collectSortedItems(state, indexName, !scanIndexForward)
-	if err != nil {
-		return nil, err
-	}
-	start := findExclusiveStart(views, state.Table.KeySchema, exclusiveStartKey)
+	start := findExclusiveStart(views, keySchema, exclusiveStartKey)
 	items := make([]map[string]any, 0)
 	var lastKey map[string]any
 	if limit <= 0 {
@@ -963,7 +985,7 @@ func (s *Store) Query(
 		}
 		item := cloneItem(view.item)
 		if projectionDef != nil {
-			item = applyIndexProjection(item, *projectionDef, state.Table.KeySchema)
+			item = applyIndexProjection(item, *projectionDef, keySchema)
 		}
 		if projection != "" {
 			item, err = applyProjectionExpression(item, projection, names)
@@ -1166,11 +1188,17 @@ func (s *Store) StreamBatch(streamArn, lastSequence string, limit int) ([]*types
 	return out, next, nil
 }
 
-func (s *Store) getTable(name string) (*tableState, error) {
+// readTable runs fn with the named table under the store's read lock. Writers
+// mutate table state in place, so nothing read from it may be used after fn
+// returns unless it was copied.
+func (s *Store) readTable(name string, fn func(*tableState) error) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	_, state, err := s.getTableLocked(name)
-	return state, err
+	if err != nil {
+		return err
+	}
+	return fn(state)
 }
 
 func (s *Store) getTableLocked(name string) (string, *tableState, error) {

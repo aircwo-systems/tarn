@@ -1,7 +1,9 @@
 package dynamodb
 
 import (
+	"fmt"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -549,4 +551,59 @@ func TestStoreTableFeatureCompatibilityAPIs(t *testing.T) {
 	if len(destinations["KinesisDataStreamDestinations"].([]map[string]any)) != 1 {
 		t.Fatalf("expected one destination, got %#v", destinations)
 	}
+}
+
+// Scan, Query and the Describe calls used to read a table after dropping the
+// store lock, so a concurrent PutItem crashed the process with "concurrent map
+// iteration and map write".
+func TestStoreReadsAreSafeDuringConcurrentWrites(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.PersistenceEnabled = false
+	store := NewStore(cfg)
+	if _, err := store.CreateTable(testTableDefinition()); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	for w := 0; w < 4; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for i := 0; i < 40; i++ {
+				item := testItem("acct#1", fmt.Sprintf("order#%d-%d", w, i), "PENDING", i, "1")
+				if _, err := store.PutItem("orders", item, "", nil, nil, "NONE"); err != nil {
+					t.Errorf("put item: %v", err)
+					return
+				}
+				if err := store.TagResource("orders", []types.DynamoDBTag{{Key: "k", Value: fmt.Sprint(i)}}); err != nil {
+					t.Errorf("tag: %v", err)
+					return
+				}
+			}
+		}(w)
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < 40; i++ {
+				if _, err := store.Query("orders", "", "pk = :pk", "", "", nil, map[string]any{":pk": map[string]any{"S": "acct#1"}}, 10, nil, true); err != nil {
+					t.Errorf("query: %v", err)
+					return
+				}
+				if _, err := store.Scan("orders", "", "", "", nil, nil, 10, nil); err != nil {
+					t.Errorf("scan: %v", err)
+					return
+				}
+				if _, err := store.DescribeTable("orders"); err != nil {
+					t.Errorf("describe: %v", err)
+					return
+				}
+				if _, err := store.ListTagsOfResource("orders"); err != nil {
+					t.Errorf("list tags: %v", err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }
