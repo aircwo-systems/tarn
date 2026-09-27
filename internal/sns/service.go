@@ -4,14 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/aircwo-systems/tarn/internal/config"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	"github.com/google/uuid"
 )
 
 // SQSInterface defines the SQS behavior required by SNS fanout.
@@ -22,6 +24,9 @@ type SQSInterface interface {
 // LambdaInterface defines the Lambda behavior required by SNS fanout.
 type LambdaInterface interface {
 	Invoke(ctx context.Context, input *types.InvokeInput) (*types.InvokeOutput, error)
+	// Enqueue checks the function can be invoked and queues run to invoke it
+	// asynchronously.
+	Enqueue(functionName string, run func(ctx context.Context)) error
 }
 
 // PublishInput captures publish request fields.
@@ -153,6 +158,14 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 	messageAttrs := withCorrelationSNSAttributes(input.MessageAttributes, correlationID)
 	spans := make([]tracesvc.Span, 0, len(subs)+1)
 	topicStart := time.Now()
+	// Lambda deliveries are asynchronous, as on AWS: they are queued, and
+	// their spans are completed when each invoke finishes.
+	type lambdaLeg struct {
+		span    int
+		fnName  string
+		payload []byte
+	}
+	var lambdaLegs []lambdaLeg
 
 	for _, sub := range subs {
 		if sub.PendingConfirmation {
@@ -185,9 +198,9 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 				}
 				body = envelope
 			}
-				if _, sendErr := s.sqs.SendMessage(queueName, body, 0, snsToSQSMessageAttributes(messageAttrs), "", ""); sendErr != nil {
-					status = "error"
-				}
+			if _, sendErr := s.sqs.SendMessage(queueName, body, 0, snsToSQSMessageAttributes(messageAttrs), "", ""); sendErr != nil {
+				status = "error"
+			}
 
 		case "lambda":
 			if s.lambda == nil {
@@ -200,13 +213,7 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 				status = "error"
 				break
 			}
-			if _, invokeErr := s.lambda.Invoke(ctx, &types.InvokeInput{
-				FunctionName:   fnName,
-				Payload:        payload,
-				InvocationType: "Event",
-			}); invokeErr != nil {
-				status = "error"
-			}
+			lambdaLegs = append(lambdaLegs, lambdaLeg{span: len(spans), fnName: fnName, payload: payload})
 		default:
 			// Unsupported protocols are ignored to keep publish behavior resilient.
 		}
@@ -239,7 +246,10 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 		Status:     "ok",
 	}}, spans...)
 
-	if s.traceStore != nil {
+	pt := &publishTrace{spans: spans, remaining: len(lambdaLegs), record: func(spans []tracesvc.Span) {
+		if s.traceStore == nil {
+			return
+		}
 		overallStatus := 200
 		for _, span := range spans {
 			if span.Status == "error" {
@@ -257,9 +267,53 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 			Path:          "/",
 			Spans:         spans,
 		})
+	}}
+	if len(lambdaLegs) == 0 {
+		pt.record(spans)
+	}
+	for _, leg := range lambdaLegs {
+		span := leg.span + 1 // after the topic span
+		err := s.lambda.Enqueue(leg.fnName, func(ctx context.Context) {
+			start := time.Now()
+			out, err := s.lambda.Invoke(ctx, &types.InvokeInput{
+				FunctionName:   leg.fnName,
+				Payload:        leg.payload,
+				InvocationType: "RequestResponse",
+			})
+			status := "ok"
+			if err != nil || (out != nil && out.FunctionError != "") {
+				status = "error"
+			}
+			pt.done(span, time.Since(start).Milliseconds(), status)
+		})
+		if err != nil {
+			log.Printf("[sns] message %s not delivered to %s: %v", messageID, leg.fnName, err)
+			pt.done(span, 0, "error")
+		}
 	}
 
 	return &PublishOutput{MessageID: messageID}, nil
+}
+
+// publishTrace records a publish's trace once the last of its queued Lambda
+// deliveries has finished.
+type publishTrace struct {
+	mu        sync.Mutex
+	spans     []tracesvc.Span
+	remaining int
+	record    func(spans []tracesvc.Span)
+}
+
+func (t *publishTrace) done(span int, durationMs int64, status string) {
+	t.mu.Lock()
+	t.spans[span].DurationMs = durationMs
+	t.spans[span].Status = status
+	t.remaining--
+	last := t.remaining == 0
+	t.mu.Unlock()
+	if last {
+		t.record(t.spans)
+	}
 }
 
 func queueNameFromSubscriptionEndpoint(endpoint string) (string, error) {

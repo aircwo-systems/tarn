@@ -728,6 +728,7 @@ func TestPutEventsMatchesAndDispatches(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PutEvents: %v", err)
 	}
+	svc.DrainDispatch() // delivery is asynchronous
 	if failedCount != 0 {
 		t.Fatalf("expected 0 failures, got %d", failedCount)
 	}
@@ -735,7 +736,6 @@ func TestPutEventsMatchesAndDispatches(t *testing.T) {
 		t.Fatalf("unexpected results: %+v", results)
 	}
 
-	// Lambda should have been invoked
 	if len(fake.invocations) != 1 {
 		t.Fatalf("expected 1 invocation, got %d", len(fake.invocations))
 	}
@@ -769,6 +769,7 @@ func TestPutEventsNoMatchDoesNotInvoke(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PutEvents: %v", err)
 	}
+	svc.DrainDispatch() // delivery is asynchronous
 	if failedCount != 0 {
 		t.Fatalf("expected 0 failures, got %d", failedCount)
 	}
@@ -806,6 +807,7 @@ func TestPutEventsDisabledRuleSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PutEvents: %v", err)
 	}
+	svc.DrainDispatch() // delivery is asynchronous
 	if len(fake.invocations) != 0 {
 		t.Fatalf("disabled rule should not trigger, got %d invocations", len(fake.invocations))
 	}
@@ -838,6 +840,7 @@ func TestPutEventsMultipleRulesMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PutEvents: %v", err)
 	}
+	svc.DrainDispatch() // delivery is asynchronous
 
 	// Both rules should have triggered
 	if len(fake.invocations) != 2 {
@@ -856,6 +859,7 @@ func TestPutEventsValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PutEvents: %v", err)
 	}
+	svc.DrainDispatch() // delivery is asynchronous
 	if failedCount != 1 {
 		t.Fatalf("expected 1 failure, got %d", failedCount)
 	}
@@ -872,6 +876,7 @@ func TestPutEventsValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PutEvents: %v", err)
 	}
+	svc.DrainDispatch() // delivery is asynchronous
 	if failedCount != 1 {
 		t.Fatalf("expected 1 failure for bad JSON, got %d", failedCount)
 	}
@@ -914,6 +919,7 @@ func TestPutEventsScheduledRulesIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PutEvents: %v", err)
 	}
+	svc.DrainDispatch() // delivery is asynchronous
 
 	if len(fake.invocations) != 0 {
 		t.Fatalf("scheduled rules should not be triggered by PutEvents, got %d invocations", len(fake.invocations))

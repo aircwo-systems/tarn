@@ -1,6 +1,7 @@
 package lambda
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -353,19 +354,6 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 		input.InvocationType = "RequestResponse"
 	}
 
-	inv := h.collector.Begin()
-	start := time.Now()
-	output, err := h.svc.Invoke(r.Context(), input)
-	durationMs := time.Since(start).Milliseconds()
-
-	status := 200
-	spanStatus := "ok"
-	if err != nil {
-		status = 500
-		spanStatus = "error"
-	} else if output != nil && output.FunctionError != "" {
-		spanStatus = "error"
-	}
 	correlationID := tracesvc.CorrelationIDFromHeaders(r.Header)
 	if correlationID == "" {
 		correlationID = tracesvc.CorrelationIDFromPayload(payload)
@@ -373,20 +361,25 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 	if correlationID == "" {
 		correlationID = tracesvc.NewCorrelationID()
 	}
-	inv.Finish(func(subSpans []tracesvc.Span) {
-		if h.traceStore == nil {
+
+	if input.InvocationType == "Event" {
+		// Queue the invoke and answer 202 now, as AWS does. The queued invoke
+		// waits for its result so the trace records how it really went.
+		input.InvocationType = "RequestResponse"
+		err := h.svc.Enqueue(name, func(ctx context.Context) {
+			h.invokeAndTrace(ctx, name, input, correlationID)
+		})
+		if err != nil {
+			status, code := invokeErrorCode(err)
+			writeError(w, status, code, err.Error())
 			return
 		}
-		h.traceStore.Add(&tracesvc.Trace{
-			ID:            uuid.NewString()[:8],
-			CorrelationID: correlationID,
-			StartedAt:     start,
-			DurationMs:    durationMs,
-			Status:        status,
-			Spans:         append([]tracesvc.Span{{Kind: "lambda", Name: name, DurationMs: durationMs, Status: spanStatus}}, subSpans...),
-		})
-	})
+		setRequestID(w)
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
 
+	output, err := h.invokeAndTrace(r.Context(), name, input, correlationID)
 	if err != nil {
 		status, code := invokeErrorCode(err)
 		writeError(w, status, code, err.Error())
@@ -410,6 +403,38 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 	setRequestID(w)
 	w.WriteHeader(output.StatusCode)
 	w.Write(output.Payload)
+}
+
+// invokeAndTrace invokes the function and records the invocation's trace
+// once its late telemetry has arrived.
+func (h *Handler) invokeAndTrace(ctx context.Context, name string, input *types.InvokeInput, correlationID string) (*types.InvokeOutput, error) {
+	inv := h.collector.Begin()
+	start := time.Now()
+	output, err := h.svc.Invoke(ctx, input)
+	durationMs := time.Since(start).Milliseconds()
+
+	status := 200
+	spanStatus := "ok"
+	if err != nil {
+		status = 500
+		spanStatus = "error"
+	} else if output != nil && output.FunctionError != "" {
+		spanStatus = "error"
+	}
+	inv.Finish(func(subSpans []tracesvc.Span) {
+		if h.traceStore == nil {
+			return
+		}
+		h.traceStore.Add(&tracesvc.Trace{
+			ID:            uuid.NewString()[:8],
+			CorrelationID: correlationID,
+			StartedAt:     start,
+			DurationMs:    durationMs,
+			Status:        status,
+			Spans:         append([]tracesvc.Span{{Kind: "lambda", Name: name, DurationMs: durationMs, Status: spanStatus}}, subSpans...),
+		})
+	})
+	return output, err
 }
 
 // PutFunctionConcurrency handles PUT /2017-10-31/functions/{name}/concurrency.

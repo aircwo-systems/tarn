@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/aircwo-systems/tarn/internal/asyncqueue"
 	"github.com/aircwo-systems/tarn/internal/config"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
@@ -27,9 +29,16 @@ const (
 	defaultRuleFireTimeout    = 30 * time.Second
 	defaultECSRuleConcurrency = 10
 	schedulerTickInterval     = 1 * time.Second
-	manualInvocationTypeEvent = "Event"
-	ecsEventPayloadEnvName    = "EVENT_PAYLOAD"
-	maxEventPayloadEnvBytes   = types.TaskEventPayloadEnvMaxBytes
+
+	// dispatchWorkers and dispatchBacklog bound background PutEvents
+	// delivery; dispatchCloseTimeout is how long Stop waits for it.
+	dispatchWorkers      = 16
+	dispatchBacklog      = 10000
+	dispatchCloseTimeout = 30 * time.Second
+	// lambdaTargetTimeout covers the 15-minute Lambda maximum plus a cold start.
+	lambdaTargetTimeout     = 16 * time.Minute
+	ecsEventPayloadEnvName  = "EVENT_PAYLOAD"
+	maxEventPayloadEnvBytes = types.TaskEventPayloadEnvMaxBytes
 )
 
 // LambdaInterface defines the Lambda behavior required by EventBridge.
@@ -105,6 +114,7 @@ type Service struct {
 	cfg          *config.Config
 	store        *Store
 	lambda       LambdaInterface
+	dispatchQ    *asyncqueue.Queue // background PutEvents delivery
 	taskRunner   TaskRunner
 	traceStore   *tracesvc.Store
 	collector    *tracesvc.Collector
@@ -130,8 +140,12 @@ func NewService(cfg *config.Config, store *Store, lambda LambdaInterface) *Servi
 		schedulerDone: make(chan struct{}),
 		ecsInFlight:   make(map[string]int),
 		ecsLimit:      defaultECSRuleConcurrency,
+		dispatchQ:     asyncqueue.New("eventbridge", dispatchWorkers, dispatchBacklog),
 	}
 }
+
+// DrainDispatch waits for every queued PutEvents dispatch to finish.
+func (s *Service) DrainDispatch() { s.dispatchQ.Drain() }
 
 func (s *Service) SetTraceStore(ts *tracesvc.Store)   { s.traceStore = ts }
 func (s *Service) SetCollector(c *tracesvc.Collector) { s.collector = c }
@@ -157,6 +171,7 @@ func (s *Service) Start() {
 func (s *Service) Stop() {
 	close(s.schedulerDone)
 	s.schedulerWG.Wait()
+	s.dispatchQ.Close(dispatchCloseTimeout)
 }
 
 func (s *Service) schedulerLoop() {
@@ -696,6 +711,12 @@ func (s *Service) PutEvents(entries []types.PutEventsEntry) ([]types.PutEventsRe
 	rules := s.store.ListRules()
 	results := make([]types.PutEventsResultEntry, len(entries))
 	failedCount := 0
+	type dispatch struct {
+		entry     int
+		eventJSON []byte
+		event     map[string]any
+	}
+	var dispatches []dispatch
 
 	for i, entry := range entries {
 		eventID := uuid.NewString()
@@ -748,11 +769,27 @@ func (s *Service) PutEvents(entries []types.PutEventsEntry) ([]types.PutEventsRe
 		}
 
 		eventJSON, _ := json.Marshal(event)
-
-		// Match against all event-pattern rules and dispatch
-		s.dispatchEvent(rules, eventJSON, event)
-
+		dispatches = append(dispatches, dispatch{entry: i, eventJSON: eventJSON, event: event})
 		results[i] = types.PutEventsResultEntry{EventId: eventID}
+	}
+
+	if len(dispatches) == 0 {
+		return results, failedCount, nil
+	}
+	// Deliver to matching rules' targets in the background, as AWS does, so
+	// the caller doesn't wait for every target. One job per call keeps this
+	// call's rule copies on a single worker.
+	err := s.dispatchQ.Submit(func(context.Context) {
+		for _, d := range dispatches {
+			s.dispatchEvent(rules, d.eventJSON, d.event)
+		}
+	})
+	if err != nil {
+		log.Printf("[eventbridge] %d event(s) not delivered: %v", len(dispatches), err)
+		for _, d := range dispatches {
+			results[d.entry] = types.PutEventsResultEntry{ErrorCode: "ThrottlingException", ErrorMessage: "Event delivery backlog is full"}
+			failedCount++
+		}
 	}
 
 	return results, failedCount, nil
@@ -871,11 +908,13 @@ func (s *Service) dispatchLambdaTarget(target *types.EventBridgeTarget, eventPay
 
 	invokeStart := time.Now()
 	inv := s.collector.Begin()
-	ctx, cancel := context.WithTimeout(context.Background(), defaultRuleFireTimeout)
+	// The target invoke waits for its result, bounded by the 15-minute
+	// Lambda maximum, so the rule records whether the function succeeded.
+	ctx, cancel := context.WithTimeout(context.Background(), lambdaTargetTimeout)
 	invokeOut, invokeErr := s.lambda.Invoke(ctx, &types.InvokeInput{
 		FunctionName:   functionName,
 		Payload:        payload,
-		InvocationType: manualInvocationTypeEvent,
+		InvocationType: "RequestResponse",
 	})
 	cancel()
 	duration := time.Since(invokeStart).Milliseconds()

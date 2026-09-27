@@ -276,36 +276,41 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 			}
 			correlationID := trace.NewCorrelationID()
 			payload := buildS3EventPayload(eventName, bucket, key, size, etag, acctCfg.Region, correlationID)
-			go func(fnName string, p []byte, corr string) {
+			fnName, p, corr := lc.LambdaFunctionName, payload, correlationID
+			err := lambdaSvc.Enqueue(fnName, func(ctx context.Context) {
 				inv := shared.collector.Begin()
 				traceStart := time.Now()
-				invokeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				out, err := lambdaSvc.Invoke(invokeCtx, &types.InvokeInput{
+				// S3 invokes asynchronously; the queued invoke waits for its
+				// result so the trace records how it went.
+				out, err := lambdaSvc.Invoke(ctx, &types.InvokeInput{
 					FunctionName:   fnName,
 					Payload:        p,
-					InvocationType: "Event",
+					InvocationType: "RequestResponse",
 				})
 				durationMs := time.Since(traceStart).Milliseconds()
-				subSpans := inv.Wait()
 				status := 200
 				spanStatus := "ok"
 				if err != nil || (out != nil && out.FunctionError != "") {
 					status = 500
 					spanStatus = "error"
 				}
-				shared.traceStore.Add(&trace.Trace{
-					ID:            uuid.NewString()[:8],
-					CorrelationID: corr,
-					StartedAt:     traceStart,
-					DurationMs:    durationMs,
-					Status:        status,
-					Spans: append([]trace.Span{
-						{Kind: "s3", Name: bucket + "/" + key, DurationMs: 0, Status: "ok", Meta: map[string]string{"event": eventName}},
-						{Kind: "lambda", Name: fnName, DurationMs: durationMs, Status: spanStatus},
-					}, subSpans...),
+				inv.Finish(func(subSpans []trace.Span) {
+					shared.traceStore.Add(&trace.Trace{
+						ID:            uuid.NewString()[:8],
+						CorrelationID: corr,
+						StartedAt:     traceStart,
+						DurationMs:    durationMs,
+						Status:        status,
+						Spans: append([]trace.Span{
+							{Kind: "s3", Name: bucket + "/" + key, DurationMs: 0, Status: "ok", Meta: map[string]string{"event": eventName}},
+							{Kind: "lambda", Name: fnName, DurationMs: durationMs, Status: spanStatus},
+						}, subSpans...),
+					})
 				})
-			}(lc.LambdaFunctionName, payload, correlationID)
+			})
+			if err != nil {
+				log.Printf("[s3] notification for %s/%s not delivered to %s: %v", bucket, key, fnName, err)
+			}
 		}
 	})
 
@@ -358,6 +363,9 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 		esmSvc.Stop()
 		eventbridgeSvc.Stop()
 		stepFunctionsSvc.Stop()
+		// Producers are stopped; let queued asynchronous invokes finish
+		// before the stores they write to are closed.
+		lambdaSvc.Close()
 
 		// Workers are stopped, so no more writes: persist what the 250ms
 		// flushers have not written yet.

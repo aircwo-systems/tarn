@@ -15,6 +15,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aircwo-systems/tarn/internal/asyncqueue"
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/internal/engine"
 	logssvc "github.com/aircwo-systems/tarn/internal/logs"
@@ -35,6 +36,8 @@ type Service struct {
 	logCursors  map[string]time.Time // container ID -> timestamp of last ingested line
 	metricsMu   sync.RWMutex
 	metrics     map[string]*FunctionMetrics
+
+	async *asyncqueue.Queue // asynchronous (Event) invokes
 }
 
 // FunctionMetrics tracks invoke-level function metrics used by the dashboard.
@@ -53,6 +56,15 @@ const (
 	containerAcquireTimeout = 60 * time.Second
 	// containerAcquirePoll is how often to re-check for a freed environment.
 	containerAcquirePoll = 25 * time.Millisecond
+
+	// asyncWorkers bounds how many asynchronous invokes run at once across
+	// the account; asyncBacklog is how many may wait before Enqueue reports
+	// throttling.
+	asyncWorkers = 16
+	asyncBacklog = 10000
+	// asyncCloseTimeout is how long shutdown waits for queued and running
+	// asynchronous invokes before cancelling them.
+	asyncCloseTimeout = 30 * time.Second
 )
 
 // NewService creates a new Lambda service.
@@ -66,8 +78,29 @@ func NewService(cfg *config.Config, store *Store, eng *engine.Engine, pool *engi
 		logsSvc:    logsSvc,
 		logCursors: make(map[string]time.Time),
 		metrics:    make(map[string]*FunctionMetrics),
+		async:      asyncqueue.New("lambda", asyncWorkers, asyncBacklog),
 	}
 }
+
+// Enqueue checks that the function can be invoked, then queues run to perform
+// an asynchronous (Event) invoke and returns without waiting for it, as AWS
+// does. run gets a context that the submitting request cannot cancel. A full
+// backlog returns ErrTooManyRequests.
+func (s *Service) Enqueue(functionName string, run func(ctx context.Context)) error {
+	if _, err := s.invocableFunction(functionName); err != nil {
+		return err
+	}
+	if err := s.async.Submit(run); err != nil {
+		return fmt.Errorf("asynchronous invoke of %s not queued: %v: %w", functionName, err, ErrTooManyRequests)
+	}
+	return nil
+}
+
+// DrainAsync waits for every queued asynchronous invoke to finish.
+func (s *Service) DrainAsync() { s.async.Drain() }
+
+// Close waits for queued asynchronous invokes, then stops the queue.
+func (s *Service) Close() { s.async.Close(asyncCloseTimeout) }
 
 // CreateFunction creates a new Lambda function.
 // If a function with the same name already exists on disk (e.g. from a previous
@@ -503,9 +536,10 @@ func (s *Service) UpdateFunctionConfiguration(ctx context.Context, name string, 
 	return fn, nil
 }
 
-// Invoke executes a Lambda function.
-func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.InvokeOutput, error) {
-	fn, err := s.store.GetFunction(input.FunctionName)
+// invocableFunction returns the function's configuration if it exists, is
+// Active (promoting it from Pending) and an execution engine is configured.
+func (s *Service) invocableFunction(name string) (*types.FunctionConfig, error) {
+	fn, err := s.store.GetFunction(name)
 	if err != nil {
 		return nil, err
 	}
@@ -514,7 +548,7 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 		if err := s.promoteFunctionToActiveIfPending(fn.FunctionName); err != nil {
 			return nil, fmt.Errorf("failed to promote function %s to active: %w", fn.FunctionName, err)
 		}
-		fn, err = s.store.GetFunction(input.FunctionName)
+		fn, err = s.store.GetFunction(name)
 		if err != nil {
 			return nil, err
 		}
@@ -528,6 +562,16 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	if s.engine == nil || s.pool == nil {
 		err := fmt.Errorf("lambda execution engine is not configured")
 		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, err.Error())
+		return nil, err
+	}
+	return fn, nil
+}
+
+// Invoke executes a Lambda function and waits for the result. Callers that
+// want AWS's asynchronous Event behaviour should use Enqueue.
+func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.InvokeOutput, error) {
+	fn, err := s.invocableFunction(input.FunctionName)
+	if err != nil {
 		return nil, err
 	}
 

@@ -391,3 +391,19 @@ func TestInvokeMissingFunctionReturnsResourceNotFound(t *testing.T) {
 		t.Fatalf("unexpected error body: %v", body)
 	}
 }
+
+// An Event invoke is queued and answered with 202, but the function is still
+// checked first so a typo is reported rather than silently accepted.
+func TestEventInvokeOfMissingFunctionReturnsResourceNotFound(t *testing.T) {
+	h := newLambdaHandler(t)
+
+	req := httptest.NewRequest(http.MethodPost, "/2015-03-31/functions/nope/invocations", strings.NewReader(`{}`))
+	req.SetPathValue("name", "nope")
+	req.Header.Set("X-Amz-Invocation-Type", "Event")
+	rec := httptest.NewRecorder()
+	h.Invoke(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body %s", rec.Code, rec.Body.String())
+	}
+}
