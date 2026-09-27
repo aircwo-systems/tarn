@@ -40,6 +40,16 @@ func NewService(cfg *config.Config, store *Store, lambdaSvc LambdaInterface, sqs
 	}
 }
 
+// newPoller builds a poller for mapping, capped at the Lambda per-function
+// concurrency limit.
+func (s *Service) newPoller(mapping *types.EventSourceMapping) *poller {
+	p := newPoller(mapping, s.sqs, s.streams, s.lambda, s.store, s.traceStore, s.collector)
+	if s.cfg != nil {
+		p.lambdaMaxConcurrency = s.cfg.LambdaMaxConcurrency
+	}
+	return p
+}
+
 // SetTraceStore attaches a trace store so ESM invocations are recorded.
 func (s *Service) SetTraceStore(ts *tracesvc.Store) { s.traceStore = ts }
 
@@ -128,7 +138,7 @@ func (s *Service) Start() {
 		if !m.Enabled || m.State != "Enabled" {
 			continue
 		}
-		p := newPoller(m, s.sqs, s.streams, s.lambda, s.store, s.traceStore, s.collector)
+		p := s.newPoller(m)
 		p.start()
 		s.pollers[m.UUID] = p
 	}
@@ -148,7 +158,7 @@ func (s *Service) Stop() {
 }
 
 // CreateMapping creates and starts a new event source mapping.
-func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string, batchSize, maxBatchingWindow int, enabled bool, filterCriteria *types.FilterCriteria) (*types.EventSourceMapping, error) {
+func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string, batchSize, maxBatchingWindow int, enabled bool, filterCriteria *types.FilterCriteria, scalingConfig *types.ScalingConfig) (*types.EventSourceMapping, error) {
 	sourceType, sourceName, err := parseSourceFromArn(eventSourceArn)
 	if err != nil {
 		return nil, err
@@ -197,6 +207,7 @@ func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string
 		updated.MaximumBatchingWindowInSeconds = maxBatchingWindow
 		updated.Enabled = enabled
 		updated.FilterCriteria = filterCriteria
+		updated.ScalingConfig = scalingConfig
 		updated.LastModified = time.Now().UTC()
 		if enabled {
 			updated.State = "Enabled"
@@ -211,7 +222,7 @@ func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string
 		// Reconcile poller state with updated mapping config.
 		s.mu.Lock()
 		if updated.Enabled && s.lambda != nil && sourceReady(&updated, s.sqs, s.streams) {
-			p := newPoller(&updated, s.sqs, s.streams, s.lambda, s.store, s.traceStore, s.collector)
+			p := s.newPoller(&updated)
 			p.start()
 			s.pollers[updated.UUID] = p
 		}
@@ -240,6 +251,7 @@ func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string
 		State:                          state,
 		LastModified:                   now,
 		FilterCriteria:                 filterCriteria,
+		ScalingConfig:                  scalingConfig,
 	}
 
 	if err := s.store.Save(mapping); err != nil {
@@ -279,7 +291,7 @@ func (s *Service) ListMappings(eventSourceArn, functionName string) []*types.Eve
 }
 
 // UpdateMapping updates a mapping's configuration.
-func (s *Service) UpdateMapping(uuid string, batchSize *int, maxBatchingWindow *int, enabled *bool, functionName *string, filterCriteria *types.FilterCriteria) (*types.EventSourceMapping, error) {
+func (s *Service) UpdateMapping(uuid string, batchSize *int, maxBatchingWindow *int, enabled *bool, functionName *string, filterCriteria *types.FilterCriteria, scalingConfig *types.ScalingConfig) (*types.EventSourceMapping, error) {
 	mapping, err := s.store.Get(uuid)
 	if err != nil {
 		return nil, err
@@ -320,6 +332,9 @@ func (s *Service) UpdateMapping(uuid string, batchSize *int, maxBatchingWindow *
 	if filterCriteria != nil {
 		mapping.FilterCriteria = filterCriteria
 	}
+	if scalingConfig != nil {
+		mapping.ScalingConfig = scalingConfig
+	}
 
 	mapping.LastModified = time.Now().UTC()
 
@@ -334,7 +349,7 @@ func (s *Service) UpdateMapping(uuid string, batchSize *int, maxBatchingWindow *
 		delete(s.pollers, uuid)
 	}
 	if mapping.Enabled && s.lambda != nil && sourceReady(mapping, s.sqs, s.streams) {
-		p := newPoller(mapping, s.sqs, s.streams, s.lambda, s.store, s.traceStore, s.collector)
+		p := s.newPoller(mapping)
 		p.start()
 		s.pollers[uuid] = p
 	}
@@ -363,7 +378,7 @@ func (s *Service) startPoller(mapping *types.EventSourceMapping) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	p := newPoller(mapping, s.sqs, s.streams, s.lambda, s.store, s.traceStore, s.collector)
+	p := s.newPoller(mapping)
 	p.start()
 	s.pollers[mapping.UUID] = p
 }

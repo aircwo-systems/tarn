@@ -154,6 +154,7 @@ func TestFilteredPollersRouteType2Message(t *testing.T) {
 		0,
 		true,
 		&types.FilterCriteria{Filters: []types.FilterCriteriaFilter{{Pattern: `{"body":{"type":["type1"]}}`}}},
+		nil,
 	); err != nil {
 		t.Fatalf("create mapping type1: %v", err)
 	}
@@ -166,6 +167,7 @@ func TestFilteredPollersRouteType2Message(t *testing.T) {
 		0,
 		true,
 		&types.FilterCriteria{Filters: []types.FilterCriteriaFilter{{Pattern: `{"body":{"type":["type2"]}}`}}},
+		nil,
 	); err != nil {
 		t.Fatalf("create mapping type2: %v", err)
 	}
@@ -236,6 +238,7 @@ func TestPollerDeliversMessageAttributesToLambda(t *testing.T) {
 		1,
 		0,
 		true,
+		nil,
 		nil,
 	); err != nil {
 		t.Fatalf("create mapping: %v", err)

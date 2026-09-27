@@ -8,6 +8,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
@@ -101,19 +102,39 @@ type LambdaInterface interface {
 }
 
 type poller struct {
-	mapping        *types.EventSourceMapping
-	sqs            SQSInterface
-	streams        StreamInterface
-	lambda         LambdaInterface
-	store          *Store
-	traceStore     *tracesvc.Store
-	collector      *tracesvc.Collector
-	done           chan struct{}
-	stopOnce       sync.Once
+	mapping    *types.EventSourceMapping
+	sqs        SQSInterface
+	streams    StreamInterface
+	lambda     LambdaInterface
+	store      *Store
+	traceStore *tracesvc.Store
+	collector  *tracesvc.Collector
+	done       chan struct{}
+	stopOnce   sync.Once
+	// lambdaMaxConcurrency caps the SQS poll loops at the function's
+	// concurrency limit, so extra loops don't just queue for a container.
+	// Zero means no cap.
+	lambdaMaxConcurrency int
+
+	// mu guards the mapping's mutable fields and notFoundStreak, which the
+	// concurrent poll loops share.
+	mu             sync.Mutex
 	notFoundStreak int
+
+	drainers atomic.Int32 // extra poll loops running while a backlog lasts
 }
 
-const maxConsecutiveNotFoundRetries = 5
+const (
+	maxConsecutiveNotFoundRetries = 5
+
+	// defaultSQSPollers is how many poll loops an SQS mapping runs when it
+	// sets no ScalingConfig.MaximumConcurrency.
+	defaultSQSPollers = 5
+
+	// invokeTimeout bounds one ESM invoke: the 15-minute Lambda maximum plus
+	// room for a cold start. The function's own timeout applies inside it.
+	invokeTimeout = 16 * time.Minute
+)
 
 func newPoller(mapping *types.EventSourceMapping, sqsSvc SQSInterface, streamsSvc StreamInterface, lambdaSvc LambdaInterface, store *Store, traceStore *tracesvc.Store, collector *tracesvc.Collector) *poller {
 	return &poller{
@@ -129,8 +150,26 @@ func newPoller(mapping *types.EventSourceMapping, sqsSvc SQSInterface, streamsSv
 }
 
 func (p *poller) start() {
-	log.Printf("[eventsource] %s: starting poller queue=%s function=%s", p.mapping.UUID, p.mapping.QueueName, p.mapping.FunctionName)
+	log.Printf("[eventsource] %s: starting poller (up to %d concurrent) queue=%s function=%s", p.mapping.UUID, p.loops(), p.mapping.QueueName, p.mapping.FunctionName)
 	go p.run()
+}
+
+// loops returns how many poll loops may run at once. SQS mappings scale out
+// like AWS pollers; FIFO ordering is still kept because the queue never hands
+// out a message group that is already in flight. DynamoDB streams keep a
+// single loop so records are processed in sequence order.
+func (p *poller) loops() int {
+	if normalizeSourceType(p.mapping) == "dynamodb-stream" {
+		return 1
+	}
+	n := defaultSQSPollers
+	if sc := p.mapping.ScalingConfig; sc != nil && sc.MaximumConcurrency > 0 {
+		n = sc.MaximumConcurrency
+	}
+	if p.lambdaMaxConcurrency > 0 && n > p.lambdaMaxConcurrency {
+		n = p.lambdaMaxConcurrency
+	}
+	return n
 }
 
 func (p *poller) stop() {
@@ -139,6 +178,18 @@ func (p *poller) stop() {
 	})
 }
 
+func (p *poller) stopped() bool {
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// run is the main poll loop. It polls once per tick while the source is idle.
+// When full batches come back it keeps polling and starts extra drain loops,
+// so a backlog is worked at invoke speed across up to loops() invokes at once.
 func (p *poller) run() {
 	interval := p.mapping.MaximumBatchingWindowInSeconds
 	if interval < 1 {
@@ -152,15 +203,43 @@ func (p *poller) run() {
 		case <-p.done:
 			return
 		case <-ticker.C:
-			p.poll()
+		}
+		for p.poll() {
+			if p.stopped() {
+				return
+			}
+			p.scaleUp()
 		}
 	}
 }
 
-func (p *poller) poll() {
+// scaleUp starts drain loops until loops() are running in total.
+func (p *poller) scaleUp() {
+	for {
+		n := p.drainers.Load()
+		if int(n) >= p.loops()-1 {
+			return
+		}
+		if p.drainers.CompareAndSwap(n, n+1) {
+			go p.drain()
+		}
+	}
+}
+
+// drain polls back to back until a batch comes back short, then exits.
+func (p *poller) drain() {
+	defer p.drainers.Add(-1)
+	for !p.stopped() && p.poll() {
+	}
+}
+
+// poll receives one batch and invokes the function with it. It returns true
+// when the batch was full and was processed, meaning more work is likely
+// waiting. Filter misses alone never count, because they are released and
+// would otherwise be received again straight away.
+func (p *poller) poll() bool {
 	if normalizeSourceType(p.mapping) == "dynamodb-stream" {
-		p.pollDynamoStream()
-		return
+		return p.pollDynamoStream()
 	}
 	pollStart := time.Now()
 
@@ -168,16 +247,17 @@ func (p *poller) poll() {
 	if err != nil {
 		if isNotFoundError(err) {
 			p.disableWithError(err)
-			return
+			return false
 		}
 		log.Printf("[eventsource] %s: receive error: %v", p.mapping.UUID, err)
 		p.updateResult(fmt.Sprintf("ERROR: %v", err))
-		return
+		return false
 	}
-	p.notFoundStreak = 0
+	p.resetNotFound()
 	if len(msgs) == 0 {
-		return
+		return false
 	}
+	fullBatch := len(msgs) >= p.mapping.BatchSize
 
 	// Apply filter criteria: partition messages into matching and non-matching.
 	// Non-matching messages are released so other pollers (with different
@@ -199,21 +279,16 @@ func (p *poller) poll() {
 		}
 	}
 	if len(matching) == 0 {
-		return
+		return false
 	}
 	msgs = matching
 
 	payload := buildSQSEventPayload(msgs, p.mapping.EventSourceArn, p.mapping.QueueName)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), invokeTimeout)
 	defer cancel()
 
-	functionName := normalizeLambdaFunctionName(p.mapping.FunctionName)
-	if functionName != p.mapping.FunctionName {
-		// Heal persisted mappings that were saved with FunctionName as an ARN.
-		p.mapping.FunctionName = functionName
-		_ = p.store.Save(p.mapping)
-	}
+	functionName := p.functionName()
 
 	inv := p.collector.Begin()
 	lambdaStart := time.Now()
@@ -229,7 +304,7 @@ func (p *poller) poll() {
 		if isNotFoundError(err) {
 			inv.Finish(func([]tracesvc.Span) {})
 			p.disableWithError(err)
-			return
+			return false
 		}
 		log.Printf("[eventsource] %s: invoke error: %v", p.mapping.UUID, err)
 		p.updateResult(fmt.Sprintf("ERROR: %v", err))
@@ -247,9 +322,9 @@ func (p *poller) poll() {
 				p.recordDLQTrace(pollStart, p.mapping.QueueName, dlqName)
 			}
 		}
-		return
+		return false
 	}
-	p.notFoundStreak = 0
+	p.resetNotFound()
 
 	log.Printf("[eventsource] %s: invoke response: statusCode=%d functionError=%q payload=%s",
 		p.mapping.UUID, output.StatusCode, output.FunctionError, truncate(output.Payload, 120))
@@ -298,30 +373,32 @@ func (p *poller) poll() {
 		p.updateResult("OK")
 		p.recordTrace(pollStart, functionName, msgs, sqsDurationMs, lambdaDurationMs, len(msgs), 0, inv)
 	}
+	// Back off to the tick after failures rather than retrying at full speed.
+	return fullBatch && failCount == 0
 }
 
-func (p *poller) pollDynamoStream() {
+func (p *poller) pollDynamoStream() bool {
 	pollStart := time.Now()
 	records, nextSeq, err := p.streams.StreamBatch(p.mapping.EventSourceArn, p.mapping.LastStreamSequence, p.mapping.BatchSize)
 	if err != nil {
 		if isNotFoundError(err) {
 			p.disableWithError(err)
-			return
+			return false
 		}
 		log.Printf("[eventsource] %s: stream batch error: %v", p.mapping.UUID, err)
 		p.updateResult(fmt.Sprintf("ERROR: %v", err))
-		return
+		return false
 	}
-	p.notFoundStreak = 0
+	p.resetNotFound()
 	if len(records) == 0 {
-		return
+		return false
 	}
 
 	payload := buildDynamoDBEventPayload(records)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), invokeTimeout)
 	defer cancel()
 
-	functionName := normalizeLambdaFunctionName(p.mapping.FunctionName)
+	functionName := p.functionName()
 	inv := p.collector.Begin()
 	streamDurationMs := time.Since(pollStart).Milliseconds()
 	lambdaStart := time.Now()
@@ -336,7 +413,7 @@ func (p *poller) pollDynamoStream() {
 		if err != nil && isNotFoundError(err) {
 			inv.Finish(func([]tracesvc.Span) {})
 			p.disableWithError(err)
-			return
+			return false
 		}
 		msg := "stream invoke failed"
 		if err != nil {
@@ -347,13 +424,16 @@ func (p *poller) pollDynamoStream() {
 		log.Printf("[eventsource] %s: %s", p.mapping.UUID, msg)
 		p.updateResult("ERROR: " + msg)
 		p.recordStreamTrace(pollStart, functionName, len(records), streamDurationMs, lambdaDurationMs, true, inv)
-		return
+		return false
 	}
 
+	p.mu.Lock()
 	p.mapping.LastStreamSequence = nextSeq
-	_ = p.store.Save(p.mapping)
+	p.saveLocked()
+	p.mu.Unlock()
 	p.updateResult("OK")
 	p.recordStreamTrace(pollStart, functionName, len(records), streamDurationMs, lambdaDurationMs, false, inv)
+	return len(records) >= p.mapping.BatchSize
 }
 
 // recordTrace records the poll's trace once the invocation's late telemetry
@@ -457,24 +537,63 @@ func (p *poller) recordDLQTrace(start time.Time, srcQueue, dlqName string) {
 }
 
 func (p *poller) updateResult(result string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.setResultLocked(result)
+}
+
+func (p *poller) setResultLocked(result string) {
 	p.mapping.LastProcessingResult = result
 	p.mapping.LastModified = time.Now().UTC()
-	_ = p.store.Save(p.mapping)
+	p.saveLocked()
+}
+
+// saveLocked persists the mapping unless the poller has been stopped: a
+// stopped poller's copy is stale, and an in-flight poll finishing after
+// UpdateMapping or DeleteMapping must not write it back.
+func (p *poller) saveLocked() {
+	if !p.stopped() {
+		_ = p.store.Save(p.mapping)
+	}
+}
+
+// functionName returns the mapping's function name, healing persisted
+// mappings that were saved with FunctionName as an ARN.
+func (p *poller) functionName() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	name := normalizeLambdaFunctionName(p.mapping.FunctionName)
+	if name != p.mapping.FunctionName {
+		p.mapping.FunctionName = name
+		p.saveLocked()
+	}
+	return name
+}
+
+func (p *poller) resetNotFound() {
+	p.mu.Lock()
+	p.notFoundStreak = 0
+	p.mu.Unlock()
 }
 
 func (p *poller) disableWithError(err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.notFoundStreak++
 	if p.notFoundStreak < maxConsecutiveNotFoundRetries {
 		log.Printf("[eventsource] %s: resource not found, will retry (%d/%d): %v", p.mapping.UUID, p.notFoundStreak, maxConsecutiveNotFoundRetries, err)
-		p.updateResult(fmt.Sprintf("ERROR: %v", err))
+		p.setResultLocked(fmt.Sprintf("ERROR: %v", err))
 		return
+	}
+	if !p.mapping.Enabled && p.mapping.State == "Disabled" {
+		return // another loop already disabled the mapping
 	}
 
 	p.mapping.Enabled = false
 	p.mapping.State = "Disabled"
 	msg := fmt.Sprintf("DISABLED: resource not found after %d retries: %v", maxConsecutiveNotFoundRetries, err)
 	log.Printf("[eventsource] %s: %s", p.mapping.UUID, msg)
-	p.updateResult(msg)
+	p.setResultLocked(msg)
 	p.stop()
 }
 

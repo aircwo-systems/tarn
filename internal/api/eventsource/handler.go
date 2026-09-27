@@ -25,6 +25,7 @@ type createMappingRequest struct {
 	MaximumBatchingWindowInSeconds int                   `json:"MaximumBatchingWindowInSeconds"`
 	Enabled                        *bool                 `json:"Enabled"`
 	FilterCriteria                 *types.FilterCriteria `json:"FilterCriteria,omitempty"`
+	ScalingConfig                  *types.ScalingConfig  `json:"ScalingConfig,omitempty"`
 }
 
 type updateMappingRequest struct {
@@ -33,6 +34,7 @@ type updateMappingRequest struct {
 	MaximumBatchingWindowInSeconds *int                  `json:"MaximumBatchingWindowInSeconds,omitempty"`
 	Enabled                        *bool                 `json:"Enabled,omitempty"`
 	FilterCriteria                 *types.FilterCriteria `json:"FilterCriteria,omitempty"`
+	ScalingConfig                  *types.ScalingConfig  `json:"ScalingConfig,omitempty"`
 }
 
 // eventSourceMappingResponse mirrors AWS response field names while keeping
@@ -50,6 +52,12 @@ type eventSourceMappingResponse struct {
 	LastProcessingResult           string                `json:"LastProcessingResult,omitempty"`
 	LastModified                   float64               `json:"LastModified"`
 	FilterCriteria                 *types.FilterCriteria `json:"FilterCriteria,omitempty"`
+	ScalingConfig                  *types.ScalingConfig  `json:"ScalingConfig,omitempty"`
+}
+
+// validScalingConfig applies AWS's bounds for MaximumConcurrency (2 to 1000).
+func validScalingConfig(sc *types.ScalingConfig) bool {
+	return sc == nil || sc.MaximumConcurrency == 0 || (sc.MaximumConcurrency >= 2 && sc.MaximumConcurrency <= 1000)
 }
 
 // Create handles POST /2015-03-31/event-source-mappings
@@ -69,6 +77,11 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !validScalingConfig(req.ScalingConfig) {
+		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "ScalingConfig.MaximumConcurrency must be between 2 and 1000")
+		return
+	}
+
 	enabled := true
 	if req.Enabled != nil {
 		enabled = *req.Enabled
@@ -77,7 +90,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	// Build the function ARN from name (simplified)
 	functionArn := req.FunctionName
 
-	mapping, err := h.svc.CreateMapping(req.EventSourceArn, functionArn, req.FunctionName, req.BatchSize, req.MaximumBatchingWindowInSeconds, enabled, req.FilterCriteria)
+	mapping, err := h.svc.CreateMapping(req.EventSourceArn, functionArn, req.FunctionName, req.BatchSize, req.MaximumBatchingWindowInSeconds, enabled, req.FilterCriteria, req.ScalingConfig)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", err.Error())
 		return
@@ -136,7 +149,12 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mapping, err := h.svc.UpdateMapping(uuid, req.BatchSize, req.MaximumBatchingWindowInSeconds, req.Enabled, req.FunctionName, req.FilterCriteria)
+	if !validScalingConfig(req.ScalingConfig) {
+		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "ScalingConfig.MaximumConcurrency must be between 2 and 1000")
+		return
+	}
+
+	mapping, err := h.svc.UpdateMapping(uuid, req.BatchSize, req.MaximumBatchingWindowInSeconds, req.Enabled, req.FunctionName, req.FilterCriteria, req.ScalingConfig)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
 		return
@@ -188,6 +206,7 @@ func toEventSourceMappingResponse(mapping *types.EventSourceMapping) *eventSourc
 		LastProcessingResult:           mapping.LastProcessingResult,
 		LastModified:                   float64(mapping.LastModified.UnixNano()) / 1e9,
 		FilterCriteria:                 mapping.FilterCriteria,
+		ScalingConfig:                  mapping.ScalingConfig,
 	}
 }
 

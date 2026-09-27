@@ -666,6 +666,7 @@ func TestDynamoStreamPollerInvokesLambdaAndAdvancesCheckpoint(t *testing.T) {
 		0,
 		true,
 		nil,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("create mapping: %v", err)

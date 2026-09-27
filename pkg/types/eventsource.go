@@ -33,4 +33,11 @@ type EventSourceMapping struct {
 	LastStreamSequence             string          `json:"LastStreamSequence,omitempty"`
 	LastModified                   time.Time       `json:"LastModified"`
 	FilterCriteria                 *FilterCriteria `json:"FilterCriteria,omitempty"`
+	ScalingConfig                  *ScalingConfig  `json:"ScalingConfig,omitempty"`
+}
+
+// ScalingConfig caps how many concurrent invokes an SQS event source mapping
+// drives.
+type ScalingConfig struct {
+	MaximumConcurrency int `json:"MaximumConcurrency,omitempty"`
 }
