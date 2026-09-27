@@ -140,6 +140,8 @@ Fix:
 
 ### P0-2: async invokes are synchronous, which cascades latency
 
+**Status: fixed** (`cab326a`). Direct `Event` invokes, S3 notifications and SNS Lambda deliveries go through a per-account queue (16 workers, 10,000 backlog; a full backlog returns `TooManyRequestsException`). `PutEvents` hands its deliveries to a queue in EventBridge. The function is still checked up front, so a missing function returns 404, not 202. Queued invokes wait for their result, so traces and EventBridge `LastResult` now show function errors, which they missed before. Shutdown waits up to 30s for queued invokes. AWS's two retries of failed async invokes are not implemented.
+
 - `InvocationType: Event` executes the function inline and only then returns 202.
 - SNS `Publish` invokes each Lambda subscriber serially and inline (`sns/service.go:203`). A publish with three subscribers costs the sum of three function durations, including cold starts of up to 60s. The invoke uses the publish request's context: when the publisher times out and its SDK retries, the in-flight work is cancelled and repeated, and duplicate deliveries follow.
 - EventBridge `PutEvents` also dispatches inline: `PutEvents`, then `dispatchEvent`, then `fireTargets`, one target at a time (`eventbridge/service.go:753`, `:1317`). It uses a detached timeout context, so it isn't cancelled by the caller, but the caller still waits for every matched target to finish.
@@ -147,6 +149,8 @@ Fix:
 Fix: add a per-account async invoke queue with a bounded worker pool, detached from the request context. Return 202 on enqueue, then add AWS's retry behaviour (two retries with backoff). A DLQ and destinations can follow.
 
 ### P0-3: SQS event source throughput is capped at BatchSize messages per second
+
+**Status: fixed** (`c64ab2f`). One poll loop runs per mapping while the queue is idle. When a full batch comes back it keeps polling and starts extra loops, up to `ScalingConfig.MaximumConcurrency` (default 5, capped at the Lambda per-function concurrency), which exit when batches come back short. Filter misses and failed batches don't trigger an immediate re-poll. DynamoDB streams keep one loop. The ESM invoke timeout is 16 minutes instead of 30 seconds, so functions longer than 30s are no longer cancelled and redelivered.
 
 The poller (`eventsource/poller.go:141`) makes one `ReceiveMessage` call per tick. The tick is at least 1s. It then invokes the function once for the batch and waits before the next tick. There is no drain loop and no fan-out. With the default batch size of 10, a mapping drains at most 10 messages per second, however much concurrency is configured. Sustained producers above that rate grow the backlog without bound. AWS scales pollers with queue depth.
 
@@ -177,6 +181,18 @@ Fix: mark the group as seen for every non-deleted, unexpired message in the grou
 `ReadTimeout` of 30s also cuts large S3 uploads on slow links.
 
 Fix: `WriteTimeout: 0` with per-handler deadlines via `http.ResponseController`, or at least 15m+. Use `ReadHeaderTimeout` instead of `ReadTimeout`.
+
+### P0-6: concurrent DynamoDB writes and reads crash Tarn
+
+**Status: fixed** (`5f115bc`). Found by the load harness. Scan, Query and the Describe calls read table state after releasing the store lock, so a PutItem running alongside a Query killed the whole process with `fatal error: concurrent map iteration and map write`. Every account's state went down with it. Reads now hold the lock while they copy what they need.
+
+### P0-7: every traced Lambda invoke sleeps 60ms
+
+**Status: fixed** (`734402a`). Found by the load harness. The trace collector slept 60ms after every invoke, so db-proxy spans could arrive, and the sleep was on the request path. It covered direct invokes, API Gateway v1 and v2, the ESM poller, EventBridge and S3 notifications. A warm invoke took 65ms, where the runtime itself took 2ms. The trace is now recorded after the response is sent. Sub-spans are also tracked per invocation instead of per function name, so concurrent invokes of one function no longer wipe each other's spans.
+
+### P1-5: DynamoDB Query and Scan cost grows with table size
+
+Open. Query and Scan copy every item in the table, each through a JSON round trip, and sort them before applying the key condition. A Query that returns 10 items from a 2,000-item table does all of that work. Under the harness, put-plus-query p50 is 79ms on a table that grows to about 2,000 items. Fix: filter on the key condition before cloning, and keep items sorted per partition key.
 
 ### P1-1: DynamoDB and SQS persistence rewrites the whole state every 250ms
 
@@ -225,6 +241,18 @@ Fix:
 - **Container names can collide.** Lambda containers are named by millisecond timestamp, so two cold starts in the same millisecond collide and one create fails. Add a random suffix.
 - **Every request logs to stdout.** One synchronous `log.Printf` per request is fine locally but noisy at high rates. Put it behind a verbosity flag.
 - **Flushers never stop.** `startFlusher` goroutines (DynamoDB, SQS, event source) have no stop channel.
+
+## Load harness results
+
+`cmd/tarn-load` drives sustained load against a running Tarn (`go run ./cmd/tarn-load -endpoint http://127.0.0.1:4599`). The figures are from a single developer machine with Docker Desktop, 8 clients and a trivial Node.js 20 function.
+
+| Scenario | Before | After |
+|---|---|---|
+| Sync invoke, 8 clients | 109 ops/s, p50 71ms | 677 to 769 ops/s, p50 9 to 11ms |
+| Sync invoke, 1 client (warm) | 65ms | 3ms |
+| SQS ESM drain, batch size 10 | 10 msgs/s | 615 msgs/s (1,000 messages) |
+| SNS publish, 3 Lambda subscribers of 200ms each | p50 630ms | p50 0.25ms |
+| DynamoDB PutItem + Query, 8 clients | process crash after 8 ops | 94 ops/s, p50 79ms (see P1-5) |
 
 ## Suggested order
 
