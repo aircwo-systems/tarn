@@ -870,9 +870,7 @@ func (s *Service) dispatchLambdaTarget(target *types.EventBridgeTarget, eventPay
 	}
 
 	invokeStart := time.Now()
-	if s.collector != nil {
-		s.collector.Begin(functionName)
-	}
+	inv := s.collector.Begin()
 	ctx, cancel := context.WithTimeout(context.Background(), defaultRuleFireTimeout)
 	invokeOut, invokeErr := s.lambda.Invoke(ctx, &types.InvokeInput{
 		FunctionName:   functionName,
@@ -910,9 +908,7 @@ func (s *Service) dispatchLambdaTarget(target *types.EventBridgeTarget, eventPay
 	}
 
 	spans = append(spans, tracesvc.Span{Kind: "lambda", Name: functionName, DurationMs: duration, Status: spanStatus, Meta: meta})
-	if s.collector != nil {
-		spans = append(spans, tracesvc.SubSpansToSpans(s.collector.CollectWithFlush(functionName))...)
-	}
+	spans = append(spans, inv.Wait()...)
 
 	return success, spans
 }

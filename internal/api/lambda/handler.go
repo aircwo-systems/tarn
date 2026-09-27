@@ -353,33 +353,29 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 		input.InvocationType = "RequestResponse"
 	}
 
-	if h.collector != nil {
-		h.collector.Begin(name)
-	}
+	inv := h.collector.Begin()
 	start := time.Now()
 	output, err := h.svc.Invoke(r.Context(), input)
 	durationMs := time.Since(start).Milliseconds()
 
-	var subSpans []tracesvc.Span
-	if h.collector != nil {
-		subSpans = tracesvc.SubSpansToSpans(h.collector.CollectWithFlush(name))
+	status := 200
+	spanStatus := "ok"
+	if err != nil {
+		status = 500
+		spanStatus = "error"
+	} else if output != nil && output.FunctionError != "" {
+		spanStatus = "error"
 	}
-
-	if h.traceStore != nil {
-		correlationID := tracesvc.CorrelationIDFromHeaders(r.Header)
-		if correlationID == "" {
-			correlationID = tracesvc.CorrelationIDFromPayload(payload)
-		}
-		if correlationID == "" {
-			correlationID = tracesvc.NewCorrelationID()
-		}
-		status := 200
-		spanStatus := "ok"
-		if err != nil {
-			status = 500
-			spanStatus = "error"
-		} else if output != nil && output.FunctionError != "" {
-			spanStatus = "error"
+	correlationID := tracesvc.CorrelationIDFromHeaders(r.Header)
+	if correlationID == "" {
+		correlationID = tracesvc.CorrelationIDFromPayload(payload)
+	}
+	if correlationID == "" {
+		correlationID = tracesvc.NewCorrelationID()
+	}
+	inv.Finish(func(subSpans []tracesvc.Span) {
+		if h.traceStore == nil {
+			return
 		}
 		h.traceStore.Add(&tracesvc.Trace{
 			ID:            uuid.NewString()[:8],
@@ -389,7 +385,7 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 			Status:        status,
 			Spans:         append([]tracesvc.Span{{Kind: "lambda", Name: name, DurationMs: durationMs, Status: spanStatus}}, subSpans...),
 		})
-	}
+	})
 
 	if err != nil {
 		status, code := invokeErrorCode(err)

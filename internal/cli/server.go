@@ -277,7 +277,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 			correlationID := trace.NewCorrelationID()
 			payload := buildS3EventPayload(eventName, bucket, key, size, etag, acctCfg.Region, correlationID)
 			go func(fnName string, p []byte, corr string) {
-				shared.collector.Begin(fnName)
+				inv := shared.collector.Begin()
 				traceStart := time.Now()
 				invokeCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
@@ -287,7 +287,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 					InvocationType: "Event",
 				})
 				durationMs := time.Since(traceStart).Milliseconds()
-				subSpans := trace.SubSpansToSpans(shared.collector.CollectWithFlush(fnName))
+				subSpans := inv.Wait()
 				status := 200
 				spanStatus := "ok"
 				if err != nil || (out != nil && out.FunctionError != "") {

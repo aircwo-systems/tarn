@@ -215,9 +215,7 @@ func (p *poller) poll() {
 		_ = p.store.Save(p.mapping)
 	}
 
-	if p.collector != nil {
-		p.collector.Begin(functionName)
-	}
+	inv := p.collector.Begin()
 	lambdaStart := time.Now()
 	sqsDurationMs := lambdaStart.Sub(pollStart).Milliseconds()
 	output, err := p.lambda.Invoke(ctx, &types.InvokeInput{
@@ -227,19 +225,15 @@ func (p *poller) poll() {
 	})
 	lambdaDurationMs := time.Since(lambdaStart).Milliseconds()
 
-	var subSpans []tracesvc.Span
-	if p.collector != nil {
-		subSpans = tracesvc.SubSpansToSpans(p.collector.CollectWithFlush(functionName))
-	}
-
 	if err != nil {
 		if isNotFoundError(err) {
+			inv.Finish(func([]tracesvc.Span) {})
 			p.disableWithError(err)
 			return
 		}
 		log.Printf("[eventsource] %s: invoke error: %v", p.mapping.UUID, err)
 		p.updateResult(fmt.Sprintf("ERROR: %v", err))
-		p.recordTrace(pollStart, functionName, msgs, sqsDurationMs, lambdaDurationMs, len(msgs), len(msgs), subSpans)
+		p.recordTrace(pollStart, functionName, msgs, sqsDurationMs, lambdaDurationMs, len(msgs), len(msgs), inv)
 
 		// Check DLQ for all messages — ReceiveMessage already incremented their
 		// receive count, so without this check messages bypass maxReceiveCount
@@ -299,10 +293,10 @@ func (p *poller) poll() {
 		errMsg := lambdaErrorMessage(output.Payload)
 		log.Printf("[eventsource] %s: %d/%d message(s) failed (%s)", p.mapping.UUID, failCount, len(msgs), errMsg)
 		p.updateResult(fmt.Sprintf("ERROR: %d/%d messages failed", failCount, len(msgs)))
-		p.recordTrace(pollStart, functionName, msgs, sqsDurationMs, lambdaDurationMs, len(msgs), failCount, subSpans)
+		p.recordTrace(pollStart, functionName, msgs, sqsDurationMs, lambdaDurationMs, len(msgs), failCount, inv)
 	} else {
 		p.updateResult("OK")
-		p.recordTrace(pollStart, functionName, msgs, sqsDurationMs, lambdaDurationMs, len(msgs), 0, subSpans)
+		p.recordTrace(pollStart, functionName, msgs, sqsDurationMs, lambdaDurationMs, len(msgs), 0, inv)
 	}
 }
 
@@ -328,9 +322,7 @@ func (p *poller) pollDynamoStream() {
 	defer cancel()
 
 	functionName := normalizeLambdaFunctionName(p.mapping.FunctionName)
-	if p.collector != nil {
-		p.collector.Begin(functionName)
-	}
+	inv := p.collector.Begin()
 	streamDurationMs := time.Since(pollStart).Milliseconds()
 	lambdaStart := time.Now()
 	output, err := p.lambda.Invoke(ctx, &types.InvokeInput{
@@ -340,13 +332,9 @@ func (p *poller) pollDynamoStream() {
 	})
 	lambdaDurationMs := time.Since(lambdaStart).Milliseconds()
 
-	var subSpans []tracesvc.Span
-	if p.collector != nil {
-		subSpans = tracesvc.SubSpansToSpans(p.collector.CollectWithFlush(functionName))
-	}
-
 	if err != nil || output == nil || output.FunctionError != "" || lambdaReturnedError(output) {
 		if err != nil && isNotFoundError(err) {
+			inv.Finish(func([]tracesvc.Span) {})
 			p.disableWithError(err)
 			return
 		}
@@ -358,18 +346,21 @@ func (p *poller) pollDynamoStream() {
 		}
 		log.Printf("[eventsource] %s: %s", p.mapping.UUID, msg)
 		p.updateResult("ERROR: " + msg)
-		p.recordStreamTrace(pollStart, functionName, len(records), streamDurationMs, lambdaDurationMs, true, subSpans)
+		p.recordStreamTrace(pollStart, functionName, len(records), streamDurationMs, lambdaDurationMs, true, inv)
 		return
 	}
 
 	p.mapping.LastStreamSequence = nextSeq
 	_ = p.store.Save(p.mapping)
 	p.updateResult("OK")
-	p.recordStreamTrace(pollStart, functionName, len(records), streamDurationMs, lambdaDurationMs, false, subSpans)
+	p.recordStreamTrace(pollStart, functionName, len(records), streamDurationMs, lambdaDurationMs, false, inv)
 }
 
-func (p *poller) recordTrace(start time.Time, functionName string, msgs []*types.SQSMessage, sqsDurationMs, lambdaDurationMs int64, msgCount, failCount int, subSpans []tracesvc.Span) {
+// recordTrace records the poll's trace once the invocation's late telemetry
+// has arrived, without holding up the next poll.
+func (p *poller) recordTrace(start time.Time, functionName string, msgs []*types.SQSMessage, sqsDurationMs, lambdaDurationMs int64, msgCount, failCount int, inv *tracesvc.Invocation) {
 	if p.traceStore == nil {
+		inv.Finish(func([]tracesvc.Span) {})
 		return
 	}
 	status := 200
@@ -401,13 +392,16 @@ func (p *poller) recordTrace(start time.Time, functionName string, msgs []*types
 	if value := correlationIDFromSQSMessageAttributes(msgs); value != "" {
 		correlationID = value
 	}
-	p.traceStore.Add(&tracesvc.Trace{
-		ID:            uuid.NewString()[:8],
-		CorrelationID: correlationID,
-		StartedAt:     start,
-		DurationMs:    time.Since(start).Milliseconds(),
-		Status:        status,
-		Spans:         append(spans, subSpans...),
+	durationMs := time.Since(start).Milliseconds()
+	inv.Finish(func(subSpans []tracesvc.Span) {
+		p.traceStore.Add(&tracesvc.Trace{
+			ID:            uuid.NewString()[:8],
+			CorrelationID: correlationID,
+			StartedAt:     start,
+			DurationMs:    durationMs,
+			Status:        status,
+			Spans:         append(spans, subSpans...),
+		})
 	})
 }
 
@@ -727,8 +721,11 @@ func buildDynamoDBEventPayload(records []*types.StreamRecord) []byte {
 	return data
 }
 
-func (p *poller) recordStreamTrace(start time.Time, functionName string, recordCount int, streamDurationMs, lambdaDurationMs int64, failed bool, subSpans []tracesvc.Span) {
+// recordStreamTrace records the poll's trace once the invocation's late
+// telemetry has arrived, without holding up the next poll.
+func (p *poller) recordStreamTrace(start time.Time, functionName string, recordCount int, streamDurationMs, lambdaDurationMs int64, failed bool, inv *tracesvc.Invocation) {
 	if p.traceStore == nil {
+		inv.Finish(func([]tracesvc.Span) {})
 		return
 	}
 	status := 200
@@ -738,25 +735,29 @@ func (p *poller) recordStreamTrace(start time.Time, functionName string, recordC
 		status = 500
 		lambdaStatus = "error"
 	}
-	p.traceStore.Add(&tracesvc.Trace{
-		ID:         uuid.NewString()[:8],
-		StartedAt:  start,
-		DurationMs: time.Since(start).Milliseconds(),
-		Status:     status,
-		Spans: append([]tracesvc.Span{
-			{
-				Kind:       "dynamodb",
-				Name:       p.mapping.SourceName,
-				DurationMs: streamDurationMs,
-				Status:     streamStatus,
-				Meta:       map[string]string{"recordCount": fmt.Sprintf("%d", recordCount)},
-			},
-			{
-				Kind:       "lambda",
-				Name:       functionName,
-				DurationMs: lambdaDurationMs,
-				Status:     lambdaStatus,
-			},
-		}, subSpans...),
+	durationMs := time.Since(start).Milliseconds()
+	sourceName := p.mapping.SourceName
+	inv.Finish(func(subSpans []tracesvc.Span) {
+		p.traceStore.Add(&tracesvc.Trace{
+			ID:         uuid.NewString()[:8],
+			StartedAt:  start,
+			DurationMs: durationMs,
+			Status:     status,
+			Spans: append([]tracesvc.Span{
+				{
+					Kind:       "dynamodb",
+					Name:       sourceName,
+					DurationMs: streamDurationMs,
+					Status:     streamStatus,
+					Meta:       map[string]string{"recordCount": fmt.Sprintf("%d", recordCount)},
+				},
+				{
+					Kind:       "lambda",
+					Name:       functionName,
+					DurationMs: lambdaDurationMs,
+					Status:     lambdaStatus,
+				},
+			}, subSpans...),
+		})
 	})
 }

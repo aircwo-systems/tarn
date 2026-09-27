@@ -532,7 +532,7 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 			if correlationID == "" {
 				correlationID = tracesvc.NewCorrelationID()
 			}
-			s.recordTrace(input, traceStart, correlationID, status, []tracesvc.Span{
+			s.recordTrace(input, traceStart, time.Now(), correlationID, status, []tracesvc.Span{
 				{Kind: "queue", Name: integration.SQSQueueName, DurationMs: time.Since(sqsStart).Milliseconds(), Status: spanStatus},
 			})
 		}
@@ -551,9 +551,7 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 		return nil, err
 	}
 
-	if s.collector != nil {
-		s.collector.Begin(integration.LambdaFunctionName)
-	}
+	inv := s.collector.Begin()
 	lambdaStart := time.Now()
 	invokeOut, err := s.lambda.Invoke(ctx, &types.InvokeInput{
 		FunctionName:   integration.LambdaFunctionName,
@@ -572,51 +570,48 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 			})
 		}
 		if err != nil {
-			var subSpans []tracesvc.Span
-			if s.collector != nil {
-				subSpans = tracesvc.SubSpansToSpans(s.collector.CollectWithFlush(integration.LambdaFunctionName))
-			}
-			if s.traceStore != nil {
-				s.recordTrace(input, traceStart, correlationID, 500, append([]tracesvc.Span{
-					{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: time.Since(lambdaStart).Milliseconds(), Status: "error"},
-				}, subSpans...))
-			}
+			s.recordLambdaTrace(inv, input, traceStart, correlationID, 500, []tracesvc.Span{
+				{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: time.Since(lambdaStart).Milliseconds(), Status: "error"},
+			})
 			return nil, fmt.Errorf("invoke failed: %w", err)
 		}
-	}
-	var subSpans []tracesvc.Span
-	if s.collector != nil {
-		subSpans = tracesvc.SubSpansToSpans(s.collector.CollectWithFlush(integration.LambdaFunctionName))
 	}
 	lambdaDurationMs := time.Since(lambdaStart).Milliseconds()
 
 	out, mapErr := mapLambdaProxyResponse(invokeOut.Payload)
 	if mapErr != nil {
-		if s.traceStore != nil {
-			s.recordTrace(input, traceStart, correlationID, 500, append([]tracesvc.Span{
-				{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: lambdaDurationMs, Status: "error"},
-			}, subSpans...))
-		}
+		s.recordLambdaTrace(inv, input, traceStart, correlationID, 500, []tracesvc.Span{
+			{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: lambdaDurationMs, Status: "error"},
+		})
 		return nil, mapErr
 	}
 
-	if s.traceStore != nil {
-		spanStatus := "ok"
-		if out.StatusCode >= 500 {
-			spanStatus = "error"
-		} else if out.StatusCode >= 400 {
-			spanStatus = "client_error"
-		}
-		s.recordTrace(input, traceStart, correlationID, out.StatusCode, append([]tracesvc.Span{
-			{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: lambdaDurationMs, Status: spanStatus},
-		}, subSpans...))
+	spanStatus := "ok"
+	if out.StatusCode >= 500 {
+		spanStatus = "error"
+	} else if out.StatusCode >= 400 {
+		spanStatus = "client_error"
 	}
+	s.recordLambdaTrace(inv, input, traceStart, correlationID, out.StatusCode, []tracesvc.Span{
+		{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: lambdaDurationMs, Status: spanStatus},
+	})
 
 	return out, nil
 }
 
+// recordLambdaTrace records a Lambda integration's trace once the invocation's
+// late telemetry has arrived, without delaying the response.
+func (s *Service) recordLambdaTrace(inv *tracesvc.Invocation, input *InvokeInput, start time.Time, correlationID string, status int, spans []tracesvc.Span) {
+	end := time.Now()
+	inv.Finish(func(subSpans []tracesvc.Span) {
+		if s.traceStore != nil {
+			s.recordTrace(input, start, end, correlationID, status, append(spans, subSpans...))
+		}
+	})
+}
+
 // recordTrace stores a completed trace in the trace store.
-func (s *Service) recordTrace(input *InvokeInput, start time.Time, correlationID string, status int, spans []tracesvc.Span) {
+func (s *Service) recordTrace(input *InvokeInput, start, end time.Time, correlationID string, status int, spans []tracesvc.Span) {
 	api, _ := s.store.GetAPI(input.APIID)
 	gwName := input.APIID
 	if api != nil {
@@ -629,7 +624,7 @@ func (s *Service) recordTrace(input *InvokeInput, start time.Time, correlationID
 		ID:            uuid.NewString()[:8],
 		CorrelationID: correlationID,
 		StartedAt:     start,
-		DurationMs:    time.Since(start).Milliseconds(),
+		DurationMs:    end.Sub(start).Milliseconds(),
 		Status:        status,
 		Method:        strings.ToUpper(input.Method),
 		Path:          input.Path,
