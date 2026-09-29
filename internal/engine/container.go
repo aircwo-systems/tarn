@@ -18,6 +18,7 @@ import (
 
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
@@ -545,7 +546,7 @@ func (e *Engine) SweepOrphanedLambdaContainers(ctx context.Context) (int, error)
 	}
 	removed := 0
 	for _, c := range orphans {
-		if err := e.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true}); err != nil && !client.IsErrNotFound(err) {
+		if err := e.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 			log.Printf("[engine] failed to remove orphaned Lambda container %s: %v", shortID(c.ID), err)
 			continue
 		}
@@ -569,7 +570,7 @@ func (e *Engine) SweepLegacyLambdaContainers(ctx context.Context) ([]string, err
 		if !ok {
 			continue
 		}
-		if err := e.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{}); err != nil && !client.IsErrNotFound(err) {
+		if err := e.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{}); err != nil && !cerrdefs.IsNotFound(err) {
 			log.Printf("[engine] failed to remove stopped Lambda container %s: %v", name, err)
 			continue
 		}
@@ -722,7 +723,7 @@ func (e *Engine) Cleanup(ctx context.Context) {
 		go func(id string) {
 			defer wg.Done()
 			_ = e.StopContainer(ctx, id, 0)
-			if err := e.client.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err != nil && !client.IsErrNotFound(err) {
+			if err := e.client.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 				log.Printf("[engine] failed to remove Lambda container %s: %v", shortID(id), err)
 			}
 		}(info.ID)

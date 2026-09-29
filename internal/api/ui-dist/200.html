@@ -3,104 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Tarn — Rack Console</title>
     <meta
       name="description"
       content="Tarn dashboard for monitoring local AWS emulation resources"
     />
-    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="shortcut icon" href="/favicon.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="/favicon.svg" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0a0f14" />
-    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#f8fafb" />
-    <script>
-      (function () {
-        var cookieName = "tarn-ui-settings=";
-        var cookieValue = null;
-        var parts = document.cookie.split("; ");
-        for (var i = 0; i < parts.length; i++) {
-          if (parts[i].indexOf(cookieName) === 0) {
-            cookieValue = parts[i].slice(cookieName.length);
-            break;
-          }
-        }
-
-        var mode = "system";
-        if (cookieValue) {
-          try {
-            var parsed = JSON.parse(decodeURIComponent(cookieValue));
-            if (
-              parsed &&
-              (parsed.themeMode === "light" ||
-                parsed.themeMode === "dark" ||
-                parsed.themeMode === "system")
-            ) {
-              mode = parsed.themeMode;
-            }
-          } catch (_) {}
-        }
-
-        var resolved = mode;
-        if (mode === "system") {
-          resolved =
-            window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches
-              ? "dark"
-              : "light";
-        }
-
-        if (resolved === "light") {
-          document.documentElement.classList.add("light");
-          document.documentElement.classList.remove("dark");
-        } else {
-          document.documentElement.classList.add("dark");
-          document.documentElement.classList.remove("light");
-        }
-
-        // Override theme-color meta to match the user's persisted choice
-        // rather than just the OS preference, so Safari chrome tracks the app.
-        if (mode !== "system") {
-          var metas = document.querySelectorAll('meta[name="theme-color"]');
-          var color = resolved === "dark" ? "#0a0f14" : "#f8fafb";
-          for (var i = 0; i < metas.length; i++) {
-            metas[i].setAttribute("content", color);
-          }
-        }
-      })();
-    </script>
-    <link href="/_app/immutable/entry/start.kUXdEqAJ.js" rel="modulepreload">
-		<link href="/_app/immutable/chunks/DB84Gji2.js" rel="modulepreload">
-		<link href="/_app/immutable/chunks/BWoViVN9.js" rel="modulepreload">
-		<link href="/_app/immutable/entry/app.CtTBjJm4.js" rel="modulepreload">
-		<link href="/_app/immutable/chunks/CJ3g7k1T.js" rel="modulepreload">
-		<link href="/_app/immutable/chunks/4wGVgsGN.js" rel="modulepreload">
-		<link href="/_app/immutable/chunks/5v0gnjj6.js" rel="modulepreload">
-		<link href="/_app/immutable/chunks/C5MZoSzC.js" rel="modulepreload">
-		<link href="/_app/immutable/nodes/0.BMa68jge.js" rel="modulepreload">
-		<link href="/_app/immutable/chunks/O4iR4ETL.js" rel="modulepreload">
-		
-		<link href="/_app/immutable/assets/0.B0LsVukR.css" rel="stylesheet">
   </head>
   <body data-sveltekit-preload-data="hover">
     <div style="display: contents">
-			<script>
-				{
-					__sveltekit_cm2um5 = {
-						base: ""
-					};
-
-					const element = document.currentScript.parentElement;
-
-					Promise.all([
-						import("/_app/immutable/entry/start.kUXdEqAJ.js"),
-						import("/_app/immutable/entry/app.CtTBjJm4.js")
-					]).then(([kit, app]) => {
-						kit.start(app, element);
-					});
-				}
-			</script>
-		</div>
+      Hi, this is Tarn. This is a placeholder page for CI; run make ui-build to embed the dashboard.
+    </div>
   </body>
 </html>

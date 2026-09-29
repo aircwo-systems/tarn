@@ -77,10 +77,11 @@ func addLogsTool(s *mcp.Server, c *client) {
 	) {
 		group := strings.TrimSpace(in.LogGroup)
 		endpoint := ""
-		if group == "*" || group == "__all__" || group == "all" {
+		switch group {
+		case "*", "__all__", "all":
 			endpoint = "/_tarn/admin/logs/events-all"
 			group = "all"
-		} else if group == "" {
+		case "":
 			if strings.TrimSpace(in.Function) == "" {
 				if strings.TrimSpace(in.Pattern) != "" {
 					endpoint = "/_tarn/admin/logs/events-all"
@@ -92,7 +93,7 @@ func addLogsTool(s *mcp.Server, c *client) {
 				group = logGroupFor(in.Function)
 				endpoint = "/_tarn/admin/logs/events/" + url.PathEscape(group)
 			}
-		} else {
+		default:
 			endpoint = "/_tarn/admin/logs/events/" + url.PathEscape(group)
 		}
 

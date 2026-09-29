@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/engine"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
 	"github.com/spf13/cobra"
@@ -497,7 +498,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		// Docker rejects removal if this container started after the list call.
 		err := docker.ContainerRemove(ctx, c.ID, container.RemoveOptions{})
 		cancel()
-		if err != nil && !client.IsErrNotFound(err) {
+		if err != nil && !cerrdefs.IsNotFound(err) {
 			recordFailure("Lambda Docker container", c.Names[0], err)
 			continue
 		}

@@ -112,7 +112,7 @@ func runESM() error {
 	if err := sqs("CreateQueue", url.Values{"QueueName": {queue}}, nil); err != nil {
 		return err
 	}
-	defer sqs("DeleteQueue", url.Values{"QueueUrl": {queueURL(queue)}}, nil)
+	defer func() { _ = sqs("DeleteQueue", url.Values{"QueueUrl": {queueURL(queue)}}, nil) }()
 
 	for sent := 0; sent < esmMessages; sent += 10 {
 		form := url.Values{"QueueUrl": {queueURL(queue)}}
@@ -134,7 +134,7 @@ func runESM() error {
 	}, &mapping); err != nil {
 		return err
 	}
-	defer doJSON(http.MethodDelete, "/2015-03-31/event-source-mappings/"+mapping.UUID, nil, nil)
+	defer func() { _ = doJSON(http.MethodDelete, "/2015-03-31/event-source-mappings/"+mapping.UUID, nil, nil) }()
 
 	deadline := start.Add(10 * time.Minute)
 	for {
@@ -163,7 +163,7 @@ func runSNS() error {
 	if err := snsCall(url.Values{"Action": {"CreateTopic"}, "Name": {topicName}}, &arn, "TopicArn"); err != nil {
 		return err
 	}
-	defer snsCall(url.Values{"Action": {"DeleteTopic"}, "TopicArn": {arn}}, nil, "")
+	defer func() { _ = snsCall(url.Values{"Action": {"DeleteTopic"}, "TopicArn": {arn}}, nil, "") }()
 
 	for i := 1; i <= 3; i++ {
 		fn := fmt.Sprintf("%ssub-%d", prefix, i)
@@ -210,7 +210,7 @@ func runDynamoDB() error {
 	}); err != nil {
 		return err
 	}
-	defer dynamo("DeleteTable", map[string]any{"TableName": table})
+	defer func() { _ = dynamo("DeleteTable", map[string]any{"TableName": table}) }()
 
 	stats := runFor(duration, concurrency, func(i int) error {
 		pk := fmt.Sprintf("p%d", i%64)

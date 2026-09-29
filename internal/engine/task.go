@@ -25,11 +25,11 @@ import (
 	"time"
 
 	"github.com/aircwo-systems/tarn/pkg/types"
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 	units "github.com/docker/go-units"
@@ -910,7 +910,7 @@ func (e *Engine) EnsureTaskVolume(ctx context.Context, name, driver string, driv
 func (e *Engine) TaskVolumeExists(ctx context.Context, name string) (bool, error) {
 	_, err := e.client.VolumeInspect(ctx, name)
 	if err != nil {
-		if client.IsErrNotFound(err) {
+		if cerrdefs.IsNotFound(err) {
 			return false, nil
 		}
 		return false, fmt.Errorf("inspect volume %s: %w", name, err)
