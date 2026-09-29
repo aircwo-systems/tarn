@@ -133,9 +133,13 @@ type summaryGroupState struct {
 	listed    int
 }
 
-// Summarize groups events matching filter by a JSON field. filter.Level is
-// applied to the stored level exactly as GetAllLogEvents applies it; order,
-// limit, offset and cursor are ignored. Errors are validation errors.
+// Summarize groups events matching filter by a JSON field. Order, limit,
+// offset and cursor are ignored. Errors are validation errors.
+//
+// A structured line's own "level" field wins over the stored level, for
+// counts, error listing and filter.Level alike. The Node runtime stores every
+// console.log line as INFO, so {"level":"error",...} would otherwise be
+// counted as info and the error hidden from the summary.
 func (s *Service) Summarize(filter *LogFilter, opts SummaryOptions) (*LogSummary, error) {
 	return s.store.Summarize(filter, opts)
 }
@@ -168,6 +172,14 @@ func (s *Store) Summarize(filter *LogFilter, opts SummaryOptions) (*LogSummary, 
 	flatten := strings.TrimSpace(opts.Flatten)
 	byMessage := strings.TrimSpace(opts.GroupBy) == summaryGroupByMessagePath
 
+	// Level is matched below against each line's effective level.
+	var wantLevel LogLevel
+	if filter != nil && filter.Level != "" {
+		f := *filter
+		wantLevel, f.Level = f.Level, ""
+		filter = &f
+	}
+
 	candidates, truncated := s.summaryCandidates(filter, scanLimit)
 
 	out := &LogSummary{
@@ -189,6 +201,12 @@ func (s *Store) Summarize(filter *LogFilter, opts SummaryOptions) (*LogSummary, 
 			continue
 		}
 		ev := &summaryEvent{group: c.Group, event: c.Event, doc: parseJSONObject(c.Event.Message)}
+		if lvl, ok := structuredLevel(ev.doc); ok {
+			ev.event.Level = lvl
+		}
+		if wantLevel != "" && !levelMatches(ev.event.Level, wantLevel) {
+			continue
+		}
 		out.Totals.EventsScanned++
 		if firstAt.IsZero() || ev.event.Timestamp.Before(firstAt) {
 			firstAt = ev.event.Timestamp
@@ -524,6 +542,43 @@ func parseJSONObject(message string) map[string]any {
 		return nil
 	}
 	return doc
+}
+
+// structuredLevel reads a JSON line's own level: a name such as "error" or
+// "warning", or a pino/bunyan number (50 error, 40 warn, 30 info).
+func structuredLevel(doc map[string]any) (LogLevel, bool) {
+	if doc == nil {
+		return "", false
+	}
+	switch v := doc["level"].(type) {
+	case string:
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "error", "err", "fatal", "critical", "crit", "panic", "alert", "emergency":
+			return LevelERROR, true
+		case "warn", "warning":
+			return LevelWARN, true
+		case "info", "notice", "information":
+			return LevelINFO, true
+		case "debug", "trace", "verbose":
+			return LevelDEBUG, true
+		}
+	case json.Number:
+		n, err := v.Int64()
+		if err != nil {
+			return "", false
+		}
+		switch {
+		case n >= 50:
+			return LevelERROR, true
+		case n >= 40:
+			return LevelWARN, true
+		case n >= 30:
+			return LevelINFO, true
+		default:
+			return LevelDEBUG, true
+		}
+	}
+	return "", false
 }
 
 func formatSummaryTime(t time.Time) string {

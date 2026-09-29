@@ -15,6 +15,7 @@
     CheckIcon,
     PlusIcon,
     PushPinIcon,
+    RowsIcon,
   } from "phosphor-svelte";
   import { fly } from "svelte/transition";
   import { Skeleton } from "$lib/components/ui/skeleton";
@@ -25,6 +26,7 @@
   import SectionHeader from "./section-header.svelte";
   import LogStream, { keyEvents } from "$lib/components/logs/log-stream.svelte";
   import LogSelectionPrompt from "$lib/components/logs/log-selection-prompt.svelte";
+  import LogSummary from "$lib/components/logs/log-summary.svelte";
   import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
   import {
     fetchLogGroups,
@@ -134,6 +136,13 @@
   let groupSearch = $state("");
   let serviceFilter = $state("all");
   let sortOrder = $state<LogSortOrder>("desc");
+
+  // Summary mode groups structured lines by a JSON field instead of listing them.
+  let summaryMode = $state(false);
+  let summaryReload = $state(0);
+  let summaryLoading = $state(false);
+  // The pattern as last applied, so typing doesn't refetch the summary per keystroke.
+  let appliedPattern = $state("");
 
   // Log full-text scan state
   let scanResult = $state<LogScanResult | null>(null);
@@ -346,6 +355,7 @@
     if (!selectedGroup) return;
     // A background tick never interrupts a user-initiated load.
     if (opts.merge && eventsController) return;
+    if (!opts.merge) appliedPattern = filterPattern;
     // Merges shift row indexes, so any pin context position is stale either way.
     contextSelection = null;
     eventsController?.abort();
@@ -604,9 +614,25 @@
     }
   }
 
+  function toggleSummary() {
+    summaryMode = !summaryMode;
+    if (summaryMode) {
+      pinsOnly = false;
+      autoRefresh = false;
+      closeDetail();
+    }
+  }
+
+  function drillIntoSummaryGroup(key: string) {
+    summaryMode = false;
+    filterPattern = formatFilterTerm(key);
+    applyFilters();
+  }
+
   function backToGroups() {
     selectedGroup = "";
     pinsOnly = false;
+    summaryMode = false;
     clearGroupSelection();
     events = [];
     eventsTotal = 0;
@@ -1087,7 +1113,7 @@
             type="button"
             class="rc-live"
             class:on={autoRefresh}
-            disabled={pinsOnly}
+            disabled={pinsOnly || summaryMode}
             onclick={() => (autoRefresh = !autoRefresh)}
             title={pinsOnly ? "Show all events to tail logs" : autoRefresh ? "Stop tailing" : "Tail new events"}
           >
@@ -1097,6 +1123,12 @@
               <span class="rc-live-rate">{ribbon.rate.toFixed(1)}/s</span>
             {/if}
           </button>
+          {@render toolButton("Summary", RowsIcon, toggleSummary, {
+            active: summaryMode,
+            pressed: summaryMode,
+            title: summaryMode ? "Show raw log events" : "Group structured log lines by a field",
+          })}
+          {#if !summaryMode}
           {@render toolButton(sortOrder === "desc" ? "Newest" : "Oldest", sortOrder === "desc" ? SortDescendingIcon : SortAscendingIcon, toggleSort, {
             title: sortOrder === "desc" ? "Showing newest first" : "Showing oldest first",
           })}
@@ -1109,7 +1141,9 @@
             pressed: pinsOnly,
             title: pinsOnly ? "Show all log events" : "Show saved pins in this log selection",
           })}
+          {/if}
           {@render toolButton("Filters", FunnelIcon, () => (showFilters = !showFilters), { active: !pinsOnly && (showFilters || !!filterStream), disabled: pinsOnly })}
+          {#if !summaryMode}
           {#if !isAllGroup && !isMultiGroup}
             {@render toolButton("Clear", TrashIcon, handleClearLogs, {
               tone: "danger",
@@ -1117,7 +1151,12 @@
               title: "Clear all logs in this group",
             })}
           {/if}
-          {@render toolButton("Refresh", ArrowsClockwiseIcon, () => loadEvents(), { spin: eventsLoading, disabled: pinsOnly || eventsLoading })}
+          {/if}
+          {#if summaryMode}
+            {@render toolButton("Refresh", ArrowsClockwiseIcon, () => { summaryReload++; loadEvents(); }, { spin: summaryLoading, disabled: summaryLoading })}
+          {:else}
+            {@render toolButton("Refresh", ArrowsClockwiseIcon, () => loadEvents(), { spin: eventsLoading, disabled: pinsOnly || eventsLoading })}
+          {/if}
         </div>
       {/snippet}
     </SectionHeader>
@@ -1227,7 +1266,18 @@
       <div class="rc-error" role="alert">{pinError}</div>
     {/if}
 
-    {#if !pinsOnly && eventsLoading && events.length === 0}
+    {#if summaryMode}
+      <LogSummary
+        groups={isAllGroup ? [] : selectedGroupList}
+        level={filterLevels.join(",")}
+        pattern={appliedPattern}
+        stream={filterStream}
+        {events}
+        reloadToken={summaryReload}
+        onDrill={drillIntoSummaryGroup}
+        onLoadingChange={(v) => (summaryLoading = v)}
+      />
+    {:else if !pinsOnly && eventsLoading && events.length === 0}
       <div class="rc-panel flex-1 space-y-1.5">
         {#each Array(14) as _, i (i)}
           <Skeleton class="h-4 w-full" />

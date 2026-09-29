@@ -348,6 +348,79 @@ export async function scanLogs(
   return (await response.json()) as LogScanResult;
 }
 
+/** A sample event from a log summary: the projected fields plus timestamp. */
+export type LogSummarySample = Record<string, unknown> & { timestamp: string; logGroup?: string };
+
+export interface LogSummaryGroup {
+  key: string;
+  count: number;
+  levels: Record<string, number>;
+  logGroups: string[];
+  firstAt: string;
+  lastAt: string;
+  errors: LogSummarySample[];
+  errorsDropped: number;
+  first: LogSummarySample;
+  last: LogSummarySample;
+}
+
+export interface LogSummary {
+  groupBy: string;
+  window: { from?: string; to?: string };
+  totals: {
+    eventsScanned: number;
+    eventsGrouped: number;
+    ungrouped: number;
+    runtimeFiltered?: number;
+    groups: number;
+    groupsReturned: number;
+    errorGroups: number;
+    truncatedScan?: boolean;
+  };
+  groups: LogSummaryGroup[];
+  ungroupedSample: LogSummarySample[];
+}
+
+export interface LogSummaryParams {
+  groupBy: string;
+  fields?: string;
+  flatten?: string;
+  groups?: string[];
+  level?: string;
+  pattern?: string;
+  stream?: string;
+  since?: string;
+  until?: string;
+  maxGroups?: number;
+  maxErrorsPerGroup?: number;
+  includeRuntime?: boolean;
+}
+
+export async function fetchLogSummary(params: LogSummaryParams, signal?: AbortSignal): Promise<LogSummary> {
+  const query = new URLSearchParams({ groupBy: params.groupBy });
+  if (params.fields) query.set("fields", params.fields);
+  if (params.flatten) query.set("flatten", params.flatten);
+  if (params.groups && params.groups.length > 0) query.set("groups", params.groups.join(","));
+  if (params.level) query.set("level", params.level);
+  if (params.pattern) query.set("pattern", params.pattern);
+  if (params.stream) query.set("stream", params.stream);
+  if (params.since) query.set("since", params.since);
+  if (params.until) query.set("until", params.until);
+  if (params.maxGroups) query.set("maxGroups", String(params.maxGroups));
+  if (params.maxErrorsPerGroup) query.set("maxErrorsPerGroup", String(params.maxErrorsPerGroup));
+  if (params.includeRuntime) query.set("includeRuntime", "true");
+
+  const response = await fetch(endpoint(`/_tarn/admin/logs/summary?${query}`), {
+    method: "GET",
+    headers: { Accept: "application/json", ...accountHeaders() },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `Failed to summarise logs: HTTP ${response.status}`));
+  }
+  return (await response.json()) as LogSummary;
+}
+
 export async function pruneOldLogs(retentionMinutes: number, signal?: AbortSignal): Promise<void> {
   const url = endpoint(`/_tarn/admin/logs/prune?retention=${retentionMinutes}`);
   const response = await fetch(url, {

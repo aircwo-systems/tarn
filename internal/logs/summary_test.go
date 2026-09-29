@@ -405,3 +405,38 @@ func TestSummaryUngroupedSampleKeepsNewest(t *testing.T) {
 		t.Errorf("sample = %v, want the newest five, oldest first", out.UngroupedSample)
 	}
 }
+
+// TestSummaryUsesStructuredLevel covers the Node runtime, which stores every
+// console.log line as INFO whatever its JSON says.
+func TestSummaryUsesStructuredLevel(t *testing.T) {
+	s := NewStore(100)
+	s.CreateGroup("g")
+	s.PutLogEvents("g", "s", []LogEvent{
+		{Timestamp: archivalBase, Level: LevelINFO, Message: `{"id":"a","level":"error","message":"boom"}`},
+		{Timestamp: archivalBase.Add(time.Second), Level: LevelINFO, Message: `{"id":"a","level":"info","message":"ok"}`},
+		{Timestamp: archivalBase.Add(2 * time.Second), Level: LevelERROR, Message: `{"id":"b","level":"info","message":"errorCount 0"}`},
+		{Timestamp: archivalBase.Add(3 * time.Second), Level: LevelINFO, Message: `{"id":"c","level":40,"message":"pino warn"}`},
+	})
+
+	out := summarize(t, s, nil, SummaryOptions{GroupBy: "id"})
+	if out.Totals.ErrorGroups != 1 || out.Groups[0].Key != "a" || len(out.Groups[0].Errors) != 1 {
+		t.Fatalf("groups = %+v, want a first with its JSON error listed", out.Groups)
+	}
+	for _, g := range out.Groups {
+		if g.Key == "b" && g.Levels["ERROR"] != 0 {
+			t.Errorf("b levels = %v, want its JSON info level to win", g.Levels)
+		}
+		if g.Key == "c" && g.Levels["WARN"] != 1 {
+			t.Errorf("c levels = %v, want pino 40 counted as WARN", g.Levels)
+		}
+	}
+
+	filter := &LogFilter{Level: LevelERROR}
+	out = summarize(t, s, filter, SummaryOptions{GroupBy: "id"})
+	if out.Totals.EventsScanned != 1 || out.Groups[0].Key != "a" {
+		t.Errorf("level=ERROR should match the JSON level: %+v", out.Totals)
+	}
+	if filter.Level != LevelERROR {
+		t.Error("Summarize must not modify the caller's filter")
+	}
+}
