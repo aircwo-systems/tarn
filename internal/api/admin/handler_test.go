@@ -1214,3 +1214,53 @@ func TestTryOperationValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestLogSummaryGroupsAndValidates(t *testing.T) {
+	h := newTestHandler(t)
+	h.logs.CreateLogGroup("/aws/lambda/worker")
+	h.logs.PutLogEvents("/aws/lambda/worker", "s", []logssvc.LogEvent{
+		{Timestamp: time.Date(2026, 9, 29, 18, 0, 0, 0, time.UTC), Level: logssvc.LevelINFO, Message: `{"message":"done","orderId":"o-1"}`},
+		{Timestamp: time.Date(2026, 9, 29, 18, 0, 1, 0, time.UTC), Level: logssvc.LevelERROR, Message: `{"message":"failed","orderId":"o-2"}`},
+		{Timestamp: time.Date(2026, 9, 29, 18, 0, 2, 0, time.UTC), Level: logssvc.LevelINFO, Message: "plain text"},
+	})
+
+	get := func(query string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/logs/summary?"+query, nil)
+		rec := httptest.NewRecorder()
+		h.LogSummary(rec, req)
+		return rec
+	}
+
+	rec := get("groupBy=orderId&groups=/aws/lambda/worker&maxGroups=10")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", rec.Code, rec.Body.String())
+	}
+	var out logssvc.LogSummary
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if out.Totals.Groups != 2 || out.Groups[0].Key != "o-2" || out.Totals.Ungrouped != 1 {
+		t.Errorf("summary = %+v", out)
+	}
+
+	for _, q := range []string{
+		"",
+		"groupBy=a..b",
+		"groupBy=orderId&since=2026-09-29T19:00:00Z&until=2026-09-29T18:00:00Z",
+		"groupBy=orderId&since=yesterday",
+		"groupBy=orderId&maxGroups=many",
+	} {
+		rec := get(q)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%q: status = %d, want 400", q, rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), `"error"`) {
+			t.Errorf("%q: body = %s, want an error message", q, rec.Body.String())
+		}
+	}
+
+	rec = get("groupBy=orderId&pattern=nothing-matches")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"groups":[]`) {
+		t.Errorf("no match: %d %s", rec.Code, rec.Body.String())
+	}
+}

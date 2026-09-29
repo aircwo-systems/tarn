@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aircwo-systems/tarn/internal/logs"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -172,32 +173,9 @@ func addLogsTool(s *mcp.Server, c *client) {
 	mcp.AddTool(s, tool, handler)
 }
 
-// runtimeNoiseMarkers identify container lifecycle chatter. These are emitted
-// by the Lambda runtime interface emulator and by Tarn's own invocation
-// boundary markers, not by the function under test.
-var runtimeNoiseMarkers = []string{
-	"(rapid)",
-	"[secrets-proxy]",
-	"START RequestId:",
-	"END RequestId:",
-	"REPORT RequestId:",
-}
-
 // isRuntimeNoise reports whether an event is container chatter rather than
-// something the function itself produced.
-//
-// Only recognized markers are filtered. Treating every runtime-sourced line as
-// noise would be fail-closed, and the consumer here is a model that cannot ask
-// what was withheld — an unrecognized line is far better shown than silently
-// dropped.
+// something the function itself produced. The server applies the same rule to
+// log summaries, so both tools withhold exactly the same lines.
 func isRuntimeNoise(source, message string) bool {
-	if source == "output" {
-		return false
-	}
-	for _, marker := range runtimeNoiseMarkers {
-		if strings.Contains(message, marker) {
-			return true
-		}
-	}
-	return false
+	return logs.IsRuntimeNoise(source, message)
 }

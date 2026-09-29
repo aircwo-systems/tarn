@@ -2037,6 +2037,80 @@ func (h *Handler) AllLogEvents(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// LogSummary groups structured log events by a JSON field across log groups.
+func (h *Handler) LogSummary(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	opts := logssvc.SummaryOptions{
+		GroupBy: q.Get("groupBy"),
+		Fields:  q["fields"],
+		Flatten: q.Get("flatten"),
+	}
+	if strings.TrimSpace(opts.GroupBy) == "" {
+		writeError(w, http.StatusBadRequest, "groupBy is required: a JSON field such as correlationId, a dotted path such as outcomes.certificate.kind, or message")
+		return
+	}
+	for _, p := range []struct {
+		name string
+		dst  *int
+	}{{"maxGroups", &opts.MaxGroups}, {"maxErrorsPerGroup", &opts.MaxErrorsPerGroup}} {
+		if v := q.Get(p.name); v != "" {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, p.name+" must be an integer")
+				return
+			}
+			*p.dst = n
+		}
+	}
+	if v := q.Get("includeRuntime"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "includeRuntime must be true or false")
+			return
+		}
+		opts.IncludeRuntime = b
+	}
+
+	filter := &logssvc.LogFilter{
+		Pattern:    q.Get("pattern"),
+		StreamName: q.Get("stream"),
+	}
+	for _, g := range q["groups"] {
+		for _, part := range strings.Split(g, ",") {
+			if part = strings.TrimSpace(part); part != "" {
+				filter.Groups = append(filter.Groups, part)
+			}
+		}
+	}
+	if v := q.Get("level"); v != "" {
+		filter.Level = logssvc.LogLevel(strings.ToUpper(v))
+	}
+	for _, p := range []struct {
+		name string
+		dst  **time.Time
+	}{{"since", &filter.StartTime}, {"until", &filter.EndTime}} {
+		if v := q.Get(p.name); v != "" {
+			ts, err := time.Parse(time.RFC3339Nano, v)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, p.name+" must be an RFC3339 timestamp")
+				return
+			}
+			*p.dst = &ts
+		}
+	}
+
+	summary, err := h.logs.Summarize(filter, opts)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(summary)
+}
+
 // ScanLogs scans logs across all groups for matches and counts.
 func (h *Handler) ScanLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()

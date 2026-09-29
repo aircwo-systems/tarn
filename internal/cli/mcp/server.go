@@ -38,6 +38,9 @@ consumer's logs. tarn_get_traces gives the same paths a structural view: one
 record per request with a span per hop (gateway, lambda, queue, ecs, and so
 on), so a queue -> Lambda -> ECS pipeline can be checked end to end by
 correlation ID instead of piecing it together from separate log groups.
+After triggering a flow, tarn_summarize_logs answers "what happened to each
+message?" in one call: it groups structured log lines from every service by a
+field such as correlationId or an entity ID, with errors listed in full.
 
 Tarn isolates resources per account. Every tool takes an optional twelve-digit
 account argument, and omitting it addresses the default account. Traces are
@@ -75,6 +78,7 @@ func addTools(server *mcp.Server, c *client) {
 	addDeployTool(server, c)
 	addInvokeTool(server, c)
 	addLogsTool(server, c)
+	addSummarizeLogsTool(server, c)
 	addPeekQueueTool(server, c)
 	addSendMessageTool(server, c)
 	addPublishTool(server, c)

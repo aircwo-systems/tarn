@@ -78,7 +78,7 @@ func (c *client) get(ctx context.Context, path, account string, query url.Values
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s returned HTTP %d", path, resp.StatusCode)
+		return fmt.Errorf("GET %s returned HTTP %d: %s", path, resp.StatusCode, readSnippet(resp.Body))
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }

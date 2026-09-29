@@ -232,6 +232,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /_tarn/admin/logs/events-all", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.AllLogEvents(w, r)
 	})
+	mux.HandleFunc("GET /_tarn/admin/logs/summary", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.LogSummary(w, r)
+	})
 	mux.HandleFunc("GET /_tarn/admin/logs/scan", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.ScanLogs(w, r)
 	})
