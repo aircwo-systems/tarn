@@ -71,6 +71,7 @@ func lambdaContainerLabels(port int, accountID, functionName string) map[string]
 // ContainerInfo holds metadata about a running Lambda container.
 type ContainerInfo struct {
 	ID           string
+	AccountID    string
 	FunctionName string
 	Runtime      types.Runtime
 	CreatedAt    time.Time
@@ -82,6 +83,43 @@ type ContainerInfo struct {
 	// environment") is held exclusively for the duration of an invoke. Guarded
 	// by Engine.mu.
 	Busy bool
+
+	// logCursor is the timestamp of the last log line ingested from this
+	// container. It lives on the container so it is freed with it.
+	logMu     sync.Mutex
+	logCursor time.Time
+}
+
+// LogCursor returns the timestamp of the last log line ingested.
+func (c *ContainerInfo) LogCursor() time.Time {
+	c.logMu.Lock()
+	defer c.logMu.Unlock()
+	return c.logCursor
+}
+
+// SetLogCursor records the timestamp of the last log line ingested.
+func (c *ContainerInfo) SetLogCursor(t time.Time) {
+	c.logMu.Lock()
+	c.logCursor = t
+	c.logMu.Unlock()
+}
+
+// poolKey identifies a function's container pool. Accounts are isolated: two
+// accounts' functions with the same name must never share a container, since
+// each container has its account's code, environment and credentials baked in.
+func poolKey(accountID, functionName string) string {
+	return accountID + "/" + functionName
+}
+
+// resolveAccount maps an empty account ID to the instance's default account.
+func (e *Engine) resolveAccount(accountID string) string {
+	if accountID != "" {
+		return accountID
+	}
+	if e.cfg != nil && e.cfg.AccountID != "" {
+		return e.cfg.AccountID
+	}
+	return defaultTaskAccountID
 }
 
 // Engine manages Docker containers for Lambda execution.
@@ -93,7 +131,7 @@ type ContainerInfo struct {
 type Engine struct {
 	client     *client.Client
 	cfg        *config.Config
-	containers map[string][]*ContainerInfo // functionName -> pool of containers
+	containers map[string][]*ContainerInfo // poolKey(account, function) -> pool of containers
 	mu         sync.RWMutex
 	// imageKnown caches runtimes confirmed to have their image present locally,
 	// avoiding a Docker ImageList call on every EnsureImage invocation.
@@ -260,13 +298,7 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 	if !ok {
 		return nil, fmt.Errorf("unsupported runtime: %s", fn.Runtime)
 	}
-	if accountID == "" {
-		if e.cfg != nil && e.cfg.AccountID != "" {
-			accountID = e.cfg.AccountID
-		} else {
-			accountID = defaultTaskAccountID
-		}
-	}
+	accountID = e.resolveAccount(accountID)
 
 	// Scan function environment for PostgreSQL URLs so db-proxy can observe them.
 	// Build a rewrite map: original key -> rewritten URL pointing to localhost:15432.
@@ -388,6 +420,7 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 
 	info := &ContainerInfo{
 		ID:           resp.ID,
+		AccountID:    accountID,
 		FunctionName: fn.FunctionName,
 		Runtime:      fn.Runtime,
 		CreatedAt:    time.Now(),
@@ -399,8 +432,9 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 		Busy: true,
 	}
 
+	key := poolKey(accountID, fn.FunctionName)
 	e.mu.Lock()
-	e.containers[fn.FunctionName] = append(e.containers[fn.FunctionName], info)
+	e.containers[key] = append(e.containers[key], info)
 	e.mu.Unlock()
 
 	return info, nil
@@ -409,10 +443,10 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 // AcquireIdle returns a ready, idle container for the function and marks it Busy,
 // so the caller has exclusive use of it for one invocation. Returns ok=false when
 // every existing container is busy (or none exist).
-func (e *Engine) AcquireIdle(functionName string) (*ContainerInfo, bool) {
+func (e *Engine) AcquireIdle(accountID, functionName string) (*ContainerInfo, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for _, info := range e.containers[functionName] {
+	for _, info := range e.containers[poolKey(e.resolveAccount(accountID), functionName)] {
 		if !info.Busy && info.State == "running" {
 			info.Busy = true
 			info.LastInvoked = time.Now()
@@ -435,10 +469,10 @@ func (e *Engine) Release(info *ContainerInfo) {
 
 // CountContainers returns the current pool size for a function (running plus
 // just-created). Used to enforce the per-function concurrency cap.
-func (e *Engine) CountContainers(functionName string) int {
+func (e *Engine) CountContainers(accountID, functionName string) int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return len(e.containers[functionName])
+	return len(e.containers[poolKey(e.resolveAccount(accountID), functionName)])
 }
 
 // StartContainer starts a container and resolves its mapped host port.
@@ -599,51 +633,55 @@ func legacyStoppedLambdaName(c container.Summary) (string, bool) {
 	return "", false
 }
 
-// EvictContainer stops and removes ALL of a function's containers synchronously.
-func (e *Engine) EvictContainer(ctx context.Context, functionName string) {
-	e.mu.Lock()
-	pool := e.containers[functionName]
-	delete(e.containers, functionName)
-	e.mu.Unlock()
-	for _, info := range pool {
-		_ = e.StopContainer(ctx, info.ID, 0)
-		_ = e.client.ContainerRemove(ctx, info.ID, container.RemoveOptions{Force: true})
-	}
-}
-
 // EvictContainerAsync drops a function's whole pool from tracking immediately (so
-// no subsequent invoke reuses it), then stops and removes the Docker containers in
+// no subsequent invoke reuses it), then force-removes the Docker containers in
 // the background. Use on the API handler path to avoid blocking Terraform
-// operations while Docker performs graceful container shutdown.
-func (e *Engine) EvictContainerAsync(functionName string) {
+// operations on Docker.
+func (e *Engine) EvictContainerAsync(accountID, functionName string) {
+	key := poolKey(e.resolveAccount(accountID), functionName)
 	e.mu.Lock()
-	pool := e.containers[functionName]
-	delete(e.containers, functionName)
+	pool := e.containers[key]
+	delete(e.containers, key)
 	e.mu.Unlock()
-	if len(pool) == 0 {
-		return
-	}
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		stopTimeout := 5
-		for _, info := range pool {
-			_ = e.client.ContainerStop(ctx, info.ID, container.StopOptions{Timeout: &stopTimeout})
-			_ = e.client.ContainerRemove(ctx, info.ID, container.RemoveOptions{Force: true})
-		}
-	}()
+	go e.forceRemoveAll(pool)
 }
 
-// GetContainer returns any one container from a function's pool, if any exist.
-// Used for log/trace lookups that just need a representative container.
-func (e *Engine) GetContainer(functionName string) (*ContainerInfo, bool) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
-	pool := e.containers[functionName]
-	if len(pool) == 0 {
-		return nil, false
+// EvictAccount drops every container pool belonging to accountID from
+// tracking and force-removes the containers in the background. It returns how
+// many containers were evicted.
+func (e *Engine) EvictAccount(accountID string) int {
+	prefix := poolKey(e.resolveAccount(accountID), "")
+	var pool []*ContainerInfo
+	e.mu.Lock()
+	for key, p := range e.containers {
+		if strings.HasPrefix(key, prefix) {
+			pool = append(pool, p...)
+			delete(e.containers, key)
+		}
 	}
-	return pool[0], true
+	e.mu.Unlock()
+	go e.forceRemoveAll(pool)
+	return len(pool)
+}
+
+// forceRemoveAll removes untracked containers in parallel. Lambda containers
+// hold no state, so there is no graceful stop: the RIE does not handle SIGTERM
+// and a stop would only wait out its grace period. Each removal gets its own
+// deadline so one slow container cannot strand the rest.
+func (e *Engine) forceRemoveAll(pool []*ContainerInfo) {
+	var wg sync.WaitGroup
+	for _, info := range pool {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), containerRemoveTimeout)
+			defer cancel()
+			if err := e.client.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+				log.Printf("[engine] failed to remove Lambda container %s: %v", shortID(id), err)
+			}
+		}(info.ID)
+	}
+	wg.Wait()
 }
 
 // ContainerLogsSince returns the container's stdout/stderr written after since
@@ -717,18 +755,7 @@ func (e *Engine) Cleanup(ctx context.Context) {
 	}
 	e.mu.Unlock()
 
-	var wg sync.WaitGroup
-	for _, info := range all {
-		wg.Add(1)
-		go func(id string) {
-			defer wg.Done()
-			_ = e.StopContainer(ctx, id, 0)
-			if err := e.client.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
-				log.Printf("[engine] failed to remove Lambda container %s: %v", shortID(id), err)
-			}
-		}(info.ID)
-	}
-	wg.Wait()
+	e.forceRemoveAll(all)
 	e.cleanupTaskPayloadFiles()
 }
 

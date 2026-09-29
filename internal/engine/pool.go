@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"context"
 	"log"
 	"sync"
 	"time"
@@ -53,28 +52,32 @@ func (wp *WarmPool) evictIdle() {
 	wp.mu.Lock()
 	defer wp.mu.Unlock()
 
-	// Collect only idle (not Busy) containers past the keep-alive window. Busy
-	// containers are mid-invocation and must never be reaped.
-	wp.engine.mu.Lock()
-	toEvict := make([]*ContainerInfo, 0)
-	for _, pool := range wp.engine.containers {
+	// Untrack idle containers past the keep-alive window while holding the
+	// engine lock, so AcquireIdle can never hand one out after it has been
+	// chosen for removal. Busy containers are mid-invocation and never reaped.
+	e := wp.engine
+	var toEvict []*ContainerInfo
+	e.mu.Lock()
+	for key, pool := range e.containers {
+		kept := pool[:0]
 		for _, info := range pool {
 			if !info.Busy && time.Since(info.LastInvoked) > wp.keepAlive {
 				toEvict = append(toEvict, info)
+				continue
 			}
+			kept = append(kept, info)
+		}
+		clear(pool[len(kept):])
+		if len(kept) == 0 {
+			delete(e.containers, key)
+		} else {
+			e.containers[key] = kept
 		}
 	}
-	wp.engine.mu.Unlock()
+	e.mu.Unlock()
 
-	ctx := context.Background()
 	for _, info := range toEvict {
-		log.Printf("[warm-pool] evicting idle container for %s (idle %s)", info.FunctionName, time.Since(info.LastInvoked))
-		if err := wp.engine.StopContainer(ctx, info.ID, 0); err != nil {
-			log.Printf("[warm-pool] error stopping container %s: %v", info.ID[:12], err)
-		}
-		// RemoveContainer drops it from its function's pool slice.
-		if err := wp.engine.RemoveContainer(ctx, info.ID); err != nil {
-			log.Printf("[warm-pool] error removing container %s: %v", info.ID[:12], err)
-		}
+		log.Printf("[warm-pool] evicting idle container for %s (idle %s)", info.FunctionName, time.Since(info.LastInvoked).Round(time.Second))
 	}
+	e.forceRemoveAll(toEvict)
 }

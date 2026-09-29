@@ -32,10 +32,8 @@ type Service struct {
 	logsSvc *logssvc.Service
 	startMu sync.Map // per-function mutex to prevent duplicate cold starts
 
-	logCursorMu sync.Mutex
-	logCursors  map[string]time.Time // container ID -> timestamp of last ingested line
-	metricsMu   sync.RWMutex
-	metrics     map[string]*FunctionMetrics
+	metricsMu sync.RWMutex
+	metrics   map[string]*FunctionMetrics
 
 	async *asyncqueue.Queue // asynchronous (Event) invokes
 }
@@ -70,15 +68,14 @@ const (
 // NewService creates a new Lambda service.
 func NewService(cfg *config.Config, store *Store, eng *engine.Engine, pool *engine.WarmPool, logsSvc *logssvc.Service) *Service {
 	return &Service{
-		cfg:        cfg,
-		store:      store,
-		engine:     eng,
-		pool:       pool,
-		invoker:    engine.NewInvoker(),
-		logsSvc:    logsSvc,
-		logCursors: make(map[string]time.Time),
-		metrics:    make(map[string]*FunctionMetrics),
-		async:      asyncqueue.New("lambda", asyncWorkers, asyncBacklog),
+		cfg:     cfg,
+		store:   store,
+		engine:  eng,
+		pool:    pool,
+		invoker: engine.NewInvoker(),
+		logsSvc: logsSvc,
+		metrics: make(map[string]*FunctionMetrics),
+		async:   asyncqueue.New("lambda", asyncWorkers, asyncBacklog),
 	}
 }
 
@@ -723,7 +720,7 @@ func (s *Service) acquireContainer(ctx context.Context, fn *types.FunctionConfig
 
 	for {
 		// Fast path: reuse an idle warm container.
-		if info, ok := s.engine.AcquireIdle(fn.FunctionName); ok {
+		if info, ok := s.engine.AcquireIdle(s.cfg.AccountID, fn.FunctionName); ok {
 			log.Printf("[lambda] warm invoke for %s (container %s)", fn.FunctionName, info.ID[:12])
 			return info, false, nil
 		}
@@ -731,12 +728,12 @@ func (s *Service) acquireContainer(ctx context.Context, fn *types.FunctionConfig
 		// Decide whether to cold-start, serialized per function so the cap holds.
 		fnMu.Lock()
 		// Re-check: another invoke may have released an environment meanwhile.
-		if info, ok := s.engine.AcquireIdle(fn.FunctionName); ok {
+		if info, ok := s.engine.AcquireIdle(s.cfg.AccountID, fn.FunctionName); ok {
 			fnMu.Unlock()
 			log.Printf("[lambda] warm invoke for %s (container %s)", fn.FunctionName, info.ID[:12])
 			return info, false, nil
 		}
-		if s.engine.CountContainers(fn.FunctionName) < maxConc {
+		if s.engine.CountContainers(s.cfg.AccountID, fn.FunctionName) < maxConc {
 			info, cerr := s.coldStart(ctx, fn, codeDir, layerDirs)
 			fnMu.Unlock()
 			if cerr != nil {
@@ -961,10 +958,7 @@ func (s *Service) evictWarmContainer(functionName string) {
 	if s.engine == nil {
 		return
 	}
-	if info, ok := s.engine.GetContainer(functionName); ok && info != nil {
-		s.clearLogCursor(info.ID)
-	}
-	s.engine.EvictContainerAsync(functionName)
+	s.engine.EvictContainerAsync(s.cfg.AccountID, functionName)
 }
 
 // ingestContainerLogs moves output the container wrote since the last ingest
@@ -977,18 +971,14 @@ func (s *Service) ingestContainerLogs(functionName string, info *engine.Containe
 	logCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	s.logCursorMu.Lock()
-	since := s.logCursors[info.ID]
-	s.logCursorMu.Unlock()
+	since := info.LogCursor()
 
 	newLogs, last, err := s.engine.ContainerLogsSince(logCtx, info.ID, since)
 	if err != nil || newLogs == "" {
 		return ""
 	}
 
-	s.logCursorMu.Lock()
-	s.logCursors[info.ID] = last
-	s.logCursorMu.Unlock()
+	info.SetLogCursor(last)
 
 	streamName := info.ID
 	if len(streamName) > 12 {
@@ -1027,10 +1017,4 @@ func (s *Service) logFunctionRuntimeEvent(functionName string, level logssvc.Log
 		Source:    logssvc.SourceRuntime,
 	}})
 	s.logsSvc.LogSystemEvent(level, fmt.Sprintf("%s: %s", functionName, message))
-}
-
-func (s *Service) clearLogCursor(containerID string) {
-	s.logCursorMu.Lock()
-	defer s.logCursorMu.Unlock()
-	delete(s.logCursors, containerID)
 }

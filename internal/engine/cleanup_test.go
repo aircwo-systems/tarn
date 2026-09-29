@@ -91,6 +91,12 @@ func parseDockerSince(v string) time.Time {
 	return time.Unix(s, n)
 }
 
+func (f *fakeDocker) removedCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.removed)
+}
+
 func newFakeEngine(t *testing.T, port int) (*Engine, *fakeDocker) {
 	t.Helper()
 	fake := &fakeDocker{}
@@ -154,7 +160,7 @@ func TestSweepOrphanedLambdaContainersRemovesOnlyThisInstance(t *testing.T) {
 
 func TestRemoveContainerSurvivesCancelledContext(t *testing.T) {
 	eng, fake := newFakeEngine(t, 4566)
-	eng.containers["orders"] = []*ContainerInfo{{ID: "cold-start", FunctionName: "orders"}}
+	eng.containers[poolKey("111111111111", "orders")] = []*ContainerInfo{{ID: "cold-start", FunctionName: "orders"}}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // invoking client disconnected mid cold start
@@ -165,23 +171,46 @@ func TestRemoveContainerSurvivesCancelledContext(t *testing.T) {
 	if len(fake.removed) != 1 || fake.removed[0] != "cold-start" {
 		t.Fatalf("container untracked but not removed from Docker: removed=%v", fake.removed)
 	}
-	if eng.CountContainers("orders") != 0 {
+	if eng.CountContainers("111111111111", "orders") != 0 {
 		t.Fatal("container still tracked")
 	}
 }
 
-func TestCleanupStopsAndRemovesEveryPool(t *testing.T) {
+func TestCleanupRemovesEveryPool(t *testing.T) {
 	eng, fake := newFakeEngine(t, 4566)
-	eng.containers["orders"] = []*ContainerInfo{{ID: "a"}, {ID: "b", Busy: true}}
-	eng.containers["billing"] = []*ContainerInfo{{ID: "c"}}
+	eng.containers[poolKey("111111111111", "orders")] = []*ContainerInfo{{ID: "a"}, {ID: "b", Busy: true}}
+	eng.containers[poolKey("222222222222", "billing")] = []*ContainerInfo{{ID: "c"}}
 
 	eng.Cleanup(context.Background())
 
-	if len(fake.stopped) != 3 || len(fake.removed) != 3 {
-		t.Fatalf("stopped=%v removed=%v, want all 3", fake.stopped, fake.removed)
+	// Lambda containers hold no state, so they are force-removed without a
+	// graceful stop that the RIE would only time out on.
+	if len(fake.removed) != 3 {
+		t.Fatalf("removed=%v, want all 3", fake.removed)
 	}
 	if len(eng.containers) != 0 {
 		t.Fatalf("pools still tracked: %v", eng.containers)
+	}
+}
+
+func TestEvictAccountRemovesOnlyThatAccount(t *testing.T) {
+	eng, fake := newFakeEngine(t, 4566)
+	eng.containers[poolKey("111111111111", "orders")] = []*ContainerInfo{{ID: "a"}, {ID: "b"}}
+	eng.containers[poolKey("111111111111", "billing")] = []*ContainerInfo{{ID: "c"}}
+	eng.containers[poolKey("222222222222", "orders")] = []*ContainerInfo{{ID: "keep"}}
+
+	if n := eng.EvictAccount("111111111111"); n != 3 {
+		t.Fatalf("evicted %d, want 3", n)
+	}
+	if eng.CountContainers("222222222222", "orders") != 1 || len(eng.containers) != 1 {
+		t.Fatalf("other account's pool touched: %v", eng.containers)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for fake.removedCount() < 3 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := fake.removedCount(); got != 3 {
+		t.Fatalf("removed %d containers from Docker, want 3", got)
 	}
 }
 
