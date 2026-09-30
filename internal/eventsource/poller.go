@@ -106,6 +106,18 @@ type StreamInterface interface {
 	StreamBatch(streamArn, lastSequence string, limit int) ([]*types.StreamRecord, string, error)
 }
 
+// waitingStreamReceiver is implemented by stream services that can sleep until
+// a record is appended. The poller uses it to wait on a write instead of
+// re-reading the stream every second, and still stops promptly when the mapping
+// is removed.
+type waitingStreamReceiver interface {
+	StreamBatchUntil(streamArn, lastSequence string, limit, waitTimeSec int, cancel <-chan struct{}) ([]*types.StreamRecord, string, error)
+}
+
+// streamLongPollSeconds bounds how long a stream mapping sleeps waiting for the
+// next write, matching the SQS long poll.
+const streamLongPollSeconds = 20
+
 // LambdaInterface abstracts Lambda operations needed by the poller.
 type LambdaInterface interface {
 	Invoke(ctx context.Context, input *types.InvokeInput) (*types.InvokeOutput, error)
@@ -395,8 +407,19 @@ func (p *poller) poll() bool {
 }
 
 func (p *poller) pollDynamoStream() bool {
+	var (
+		records []*types.StreamRecord
+		nextSeq string
+		err     error
+	)
+	if w, ok := p.streams.(waitingStreamReceiver); ok {
+		records, nextSeq, err = w.StreamBatchUntil(p.mapping.EventSourceArn, p.mapping.LastStreamSequence, p.mapping.BatchSize, streamLongPollSeconds, p.done)
+	} else {
+		records, nextSeq, err = p.streams.StreamBatch(p.mapping.EventSourceArn, p.mapping.LastStreamSequence, p.mapping.BatchSize)
+	}
+	// Measured from receipt, as for SQS: time spent sleeping on an empty stream
+	// is not part of handling the batch.
 	pollStart := time.Now()
-	records, nextSeq, err := p.streams.StreamBatch(p.mapping.EventSourceArn, p.mapping.LastStreamSequence, p.mapping.BatchSize)
 	if err != nil {
 		if isNotFoundError(err) {
 			p.disableWithError(err)

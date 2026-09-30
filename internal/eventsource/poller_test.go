@@ -617,6 +617,112 @@ func TestServiceRestartStartsPollers(t *testing.T) {
 	}
 }
 
+// TestDynamoStreamPollerWaitsOnTheStreamInsteadOfPolling checks the wiring: a
+// stream service that can sleep must be asked to, with the poller's own stop
+// channel as the cancel, so the poller parks on the stream rather than
+// re-reading it on its tick. The wake itself is covered by the store's own
+// StreamBatchUntil tests.
+func TestDynamoStreamPollerWaitsOnTheStreamInsteadOfPolling(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.PersistenceEnabled = false
+
+	store := NewStore(cfg)
+	if err := store.Init(); err != nil {
+		t.Fatalf("init eventsource store: %v", err)
+	}
+	streams := &mockWaitingStreams{}
+	svc := NewService(cfg, store, &mockLambda{}, nil, streams)
+	mapping := &types.EventSourceMapping{
+		UUID:                           "stream-poll",
+		EventSourceArn:                 "arn:aws:dynamodb:us-east-1:000000000000:table/orders/stream/2026-09-30T00:00:00.000",
+		FunctionArn:                    "arn:aws:lambda:us-east-1:000000000000:function:stream-handler",
+		FunctionName:                   "stream-handler",
+		BatchSize:                      10,
+		MaximumBatchingWindowInSeconds: 1,
+		Enabled:                        true,
+		State:                          "Enabled",
+	}
+	if err := store.Save(mapping); err != nil {
+		t.Fatalf("save mapping: %v", err)
+	}
+	svc.Start()
+	defer svc.Stop()
+
+	if !waitFor(t, 3*time.Second, func() bool {
+		streams.mu.Lock()
+		defer streams.mu.Unlock()
+		return streams.waits > 0
+	}) {
+		t.Fatal("poller never asked the stream to wait")
+	}
+
+	streams.mu.Lock()
+	waitSecs, plainCalls, cancel := streams.waitSecs, streams.plainCalls, streams.cancel
+	streams.mu.Unlock()
+
+	if waitSecs <= 0 {
+		t.Fatalf("poller passed a wait of %d seconds, want a positive one", waitSecs)
+	}
+	if plainCalls != 0 {
+		t.Fatalf("poller fell back to the non-waiting StreamBatch %d times", plainCalls)
+	}
+	if cancel == nil {
+		t.Fatal("poller did not pass a cancel channel, so Stop would block on the wait")
+	}
+
+	// Closing the poller's stop channel must end a parked wait promptly.
+	svc.mu.Lock()
+	poller, ok := svc.pollers[mapping.UUID]
+	svc.mu.Unlock()
+	if !ok {
+		t.Fatal("poller not registered")
+	}
+	poller.stop()
+	if !waitFor(t, time.Second, func() bool {
+		streams.mu.Lock()
+		defer streams.mu.Unlock()
+		return streams.cancels > 0
+	}) {
+		t.Fatal("stopping the poller did not cancel its stream wait")
+	}
+}
+
+// mockWaitingStreams is a stream service that can sleep, recording how the
+// poller asked it to.
+type mockWaitingStreams struct {
+	mu         sync.Mutex
+	waits      int
+	waitSecs   int
+	plainCalls int
+	cancels    int
+	cancel     <-chan struct{}
+}
+
+func (m *mockWaitingStreams) StreamBatch(streamArn, lastSequence string, limit int) ([]*types.StreamRecord, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.plainCalls++
+	return nil, "", nil
+}
+
+func (m *mockWaitingStreams) StreamBatchUntil(streamArn, lastSequence string, limit, waitTimeSec int, cancel <-chan struct{}) ([]*types.StreamRecord, string, error) {
+	m.mu.Lock()
+	m.waits++
+	m.waitSecs = waitTimeSec
+	m.cancel = cancel
+	m.mu.Unlock()
+
+	select {
+	case <-cancel:
+		m.mu.Lock()
+		m.cancels++
+		m.mu.Unlock()
+	case <-time.After(30 * time.Second):
+	}
+	return nil, "", nil
+}
+
 func TestDynamoStreamPollerInvokesLambdaAndAdvancesCheckpoint(t *testing.T) {
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()

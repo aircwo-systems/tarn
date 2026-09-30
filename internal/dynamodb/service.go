@@ -133,5 +133,10 @@ func (s *Service) StreamBatch(streamArn, lastSequence string, limit int) ([]*typ
 	return s.store.StreamBatch(streamArn, lastSequence, limit)
 }
 
+// StreamBatchUntil is StreamBatch with a wait for a record to be appended.
+func (s *Service) StreamBatchUntil(streamArn, lastSequence string, limit, waitTimeSec int, cancel <-chan struct{}) ([]*types.StreamRecord, string, error) {
+	return s.store.StreamBatchUntil(streamArn, lastSequence, limit, waitTimeSec, cancel)
+}
+
 // Close stops background persistence after writing any pending state.
 func (s *Service) Close() { s.store.Close() }

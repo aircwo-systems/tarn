@@ -35,6 +35,13 @@ type Store struct {
 	flusher *persist.Flusher
 	cfg     *config.Config
 	tables  map[string]*tableState
+
+	// wakes holds one channel per stream ARN that a reader is currently
+	// waiting on. It is closed and dropped whenever a record is appended, so a
+	// stream mapping sleeps until there is something to read instead of
+	// re-reading the stream on a timer. Guarded by mu, alongside the records
+	// it reports about, and never persisted.
+	wakes map[string]chan struct{}
 }
 
 type tableState struct {
@@ -121,6 +128,7 @@ func NewStore(cfg *config.Config) *Store {
 	return &Store{
 		cfg:    cfg,
 		tables: make(map[string]*tableState),
+		wakes:  make(map[string]chan struct{}),
 	}
 }
 
@@ -350,6 +358,11 @@ func (s *Store) DeleteTable(name string) (*types.DynamoDBTable, error) {
 	if deleted != nil {
 		deleted.TableStatus = types.DynamoDBTableStatusDeleting
 	}
+	if state.Stream != nil {
+		// A mapping waiting on this stream would otherwise sleep until its
+		// deadline before finding the table is gone.
+		s.signalStreamLocked(state.Stream.ARN)
+	}
 	delete(s.tables, state.Table.TableName)
 	s.mu.Unlock()
 
@@ -372,7 +385,16 @@ func (s *Store) UpdateTableDefinition(name string, streamSpec *types.DynamoDBStr
 	}
 
 	if streamSpec != nil {
+		previousARN := ""
+		if state.Stream != nil {
+			previousARN = state.Stream.ARN
+		}
 		applyTableStreamUpdateLocked(s.cfg, state, streamSpec, time.Now().UTC())
+		// Disabling the stream, or changing its view type, retires the old ARN.
+		// Wake anything parked on it so it re-reads and reports it missing.
+		if previousARN != "" && (state.Stream == nil || state.Stream.ARN != previousARN) {
+			s.signalStreamLocked(previousARN)
+		}
 	}
 	normalizeTableCompatibility(state.Table)
 
@@ -1133,7 +1155,7 @@ func (s *Store) GetRecords(iterator string, limit int) ([]map[string]any, string
 	// Only the window after the iterator is copied, and the deep copy happens
 	// outside the lock: cloning every retained record under the exclusive lock
 	// made each poll cost the whole stream's size.
-	records, err := s.streamWindow(streamArn, startSeq, limit)
+	records, _, err := s.streamWindow(streamArn, startSeq, limit, false)
 	if err != nil {
 		return nil, "", err
 	}
@@ -1148,11 +1170,54 @@ func (s *Store) GetRecords(iterator string, limit int) ([]map[string]any, string
 }
 
 func (s *Store) StreamBatch(streamArn, lastSequence string, limit int) ([]*types.StreamRecord, string, error) {
+	records, next, _, err := s.streamBatch(streamArn, lastSequence, limit, false)
+	return records, next, err
+}
+
+// StreamBatchUntil is StreamBatch with a wait. When the stream holds nothing
+// after the checkpoint it sleeps until a record is appended, cancel is closed,
+// or waitTimeSec elapses, rather than returning empty for the caller to re-poll
+// on a timer. A non-positive waitTimeSec is plain StreamBatch.
+func (s *Store) StreamBatchUntil(streamArn, lastSequence string, limit, waitTimeSec int, cancel <-chan struct{}) ([]*types.StreamRecord, string, error) {
+	if waitTimeSec <= 0 {
+		return s.StreamBatch(streamArn, lastSequence, limit)
+	}
+	deadline := time.Now().Add(time.Duration(waitTimeSec) * time.Second)
+	// Go 1.23+ timers: Reset needs no drain and a stopped timer never delivers.
+	timer := time.NewTimer(time.Duration(waitTimeSec) * time.Second)
+	defer timer.Stop()
+
+	for {
+		records, next, wake, err := s.streamBatch(streamArn, lastSequence, limit, true)
+		if err != nil || len(records) > 0 {
+			return records, next, err
+		}
+
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return []*types.StreamRecord{}, "", nil
+		}
+		timer.Reset(remaining)
+		select {
+		case <-wake:
+		case <-timer.C:
+			return []*types.StreamRecord{}, "", nil
+		case <-cancel:
+			return []*types.StreamRecord{}, "", nil
+		}
+	}
+}
+
+// streamBatch reads one batch. With waitForWrite set, an empty result also
+// carries the channel the next append to this stream will signal; without it no
+// channel is created, so a one-shot read leaves nothing behind for a later
+// signal to close.
+func (s *Store) streamBatch(streamArn, lastSequence string, limit int, waitForWrite bool) ([]*types.StreamRecord, string, <-chan struct{}, error) {
 	startSeq := int64(1)
 	if strings.TrimSpace(lastSequence) != "" {
 		parsed, err := strconv.ParseInt(lastSequence, 10, 64)
 		if err != nil {
-			return nil, "", validationError("Invalid checkpoint sequence")
+			return nil, "", nil, validationError("Invalid checkpoint sequence")
 		}
 		startSeq = parsed + 1
 	}
@@ -1160,29 +1225,55 @@ func (s *Store) StreamBatch(streamArn, lastSequence string, limit int) ([]*types
 		limit = 100
 	}
 
-	records, err := s.streamWindow(streamArn, startSeq, limit)
+	records, wake, err := s.streamWindow(streamArn, startSeq, limit, waitForWrite)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 
 	next := ""
 	if len(records) > 0 {
 		next = records[len(records)-1].Dynamodb.SequenceNumber
 	}
-	return records, next, nil
+	return records, next, wake, nil
+}
+
+// streamWaitChanLocked returns the channel the next signal on this stream will
+// close, creating it when no one is waiting yet. Caller holds s.mu.
+func (s *Store) streamWaitChanLocked(streamArn string) <-chan struct{} {
+	if s.wakes == nil {
+		s.wakes = make(map[string]chan struct{})
+	}
+	wake, ok := s.wakes[streamArn]
+	if !ok {
+		wake = make(chan struct{})
+		s.wakes[streamArn] = wake
+	}
+	return wake
+}
+
+// signalStreamLocked wakes every reader waiting on this stream. Closing
+// coalesces a burst of writes into one wake, since every waiter re-reads from
+// the same retained records. It never blocks, so it is safe on a write path
+// holding s.mu. Caller holds s.mu.
+func (s *Store) signalStreamLocked(streamArn string) {
+	if wake, ok := s.wakes[streamArn]; ok {
+		delete(s.wakes, streamArn)
+		close(wake)
+	}
 }
 
 // streamWindow returns up to limit retained records with a sequence number at
 // or after startSeq, deep-copied so the caller can use them after the lock is
 // released. A checkpoint behind the oldest retained record resumes at that
 // record rather than failing, matching how a real shard iterator moves past
-// records that aged out.
-func (s *Store) streamWindow(streamArn string, startSeq int64, limit int) ([]*types.StreamRecord, error) {
+// records that aged out. With waitForWrite set, an empty window also returns the
+// channel the next append to this stream will signal.
+func (s *Store) streamWindow(streamArn string, startSeq int64, limit int, waitForWrite bool) ([]*types.StreamRecord, <-chan struct{}, error) {
 	s.mu.Lock()
 	state, err := s.findStreamLocked(streamArn)
 	if err != nil {
 		s.mu.Unlock()
-		return nil, err
+		return nil, nil, err
 	}
 	s.pruneStreamLocked(state, time.Now().UTC())
 	records := state.Stream.Records
@@ -1192,8 +1283,12 @@ func (s *Store) streamWindow(streamArn string, startSeq int64, limit int) ([]*ty
 		return streamRecordSeq(records[i]) >= startSeq
 	})
 	if start >= len(records) {
+		var wake <-chan struct{}
+		if waitForWrite {
+			wake = s.streamWaitChanLocked(streamArn)
+		}
 		s.mu.Unlock()
-		return nil, nil
+		return nil, wake, nil
 	}
 	end := start + limit
 	if end > len(records) {
@@ -1206,7 +1301,7 @@ func (s *Store) streamWindow(streamArn string, startSeq int64, limit int) ([]*ty
 	for _, record := range window {
 		out = append(out, cloneStreamRecord(record))
 	}
-	return out, nil
+	return out, nil, nil
 }
 
 func streamRecordSeq(record *types.StreamRecord) int64 {
@@ -1340,6 +1435,10 @@ func (s *Store) appendStreamRecordLocked(state *tableState, eventName string, ke
 	}
 	state.Stream.Records = append(state.Stream.Records, record)
 	s.evictOldStreamRecordsLocked(state)
+	// A reader parked on this stream has something to read now. Signalling
+	// after the append, under the lock the reader releases before waiting, is
+	// what makes the wakeup race-free.
+	s.signalStreamLocked(state.Stream.ARN)
 }
 
 // evictOldStreamRecordsLocked drops the oldest records once a stream passes
