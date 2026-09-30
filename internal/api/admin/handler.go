@@ -1080,42 +1080,18 @@ func (h *Handler) listECSOverview() *ecsOverview {
 		TaskDefinitions: make([]ecsTaskDefinitionSummary, 0),
 	}
 
-	for _, status := range []string{
-		types.TaskDefinitionStatusActive,
-		types.TaskDefinitionStatusInactive,
-		types.TaskDefinitionStatusDeleteInProgress,
-	} {
-		nextToken := ""
-		for {
-			definitions, listErr := h.ecs.ListTaskDefinitions(&types.ListTaskDefinitionsInput{
-				MaxResults: 100,
-				NextToken:  nextToken,
-				Sort:       types.TaskDefinitionSortAscending,
-				Status:     status,
-			})
-			if listErr != nil || definitions == nil {
-				break
-			}
-			for _, arn := range definitions.TaskDefinitionArns {
-				described, describeErr := h.ecs.DescribeTaskDefinition(arn, nil)
-				if describeErr != nil || described == nil || described.TaskDefinition == nil {
-					continue
-				}
-				td := described.TaskDefinition
-				overview.TaskDefinitions = append(overview.TaskDefinitions, ecsTaskDefinitionSummary{
-					Arn:               td.TaskDefinitionArn,
-					TaskDefinitionArn: td.TaskDefinitionArn,
-					Name:              td.Family,
-					Family:            td.Family,
-					Revision:          td.Revision,
-					Status:            td.Status,
-				})
-			}
-			nextToken = definitions.NextToken
-			if nextToken == "" {
-				break
-			}
-		}
+	// Task definitions are listed as light refs, so the overview names every
+	// revision without describing (and therefore deep-cloning) each one, and
+	// without paging: refs are already in family/revision order.
+	for _, ref := range h.ecs.ListTaskDefinitionRefs() {
+		overview.TaskDefinitions = append(overview.TaskDefinitions, ecsTaskDefinitionSummary{
+			Arn:               ref.Arn,
+			TaskDefinitionArn: ref.Arn,
+			Name:              ref.Family,
+			Family:            ref.Family,
+			Revision:          ref.Revision,
+			Status:            ref.Status,
+		})
 	}
 
 	clusterList, err := h.ecs.ListClusters(&types.ListClustersInput{})

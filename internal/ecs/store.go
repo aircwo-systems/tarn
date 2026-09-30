@@ -235,6 +235,49 @@ func (s *Store) LatestActiveTaskDefinition(family string) (*types.TaskDefinition
 	return cloneTaskDefinition(best), nil
 }
 
+// TaskDefinitionRef identifies one task-definition revision without carrying its
+// definition. It exists because a caller that only needs to name a revision
+// should not pay to deep-clone every container definition to do it — which is
+// what a dashboard poll did, once per page of results, for every status.
+type TaskDefinitionRef struct {
+	Arn      string
+	Family   string
+	Revision int
+	Status   string
+}
+
+// ListTaskDefinitionRefs returns every registered revision as a light ref,
+// families ascending and revisions ascending within each, including INACTIVE
+// ones. It holds the read lock for the whole walk and copies four fields per
+// revision rather than cloning the definition.
+func (s *Store) ListTaskDefinitionRefs() []TaskDefinitionRef {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	families := make([]string, 0, len(s.taskDefs))
+	for family := range s.taskDefs {
+		families = append(families, family)
+	}
+	sort.Strings(families)
+
+	out := make([]TaskDefinitionRef, 0, len(s.taskDefs))
+	for _, family := range families {
+		revs := s.taskDefs[family]
+		refs := make([]TaskDefinitionRef, 0, len(revs))
+		for _, td := range revs {
+			refs = append(refs, TaskDefinitionRef{
+				Arn:      td.TaskDefinitionArn,
+				Family:   family,
+				Revision: td.Revision,
+				Status:   td.Status,
+			})
+		}
+		sort.Slice(refs, func(i, j int) bool { return refs[i].Revision < refs[j].Revision })
+		out = append(out, refs...)
+	}
+	return out
+}
+
 // ListTaskDefinitionRevisions returns every revision registered for family,
 // sorted ascending, including INACTIVE ones.
 func (s *Store) ListTaskDefinitionRevisions(family string) []*types.TaskDefinition {

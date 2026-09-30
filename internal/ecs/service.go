@@ -449,31 +449,28 @@ func (s *Service) ListTaskDefinitions(in *types.ListTaskDefinitionsInput) (*type
 		return nil, invalidParameterError("NextToken is invalid")
 	}
 
-	families := s.store.ListTaskDefinitionFamilies()
-	arns := make([]string, 0)
-	appendFamily := func(family string, revisions []*types.TaskDefinition) {
-		if familyPrefix != "" && !strings.HasPrefix(family, familyPrefix) {
+	// Refs carry the status and ARN and nothing else, so filtering a status out
+	// of every revision no longer deep-clones every container definition to read
+	// two fields.
+	refs := s.store.ListTaskDefinitionRefs()
+	arns := make([]string, 0, len(refs))
+	appendRef := func(ref TaskDefinitionRef) {
+		if familyPrefix != "" && !strings.HasPrefix(ref.Family, familyPrefix) {
 			return
 		}
-		for _, td := range revisions {
-			if td.Status == status {
-				arns = append(arns, td.TaskDefinitionArn)
-			}
+		if ref.Status == status {
+			arns = append(arns, ref.Arn)
 		}
 	}
 	if sortOrder == types.TaskDefinitionSortDescending {
-		for i := len(families) - 1; i >= 0; i-- {
-			family := families[i]
-			revisions := s.store.ListTaskDefinitionRevisions(family)
-			for left, right := 0, len(revisions)-1; left < right; left, right = left+1, right-1 {
-				revisions[left], revisions[right] = revisions[right], revisions[left]
-			}
-			appendFamily(family, revisions)
+		// Families descending, and within each family the newest revision
+		// first, which is the reverse of the order the refs arrive in.
+		for i, j := 0, len(refs)-1; i < j; i, j = i+1, j-1 {
+			refs[i], refs[j] = refs[j], refs[i]
 		}
-	} else {
-		for _, family := range families {
-			appendFamily(family, s.store.ListTaskDefinitionRevisions(family))
-		}
+	}
+	for _, ref := range refs {
+		appendRef(ref)
 	}
 
 	if offset >= len(arns) {
@@ -491,6 +488,15 @@ func (s *Service) ListTaskDefinitions(in *types.ListTaskDefinitionsInput) (*type
 		TaskDefinitionArns: arns[offset:end],
 		NextToken:          next,
 	}, nil
+}
+
+// ListTaskDefinitionRefs returns every registered task-definition revision as a
+// light ref — ARN, family, revision and status — in family/revision order,
+// including INACTIVE ones. A caller that only needs to name revisions (the
+// dashboard's task-definition list) should use this rather than listing and
+// describing each one.
+func (s *Service) ListTaskDefinitionRefs() []TaskDefinitionRef {
+	return s.store.ListTaskDefinitionRefs()
 }
 
 func parseTaskDefinitionNextToken(token string) (int, error) {
