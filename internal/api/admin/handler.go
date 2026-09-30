@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	apigatewaysvc "github.com/aircwo-systems/tarn/internal/apigateway"
@@ -59,6 +60,11 @@ type Handler struct {
 	// It is optional: while unset, RunECSTask reports 503 like the AWS
 	// protocol surface does without a runner.
 	taskRunner types.TaskRunner
+
+	// eventExamplesCache holds Lambda events/ fixtures keyed by the code they
+	// were read from, so a poll does not re-extract and re-validate a zip whose
+	// code has not changed. The Handler is per-account, so this is too.
+	eventExamplesCache eventExampleCache
 }
 
 func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apigatewayv1svc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, sns *snssvc.Service, dynamodb *dynamodbsvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, eventbridge *eventbridgesvc.Service, stepfunctions *stepfunctionssvc.Service, traceStore *tracesvc.Store) *Handler {
@@ -842,7 +848,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	gatewaySummaries, gatewayConns, gatewayWarnings := h.collectGateways()
+	gatewaySummaries, gatewayConns, gatewayWarnings := h.collectGateways(codeSHAs(functions))
 	resp.Gateways = append(resp.Gateways, gatewaySummaries...)
 	resp.Connections = append(resp.Connections, gatewayConns...)
 	resp.Warnings = append(resp.Warnings, gatewayWarnings...)
@@ -3187,13 +3193,97 @@ func isLocalAlias(host string) bool {
 	}
 }
 
+// eventExampleCache holds a function's events/ fixtures keyed by the code they
+// came from. Reading them extracts the function zip, takes the function's write
+// lock and re-validates every fixture, and a dashboard poll does it for every
+// route targeting the function — several times a minute, for code that has not
+// changed. A code update changes the SHA, which retires the entry.
+type eventExampleCache struct {
+	mu      sync.Mutex
+	entries map[string]eventExampleEntry
+}
+
+type eventExampleEntry struct {
+	sha      string
+	examples map[string]json.RawMessage
+}
+
+func (c *eventExampleCache) get(name, sha string) (map[string]json.RawMessage, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[name]
+	if !ok || entry.sha != sha {
+		return nil, false
+	}
+	return entry.examples, true
+}
+
+func (c *eventExampleCache) put(name, sha string, examples map[string]json.RawMessage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[string]eventExampleEntry)
+	}
+	// Drop retired entries so a function whose code changed does not leave a
+	// stale set behind for as long as the process lives.
+	for key, entry := range c.entries {
+		if key == name || (sha != "" && entry.sha != sha) {
+			delete(c.entries, key)
+		}
+	}
+	c.entries[name] = eventExampleEntry{sha: sha, examples: examples}
+}
+
+// eventExamples returns a function's fixtures, reading them only when the code
+// has changed since they were last read. codeSHA may be empty, in which case
+// nothing is cached and the fixtures are read every time.
+func (h *Handler) eventExamples(name, codeSHA string) map[string]json.RawMessage {
+	if codeSHA != "" {
+		if examples, ok := h.eventExamplesCache.get(name, codeSHA); ok {
+			return examples
+		}
+	}
+	examples := h.lambda.GetEventExamples(name)
+	if codeSHA != "" {
+		h.eventExamplesCache.put(name, codeSHA, examples)
+	}
+	return examples
+}
+
+// codeSHAs indexes function code SHAs by name, so the gateway walk can key its
+// event-example cache without reading each function's config again.
+func codeSHAs(functions []*types.FunctionConfig) map[string]string {
+	if len(functions) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(functions))
+	for _, fn := range functions {
+		if fn != nil {
+			out[fn.FunctionName] = fn.CodeSHA256
+		}
+	}
+	return out
+}
+
 // collectGateways builds UI summaries for every v2 and v1 API Gateway, plus the
-// gateway→integration connections used by the topology view.
-func (h *Handler) collectGateways() (summaries []gatewaySummary, conns []infraConnection, warnings []string) {
+// gateway→integration connections used by the topology view. codeSHAs may be
+// nil, which disables the event-example cache.
+func (h *Handler) collectGateways(codeSHAs map[string]string) (summaries []gatewaySummary, conns []infraConnection, warnings []string) {
 	gateways := h.apigw.ListAPIs()
 	var v1APIs []*types.RestAPI
 	if h.apigwv1 != nil {
 		v1APIs = h.apigwv1.ListAPIs()
+	}
+	// One memo for the whole walk, not one per API: two APIs routing to the
+	// same function used to extract its zip twice per poll.
+	lambdaEvents := make(map[string]map[string]json.RawMessage)
+	eventExamples := func(name string) map[string]json.RawMessage {
+		if examples, ok := lambdaEvents[name]; ok {
+			return examples
+		}
+		examples := h.eventExamples(name, codeSHAs[name])
+		lambdaEvents[name] = examples
+		return examples
 	}
 	for _, api := range gateways {
 		routes, err := h.apigw.ListRoutes(api.APIID)
@@ -3236,7 +3326,6 @@ func (h *Handler) collectGateways() (summaries []gatewaySummary, conns []infraCo
 		for _, ig := range integrations {
 			integByID[ig.IntegrationID] = ig
 		}
-		lambdaEvents := make(map[string]map[string]json.RawMessage)
 		routeDetails := make([]routeDetailSummary, 0, len(routes))
 		for _, route := range routes {
 			detail := routeDetailSummary{RouteKey: route.RouteKey}
@@ -3258,10 +3347,7 @@ func (h *Handler) collectGateways() (summaries []gatewaySummary, conns []infraCo
 				}
 				// Populate body example from the Lambda's events/ folder.
 				if fn := ig.LambdaFunctionName; fn != "" && detail.Method != "" {
-					if _, cached := lambdaEvents[fn]; !cached {
-						lambdaEvents[fn] = h.lambda.GetEventExamples(fn)
-					}
-					detail.BodyExample = pickBodyExample(lambdaEvents[fn], detail.Method)
+					detail.BodyExample = pickBodyExample(eventExamples(fn), detail.Method)
 				}
 			}
 			routeDetails = append(routeDetails, detail)
@@ -3349,9 +3435,6 @@ func (h *Handler) collectGateways() (summaries []gatewaySummary, conns []infraCo
 		for _, res := range resources {
 			resourcePathByID[res.ID] = res.Path
 		}
-		// Cache event examples per Lambda function to avoid re-reading the zip
-		// for every route that targets the same function.
-		lambdaEvents := make(map[string]map[string]json.RawMessage)
 		v1RouteDetails := make([]routeDetailSummary, 0, len(integrations))
 		for _, integ := range integrations {
 			resPath := resourcePathByID[integ.ResourceID]
@@ -3376,10 +3459,7 @@ func (h *Handler) collectGateways() (summaries []gatewaySummary, conns []infraCo
 			}
 			// Populate body example from the Lambda's events/ folder.
 			if integ.LambdaFunctionName != "" {
-				if _, cached := lambdaEvents[integ.LambdaFunctionName]; !cached {
-					lambdaEvents[integ.LambdaFunctionName] = h.lambda.GetEventExamples(integ.LambdaFunctionName)
-				}
-				if example := pickBodyExample(lambdaEvents[integ.LambdaFunctionName], integ.MethodHTTPMethod); example != nil {
+				if example := pickBodyExample(eventExamples(integ.LambdaFunctionName), integ.MethodHTTPMethod); example != nil {
 					detail.BodyExample = example
 				}
 			}
@@ -3446,7 +3526,7 @@ func (h *Handler) collectGateways() (summaries []gatewaySummary, conns []infraCo
 // With ?download=1 the response is served as an attachment.
 func (h *Handler) OpenAPI(w http.ResponseWriter, r *http.Request) {
 	apiID := r.PathValue("apiId")
-	summaries, _, _ := h.collectGateways()
+	summaries, _, _ := h.collectGateways(nil)
 	for _, gw := range summaries {
 		if gw.APIID != apiID {
 			continue
@@ -3547,7 +3627,7 @@ func (h *Handler) TryOperation(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var invokeURL string
-	summaries, _, _ := h.collectGateways()
+	summaries, _, _ := h.collectGateways(nil)
 	for _, gw := range summaries {
 		if gw.APIID == apiID {
 			invokeURL = gw.InvokeURL

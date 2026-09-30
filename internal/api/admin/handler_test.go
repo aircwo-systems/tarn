@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -213,6 +214,181 @@ func TestSecretValueNotFound(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// TestEventExampleCacheRetiresOnCodeChange covers the cache that keeps a
+// dashboard poll from re-extracting a function zip. The key is the function's
+// code SHA, so a code update has to retire the entry rather than serve fixtures
+// that no longer match the deployed code.
+func TestEventExampleCacheRetiresOnCodeChange(t *testing.T) {
+	var cache eventExampleCache
+	first := map[string]json.RawMessage{"post": json.RawMessage(`{"a":1}`)}
+
+	if _, ok := cache.get("orders", "sha-1"); ok {
+		t.Fatal("an empty cache returned a hit")
+	}
+	cache.put("orders", "sha-1", first)
+
+	got, ok := cache.get("orders", "sha-1")
+	if !ok || len(got) != 1 {
+		t.Fatalf("same SHA missed: %v %v", got, ok)
+	}
+	if _, ok := cache.get("orders", "sha-2"); ok {
+		t.Fatal("a changed SHA was served from the cache")
+	}
+	if _, ok := cache.get("billing", "sha-1"); ok {
+		t.Fatal("another function was served this function's entry")
+	}
+
+	// A function whose code changed replaces its own entry and does not leave
+	// the superseded one behind.
+	second := map[string]json.RawMessage{"post": json.RawMessage(`{"a":2}`)}
+	cache.put("orders", "sha-2", second)
+	if got, _ := cache.get("orders", "sha-2"); string(got["post"]) != `{"a":2}` {
+		t.Fatalf("replaced entry = %s", got["post"])
+	}
+	cache.mu.Lock()
+	entries := len(cache.entries)
+	cache.mu.Unlock()
+	if entries != 1 {
+		t.Fatalf("cache holds %d entries, want just the current one", entries)
+	}
+}
+
+// zippedFunction builds a deployable function zip containing an events/
+// directory, so a test can exercise the fixture path without a container.
+func zippedFunction(t *testing.T, eventFile, eventBody string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	files := map[string]string{
+		"index.js":            "exports.handler = async () => ({statusCode: 200});",
+		"events/" + eventFile: eventBody,
+	}
+	for name, body := range files {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatalf("create %s in zip: %v", name, err)
+		}
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close zip: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// TestOverviewReadsEventExamplesOnceForUnchangedCode is the end-to-end proof
+// that a second poll does not re-read a function's fixtures. It deletes the
+// extracted code between the polls: a cache serves what it already has, while
+// anything that reads the fixtures again finds nothing.
+func TestOverviewReadsEventExamplesOnceForUnchangedCode(t *testing.T) {
+	h := newTestHandler(t)
+	code := zippedFunction(t, "post-order.json", `{"sku":"abc","qty":2}`)
+
+	if _, err := h.lambda.CreateFunction(context.Background(), &types.FunctionConfig{
+		FunctionName: "orders",
+		Runtime:      types.RuntimeNodeJS20,
+		Handler:      "index.handler",
+		Role:         "arn:aws:iam::000000000000:role/lambda-role",
+	}, code); err != nil {
+		t.Fatalf("create function: %v", err)
+	}
+
+	api, err := h.apigw.CreateAPI("orders-http-api", "test api", "HTTP", "", nil)
+	if err != nil {
+		t.Fatalf("create api: %v", err)
+	}
+	integration, err := h.apigw.CreateIntegration(api.APIID, apigatewaysvc.IntegrationCreateInput{
+		IntegrationType: "AWS_PROXY",
+		IntegrationURI:  "arn:aws:lambda:us-east-1:000000000000:function:orders",
+	})
+	if err != nil {
+		t.Fatalf("create integration: %v", err)
+	}
+	if _, err := h.apigw.CreateRoute(api.APIID, apigatewaysvc.RouteCreateInput{
+		RouteKey: "POST /orders",
+		Target:   "integrations/" + integration.IntegrationID,
+	}); err != nil {
+		t.Fatalf("create route: %v", err)
+	}
+
+	bodyExample := func() string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
+		rec := httptest.NewRecorder()
+		h.Overview(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+		var payload struct {
+			Gateways []gatewaySummary `json:"gateways"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode response: %v", err)
+		}
+		for _, gw := range payload.Gateways {
+			for _, route := range gw.RouteDetails {
+				if len(route.BodyExample) > 0 {
+					return string(route.BodyExample)
+				}
+			}
+		}
+		return ""
+	}
+
+	const want = `{"sku":"abc","qty":2}`
+	if got := bodyExample(); got != want {
+		t.Fatalf("first poll body example = %q, want %q", got, want)
+	}
+
+	// Remove what a real read would consult. Only the cache can answer now.
+	extracted := filepath.Join(h.cfg.DataDir, "functions", "orders", "code", "extracted")
+	if err := os.RemoveAll(extracted); err != nil {
+		t.Fatalf("remove extracted code: %v", err)
+	}
+	if _, err := os.Stat(extracted); !os.IsNotExist(err) {
+		t.Fatalf("extracted code is still present: %v", err)
+	}
+	if got := bodyExample(); got != want {
+		t.Fatalf("second poll body example = %q, want the cached %q — the fixtures were read again", got, want)
+	}
+
+	// A code change changes the SHA, which has to retire the entry rather than
+	// keep serving fixtures that no longer match what is deployed.
+	fn, err := h.lambda.GetFunction("orders")
+	if err != nil {
+		t.Fatalf("get function: %v", err)
+	}
+	if _, ok := h.eventExamplesCache.get("orders", fn.CodeSHA256); !ok {
+		t.Fatalf("cache holds no entry for the deployed SHA %q", fn.CodeSHA256)
+	}
+	replacement := zippedFunction(t, "post-order.json", `{"sku":"xyz","qty":9}`)
+	if _, err := h.lambda.UpdateFunctionCode(context.Background(), "orders", replacement); err != nil {
+		t.Fatalf("update code: %v", err)
+	}
+	after, err := h.lambda.GetFunction("orders")
+	if err != nil {
+		t.Fatalf("get function after update: %v", err)
+	}
+	if after.CodeSHA256 == fn.CodeSHA256 {
+		t.Fatal("updating the code did not change its SHA, so the cache key cannot detect it")
+	}
+	// The stale entry is replaced on the next poll, not by the update itself: a
+	// superseded SHA can never match again, so leaving it costs nothing until
+	// something reads the function.
+	const updated = `{"sku":"xyz","qty":9}`
+	if got := bodyExample(); got != updated {
+		t.Fatalf("poll after the code update = %q, want the new fixture %q", got, updated)
+	}
+	if _, ok := h.eventExamplesCache.get("orders", fn.CodeSHA256); ok {
+		t.Fatal("the superseded SHA is still cached after a poll read the new code")
+	}
+	if _, ok := h.eventExamplesCache.get("orders", after.CodeSHA256); !ok {
+		t.Fatalf("cache holds no entry for the new SHA %q", after.CodeSHA256)
 	}
 }
 
