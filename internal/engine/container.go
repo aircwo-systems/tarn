@@ -337,7 +337,10 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 	//   db-proxy: transparent TCP proxy for PostgreSQL — observational only.
 	var bgCmds []string
 
-	secretsProxyPath := e.findSecretsProxy()
+	secretsProxyPath := ""
+	if e.cfg.ExposeSecretsProxy || usesSecretsExtension(fn) {
+		secretsProxyPath = e.findSecretsProxy()
+	}
 	if secretsProxyPath != "" {
 		binds = append(binds, fmt.Sprintf("%s:/opt/tarn/secrets-proxy:ro", secretsProxyPath))
 		env = append(env,
@@ -776,6 +779,32 @@ func (e *Engine) cleanupTaskPayloadFiles() {
 // findSecretsProxy locates the secrets-proxy-linux binary.
 // It searches in the build directory (relative to the working directory) and
 // next to the running executable.
+// secretsExtensionEnvPrefixes are the configuration variables of the AWS
+// Parameters and Secrets Lambda Extension. Setting any of them signals a
+// function expects the extension.
+var secretsExtensionEnvPrefixes = []string{"PARAMETERS_SECRETS_EXTENSION_", "SECRETS_MANAGER_", "SSM_PARAMETER_STORE_"}
+
+// usesSecretsExtension reports whether fn uses the Parameters and Secrets
+// extension: it has the extension's layer, or sets one of its variables. On
+// AWS a function without the layer cannot reach localhost:2773, so every
+// other function gets no proxy process. --expose-secrets-proxy injects it
+// into every function regardless.
+func usesSecretsExtension(fn *types.FunctionConfig) bool {
+	for _, layer := range fn.Layers {
+		if strings.Contains(strings.ToLower(layer), "parameters-and-secrets-lambda-extension") {
+			return true
+		}
+	}
+	for key := range fn.Environment {
+		for _, prefix := range secretsExtensionEnvPrefixes {
+			if strings.HasPrefix(key, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (e *Engine) findSecretsProxy() string {
 	candidates := []string{
 		"./build/secrets-proxy-linux",

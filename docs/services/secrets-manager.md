@@ -22,7 +22,7 @@ Store and manage sensitive data.
 ## Features
 
 ### Lambda Extension
-Secrets are automatically available inside Lambda containers via the AWS Secrets Manager Lambda Extension:
+Secrets are available inside Lambda containers via the AWS Parameters and Secrets Lambda Extension. A function gets it when it has the extension's layer or sets one of its variables (for example `PARAMETERS_SECRETS_EXTENSION_HTTP_PORT=2773`); start Tarn with `--expose-secrets-proxy` to give it to every function:
 
 ```javascript
 // Inside your Lambda function

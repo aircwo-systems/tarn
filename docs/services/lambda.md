@@ -70,7 +70,7 @@ awslocal lambda create-event-source-mapping \
 ```
 
 ### Environment Variables & Secrets
-Pass secrets to functions automatically via the Lambda extension.
+Pass secrets to functions via the Lambda extension. Setting one of the extension's variables (or adding its layer) turns it on for the function; see [Secrets Cache Extension](#secrets-cache-extension).
 
 ```bash
 tarn lambda create \
@@ -78,7 +78,8 @@ tarn lambda create \
   --runtime nodejs20.x \
   --handler index.handler \
   --zip function.zip \
-  --env DB_SECRET=my-secret
+  --env DB_SECRET=my-secret \
+  --env PARAMETERS_SECRETS_EXTENSION_HTTP_PORT=2773
 ```
 
 Inside your function:
@@ -241,7 +242,15 @@ Runtime images are pulled automatically on first function creation.
 
 ## Secrets Cache Extension
 
-Tarn injects a lightweight Parameters/Secrets extension into every Lambda container. This matches the AWS extension API and allows `localhost:2773` lookups without any SDK changes.
+Tarn injects a lightweight Parameters/Secrets extension into Lambda containers that use it. This matches the AWS extension API and allows `localhost:2773` lookups without any SDK changes.
+
+A function gets the extension when any of these holds, as on AWS where only functions with the layer can reach it:
+
+- it has the `AWS-Parameters-and-Secrets-Lambda-Extension` layer (the ARN is recognised; the layer itself isn't downloaded)
+- it sets one of the extension's variables, such as `PARAMETERS_SECRETS_EXTENSION_HTTP_PORT`, `SECRETS_MANAGER_TTL` or `SSM_PARAMETER_STORE_TTL`
+- Tarn was started with `--expose-secrets-proxy`, which injects it into every function
+
+Other functions run without the extra process.
 
 - A small proxy binary is built for Linux and mounted into Lambda containers
 - The proxy listens on port `2773` inside the container

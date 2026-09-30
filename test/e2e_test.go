@@ -2811,6 +2811,9 @@ exports.handler = async (event) => {
 		"Code": map[string]string{
 			"ZipFile": base64.StdEncoding.EncodeToString(zipData),
 		},
+		// As on AWS, a function opts into the extension with its layer; Tarn
+		// only runs the proxy in functions that do.
+		"Layers": []string{"arn:aws:lambda:us-east-1:177933569100:layer:AWS-Parameters-and-Secrets-Lambda-Extension:12"},
 	}
 
 	body, _ := json.Marshal(createReq)

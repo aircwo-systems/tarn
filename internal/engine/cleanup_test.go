@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -307,5 +309,54 @@ func TestContainerLogsSinceJoinsPartialEntriesOfLongLines(t *testing.T) {
 	}
 	if text != head+"tailEND\n" {
 		t.Fatalf("long line not rejoined cleanly: len=%d, suffix %q", len(text), text[max(0, len(text)-60):])
+	}
+}
+
+func TestSecretsProxyInjectedOnlyWhenUsed(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "build", "secrets-proxy-linux"), []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+
+	hasProxy := func(eng *Engine, fake *fakeDocker, fn *types.FunctionConfig) bool {
+		t.Helper()
+		if _, err := eng.CreateContainer(context.Background(), fn, t.TempDir(), nil, "111111111111"); err != nil {
+			t.Fatal(err)
+		}
+		for _, b := range fake.host.Binds {
+			if strings.Contains(b, "/opt/tarn/secrets-proxy") {
+				return true
+			}
+		}
+		return false
+	}
+	base := func() *types.FunctionConfig {
+		return &types.FunctionConfig{FunctionName: "orders", Runtime: types.RuntimeNodeJS20, Handler: "index.handler", MemorySize: 128}
+	}
+
+	eng, fake := newFakeEngine(t, 4566)
+	if hasProxy(eng, fake, base()) {
+		t.Error("a function that doesn't use the extension got a secrets proxy process")
+	}
+
+	withLayer := base()
+	withLayer.Layers = []string{"arn:aws:lambda:us-east-1:177933569100:layer:AWS-Parameters-and-Secrets-Lambda-Extension:12"}
+	if !hasProxy(eng, fake, withLayer) {
+		t.Error("a function with the extension layer got no secrets proxy")
+	}
+
+	withEnv := base()
+	withEnv.Environment = map[string]string{"SECRETS_MANAGER_TTL": "300"}
+	if !hasProxy(eng, fake, withEnv) {
+		t.Error("a function setting an extension variable got no secrets proxy")
+	}
+
+	eng.cfg.ExposeSecretsProxy = true
+	if !hasProxy(eng, fake, base()) {
+		t.Error("--expose-secrets-proxy must inject the proxy into every function")
 	}
 }
