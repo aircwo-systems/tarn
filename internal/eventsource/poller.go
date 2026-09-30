@@ -144,6 +144,9 @@ type poller struct {
 	notFoundStreak int
 
 	drainers atomic.Int32 // extra poll loops running while a backlog lasts
+
+	// wg tracks the run loop and every drain loop, so stop can wait for them.
+	wg sync.WaitGroup
 }
 
 const (
@@ -156,6 +159,12 @@ const (
 	// invokeTimeout bounds one ESM invoke: the 15-minute Lambda maximum plus
 	// room for a cold start. The function's own timeout applies inside it.
 	invokeTimeout = 16 * time.Minute
+
+	// pollerStopGrace is how long stop waits for a poller's goroutines to
+	// notice. Every wait takes done as its cancel, so this is only spent by a
+	// poller mid-invoke, which is then left to finish rather than blocking the
+	// caller.
+	pollerStopGrace = 2 * time.Second
 )
 
 func newPoller(mapping *types.EventSourceMapping, sqsSvc SQSInterface, streamsSvc StreamInterface, lambdaSvc LambdaInterface, store *Store, traceStore *tracesvc.Store, collector *tracesvc.Collector) *poller {
@@ -173,7 +182,11 @@ func newPoller(mapping *types.EventSourceMapping, sqsSvc SQSInterface, streamsSv
 
 func (p *poller) start() {
 	log.Printf("[eventsource] %s: starting poller (up to %d concurrent) queue=%s function=%s", p.mapping.UUID, p.loops(), p.mapping.QueueName, p.mapping.FunctionName)
-	go p.run()
+	p.wg.Add(1)
+	go func() {
+		defer p.wg.Done()
+		p.run()
+	}()
 }
 
 // loops returns how many poll loops may run at once. SQS mappings scale out
@@ -194,10 +207,30 @@ func (p *poller) loops() int {
 	return n
 }
 
+// stop ends the poll loop and gives its goroutines a bounded chance to wind
+// up. Closing done alone was not enough: a poller replaced by an update, or by
+// a service restart, could still be inside a receive or a drain loop while its
+// replacement started, so two generations could run at once and take up to
+// twice the configured concurrency. Every wait in a poller takes done as its
+// cancel, so a parked one exits at once; the only slow case is a lambda invoke
+// already in flight, which is given pollerStopGrace and then left to finish on
+// its own rather than holding up the API call that stopped it.
 func (p *poller) stop() {
 	p.stopOnce.Do(func() {
 		close(p.done)
 	})
+
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		p.wg.Wait()
+	}()
+	timer := time.NewTimer(pollerStopGrace)
+	defer timer.Stop()
+	select {
+	case <-exited:
+	case <-timer.C:
+	}
 }
 
 func (p *poller) stopped() bool {
@@ -243,7 +276,11 @@ func (p *poller) scaleUp() {
 			return
 		}
 		if p.drainers.CompareAndSwap(n, n+1) {
-			go p.drain()
+			p.wg.Add(1)
+			go func() {
+				defer p.wg.Done()
+				p.drain()
+			}()
 		}
 	}
 }

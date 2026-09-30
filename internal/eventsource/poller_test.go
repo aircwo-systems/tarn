@@ -108,6 +108,118 @@ func (m *mockLambda) Invoke(ctx context.Context, input *types.InvokeInput) (*typ
 	return &types.InvokeOutput{StatusCode: 200}, nil
 }
 
+// TestPollerStopWaitsForItsLoops covers the overlap an update or a restart used
+// to cause: stop only closed done, so a poller replaced by a new one could still
+// be inside a receive or a drain loop. Two generations at once means up to twice
+// the configured concurrency, and both driving the same mapping.
+func TestPollerStopWaitsForItsLoops(t *testing.T) {
+	release := make(chan struct{})
+	sqs := &overlapSQS{release: release, entered: make(chan struct{}, 8)}
+
+	mapping := &types.EventSourceMapping{
+		UUID:                           "stop-waits",
+		QueueName:                      "test-queue",
+		FunctionName:                   "test-func",
+		BatchSize:                      10,
+		MaximumBatchingWindowInSeconds: 1,
+		Enabled:                        true,
+		State:                          "Enabled",
+	}
+	store := testStore(t)
+	if err := store.Save(mapping); err != nil {
+		t.Fatalf("save mapping: %v", err)
+	}
+
+	p := newPoller(mapping, sqs, nil, &mockLambda{}, store, nil, nil)
+	p.start()
+
+	// Let the run loop get inside a long poll, then start drain loops so the
+	// wg has to account for them as well as the run loop.
+	select {
+	case <-sqs.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("poller never entered a receive")
+	}
+	p.scaleUp()
+	waitFor(t, 3*time.Second, func() bool { return sqs.running() >= 2 })
+
+	stopped := make(chan struct{})
+	go func() {
+		p.stop()
+		close(stopped)
+	}()
+
+	// A parked receive is cancelled by done, so stop must return without
+	// waiting on the blocked lambda invoke.
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		close(release)
+		t.Fatal("stop did not wait for the poller's loops to exit")
+	}
+	if n := sqs.running(); n != 0 {
+		close(release)
+		t.Fatalf("%d poller loops still running after stop returned", n)
+	}
+	close(release)
+}
+
+// overlapSQS blocks every receive until released, and counts the loops inside
+// one at a time.
+type overlapSQS struct {
+	release chan struct{}
+	entered chan struct{}
+
+	mu      sync.Mutex
+	active  int
+	highest int
+}
+
+func (s *overlapSQS) running() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.active
+}
+
+func (s *overlapSQS) ReceiveMessage(queueName string, maxCount, visTimeout, waitTimeSec int) ([]*types.SQSMessage, error) {
+	return nil, nil
+}
+
+func (s *overlapSQS) ReceiveMessageUntil(queueName string, maxCount, visTimeout, waitTimeSec int, cancel <-chan struct{}) ([]*types.SQSMessage, error) {
+	s.mu.Lock()
+	s.active++
+	s.highest = max(s.highest, s.active)
+	s.mu.Unlock()
+	select {
+	case s.entered <- struct{}{}:
+	default:
+	}
+	defer func() {
+		s.mu.Lock()
+		s.active--
+		s.mu.Unlock()
+	}()
+
+	select {
+	case <-s.release:
+		return nil, nil
+	case <-cancel:
+		return []*types.SQSMessage{}, nil
+	}
+}
+
+func (s *overlapSQS) DeleteMessage(queueName, receiptHandle string) error { return nil }
+func (s *overlapSQS) IncrementProcessedCount(queueName string, delta int64) error {
+	return nil
+}
+func (s *overlapSQS) ChangeMessageVisibility(queueName, receiptHandle string, timeout int) error {
+	return nil
+}
+func (s *overlapSQS) ReleaseMessage(queueName, receiptHandle string) error { return nil }
+func (s *overlapSQS) MoveToDLQIfExceeded(srcQueue string, msg *types.SQSMessage) (bool, string, error) {
+	return false, "", nil
+}
+
 func TestBuildSQSEventPayload(t *testing.T) {
 	msgs := []*types.SQSMessage{
 		{
