@@ -152,6 +152,15 @@ func classifyLambdaLogEvent(msg string) (string, LogLevel, LogSource) {
 	if level, ok := extractLeadingLevel(msg); ok {
 		return msg, level, SourceOutput
 	}
+	// A structured runtime writes its own level into the line, but the Node
+	// runtime reports every console.log line as INFO, so {"level":"error",...}
+	// was stored as INFO and hidden from the events view and from level=ERROR
+	// filters. Taking the line's level here is what makes those agree with the
+	// summary, which already prefers it. Only lines that parse as a JSON object
+	// pay for the decode; everything else is a prefix test.
+	if level, ok := structuredLevel(parseJSONObject(msg)); ok {
+		return msg, level, SourceRuntime
+	}
 	return msg, DetectLevel(msg), SourceRuntime
 }
 

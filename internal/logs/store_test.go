@@ -335,6 +335,56 @@ REPORT RequestId: abc-123	Duration: 50ms`
 	}
 }
 
+// TestIngestContainerLogsUsesStructuredLogLevel covers the Node runtime's
+// console.log: it reports every line as INFO, so a structured line's own level
+// was thrown away at ingestion and the error never reached the events view or a
+// level=ERROR filter. The summary has always preferred the line's own level, so
+// the two disagreed.
+//
+// The cases below are the ones where keyword detection and the line's own level
+// genuinely disagree. Most JSON lines happen to agree, because the level name is
+// itself a keyword DetectLevel finds in the text.
+func TestIngestContainerLogsUsesStructuredLogLevel(t *testing.T) {
+	svc := NewService(testConfig())
+
+	rawLogs := `2026-01-15T10:30:00.000Z	{"level":50,"msg":"server listening"}
+2026-01-15T10:30:01.000Z	{"level":40,"msg":"cache miss"}
+2026-01-15T10:30:02.000Z	{"level":"debug","msg":"ERROR in parser"}
+2026-01-15T10:30:03.000Z	{"level":"info","msg":"all good"}
+2026-01-15T10:30:04.000Z	{"level":"error","msg":"boom"}
+2026-01-15T10:30:05.000Z	{"msg":"no level at all"}
+2026-01-15T10:30:06.000Z	plain text, no level`
+
+	svc.IngestContainerLogs("myFunc", "2026/01/15/[abc123]", rawLogs)
+
+	// The line is stored whole, so the assertions key on it.
+	want := map[string]LogLevel{
+		`{"level":50,"msg":"server listening"}`:     LevelERROR, // pino 50, nothing to keyword-match
+		`{"level":40,"msg":"cache miss"}`:           LevelWARN,  // pino 40
+		`{"level":"debug","msg":"ERROR in parser"}`: LevelDEBUG, // the line's level outranks the text
+		`{"level":"info","msg":"all good"}`:         LevelINFO,
+		`{"level":"error","msg":"boom"}`:            LevelERROR,
+		`{"msg":"no level at all"}`:                 DetectLevel(`{"msg":"no level at all"}`),
+		`plain text, no level`:                      DetectLevel(`plain text, no level`),
+	}
+	events, total, _ := svc.GetLogEvents("/aws/lambda/myFunc", nil)
+	if total != len(want) {
+		t.Fatalf("expected %d events, got %d", len(want), total)
+	}
+	for _, evt := range events {
+		if evt.Level != want[evt.Message] {
+			t.Errorf("message %q stored as %q, want %q", evt.Message, evt.Level, want[evt.Message])
+		}
+	}
+
+	// The whole point: the error is now visible to a level filter, not just to
+	// the summary.
+	errs, _, _ := svc.GetLogEvents("/aws/lambda/myFunc", &LogFilter{Level: LevelERROR})
+	if len(errs) != 2 {
+		t.Fatalf("level=ERROR returned %d events, want the two structured errors", len(errs))
+	}
+}
+
 func TestDetectLevel(t *testing.T) {
 	tests := []struct {
 		msg   string
