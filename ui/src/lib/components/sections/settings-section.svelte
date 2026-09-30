@@ -16,11 +16,13 @@
     setPollingIntervalSeconds,
     setSchemaSourceDir,
     setThemeMode,
+    setCollapsedSidebarMode,
     switchAccount,
     addKnownAccount,
     removeKnownAccount,
     sanitizeSchemaSourceDir,
     type ThemeMode,
+    type CollapsedSidebarMode,
     type InfraProbeKind,
   } from "$lib/state.svelte";
 
@@ -66,6 +68,7 @@
   // ── Drafts: edits stay local until saved ─────────────────────────
   let pollingInterval = $state(uiSettings.pollingIntervalSeconds);
   let themeMode       = $state<ThemeMode>(uiSettings.themeMode);
+  let collapsedSidebarMode = $state<CollapsedSidebarMode>(uiSettings.collapsedSidebarMode);
   let schemaSourceDir = $state(uiSettings.schemaSourceDir);
   let logRetention    = $state(uiSettings.logRetentionMinutes);
   let enabledKinds    = $state<InfraProbeKind[]>([...infraSettings.enabledKinds]);
@@ -74,6 +77,7 @@
   function reset() {
     pollingInterval = uiSettings.pollingIntervalSeconds;
     themeMode       = uiSettings.themeMode;
+    collapsedSidebarMode = uiSettings.collapsedSidebarMode;
     schemaSourceDir = uiSettings.schemaSourceDir;
     logRetention    = uiSettings.logRetentionMinutes;
     enabledKinds    = [...infraSettings.enabledKinds];
@@ -82,11 +86,11 @@
   }
 
   const draftKey = () => JSON.stringify([
-    pollingInterval, themeMode, sanitizeSchemaSourceDir(schemaSourceDir), logRetention,
+    pollingInterval, themeMode, collapsedSidebarMode, sanitizeSchemaSourceDir(schemaSourceDir), logRetention,
     [...enabledKinds].sort(), services,
   ]);
   const storedKey = () => JSON.stringify([
-    uiSettings.pollingIntervalSeconds, uiSettings.themeMode,
+    uiSettings.pollingIntervalSeconds, uiSettings.themeMode, uiSettings.collapsedSidebarMode,
     uiSettings.schemaSourceDir, uiSettings.logRetentionMinutes,
     [...infraSettings.enabledKinds].sort(), infraSettings.userServices,
   ]);
@@ -125,6 +129,7 @@
     }
     setPollingIntervalSeconds(pollingInterval);
     setThemeMode(themeMode);
+    setCollapsedSidebarMode(collapsedSidebarMode);
     setSchemaSourceDir(schemaSourceDir);
     setLogRetentionMinutes(logRetention);
     setInfraEnabledKinds(enabledKinds);
@@ -489,7 +494,7 @@
       <section id="settings-appearance" class="panel">
         <header>
           <h2>Appearance</h2>
-          <p>Follow the OS or pin a theme.</p>
+          <p>Choose a theme and how the sidebar collapses.</p>
         </header>
         <div class="setting">
           <div class="setting-label"><span>Theme</span></div>
@@ -501,6 +506,17 @@
                 <Icon size={12} weight={themeMode === t.id ? "fill" : "regular"} />{t.label}
               </button>
             {/each}
+          </div>
+        </div>
+        <div class="setting collapsed-sidebar-setting">
+          <div class="setting-label">
+            <span>Collapsed sidebar</span>
+            <small>Keep navigation icons visible or hide the sidebar completely.</small>
+          </div>
+          <div class="segmented two-options" role="group" aria-label="Collapsed sidebar">
+            <span class="segmented-pill" aria-hidden="true" style="transform: translateX({collapsedSidebarMode === 'hidden' ? 100 : 0}%)"></span>
+            <button type="button" aria-pressed={collapsedSidebarMode === "icons"} class:on={collapsedSidebarMode === "icons"} onclick={() => (collapsedSidebarMode = "icons")}>Icons</button>
+            <button type="button" aria-pressed={collapsedSidebarMode === "hidden"} class:on={collapsedSidebarMode === "hidden"} onclick={() => (collapsedSidebarMode = "hidden")}>Hidden</button>
           </div>
         </div>
       </section>
@@ -787,6 +803,8 @@
     background: var(--bg-stage); border: 1px solid var(--border-default);
     transition: transform 280ms var(--ease-snappy);
   }
+  .segmented.two-options { grid-template-columns: repeat(2, 84px); flex-shrink: 0; }
+  .collapsed-sidebar-setting { flex-wrap: wrap; }
   .segmented button {
     position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
     height: 24px; font-size: 11.5px; color: var(--text-tertiary); transition: color 140ms ease;

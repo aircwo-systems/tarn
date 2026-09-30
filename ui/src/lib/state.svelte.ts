@@ -48,9 +48,11 @@ const MIN_LOG_RETENTION_MINUTES = 1;
 const MAX_LOG_RETENTION_MINUTES = 1440; // 24 hours
 
 export type ThemeMode = "system" | "light" | "dark";
+export type CollapsedSidebarMode = "icons" | "hidden";
 
 let pollingIntervalSeconds = $state(DEFAULT_POLLING_INTERVAL_SECONDS);
 let themeMode = $state<ThemeMode>("system");
+let collapsedSidebarMode = $state<CollapsedSidebarMode>("icons");
 let resolvedTheme = $state<"light" | "dark">("dark");
 let persistenceEnabled = $state(DEFAULT_PERSISTENCE_ENABLED);
 let dashboardTagFilter = $state("");
@@ -99,6 +101,9 @@ export function getUISettings() {
     },
     get themeMode() {
       return themeMode;
+    },
+    get collapsedSidebarMode() {
+      return collapsedSidebarMode;
     },
     get resolvedTheme() {
       return resolvedTheme;
@@ -181,6 +186,7 @@ export function initUISettings() {
   const settings = readSettingsFromCookie();
   pollingIntervalSeconds = normalizePollingInterval(settings.pollingIntervalSeconds);
   themeMode = normalizeThemeMode(settings.themeMode);
+  collapsedSidebarMode = normalizeCollapsedSidebarMode(settings.collapsedSidebarMode);
   persistenceEnabled = normalizePersistenceEnabled(settings.persistenceEnabled);
   logRetentionMinutes = normalizeLogRetention(settings.logRetentionMinutes);
   applyTheme(themeMode);
@@ -276,6 +282,14 @@ export function setThemeMode(next: ThemeMode) {
 
   themeMode = normalized;
   applyTheme(themeMode);
+  persistSettingsToCookie();
+}
+
+export function setCollapsedSidebarMode(next: CollapsedSidebarMode) {
+  const normalized = normalizeCollapsedSidebarMode(next);
+  if (normalized === collapsedSidebarMode) return;
+
+  collapsedSidebarMode = normalized;
   persistSettingsToCookie();
 }
 
@@ -437,6 +451,7 @@ function persistSettingsToCookie() {
     JSON.stringify({
       pollingIntervalSeconds,
       themeMode,
+      collapsedSidebarMode,
       persistenceEnabled,
       logRetentionMinutes,
     }),
@@ -447,6 +462,7 @@ function persistSettingsToCookie() {
 function readSettingsFromCookie(): {
   pollingIntervalSeconds?: number;
   themeMode?: ThemeMode;
+  collapsedSidebarMode?: CollapsedSidebarMode;
   persistenceEnabled?: boolean;
   logRetentionMinutes?: number;
 } {
@@ -461,6 +477,7 @@ function readSettingsFromCookie(): {
     const parsed = JSON.parse(decodeURIComponent(encoded)) as {
       pollingIntervalSeconds?: number;
       themeMode?: ThemeMode;
+      collapsedSidebarMode?: CollapsedSidebarMode;
       persistenceEnabled?: boolean;
       logRetentionMinutes?: number;
     };
@@ -482,6 +499,10 @@ function normalizeThemeMode(value: unknown): ThemeMode {
     return value;
   }
   return "system";
+}
+
+function normalizeCollapsedSidebarMode(value: unknown): CollapsedSidebarMode {
+  return value === "hidden" ? "hidden" : "icons";
 }
 
 function normalizePersistenceEnabled(value: unknown): boolean {

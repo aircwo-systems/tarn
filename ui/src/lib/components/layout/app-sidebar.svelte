@@ -5,6 +5,7 @@
   import type { Component } from "svelte";
   import { onMount } from "svelte";
   import type { LogPulse } from "$lib/log-pulse.svelte";
+  import type { CollapsedSidebarMode } from "$lib/state.svelte";
   import SidebarWidget, { type SidebarWidgetData } from "./sidebar-widget.svelte";
 
   export interface NavItem {
@@ -27,6 +28,7 @@
     navSections,
     activeTab,
     sidebarCollapsed = $bindable(false),
+    collapsedSidebarMode = "icons",
     pollingIntervalSeconds: _pollingIntervalSeconds,
     activeAccountId = "000000000000",
     onSetTab,
@@ -35,6 +37,7 @@
     navSections: NavSection[];
     activeTab: string;
     sidebarCollapsed: boolean;
+    collapsedSidebarMode?: CollapsedSidebarMode;
     pollingIntervalSeconds?: number;
     activeAccountId?: string;
     onSetTab: (tab: string) => void;
@@ -42,6 +45,7 @@
   } = $props();
 
   const isNonDefaultAccount = $derived(activeAccountId !== "000000000000");
+  const sidebarHidden = $derived(sidebarCollapsed && collapsedSidebarMode === "hidden");
 
   let contentEl = $state<HTMLElement | null>(null);
   const itemEls = new Map<string, HTMLElement>();
@@ -118,14 +122,19 @@
   $effect(() => {
     const _tab = activeTab;
     const _col = sidebarCollapsed;
+    const _mode = collapsedSidebarMode;
     const _w = width;
     requestAnimationFrame(() => {
       syncActivePill(true);
+      if (sidebarCollapsed && !sidebarHidden) {
+        itemEls.get(activeTab)?.scrollIntoView({ block: "nearest" });
+      }
     });
   });
 
   // ─── Resizable / Collapsible Edge ───
   const DEFAULT_WIDTH = 256;
+  const RAIL_WIDTH = 64;
   const MIN_WIDTH = 180;
   const MAX_WIDTH = 520;
   const COLLAPSE_THRESHOLD = 110;
@@ -149,7 +158,7 @@
     releaseToCollapse = false;
     dragMoved = false;
     dragStartX = e.clientX;
-    dragStartWidth = sidebarCollapsed ? 0 : width;
+    dragStartWidth = sidebarCollapsed ? (sidebarHidden ? 0 : RAIL_WIDTH) : width;
     document.body.classList.add("is-resizing");
     window.addEventListener("pointermove", onResizeMove);
     window.addEventListener("pointerup", stopResize);
@@ -225,12 +234,15 @@
 
 <aside
   class="sidebar"
-  class:collapsed={sidebarCollapsed}
+  class:collapsed={sidebarCollapsed && !sidebarHidden}
+  class:hidden={sidebarHidden}
   class:resizing
   style:--sidebar-w="{width}px"
   aria-label="Rack navigation"
+  aria-hidden={sidebarHidden ? true : undefined}
+  inert={sidebarHidden}
 >
-  {#if !sidebarCollapsed}
+  {#if !sidebarHidden}
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
     <div
@@ -238,8 +250,8 @@
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize sidebar"
-      aria-valuenow={width}
-      aria-valuemin={MIN_WIDTH}
+      aria-valuenow={sidebarCollapsed ? RAIL_WIDTH : width}
+      aria-valuemin={RAIL_WIDTH}
       aria-valuemax={MAX_WIDTH}
       tabindex="0"
       title="Drag to resize sidebar (double click to reset, arrow keys to adjust)"
@@ -249,10 +261,12 @@
       onkeydown={(e) => {
         if (e.key === "ArrowLeft") {
           e.preventDefault();
-          saveSidebarWidth(width - 10);
+          if (width - 10 < MIN_WIDTH) sidebarCollapsed = true;
+          else if (!sidebarCollapsed) saveSidebarWidth(width - 10);
         } else if (e.key === "ArrowRight") {
           e.preventDefault();
-          saveSidebarWidth(width + 10);
+          if (sidebarCollapsed) sidebarCollapsed = false;
+          else saveSidebarWidth(width + 10);
         } else if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
           resetWidth();
@@ -334,12 +348,15 @@
               class:has-widget={hasWidget}
               aria-describedby={hasWidget ? `nav-${item.id}-widget` : undefined}
               aria-current={active ? "page" : undefined}
+              aria-label={item.label}
+              title={sidebarCollapsed ? item.label : undefined}
             >
               <div class="nav-item-left">
                 <Icon
                   size={15}
                   class="nav-item-icon"
                   weight={active ? "bold" : "regular"}
+                  aria-hidden="true"
                 />
                 <span class="nav-item-label">{item.label}</span>
               </div>
@@ -411,15 +428,16 @@
           class:active={activeTab === "settings"}
           title="Console Settings"
           aria-label="Settings"
+          aria-current={activeTab === "settings" ? "page" : undefined}
         >
-          <GearIcon size={14} />
+          <GearIcon size={14} aria-hidden="true" />
         </button>
       </div>
     </div>
   </div>
 </aside>
 
-{#if sidebarCollapsed}
+{#if sidebarHidden}
   <button
     type="button"
     class="collapsed-edge-zone"
@@ -460,7 +478,7 @@
     transition: none;
   }
 
-  .sidebar.collapsed {
+  .sidebar.hidden {
     width: 0;
     overflow: hidden;
   }
@@ -476,7 +494,7 @@
     transition: opacity 140ms ease;
   }
 
-  .sidebar.collapsed .sidebar-inner {
+  .sidebar.hidden .sidebar-inner {
     opacity: 0;
     pointer-events: none;
   }
@@ -650,6 +668,14 @@
   }
 
   .collapsed-edge-zone:hover .collapsed-edge-pill {
+    opacity: 1;
+  }
+
+  .collapsed-edge-zone:focus-visible {
+    outline: 2px solid var(--border-focus);
+  }
+
+  .collapsed-edge-zone:focus-visible .collapsed-edge-pill {
     opacity: 1;
   }
 
@@ -1061,13 +1087,113 @@
   }
 
   :global(.sidebar .footer-btn.active) {
-    color: var(--text-primary);
-    background: var(--bg-element-hover);
+    color: var(--text-primary) !important;
+    background: var(--bg-element-hover) !important;
   }
 
   :global(.sidebar .footer-btn:hover) {
     color: var(--text-primary) !important;
     background: var(--bg-sidebar-subtle) !important;
     border-color: var(--border-subtle) !important;
+  }
+
+  :global(.sidebar .footer-btn:focus-visible) {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 2px;
+  }
+
+  .sidebar.collapsed {
+    width: 64px;
+  }
+
+  .sidebar.collapsed .sidebar-inner {
+    width: 64px;
+    min-width: 0;
+  }
+
+  .sidebar.collapsed .sidebar-header {
+    padding: 16px 8px 12px;
+  }
+
+  .sidebar.collapsed .brand-row,
+  .sidebar.collapsed .brand-meta {
+    justify-content: center;
+    padding: 0;
+  }
+
+  .sidebar.collapsed .brand-titles,
+  .sidebar.collapsed .nav-section-title,
+  .sidebar.collapsed .nav-item-label,
+  .sidebar.collapsed .nav-item-right,
+  .sidebar.collapsed .footer-left,
+  .sidebar.collapsed .nav-active-pill {
+    display: none;
+  }
+
+  .sidebar.collapsed .sidebar-content {
+    padding: 8px;
+    gap: 12px;
+  }
+
+  .sidebar.collapsed .nav-section + .nav-section {
+    border-top: 1px solid var(--border-subtle);
+    padding-top: 12px;
+  }
+
+  .sidebar.collapsed .nav-item {
+    width: 44px;
+    height: 48px;
+    margin: 0 auto;
+    padding: 0;
+    flex-shrink: 0;
+    justify-content: center;
+  }
+
+  .sidebar.collapsed .nav-item-left {
+    justify-content: center;
+  }
+
+  :global(.sidebar.collapsed .nav-item .nav-item-icon) {
+    width: 18px;
+    height: 18px;
+  }
+
+  .sidebar.collapsed .nav-item.active::after,
+  :global(.sidebar.collapsed .footer-btn[aria-current="page"]::after) {
+    content: "";
+    position: absolute;
+    bottom: 3px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 16px;
+    height: 3px;
+    border-radius: 999px;
+    background: var(--text-primary);
+  }
+
+  .sidebar.collapsed .sidebar-footer {
+    justify-content: center;
+    padding: 8px;
+  }
+
+  .sidebar.collapsed .footer-actions {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  :global(.sidebar.collapsed .footer-btn) {
+    position: relative;
+    width: 44px !important;
+    height: 44px !important;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar,
+    .sidebar-inner,
+    .nav-hover-pill,
+    .nav-active-pill,
+    .nav-item {
+      transition: none;
+    }
   }
 </style>

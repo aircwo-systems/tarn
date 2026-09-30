@@ -387,6 +387,7 @@
     {navSections}
     {activeTab}
     bind:sidebarCollapsed
+    collapsedSidebarMode={uiSettings.collapsedSidebarMode}
     pollingIntervalSeconds={uiSettings.pollingIntervalSeconds}
     activeAccountId={accountSettings.activeAccountId}
     onSetTab={setTab}
@@ -396,7 +397,7 @@
   <!-- ═══════════════════════════════════════════════════ MAIN ══ -->
   {#key activeTab}
     {#if activeTab === "overview"}
-    <main id="main-stage-content" tabindex="-1" class="tab-content-view main-stage flex min-w-0 flex-1 flex-col overflow-hidden outline-none" class:sidebar-collapsed={sidebarCollapsed}>
+    <main id="main-stage-content" tabindex="-1" class="tab-content-view main-stage flex min-w-0 flex-1 flex-col overflow-hidden outline-none" class:sidebar-collapsed={sidebarCollapsed && uiSettings.collapsedSidebarMode === "hidden"}>
       <div class="flex flex-1 flex-col overflow-hidden {canvasExpanded ? 'px-6 py-5' : 'px-4 py-4'}">
         <SectionHeader
           title="Overview"
@@ -459,7 +460,7 @@
       </div>
     </main>
     {:else}
-    <main id="main-stage-content" tabindex="-1" class="tab-content-view main-stage min-w-0 flex-1 px-6 py-5 outline-none {activeTab === 'logs' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}" class:sidebar-collapsed={sidebarCollapsed}>
+    <main id="main-stage-content" tabindex="-1" class="tab-content-view main-stage min-w-0 flex-1 px-6 py-5 outline-none {activeTab === 'logs' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}" class:sidebar-collapsed={sidebarCollapsed && uiSettings.collapsedSidebarMode === "hidden"}>
       {#if activeTab === "gateways"}
         <APIGatewaysSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "functions"}
