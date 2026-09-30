@@ -25,8 +25,17 @@ See also `docs/aws-parity-and-performance-audit.md`, which lists older items (P0
 | `38ffd64` | Streams cap retained records, evict the oldest on append, bisect the checkpoint and clone only the returned window |
 | `510da69` | Step Functions caps executions per state machine, deletes them with the machine, and filters before copying |
 | `bd216fa` | Lambda burst containers get a short keep-alive; the startup sweep reclaims orphans from any port |
+| `23e9db6` | DynamoDB stream mappings wait on a per-stream signal instead of a one-second poll |
+| `453b49f` | ECS recovery resumes recovered containers' log pumps and starts their health pollers |
+| `a42941e` | The volume-on-stop test no longer races a 2s log drain against a 2s deadline |
+| `d187284` | A structured log line's own level is stored at ingestion, so ERROR filters see it |
+| `65b0675` | Stopping an event source poller waits for its poll and drain loops to exit |
+| `1c90e39` | Log stream names per group are capped, evicting the least recently written |
+| `752d26d` | `make ui-build` leaves no committable `200.html`; a partial build skips in CI |
 
-## Open: medium, one focused change each
+## Fixed: medium, one focused change each
+
+Item 5 is the only one still open.
 
 ### 1. DynamoDB streams copy the whole retained stream every second (verified)
 
@@ -168,14 +177,50 @@ On client cancel the invoke returns a synthetic timeout and the container is rel
 
 Fix: when the context ends before the function's own timeout, remove the container instead of releasing it. First confirm how the Lambda runtime interface emulator behaves on an abandoned request.
 
-## Open: small
+## Fixed: small
 
-- **Log stream map grows per container.** Each cold start adds a stream entry to the function's log group (`internal/logs/store.go` `PutLogEvents`), cleared only by `ClearGroup`.
-- **Event source `Stop` doesn't wait.** `internal/eventsource/service.go` `Stop` closes `done` but does not join poll or drain goroutines, so an update during a backlog can briefly run old and new pollers together (up to twice `MaximumConcurrency`). Track a `WaitGroup` per poller, or cancel the invoke context on stop.
-- **One timer per traced invoke.** `internal/trace/collector.go` `Finish` schedules a 60 ms `AfterFunc` per invoke. There is no idle cost, only churn under load.
-- **Raw log levels for Node JSON lines.** The Node runtime stores `console.log` output as INFO, so `{"level":"error",...}` lines show as INFO in the events view and in `level=ERROR` filters on `events-all`. The log summary already uses the line's own level. Fix at ingestion (`internal/logs/service.go` `classifyLambdaLogEvent`).
-- **Placeholder UI shell gets overwritten.** `make ui-build` replaces `internal/api/ui-dist/200.html`, so a real build shell can be committed again and break `TestRootDispatchServesReferencedUIAsset` in CI. Skip `200.html` in the Makefile copy, or mark it skip-worktree locally.
-- **Flaky test.** `TestRunnerRemovesTaskScopedVolumeOnStopButNotShared` (`internal/ecs/runner_test.go`) fails about 1 run in 6 to 10 under `-race`, before and after this work. Its 2-second wait for STOPPED looks too tight under load.
+These were one focused change each, on top of the numbered items above.
+
+- **Log stream map grows per container.** A Lambda stream is named after its
+  container, so every cold start added an entry nothing removed except
+  `ClearGroup`: a function that cold-started a thousand times held a thousand
+  names whose events the ring had long since evicted. `maxStreamsPerGroup`
+  (100) now caps them, evicting the least recently written on append. The
+  group's event buffer, not this map, decides what is still readable, so
+  dropping the oldest names loses nothing.
+- **Event source `Stop` didn't wait.** Closing `done` was not enough, so a
+  poller replaced by an update or a restart could still be inside a receive or
+  a drain loop while its replacement started — two generations at once, up to
+  twice the configured concurrency, both driving the same mapping. The poller
+  now tracks its run and drain loops in a `WaitGroup` and `stop` waits for them
+  (`pollerStopGrace`, 2s). Every wait in a poller takes `done` as its cancel, so
+  a parked one exits at once; the grace is only ever spent by an invoke already
+  in flight, which is then left to finish rather than holding up the API call
+  that stopped it.
+- **Raw log levels for Node JSON lines.** `classifyLambdaLogEvent` now takes a
+  structured line's own level, reusing the `parseJSONObject`/`structuredLevel`
+  pair the summary already used — so the events view and `level=ERROR` filters
+  agree with it. Note most JSON lines happened to agree anyway, because the
+  level name is itself a keyword `DetectLevel` finds in the text; what actually
+  differed was a numeric pino level with a neutral message, and a line whose
+  explicit level outranked a keyword in its own text.
+- **Placeholder UI shell got overwritten.** The original suggestion — skip
+  `200.html` in the `make ui-build` copy — is wrong: `adapter-static` is
+  configured with `fallback: "200.html"`, so the built file is the dashboard's
+  real SPA shell and skipping it would break the embedded UI. The build instead
+  marks it `skip-worktree`, so a local build never leaves it as a pending
+  change, and `TestRootDispatchServesReferencedUIAsset` now skips (rather than
+  fails) when the shell references an asset that is not embedded — checking the
+  embedded FS, so a real "asset present but served as the shell" regression
+  still fails.
+- **Flaky test.** `TestRunnerRemovesTaskScopedVolumeOnStopButNotShared` was not
+  a tight deadline so much as a missing fixture: a task only reaches STOPPED
+  after its log pump has been given `logDrainGracePeriod`, which defaults to
+  2s — the same 2s the test's own wait allowed. It was racing a full drain
+  against its own timeout, and every sibling test already shrank that grace
+  except this one. 60 consecutive `-race` runs now pass.
+
+- **One timer per traced invoke.** `internal/trace/collector.go` `Finish` schedules a 60 ms `AfterFunc` per invoke. There is no idle cost, only churn under load. *Not fixed:* a shared timer was written and reverted — three benchmark shapes (setup only, burst-and-drain, zero window) all showed identical allocations and no clear time difference, so it was not worth ~40 lines of rearm logic in a concurrency primitive. Revisit only if profiling ever shows the timer heap under load.
 
 ## Older audit items still open
 
