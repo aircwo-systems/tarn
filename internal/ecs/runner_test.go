@@ -702,6 +702,13 @@ func TestRunnerFailsLaunchWhenSharedVolumeMissingAndAutoprovisionFalse(t *testin
 // removes a task-scoped Docker volume once every container has stopped, but
 // never touches a shared-scope volume used by the same task.
 func TestRunnerRemovesTaskScopedVolumeOnStopButNotShared(t *testing.T) {
+	// A task only reaches STOPPED after its log pump has been given the drain
+	// grace period, so without shrinking that the wait below races a 2s drain
+	// against its own 2s deadline and loses whenever the machine is loaded.
+	origGrace := logDrainGracePeriod
+	logDrainGracePeriod = 20 * time.Millisecond
+	defer func() { logDrainGracePeriod = origGrace }()
+
 	r, svc, eng, _ := newTestRunner(t)
 	tdOut, err := svc.RegisterTaskDefinition(&types.RegisterTaskDefinitionInput{
 		Family: "volume-remove-on-stop",
