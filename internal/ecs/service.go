@@ -78,6 +78,9 @@ type Service struct {
 	cfg   *config.Config
 	store *Store
 
+	// serviceChanged is signalled when a service is created or updated.
+	serviceChanged chan struct{}
+
 	// taskDrainer is supplied by the runner. Keeping it as a callback avoids a
 	// control-plane -> Docker dependency while still letting Force delete wait
 	// for the actual containers to stop before removing the service record.
@@ -96,7 +99,19 @@ func NewService(cfg *config.Config, store *Store) *Service {
 	if store == nil {
 		store = NewStore(cfg)
 	}
-	return &Service{cfg: cfg, store: store}
+	return &Service{cfg: cfg, store: store, serviceChanged: make(chan struct{}, 1)}
+}
+
+// notifyServiceChanged wakes the runner's reconcile loop after a service is
+// created or updated, so it acts at once instead of on its next slow pass.
+func (s *Service) notifyServiceChanged() {
+	if s.serviceChanged == nil {
+		return
+	}
+	select {
+	case s.serviceChanged <- struct{}{}:
+	default:
+	}
 }
 
 // SetTaskDrainer connects the service control plane to the account's ECS
@@ -1048,6 +1063,7 @@ func (s *Service) CreateService(in *types.CreateServiceInput) (*types.CreateServ
 	if err := s.store.SaveService(svc); err != nil {
 		return nil, err
 	}
+	s.notifyServiceChanged()
 	return &types.CreateServiceOutput{Service: svc}, nil
 }
 
@@ -1102,6 +1118,7 @@ func (s *Service) UpdateService(in *types.UpdateServiceInput) (*types.UpdateServ
 	if err := s.store.SaveService(svc); err != nil {
 		return nil, err
 	}
+	s.notifyServiceChanged()
 	return &types.UpdateServiceOutput{Service: svc}, nil
 }
 

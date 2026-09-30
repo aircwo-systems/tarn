@@ -48,6 +48,16 @@ var (
 	// interval.
 	reconcileTickInterval = 2 * time.Second
 
+	// reconcileMaxInterval caps the back-off between passes while every
+	// service is steady. Service changes and task exits wake the loop at
+	// once, so this only bounds how long an outside change (a container
+	// killed from the Docker CLI) takes to notice.
+	reconcileMaxInterval = 15 * time.Second
+
+	// reconcileIdleInterval is the pass interval with no ACTIVE services,
+	// when a pass only prunes old task and service records.
+	reconcileIdleInterval = 5 * time.Minute
+
 	// logDrainGracePeriod bounds how long the per-container wait goroutine
 	// waits for the log pump to finish on its own after the container exits,
 	// before forcing it closed. Docker's follow stream normally ends shortly
@@ -215,6 +225,7 @@ type Runner struct {
 	wg sync.WaitGroup
 
 	reconcileDone     chan struct{}
+	reconcileKick     chan struct{} // task exits wake the loop
 	reconcileWG       sync.WaitGroup
 	reconcileStopOnce sync.Once
 
@@ -252,6 +263,7 @@ func NewRunner(cfg *config.Config, svc *Service, eng taskEngine, sink logSink) *
 		lifecycleCtx:    lifecycleCtx,
 		lifecycleCancel: lifecycleCancel,
 		reconcileDone:   make(chan struct{}),
+		reconcileKick:   make(chan struct{}, 1),
 		tasks:           make(map[string]*runningTask),
 		launchBackoff:   make(map[string]launchBackoffState),
 		serviceGates:    make(map[string]*serviceGate),
@@ -1068,6 +1080,7 @@ func (r *Runner) finishTask(taskArn string, rt *runningTask) {
 		log.Printf("[ecs] record task %s desired-stopped: %v", taskArn, err)
 	}
 	r.recordTaskStoppedTrace(taskArn, rt)
+	r.kickReconcile() // a service may need a replacement task
 	r.mu.Lock()
 	if current, ok := r.tasks[taskArn]; ok && current == rt {
 		delete(r.tasks, taskArn)
@@ -1845,22 +1858,51 @@ func (r *Runner) pumpLogs(ctx context.Context, logGroup, streamName, containerID
 func (r *Runner) reconcileLoop() {
 	defer r.reconcileWG.Done()
 
-	ticker := time.NewTicker(reconcileTickInterval)
-	defer ticker.Stop()
+	// Pass every reconcileTickInterval after a change, doubling up to
+	// reconcileMaxInterval while services are steady, and only every
+	// reconcileIdleInterval when there are no services to reconcile. Each
+	// pass lists containers per service, so an idle account must not pay it.
+	interval := reconcileTickInterval
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
 	for {
+		kicked := false
 		select {
 		case <-r.reconcileDone:
 			return
-		case <-ticker.C:
-			r.reconcileOnce(r.ctx)
+		case <-timer.C:
+		case <-r.reconcileKick:
+			kicked = true
+		case <-r.svc.serviceChanged:
+			kicked = true
 		}
+
+		active := r.reconcileOnce(r.ctx)
+		switch {
+		case active == 0:
+			interval = reconcileIdleInterval
+		case kicked || interval >= reconcileIdleInterval:
+			interval = reconcileTickInterval
+		default:
+			interval = min(interval*2, max(reconcileMaxInterval, reconcileTickInterval))
+		}
+		timer.Reset(interval)
+	}
+}
+
+// kickReconcile runs a reconcile pass promptly, for example after a service
+// task exits and may need replacing.
+func (r *Runner) kickReconcile() {
+	select {
+	case r.reconcileKick <- struct{}{}:
+	default:
 	}
 }
 
 // reconcileOnce reconciles every ACTIVE service in every cluster this
 // runner's store knows about. Factored out of the ticker loop so tests can
 // drive a single pass deterministically with no wall-clock waiting.
-func (r *Runner) reconcileOnce(ctx context.Context) {
+func (r *Runner) reconcileOnce(ctx context.Context) (active int) {
 	if _, err := r.svc.store.PruneStoppedTasks(time.Now().UTC().Add(-stoppedTaskRetention)); err != nil {
 		log.Printf("[ecs] reconcile: prune stopped tasks: %v", err)
 	}
@@ -1872,9 +1914,11 @@ func (r *Runner) reconcileOnce(ctx context.Context) {
 			if svc.Status != types.ServiceStatusActive {
 				continue
 			}
+			active++
 			r.reconcileService(ctx, cluster, svc)
 		}
 	}
+	return active
 }
 
 // reconcileService counts RUNNING containers matching svc's label selector,
