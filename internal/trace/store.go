@@ -28,7 +28,12 @@ type Store struct {
 	mu        sync.RWMutex
 	db        *sql.DB
 	retention time.Duration
+	added     int // traces added since the last prune; guarded by mu
 }
+
+// pruneEvery is how many traces are added between prunes, so retention and
+// the count cap hold while the process runs, not only at startup.
+const pruneEvery = 200
 
 // Trace records the full request lifecycle for one invocation.
 type Trace struct {
@@ -153,6 +158,10 @@ func (s *Store) Add(t *Trace) {
 	)
 	if err != nil {
 		log.Printf("[trace] failed to insert trace %s: %v", t.ID, err)
+	}
+	if s.added++; s.added >= pruneEvery {
+		s.added = 0
+		s.prune()
 	}
 }
 
