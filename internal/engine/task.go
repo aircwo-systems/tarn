@@ -527,6 +527,12 @@ func buildTaskContainerConfig(spec TaskContainerSpec, tarnPort int) (*container.
 		DNS:            spec.DNSServers,
 		VolumesFrom:    spec.VolumesFrom,
 		ShmSize:        spec.ShmSize,
+		// Tarn follows task output into its own log store, so Docker's copy
+		// only needs to be recent. Uncapped, a chatty service fills the disk.
+		LogConfig: container.LogConfig{
+			Type:   "json-file",
+			Config: map[string]string{"max-size": "10m", "max-file": "2"},
+		},
 	}
 	if spec.InitProcessEnabled {
 		init := true

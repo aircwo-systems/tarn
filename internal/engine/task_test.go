@@ -546,3 +546,14 @@ func TestScanDemuxedLinesPropagatesStreamError(t *testing.T) {
 }
 
 var _ io.Reader = (*failingReader)(nil)
+
+func TestTaskContainerCapsDockerLogFiles(t *testing.T) {
+	_, hostCfg, err := buildTaskContainerConfig(TaskContainerSpec{Image: "example/task:latest"}, 4566)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := hostCfg.LogConfig
+	if cfg.Type != "json-file" || cfg.Config["max-size"] == "" || cfg.Config["max-file"] == "" {
+		t.Fatalf("ECS task container log files must be capped, got %+v", cfg)
+	}
+}

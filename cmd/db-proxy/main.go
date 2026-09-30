@@ -50,12 +50,18 @@ func main() {
 	}
 	log.Printf("[db-proxy] listening on :%s, upstream: %s", listenPort, upstreamAddr)
 
+	var backoff time.Duration
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
+			// Back off on repeated errors (for example fd exhaustion) rather
+			// than spinning a core.
+			backoff = min(max(backoff*2, 5*time.Millisecond), time.Second)
 			log.Printf("[db-proxy] accept error: %v", err)
+			time.Sleep(backoff)
 			continue
 		}
+		backoff = 0
 		go handleConn(conn, upstreamAddr, tarnEndpoint, dbName)
 	}
 }
@@ -303,13 +309,17 @@ func parseMessages(src io.Reader, dst io.Writer, onReady func(txStatus byte)) er
 	}
 }
 
+// telemetryClient bounds span reports: if Tarn is gone, reports fail fast
+// instead of piling up goroutines and connections inside the container.
+var telemetryClient = &http.Client{Timeout: 2 * time.Second}
+
 func reportSpan(endpoint, dbName string, durationMs int64, status string) {
 	body, _ := json.Marshal(map[string]interface{}{
 		"name":       dbName,
 		"durationMs": durationMs,
 		"status":     status,
 	})
-	resp, err := http.Post(fmt.Sprintf("%s/_tarn/telemetry/db", endpoint), "application/json", bytes.NewReader(body))
+	resp, err := telemetryClient.Post(fmt.Sprintf("%s/_tarn/telemetry/db", endpoint), "application/json", bytes.NewReader(body))
 	if err != nil {
 		log.Printf("[db-proxy] report span error: %v", err)
 		return

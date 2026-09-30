@@ -547,7 +547,9 @@ func startServer(cfg *config.Config) error {
 
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	// SIGHUP is sent when the terminal running Tarn closes; without handling
+	// it Go exits at once and warm containers are left running.
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
 	// Start returns as soon as Shutdown is called, so the caller must wait on
 	// shutdownDone before returning; otherwise deferred eng.Close() closes the
