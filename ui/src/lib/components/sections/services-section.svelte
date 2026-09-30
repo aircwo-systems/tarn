@@ -643,6 +643,7 @@
   :global(.dark) .add-service,
   :global(.dark) .expand-list-btn,
   :global(.dark) .service-chip,
+  :global(.dark) .collapse-list-btn,
   :global(.dark) .search {
     background: var(--bg-element);
     box-shadow: none;
@@ -676,28 +677,6 @@
   .search-row .search {
     flex: 1;
     min-width: 0;
-  }
-  .collapse-list-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
-    border: 1px solid var(--border-subtle);
-    background: #ffffff;
-    color: var(--text-tertiary);
-    cursor: pointer;
-    flex-shrink: 0;
-    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
-    transition: border-color 120ms ease, color 120ms ease, background 120ms ease, transform 120ms ease;
-  }
-  .collapse-list-btn:hover {
-    border-color: var(--border-default);
-    color: var(--text-primary);
-  }
-  .collapse-list-btn:active {
-    transform: scale(0.96);
   }
 
   .search {
