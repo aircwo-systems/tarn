@@ -52,8 +52,10 @@ const (
 	// containerAcquireTimeout bounds how long an invoke waits for a free
 	// execution environment when the function is at its concurrency cap.
 	containerAcquireTimeout = 60 * time.Second
-	// containerAcquirePoll is how often to re-check for a freed environment.
-	containerAcquirePoll = 25 * time.Millisecond
+	// containerAcquirePoll is how soon to first re-check for a freed
+	// environment; waits back off to containerAcquireMaxPoll.
+	containerAcquirePoll    = 25 * time.Millisecond
+	containerAcquireMaxPoll = 250 * time.Millisecond
 
 	// asyncWorkers bounds how many asynchronous invokes run at once across
 	// the account; asyncBacklog is how many may wait before Enqueue reports
@@ -717,6 +719,7 @@ func (s *Service) acquireContainer(ctx context.Context, fn *types.FunctionConfig
 	}
 	fnMu := s.getFunctionMutex(fn.FunctionName)
 	deadline := time.Now().Add(containerAcquireTimeout)
+	poll := containerAcquirePoll
 
 	for {
 		// Fast path: reuse an idle warm container.
@@ -752,8 +755,9 @@ func (s *Service) acquireContainer(ctx context.Context, fn *types.FunctionConfig
 		select {
 		case <-ctx.Done():
 			return nil, false, ctx.Err()
-		case <-time.After(containerAcquirePoll):
+		case <-time.After(poll):
 		}
+		poll = min(poll*2, containerAcquireMaxPoll)
 	}
 }
 

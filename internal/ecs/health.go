@@ -17,6 +17,13 @@ import (
 // real interval.
 var healthPollInterval = 500 * time.Millisecond
 
+// healthStablePollInterval is the slower interval used once a container's
+// health has held for healthStableAfter polls. Docker itself only re-runs the
+// check every HealthCheck.Interval (30s by default).
+var healthStablePollInterval = 5 * time.Second
+
+const healthStableAfter = 4
+
 // spawnHealthPoller starts a background poller for one container's Docker
 // HEALTHCHECK result, tracked by r.wg like every other lifecycle goroutine so
 // Stop() waits for it to exit. It is a no-op when cd defines no HealthCheck.
@@ -35,6 +42,8 @@ func (r *Runner) spawnHealthPoller(taskArn, containerName, containerID string, r
 		defer r.wg.Done()
 		ticker := time.NewTicker(healthPollInterval)
 		defer ticker.Stop()
+		var last string
+		unchanged := 0
 		for {
 			select {
 			case <-r.lifecycleCtx.Done():
@@ -54,6 +63,18 @@ func (r *Runner) spawnHealthPoller(taskArn, containerName, containerID string, r
 			if status == "" {
 				continue
 			}
+			if status == last {
+				// Poll fast while a status is new, then slow down: a stable
+				// container needs no Docker call twice a second.
+				if unchanged++; unchanged == healthStableAfter {
+					ticker.Reset(healthStablePollInterval)
+				}
+				continue
+			}
+			if last != "" {
+				ticker.Reset(healthPollInterval)
+			}
+			last, unchanged = status, 0
 
 			task, err := r.svc.SetContainerHealthStatus(taskArn, containerName, status)
 			if err != nil {

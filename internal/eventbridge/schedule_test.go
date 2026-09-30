@@ -72,3 +72,16 @@ func TestComputeNextRunCron(t *testing.T) {
 		t.Fatalf("next=%s want=%s", next, want)
 	}
 }
+
+func TestUntilNextMinuteWakesJustAfterBoundary(t *testing.T) {
+	now := time.Date(2026, 9, 30, 10, 15, 42, 0, time.UTC)
+	wake := now.Add(untilNextMinute(now))
+	if wake.Truncate(time.Minute) != time.Date(2026, 9, 30, 10, 16, 0, 0, time.UTC) {
+		t.Fatalf("wakes at %s, want just after 10:16", wake)
+	}
+	// Exactly on a boundary still waits for the next one.
+	on := time.Date(2026, 9, 30, 10, 16, 0, 0, time.UTC)
+	if d := untilNextMinute(on); d < time.Minute {
+		t.Fatalf("from a boundary waits %s, want about a minute", d)
+	}
+}

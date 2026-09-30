@@ -28,7 +28,7 @@ const (
 	maxTargetListLimit        = 100
 	defaultRuleFireTimeout    = 30 * time.Second
 	defaultECSRuleConcurrency = 10
-	schedulerTickInterval     = 1 * time.Second
+	schedulerWakeMargin       = 50 * time.Millisecond
 
 	// dispatchWorkers and dispatchBacklog bound background PutEvents
 	// delivery; dispatchCloseTimeout is how long Stop waits for it.
@@ -177,23 +177,32 @@ func (s *Service) Stop() {
 func (s *Service) schedulerLoop() {
 	defer s.schedulerWG.Done()
 
-	ticker := time.NewTicker(schedulerTickInterval)
-	defer ticker.Stop()
+	// Schedules resolve to the minute, so sleep until the next minute
+	// boundary rather than waking every second to find nothing due.
+	timer := time.NewTimer(untilNextMinute(time.Now()))
+	defer timer.Stop()
 
 	lastMinute := int64(0)
 	for {
 		select {
 		case <-s.schedulerDone:
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			now := time.Now().UTC().Truncate(time.Minute)
-			if now.Unix() == lastMinute {
-				continue
+			if now.Unix() != lastMinute {
+				lastMinute = now.Unix()
+				s.executeDueRules(now)
 			}
-			lastMinute = now.Unix()
-			s.executeDueRules(now)
+			timer.Reset(untilNextMinute(time.Now()))
 		}
 	}
+}
+
+// untilNextMinute returns the wait until just after the next minute boundary.
+// The small margin keeps a slightly early wakeup from landing in the minute
+// that just ran.
+func untilNextMinute(now time.Time) time.Duration {
+	return now.Truncate(time.Minute).Add(time.Minute + schedulerWakeMargin).Sub(now)
 }
 
 func (s *Service) executeDueRules(now time.Time) {

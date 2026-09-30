@@ -537,7 +537,8 @@ type taskExecutor struct {
 const ecsRunTaskSyncResource = "arn:aws:states:::ecs:runTask.sync"
 
 const (
-	ecsTaskPollInterval = 100 * time.Millisecond
+	ecsTaskPollInterval    = 100 * time.Millisecond
+	ecsTaskMaxPollInterval = 2 * time.Second
 	ecsTaskStopTimeout  = 5 * time.Second
 )
 
@@ -674,6 +675,7 @@ func ecsTaskContext(ctx context.Context, timeoutSeconds int) (context.Context, c
 
 func (e *taskExecutor) waitECSTasks(parentCtx, taskCtx context.Context, cluster string, launched []types.Task, timeoutSeconds int) ([]types.Task, error) {
 	completed := append([]types.Task(nil), launched...)
+	pollInterval := ecsTaskPollInterval
 	for {
 		allStopped := true
 		for i := range completed {
@@ -709,7 +711,9 @@ func (e *taskExecutor) waitECSTasks(parentCtx, taskCtx context.Context, cluster 
 			return completed, nil
 		}
 
-		timer := time.NewTimer(ecsTaskPollInterval)
+		// Back off from 100ms to 2s: tasks often run for minutes.
+		timer := time.NewTimer(pollInterval)
+		pollInterval = min(pollInterval*2, ecsTaskMaxPollInterval)
 		select {
 		case <-taskCtx.Done():
 			if !timer.Stop() {

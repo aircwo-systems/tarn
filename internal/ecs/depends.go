@@ -131,7 +131,11 @@ func (r *Runner) waitForDependencies(ctx context.Context, taskArn string, cd typ
 }
 
 func (r *Runner) waitForDependency(ctx context.Context, taskArn string, dep types.ContainerDependency) error {
-	ticker := time.NewTicker(dependsOnPollInterval)
+	// Start fast so quick dependencies aren't delayed, then back off: a
+	// HEALTHY dependency can take a long time.
+	interval := dependsOnPollInterval
+	maxInterval := 20 * dependsOnPollInterval
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	deadline := time.Now().Add(dependsOnWaitTimeout)
 
@@ -178,6 +182,10 @@ func (r *Runner) waitForDependency(ctx context.Context, taskArn string, dep type
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+			if interval < maxInterval {
+				interval = min(interval*2, maxInterval)
+				ticker.Reset(interval)
+			}
 		}
 	}
 }
