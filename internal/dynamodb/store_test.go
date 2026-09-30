@@ -3,6 +3,7 @@ package dynamodb
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -553,6 +554,157 @@ func TestStoreTableFeatureCompatibilityAPIs(t *testing.T) {
 	}
 }
 
+// A stream event source mapping polls once a second, so retention has to stay
+// bounded and an idle poll has to cost nothing. Both used to be proportional to
+// everything the stream had ever retained.
+func TestStreamRecordsAreCappedAndCheckpointsBisect(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.PersistenceEnabled = false
+
+	store := NewStore(cfg)
+	table, err := store.CreateTable(testTableDefinition())
+	if err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	// One write past the cap, so the oldest record is evicted.
+	for i := 0; i <= maxStreamRecords; i++ {
+		item := testItem("acct#1", fmt.Sprintf("order#%d", i), "PENDING", i, "1")
+		if _, err := store.PutItem("orders", item, "", nil, nil, "NONE"); err != nil {
+			t.Fatalf("put item %d: %v", i, err)
+		}
+	}
+
+	store.mu.RLock()
+	retained := store.tables["orders"].Stream.Records
+	store.mu.RUnlock()
+	if len(retained) != maxStreamRecords {
+		t.Fatalf("retained records = %d, want %d", len(retained), maxStreamRecords)
+	}
+	if got := streamRecordSeq(retained[0]); got != 2 {
+		t.Fatalf("oldest retained sequence = %d, want 2", got)
+	}
+
+	// A checkpoint behind the evicted records resumes at the oldest retained
+	// one rather than failing.
+	all, _, err := store.StreamBatch(table.LatestStreamArn, "", maxStreamRecords)
+	if err != nil {
+		t.Fatalf("stream batch from trim horizon: %v", err)
+	}
+	if len(all) != maxStreamRecords {
+		t.Fatalf("window from trim horizon = %d, want %d", len(all), maxStreamRecords)
+	}
+	if got := streamRecordSeq(all[0]); got != 2 {
+		t.Fatalf("window from trim horizon starts at %d, want 2", got)
+	}
+
+	// A mid-stream checkpoint returns only what follows it.
+	tail, next, err := store.StreamBatch(table.LatestStreamArn, "10000", maxStreamRecords)
+	if err != nil {
+		t.Fatalf("stream batch from checkpoint: %v", err)
+	}
+	if len(tail) != 1 || streamRecordSeq(tail[0]) != 10001 {
+		t.Fatalf("window from checkpoint = %d records starting at %d, want 1 at 10001",
+			len(tail), streamRecordSeq(tail[0]))
+	}
+	if next != "10001" {
+		t.Fatalf("next sequence = %q, want 10001", next)
+	}
+
+	// A checkpoint at the head returns nothing, and costs no clone.
+	empty, next, err := store.StreamBatch(table.LatestStreamArn, "10001", 10)
+	if err != nil {
+		t.Fatalf("stream batch at head: %v", err)
+	}
+	if len(empty) != 0 || next != "" {
+		t.Fatalf("window at head = %d records next=%q, want 0 and empty", len(empty), next)
+	}
+
+	// GetRecords honours the limit without walking past it.
+	iter, err := store.GetShardIterator(table.LatestStreamArn, streamShardID, "TRIM_HORIZON", "")
+	if err != nil {
+		t.Fatalf("shard iterator: %v", err)
+	}
+	records, _, err := store.GetRecords(iter, 5)
+	if err != nil {
+		t.Fatalf("get records: %v", err)
+	}
+	if len(records) != 5 {
+		t.Fatalf("get records len = %d, want 5", len(records))
+	}
+	if got := records[0]["dynamodb"].(map[string]any)["SequenceNumber"]; got != "2" {
+		t.Fatalf("first record sequence = %v, want 2", got)
+	}
+}
+
+func TestPruneStreamReleasesEvictedRecords(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.PersistenceEnabled = false
+
+	store := NewStore(cfg)
+	if _, err := store.CreateTable(testTableDefinition()); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
+
+	store.mu.Lock()
+	state := store.tables["orders"]
+	state.Stream.Records = append(state.Stream.Records, &types.StreamRecord{
+		EventID: "expired",
+		Dynamodb: types.StreamRecordData{
+			SequenceNumber:              "1",
+			ApproximateCreationDateTime: float64(time.Now().UTC().Add(-48 * time.Hour).Unix()),
+		},
+	})
+	// Bypass the once-a-minute prune throttle so the single call does the work.
+	state.Stream.LastPruned = time.Time{}
+	store.pruneStreamLocked(state, time.Now().UTC())
+	retained := state.Stream.Records
+	backing := retained[:cap(retained)]
+	store.mu.Unlock()
+
+	if len(retained) != 0 {
+		t.Fatalf("retained records = %d, want 0", len(retained))
+	}
+	// Pruning reuses the backing array, so the slot past the new length still
+	// pinned the expired record until it was cleared.
+	for i, record := range backing {
+		if record != nil {
+			t.Fatalf("backing slot %d still holds record %q", i, record.EventID)
+		}
+	}
+}
+
+// BenchmarkStreamBatchIdlePoll measures the cost of a stream event source
+// mapping's once-a-second poll when no records are waiting, with a full
+// stream of retained records behind the checkpoint.
+func BenchmarkStreamBatchIdlePoll(b *testing.B) {
+	cfg := config.Default()
+	cfg.DataDir = b.TempDir()
+	cfg.PersistenceEnabled = false
+
+	store := NewStore(cfg)
+	table, err := store.CreateTable(testTableDefinition())
+	if err != nil {
+		b.Fatalf("create table: %v", err)
+	}
+	for i := 0; i < maxStreamRecords; i++ {
+		item := testItem("acct#1", fmt.Sprintf("order#%d", i), "PENDING", i, "1")
+		if _, err := store.PutItem("orders", item, "", nil, nil, "NONE"); err != nil {
+			b.Fatalf("put item %d: %v", i, err)
+		}
+	}
+	head := strconv.FormatInt(maxStreamRecords, 10)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, _, err := store.StreamBatch(table.LatestStreamArn, head, 10); err != nil {
+			b.Fatalf("stream batch: %v", err)
+		}
+	}
+}
+
 // Scan, Query and the Describe calls used to read a table after dropping the
 // store lock, so a concurrent PutItem crashed the process with "concurrent map
 // iteration and map write".
@@ -561,7 +713,8 @@ func TestStoreReadsAreSafeDuringConcurrentWrites(t *testing.T) {
 	cfg.DataDir = t.TempDir()
 	cfg.PersistenceEnabled = false
 	store := NewStore(cfg)
-	if _, err := store.CreateTable(testTableDefinition()); err != nil {
+	table, err := store.CreateTable(testTableDefinition())
+	if err != nil {
 		t.Fatalf("create table: %v", err)
 	}
 
@@ -585,6 +738,11 @@ func TestStoreReadsAreSafeDuringConcurrentWrites(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			iter, err := store.GetShardIterator(table.LatestStreamArn, streamShardID, "TRIM_HORIZON", "")
+			if err != nil {
+				t.Errorf("shard iterator: %v", err)
+				return
+			}
 			for i := 0; i < 40; i++ {
 				if _, err := store.Query("orders", "", "pk = :pk", "", "", nil, map[string]any{":pk": map[string]any{"S": "acct#1"}}, 10, nil, true); err != nil {
 					t.Errorf("query: %v", err)
@@ -600,6 +758,14 @@ func TestStoreReadsAreSafeDuringConcurrentWrites(t *testing.T) {
 				}
 				if _, err := store.ListTagsOfResource("orders"); err != nil {
 					t.Errorf("list tags: %v", err)
+					return
+				}
+				if _, _, err := store.StreamBatch(table.LatestStreamArn, "", 10); err != nil {
+					t.Errorf("stream batch: %v", err)
+					return
+				}
+				if _, _, err := store.GetRecords(iter, 10); err != nil {
+					t.Errorf("get records: %v", err)
 					return
 				}
 			}

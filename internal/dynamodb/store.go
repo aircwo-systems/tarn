@@ -21,6 +21,12 @@ import (
 const (
 	defaultStreamRetention = 24 * time.Hour
 	streamShardID          = "shardId-000000000000"
+
+	// maxStreamRecords caps how many records one stream retains. Retention
+	// alone lets a write-per-second table hold about 430 MB of
+	// NEW_AND_OLD_IMAGES images for a day, which is more than a laptop
+	// should hand out for a stream nobody is reading.
+	maxStreamRecords = 10000
 )
 
 type Store struct {
@@ -1120,71 +1126,95 @@ func (s *Store) GetRecords(iterator string, limit int) ([]map[string]any, string
 	if err != nil {
 		return nil, "", validationError("Invalid ShardIterator")
 	}
-	state, err := s.findStream(streamArn)
-	if err != nil {
-		return nil, "", err
-	}
-	s.mu.Lock()
-	now := time.Now().UTC()
-	s.pruneStreamLocked(state, now)
-	records := cloneStreamRecords(state.Stream.Records)
-	s.mu.Unlock()
-
 	if limit <= 0 || limit > 1000 {
 		limit = 1000
 	}
-	out := make([]map[string]any, 0, limit)
+
+	// Only the window after the iterator is copied, and the deep copy happens
+	// outside the lock: cloning every retained record under the exclusive lock
+	// made each poll cost the whole stream's size.
+	records, err := s.streamWindow(streamArn, startSeq, limit)
+	if err != nil {
+		return nil, "", err
+	}
+
+	out := make([]map[string]any, 0, len(records))
 	nextSeq := startSeq
 	for _, record := range records {
-		seq, _ := strconv.ParseInt(record.Dynamodb.SequenceNumber, 10, 64)
-		if seq < startSeq {
-			continue
-		}
 		out = append(out, streamRecordShape(record))
-		nextSeq = seq + 1
-		if len(out) >= limit {
-			break
-		}
+		nextSeq = streamRecordSeq(record) + 1
 	}
 	return out, encodeShardIterator(streamArn, nextSeq), nil
 }
 
 func (s *Store) StreamBatch(streamArn, lastSequence string, limit int) ([]*types.StreamRecord, string, error) {
-	state, err := s.findStream(streamArn)
-	if err != nil {
-		return nil, "", err
-	}
 	startSeq := int64(1)
 	if strings.TrimSpace(lastSequence) != "" {
-		startSeq, err = strconv.ParseInt(lastSequence, 10, 64)
+		parsed, err := strconv.ParseInt(lastSequence, 10, 64)
 		if err != nil {
 			return nil, "", validationError("Invalid checkpoint sequence")
 		}
-		startSeq++
+		startSeq = parsed + 1
 	}
-	s.mu.Lock()
-	now := time.Now().UTC()
-	s.pruneStreamLocked(state, now)
-	records := cloneStreamRecords(state.Stream.Records)
-	s.mu.Unlock()
-
 	if limit <= 0 {
 		limit = 100
 	}
-	out := make([]*types.StreamRecord, 0, limit)
-	next := ""
-	for _, record := range records {
-		seq, _ := strconv.ParseInt(record.Dynamodb.SequenceNumber, 10, 64)
-		if seq < startSeq {
-			continue
-		}
-		out = append(out, cloneStreamRecord(record))
-		next = record.Dynamodb.SequenceNumber
-		if len(out) >= limit {
-			break
-		}
+
+	records, err := s.streamWindow(streamArn, startSeq, limit)
+	if err != nil {
+		return nil, "", err
 	}
-	return out, next, nil
+
+	next := ""
+	if len(records) > 0 {
+		next = records[len(records)-1].Dynamodb.SequenceNumber
+	}
+	return records, next, nil
+}
+
+// streamWindow returns up to limit retained records with a sequence number at
+// or after startSeq, deep-copied so the caller can use them after the lock is
+// released. A checkpoint behind the oldest retained record resumes at that
+// record rather than failing, matching how a real shard iterator moves past
+// records that aged out.
+func (s *Store) streamWindow(streamArn string, startSeq int64, limit int) ([]*types.StreamRecord, error) {
+	s.mu.Lock()
+	state, err := s.findStreamLocked(streamArn)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	s.pruneStreamLocked(state, time.Now().UTC())
+	records := state.Stream.Records
+	// Records are appended in ascending sequence order, so the checkpoint
+	// bisects rather than scanning everything retained.
+	start := sort.Search(len(records), func(i int) bool {
+		return streamRecordSeq(records[i]) >= startSeq
+	})
+	if start >= len(records) {
+		s.mu.Unlock()
+		return nil, nil
+	}
+	end := start + limit
+	if end > len(records) {
+		end = len(records)
+	}
+	window := slices.Clone(records[start:end])
+	s.mu.Unlock()
+
+	out := make([]*types.StreamRecord, 0, len(window))
+	for _, record := range window {
+		out = append(out, cloneStreamRecord(record))
+	}
+	return out, nil
+}
+
+func streamRecordSeq(record *types.StreamRecord) int64 {
+	if record == nil {
+		return 0
+	}
+	seq, _ := strconv.ParseInt(record.Dynamodb.SequenceNumber, 10, 64)
+	return seq
 }
 
 // readTable runs fn with the named table under the store's read lock. Writers
@@ -1231,6 +1261,11 @@ func normalizeTableIdentifier(value string) string {
 func (s *Store) findStream(streamArn string) (*tableState, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	return s.findStreamLocked(streamArn)
+}
+
+// findStreamLocked is findStream for callers already holding s.mu.
+func (s *Store) findStreamLocked(streamArn string) (*tableState, error) {
 	for _, state := range s.tables {
 		if state.Stream != nil && state.Stream.ARN == streamArn {
 			return state, nil
@@ -1304,6 +1339,21 @@ func (s *Store) appendStreamRecordLocked(state *tableState, eventName string, ke
 		record.Dynamodb.OldImage = cloneItem(oldImage)
 	}
 	state.Stream.Records = append(state.Stream.Records, record)
+	s.evictOldStreamRecordsLocked(state)
+}
+
+// evictOldStreamRecordsLocked drops the oldest records once a stream passes
+// maxStreamRecords. Caller holds the write lock.
+func (s *Store) evictOldStreamRecordsLocked(state *tableState) {
+	if state == nil || state.Stream == nil {
+		return
+	}
+	overflow := len(state.Stream.Records) - maxStreamRecords
+	if overflow <= 0 {
+		return
+	}
+	clear(state.Stream.Records[:overflow])
+	state.Stream.Records = state.Stream.Records[overflow:]
 }
 
 func applyTableStreamUpdateLocked(cfg *config.Config, state *tableState, spec *types.DynamoDBStreamSpecification, now time.Time) {
@@ -1360,7 +1410,12 @@ func (s *Store) pruneStreamLocked(state *tableState, now time.Time) {
 			keep = append(keep, record)
 		}
 	}
+	// Clearing the tail drops the last references to pruned records. Without
+	// it they stay reachable through the backing array even though the slice
+	// no longer spans them.
+	clear(state.Stream.Records[len(keep):])
 	state.Stream.Records = keep
+	s.evictOldStreamRecordsLocked(state)
 	state.Stream.LastPruned = now
 }
 
@@ -1602,14 +1657,6 @@ func cloneItem(item map[string]any) map[string]any {
 
 func cloneAny(value any) any {
 	return normalizeAny(value)
-}
-
-func cloneStreamRecords(records []*types.StreamRecord) []*types.StreamRecord {
-	out := make([]*types.StreamRecord, 0, len(records))
-	for _, record := range records {
-		out = append(out, cloneStreamRecord(record))
-	}
-	return out
 }
 
 func cloneStreamRecord(record *types.StreamRecord) *types.StreamRecord {
