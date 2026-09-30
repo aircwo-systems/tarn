@@ -22,7 +22,8 @@ See also `docs/aws-parity-and-performance-audit.md`, which lists older items (P0
 | `46a99ce` | Infrastructure probes pause when no dashboard has read results for 2 minutes |
 | `99328b8` | The in-container secrets proxy only runs for functions using the Parameters and Secrets extension, unless `--expose-secrets-proxy` is set |
 | `fb961df` | The ECS reconcile loop idles with no services, backs off while services are steady, and wakes on service changes and task exits |
-| pending | Streams cap retained records, evict the oldest on append, bisect the checkpoint and clone only the returned window |
+| `38ffd64` | Streams cap retained records, evict the oldest on append, bisect the checkpoint and clone only the returned window |
+| `510da69` | Step Functions caps executions per state machine, deletes them with the machine, and filters before copying |
 
 ## Open: medium, one focused change each
 
@@ -48,10 +49,18 @@ cheap, but a per-stream signal would remove it, as SQS long polls already do.
 
 `internal/stepfunctions/store.go` (executions map, `ListExecutions`), `internal/stepfunctions/service.go` `ListExecutions`, `internal/api/admin/handler.go` Overview
 
-- Executions are never pruned, and `DeleteStateMachine` leaves them behind. Each keeps its full history with inputs and outputs, roughly 12 to 30 KB for a typical execution and far more for Map states.
-- `ListExecutions` clones every execution (history included), sorts, then filters by state machine. Overview calls it once per state machine every 5 seconds.
+Fixed. `maxExecutionsPerMachine` (100) bounds retention, `evictExecutionsLocked` drops the
+oldest finished executions first and never drops a running one, `DeleteStateMachine` takes
+its executions with it, and `Init` re-caps snapshots written before the cap existed.
+`ListExecutions` now filters and truncates to a limit before copying anything, and copies
+after the lock is released. Overview asks for the 50 it surfaces instead of cloning every
+execution of every machine and discarding most.
 
-Fix: cap executions per state machine (for example 100, oldest finished first) and delete them with the machine. Add a filtered, history-free listing for the dashboard.
+The history-free listing the original note suggested would have broken the dashboard:
+`state-machine-detail.svelte` renders `execution.events` through `execution-history.svelte`,
+so the events are load-bearing. Filtering before the copy was the fix that mattered.
+`BenchmarkListExecutionsPerMachine` (8 machines, 20 history events each, 50 requested) went
+from 198 536 ns and 1.3 MB allocated to 18 438 ns and 82 KB.
 
 ### 3. Warm containers linger after bursts, and other-port orphans are never swept
 
@@ -60,7 +69,26 @@ Fix: cap executions per state machine (for example 100, oldest finished first) a
 - A burst can start up to 10 containers for one function. `AcquireIdle` always picks the first idle one, so the rest sit idle for the full 10 minutes. JVM functions can hold several GB this way.
 - The startup sweep only matches `tarn.port=<current port>`. After an unclean exit, restarting on another port leaves the old containers running indefinitely.
 
-Fix: use a shorter keepalive (30 to 60s) for containers beyond the first per function, or pause them. On startup, remove labelled Lambda containers whose `tarn.port` has no Tarn listening.
+Fixed. The pool now has two windows: `LambdaOverflowKeepAliveMS` (30s,
+`TARN_LAMBDA_OVERFLOW_KEEPALIVE_MS`) applies to every container after the first
+in a function's pool, and `LambdaKeepAliveMS` to the first. Pools are append-
+ordered by creation and the reaper's filter preserves that order, so index 0 is
+the baseline and the rest are burst containers. The reaper's 30s tick puts actual
+eviction at 30 to 60s after a burst ends, instead of 10 to 10.5 minutes. An
+overflow window that is unset or not shorter than the baseline falls back to it.
+
+`SweepOrphanedLambdaContainers` now lists every container labelled
+`tarn.managed=lambda` and decides ownership per container from its `tarn.port`,
+rather than filtering on the current port. A container is removed only once
+nothing answers on its port; our own port is never probed, since the sweep runs
+before the API server binds. A container with a missing or unreadable port label
+is removed and logged, since no Tarn can be shown to be holding it. This is what
+finds the orphans a restart on a different port used to leave running.
+
+The trade-off is deliberate: a function running at steady concurrency above one
+now cold-starts its extra environments every 30s of quiet, instead of holding
+them for 10 minutes. The image stays cached, so that is a container start, not a
+pull. Set `TARN_LAMBDA_OVERFLOW_KEEPALIVE_MS` to the full keep-alive to opt out.
 
 ### 4. ECS recovery replays whole logs and loses health checks
 

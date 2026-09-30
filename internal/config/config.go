@@ -19,6 +19,12 @@ type Config struct {
 	DockerHost string
 	// LambdaKeepAliveMS is how long warm containers stay alive (milliseconds).
 	LambdaKeepAliveMS int
+	// LambdaOverflowKeepAliveMS is how long a function's second and later warm
+	// containers stay alive (milliseconds). Only the first container of a
+	// function is a baseline worth keeping for a whole session; the rest exist
+	// to absorb a burst of concurrent invocations, and a burst of
+	// LambdaMaxConcurrency JVM containers holds several GB apiece. Must be > 0.
+	LambdaOverflowKeepAliveMS int
 	// LambdaMaxConcurrency is the maximum number of concurrent execution
 	// environments (containers) per function — the local analogue of AWS Lambda
 	// function concurrency. Concurrent invocations beyond this wait for a free
@@ -66,29 +72,30 @@ type Config struct {
 func Default() *Config {
 	home, _ := os.UserHomeDir()
 	return &Config{
-		Host:                     "0.0.0.0",
-		Port:                     4566,
-		DataDir:                  filepath.Join(home, ".tarn", "data"),
-		DockerHost:               "unix:///var/run/docker.sock",
-		LambdaKeepAliveMS:        600000, // 10 minutes
-		LambdaMaxConcurrency:     10,     // concurrent containers per function
-		LambdaDefaultTimeout:     3,
-		LambdaDefaultMemory:      128,
-		Region:                   "us-east-1",
-		AccountID:                "000000000000",
-		UIEnabled:                false,
-		UIDir:                    "./ui/build",
-		PersistenceEnabled:       false,
-		LogsMaxEventsPerGroup:    10000,
-		LogsPersistToDisk:        false,
-		InfraProbeEnabled:        true,
-		InfraProbeTargets:        "postgresql:localhost:5432,redis:localhost:6379,mysql:localhost:3306,mongodb:localhost:27017",
-		ExposeSecretsProxy:       false,
-		SecretsProxyHost:         "127.0.0.1",
-		SecretsProxyPort:         2773,
-		SecretsProxySessionToken: "local-dev-token",
-		SecretsProxyRequireToken: true,
-		VaultKeyPath:             filepath.Join(home, ".tarn", "vault.key"),
+		Host:                      "0.0.0.0",
+		Port:                      4566,
+		DataDir:                   filepath.Join(home, ".tarn", "data"),
+		DockerHost:                "unix:///var/run/docker.sock",
+		LambdaKeepAliveMS:         600000, // 10 minutes
+		LambdaOverflowKeepAliveMS: 30000,  // 30 seconds
+		LambdaMaxConcurrency:      10,     // concurrent containers per function
+		LambdaDefaultTimeout:      3,
+		LambdaDefaultMemory:       128,
+		Region:                    "us-east-1",
+		AccountID:                 "000000000000",
+		UIEnabled:                 false,
+		UIDir:                     "./ui/build",
+		PersistenceEnabled:        false,
+		LogsMaxEventsPerGroup:     10000,
+		LogsPersistToDisk:         false,
+		InfraProbeEnabled:         true,
+		InfraProbeTargets:         "postgresql:localhost:5432,redis:localhost:6379,mysql:localhost:3306,mongodb:localhost:27017",
+		ExposeSecretsProxy:        false,
+		SecretsProxyHost:          "127.0.0.1",
+		SecretsProxyPort:          2773,
+		SecretsProxySessionToken:  "local-dev-token",
+		SecretsProxyRequireToken:  true,
+		VaultKeyPath:              filepath.Join(home, ".tarn", "vault.key"),
 	}
 }
 
@@ -111,6 +118,11 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("TARN_LAMBDA_KEEPALIVE_MS"); v != "" {
 		if ms, err := strconv.Atoi(v); err == nil {
 			c.LambdaKeepAliveMS = ms
+		}
+	}
+	if v := os.Getenv("TARN_LAMBDA_OVERFLOW_KEEPALIVE_MS"); v != "" {
+		if ms, err := strconv.Atoi(v); err == nil && ms > 0 {
+			c.LambdaOverflowKeepAliveMS = ms
 		}
 	}
 	if v := os.Getenv("TARN_LAMBDA_MAX_CONCURRENCY"); v != "" {

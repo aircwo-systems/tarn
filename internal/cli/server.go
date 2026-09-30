@@ -405,7 +405,7 @@ func startServer(cfg *config.Config) error {
 	} else if n, err := eng.SweepOrphanedLambdaContainers(ctx); err != nil {
 		log.Printf("WARNING: could not sweep orphaned Lambda containers: %v", err)
 	} else if n > 0 {
-		log.Printf("[engine] removed %d orphaned Lambda container(s) from a previous run", n)
+		log.Printf("[engine] removed %d orphaned Lambda container(s) from a Tarn that is no longer running", n)
 	}
 	if dockerPingErr == nil {
 		if names, err := eng.SweepLegacyLambdaContainers(ctx); err != nil {
@@ -416,7 +416,7 @@ func startServer(cfg *config.Config) error {
 	}
 
 	// Warm pool is shared so containers can be reused across accounts
-	pool := engine.NewWarmPool(eng, cfg.LambdaKeepAliveMS)
+	pool := engine.NewWarmPool(eng, cfg.LambdaKeepAliveMS, cfg.LambdaOverflowKeepAliveMS)
 	pool.Start()
 
 	// Shared services. Logs are NOT shared — each account gets its own logs

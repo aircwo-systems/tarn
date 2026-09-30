@@ -36,6 +36,22 @@ Deploy and invoke serverless functions in Tarn.
 ### Container-Based Execution
 Functions run in Docker containers using AWS Lambda base images and the Runtime Interface Emulator (RIE).
 
+Each function has a pool of containers rather than a single one, so concurrent invokes get an execution environment each. The first container of a function is a baseline kept warm between invocations; any further containers exist to absorb a burst and are released once the burst passes.
+
+| Environment variable | Default | Effect |
+|---|---|---|
+| `TARN_LAMBDA_KEEPALIVE_MS` | `600000` | Idle time before the function's first container is removed |
+| `TARN_LAMBDA_OVERFLOW_KEEPALIVE_MS` | `30000` | Idle time before the second and later containers are removed |
+| `TARN_LAMBDA_MAX_CONCURRENCY` | `10` | Maximum containers per function; invokes beyond it wait for a free one |
+
+Reaping runs on a 30-second scan, so a burst container is removed 30 to 60 seconds after it goes idle rather than after the full 10-minute keep-alive. The trade-off is deliberate — a burst of up to 10 JVM containers is several GB of memory. Set the overflow window to the full keep-alive to hold every container equally long:
+
+```bash
+export TARN_LAMBDA_OVERFLOW_KEEPALIVE_MS=600000
+```
+
+Containers Tarn started but did not clean up — after a crash, `kill -9`, or a closed terminal — are removed the next time it starts, including any left by a Tarn that had been running on a different port. Containers whose port still has a Tarn listening on it are left alone, so several instances can share one Docker daemon.
+
 ### Supported Runtimes
 - Node.js (18, 20, 22, 24)
 - Python (3.9, 3.10, 3.11, 3.12, 3.13)

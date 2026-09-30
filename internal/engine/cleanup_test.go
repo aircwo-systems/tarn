@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -141,21 +142,42 @@ func TestCreateContainerLabelsLambdaOwnership(t *testing.T) {
 	}
 }
 
-func TestSweepOrphanedLambdaContainersRemovesOnlyThisInstance(t *testing.T) {
+func TestSweepOrphanedLambdaContainersRemovesOnlyUnownedContainers(t *testing.T) {
+	// A Tarn still listening on another port, and a port nothing answers on.
+	live := mustListenLocalhost(t)
+	livePort := live.Addr().(*net.TCPAddr).Port
+	t.Cleanup(func() { _ = live.Close() })
+	dead := mustListenLocalhost(t)
+	deadPort := dead.Addr().(*net.TCPAddr).Port
+	if err := dead.Close(); err != nil {
+		t.Fatal(err)
+	}
+
 	eng, fake := newFakeEngine(t, 4566)
-	fake.listed = []container.Summary{{ID: "orphan-running", State: "running"}, {ID: "orphan-exited", State: "exited"}}
+	fake.listed = []container.Summary{
+		{ID: "orphan-running", State: "running", Labels: lambdaOwnerLabels(4566)},
+		{ID: "orphan-exited", State: "exited", Labels: lambdaOwnerLabels(4566)},
+		{ID: "orphan-other-port", State: "running", Labels: lambdaOwnerLabels(deadPort)},
+		{ID: "live-other-tarn", State: "running", Labels: lambdaOwnerLabels(livePort)},
+		{ID: "no-port-label", State: "running", Labels: map[string]string{labelManaged: labelManagedLambda}},
+	}
 
 	n, err := eng.SweepOrphanedLambdaContainers(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 2 {
-		t.Fatalf("removed %d, want 2", n)
+	if n != 4 {
+		t.Fatalf("removed %d, want 4", n)
 	}
-	if !fake.listQuery.ExactMatch("label", labelManaged+"="+labelManagedLambda) || !fake.listQuery.ExactMatch("label", labelPort+"=4566") {
-		t.Fatalf("list must filter by owner labels, got %v", fake.listQuery)
+	// The port is now decided per container rather than filtered on, so an
+	// orphan from a run on another port is found too.
+	if !fake.listQuery.ExactMatch("label", labelManaged+"="+labelManagedLambda) {
+		t.Fatalf("list must filter on the managed label, got %v", fake.listQuery)
 	}
-	if strings.Join(fake.removed, ",") != "orphan-running,orphan-exited" {
+	if fake.listQuery.ExactMatch("label", labelPort+"=4566") {
+		t.Fatalf("list must not filter on this instance's port, got %v", fake.listQuery)
+	}
+	if strings.Join(fake.removed, ",") != "orphan-running,orphan-exited,orphan-other-port,no-port-label" {
 		t.Fatalf("removed %v", fake.removed)
 	}
 }

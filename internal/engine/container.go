@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -29,8 +30,8 @@ import (
 const rieContainerPort = "8080/tcp"
 
 // Docker labels applied to every Lambda execution container. The port label
-// scopes ownership to one Tarn instance, so a startup sweep never touches
-// containers belonging to another Tarn running against the same Docker daemon.
+// names the Tarn that owns the container, so the startup sweep can tell an
+// orphan from a warm container a second Tarn instance is still using.
 const (
 	labelManaged       = "tarn.managed"
 	labelManagedLambda = "lambda"
@@ -50,8 +51,8 @@ const lambdaImagePrefix = "public.ecr.aws/lambda/"
 // container has already been dropped from tracking.
 const containerRemoveTimeout = 30 * time.Second
 
-// lambdaOwnerLabels selects the Lambda containers owned by a Tarn instance
-// listening on port.
+// lambdaOwnerLabels are the labels that tie a Lambda container to the Tarn
+// instance listening on port.
 func lambdaOwnerLabels(port int) map[string]string {
 	return map[string]string{
 		labelManaged: labelManagedLambda,
@@ -572,17 +573,29 @@ func (e *Engine) RemoveContainer(ctx context.Context, containerID string) error 
 	return e.client.ContainerRemove(removeCtx, containerID, container.RemoveOptions{Force: true})
 }
 
-// SweepOrphanedLambdaContainers force-removes Lambda containers left behind
-// by a previous run of this Tarn instance (crash, kill -9, closed terminal).
-// Call at startup, before any invoke creates a container, so every match is
-// an orphan. Returns the number removed.
+// SweepOrphanedLambdaContainers force-removes Lambda containers left behind by
+// a Tarn that is no longer running (crash, kill -9, closed terminal) — including
+// those from a previous run that came up on a different port. Call at startup,
+// before any invoke creates a container. Returns the number removed.
+//
+// Several Tarn instances can share one Docker daemon, so a container is only an
+// orphan once nothing is listening on the port it was labelled with. Our own
+// port is never probed: this runs before the API server binds, so a container
+// carrying it is a leftover by definition.
 func (e *Engine) SweepOrphanedLambdaContainers(ctx context.Context) (int, error) {
-	orphans, err := e.ListContainersByLabel(ctx, lambdaOwnerLabels(e.cfg.Port))
+	candidates, err := e.ListContainersByLabel(ctx, map[string]string{labelManaged: labelManagedLambda})
 	if err != nil {
 		return 0, err
 	}
 	removed := 0
-	for _, c := range orphans {
+	for _, c := range candidates {
+		state := e.lambdaOwnerState(c.Labels[labelPort])
+		if state == ownerAlive {
+			continue
+		}
+		if state == ownerUnattributable {
+			log.Printf("[engine] removing Lambda container %s: its %s label is %q, so no Tarn can be holding it", shortID(c.ID), labelPort, c.Labels[labelPort])
+		}
 		if err := e.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 			log.Printf("[engine] failed to remove orphaned Lambda container %s: %v", shortID(c.ID), err)
 			continue
@@ -590,6 +603,64 @@ func (e *Engine) SweepOrphanedLambdaContainers(ctx context.Context) (int, error)
 		removed++
 	}
 	return removed, nil
+}
+
+// ownerState is what the startup sweep concluded about the Tarn that owns — or
+// should own — a Lambda container.
+type ownerState int
+
+const (
+	// ownerDead means nothing is listening on the container's port, so it is
+	// an orphan left behind by a Tarn that exited without cleaning up.
+	ownerDead ownerState = iota
+	// ownerAlive means another Tarn is still listening and may have the
+	// container in its warm pool.
+	ownerAlive
+	// ownerUnattributable means the port label is missing or unreadable, so no
+	// Tarn can be shown to be holding the container either.
+	ownerUnattributable
+)
+
+// lambdaOwnerState decides whether the Tarn that created a container is still
+// around, from the port label it carries.
+func (e *Engine) lambdaOwnerState(portLabel string) ownerState {
+	port, err := strconv.Atoi(portLabel)
+	if err != nil || port <= 0 {
+		return ownerUnattributable
+	}
+	if port == e.cfg.Port {
+		return ownerDead
+	}
+	if e.tarnListening(port) {
+		return ownerAlive
+	}
+	return ownerDead
+}
+
+// tarnLivenessTimeout bounds each TCP probe made while sweeping. A Tarn that is
+// up answers immediately; the wait only costs anything when nothing is there.
+const tarnLivenessTimeout = 250 * time.Millisecond
+
+// tarnListening reports whether a Tarn still answers on a port on this host.
+// Loopback is tried first, since a Tarn bound to a wildcard address is
+// reachable there; one bound to a single interface is only reachable on that
+// interface, so the configured host is tried too. Only a definite refusal
+// counts as dead, since a wrong answer here removes a live instance's warm
+// containers.
+func (e *Engine) tarnListening(port int) bool {
+	hosts := []string{"127.0.0.1"}
+	if h := e.cfg.Host; h != "" && h != "0.0.0.0" && h != "::" && h != "localhost" {
+		hosts = append(hosts, h)
+	}
+	for _, host := range hosts {
+		conn, err := net.DialTimeout("tcp", net.JoinHostPort(host, strconv.Itoa(port)), tarnLivenessTimeout)
+		if err != nil {
+			continue
+		}
+		_ = conn.Close()
+		return true
+	}
+	return false
 }
 
 // SweepLegacyLambdaContainers removes stopped Lambda containers created by
