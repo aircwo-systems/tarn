@@ -1369,22 +1369,18 @@ func (h *Handler) recentTraces() []*tracesvc.Trace {
 	return t
 }
 
+// bucketPreviewObjects returns the bucket's newest objects for the dashboard.
+// It reads the store's maintained index, so it costs the same whether the
+// bucket holds ten objects or ten thousand — where listing with a large
+// MaxResults read and parsed every object's metadata to show a dozen.
 func (h *Handler) bucketPreviewObjects(bucket string, limit int) []s3BucketObjectPreview {
 	if h.s3 == nil || limit <= 0 {
 		return nil
 	}
 
-	result, err := h.s3.ListObjects(bucket, "", "", "", 1_000_000)
-	if err != nil || result == nil || len(result.Contents) == 0 {
+	objects, err := h.s3.RecentObjects(bucket, limit)
+	if err != nil || len(objects) == 0 {
 		return nil
-	}
-
-	objects := append([]types.Object(nil), result.Contents...)
-	sort.Slice(objects, func(i, j int) bool {
-		return objects[i].LastModified.After(objects[j].LastModified)
-	})
-	if len(objects) > limit {
-		objects = objects[:limit]
 	}
 
 	previews := make([]s3BucketObjectPreview, 0, len(objects))

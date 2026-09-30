@@ -160,6 +160,11 @@ func (s *Service) TotalSize(bucket string) int64 {
 	return s.store.TotalSize(bucket)
 }
 
+// RecentObjects returns up to limit of a bucket's newest objects, newest first.
+func (s *Service) RecentObjects(bucket string, limit int) ([]types.Object, error) {
+	return s.store.RecentObjects(bucket, limit)
+}
+
 // PutBucketNotificationConfiguration stores notification config for a bucket.
 func (s *Service) PutBucketNotificationConfiguration(bucket string, cfg *types.BucketNotificationConfiguration) error {
 	return s.store.PutBucketNotification(bucket, cfg)

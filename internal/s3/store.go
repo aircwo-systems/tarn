@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +29,82 @@ type Store struct {
 type bucketState struct {
 	mu   sync.RWMutex
 	meta *types.Bucket
+
+	// index is the per-bucket object summary the dashboard reads: how many
+	// objects there are, their total size, and the most recently written ones.
+	// It is maintained on write rather than derived from the filesystem, which
+	// is what made a dashboard poll cost a directory walk, a stat per object
+	// and a metadata read per object for every bucket, every five seconds.
+	index objectIndex
+}
+
+// objectIndex is the maintained view of a bucket's object set. Guarded by
+// bucketState.mu.
+type objectIndex struct {
+	count     int
+	totalSize int64
+	// recent holds the newest objects, newest first, capped at recentLimit so a
+	// bucket that is written to constantly cannot grow it without bound.
+	recent []types.Object
+}
+
+// recentLimit is how many of the newest objects a bucket keeps for the
+// dashboard's preview. The preview asks for 12; the rest is slack so a small
+// change in what the UI asks for does not need an index change.
+const recentLimit = 32
+
+// record adds or replaces an object in the index, given whether the key was
+// already present and its previous size. Caller must hold the bucket write lock.
+func (ix *objectIndex) record(prevSize int64, existed bool, obj types.Object) {
+	if !existed {
+		ix.count++
+	}
+	ix.totalSize += obj.Size - prevSize
+
+	// Keep the newest first, replacing an existing entry for the same key
+	// rather than duplicating it.
+	for i, existing := range ix.recent {
+		if existing.Key == obj.Key {
+			ix.recent = slices.Delete(ix.recent, i, i+1)
+			break
+		}
+	}
+	ix.recent = append(ix.recent, obj)
+	slices.SortFunc(ix.recent, func(a, b types.Object) int {
+		return b.LastModified.Compare(a.LastModified)
+	})
+	if len(ix.recent) > recentLimit {
+		ix.recent = ix.recent[:recentLimit]
+	}
+}
+
+// forget removes an object from the index, given its size if it was present.
+// Caller must hold the bucket write lock.
+func (ix *objectIndex) forget(key string, size int64, existed bool) {
+	if !existed {
+		return
+	}
+	ix.count--
+	ix.totalSize -= size
+	for i, existing := range ix.recent {
+		if existing.Key == key {
+			ix.recent = slices.Delete(ix.recent, i, i+1)
+			return
+		}
+	}
+}
+
+// RecentObjects returns up to limit of the bucket's newest objects, newest
+// first. It reads the maintained index and touches no files.
+func (bs *bucketState) recentObjects(limit int) []types.Object {
+	bs.mu.RLock()
+	defer bs.mu.RUnlock()
+	if limit <= 0 || limit > len(bs.index.recent) {
+		limit = len(bs.index.recent)
+	}
+	out := make([]types.Object, limit)
+	copy(out, bs.index.recent[:limit])
+	return out
 }
 
 type objectMeta struct {
@@ -78,6 +155,7 @@ func (s *Store) Init() error {
 			continue
 		}
 		s.buckets[name] = &bucketState{meta: &bucket}
+		s.rebuildIndexLocked(name)
 
 		// Load notification config if present
 		notifPath := filepath.Join(s.baseDir, name, ".notifications.json")
@@ -101,6 +179,56 @@ func (s *Store) Init() error {
 	}
 
 	return nil
+}
+
+// rebuildIndexLocked fills a bucket's index from what is on disk. It runs once
+// per bucket at Init — the same walk the dashboard used to force on every poll,
+// paid once instead of every five seconds — and after that writes maintain the
+// index. Caller must hold s.mu.
+func (s *Store) rebuildIndexLocked(bucket string) {
+	bs := s.buckets[bucket]
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+
+	var index objectIndex
+	metaDir := s.objmetaDir(bucket)
+	entries, err := os.ReadDir(metaDir)
+	if err == nil {
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				continue
+			}
+			data, err := os.ReadFile(filepath.Join(metaDir, entry.Name()))
+			if err != nil {
+				continue
+			}
+			var meta objectMeta
+			if json.Unmarshal(data, &meta) != nil {
+				continue
+			}
+			index.count++
+			index.totalSize += meta.Size
+			index.recent = append(index.recent, types.Object{
+				Key:          meta.Key,
+				Size:         meta.Size,
+				ETag:         meta.ETag,
+				ContentType:  meta.ContentType,
+				LastModified: meta.LastModified,
+				Metadata:     meta.Metadata,
+			})
+		}
+	}
+	// An object whose body survived but whose metadata did not — a crash between
+	// the two writes — is invisible to ListObjects, so leaving it out of the
+	// index keeps the count and the preview telling the same story. Its bytes
+	// are still on disk, so DeleteBucket still refuses to remove the bucket.
+	slices.SortFunc(index.recent, func(a, b types.Object) int {
+		return b.LastModified.Compare(a.LastModified)
+	})
+	if len(index.recent) > recentLimit {
+		index.recent = index.recent[:recentLimit]
+	}
+	bs.index = index
 }
 
 func (s *Store) bucketDir(name string) string {
@@ -288,6 +416,13 @@ func (s *Store) PutObject(bucket, key, contentType string, body io.Reader, metad
 	objPath := filepath.Join(s.objectsDir(bucket), encoded)
 	metaPath := filepath.Join(s.objmetaDir(bucket), encoded+".json")
 
+	// Stat before os.Create truncates, so an overwrite can adjust the index by
+	// the difference rather than counting the same key twice.
+	prevSize, existed := int64(0), false
+	if info, statErr := os.Stat(objPath); statErr == nil {
+		prevSize, existed = info.Size(), true
+	}
+
 	f, err := os.Create(objPath)
 	if err != nil {
 		return nil, fmt.Errorf("create object file: %w", err)
@@ -330,6 +465,7 @@ func (s *Store) PutObject(bucket, key, contentType string, body io.Reader, metad
 		return nil, fmt.Errorf("write object meta: %w", err)
 	}
 
+	bs.index.record(prevSize, existed, *obj)
 	return obj, nil
 }
 
@@ -423,10 +559,33 @@ func (s *Store) DeleteObject(bucket, key string) error {
 	bs.mu.Lock()
 	defer bs.mu.Unlock()
 
+	// Read the size before removing, so the index can subtract exactly what the
+	// key contributed. A missing key leaves the index alone: S3 delete is
+	// idempotent and must not double-count.
+	size, existed := s.objectSizeLocked(bucket, key)
 	encoded := encodeKey(key)
 	_ = os.Remove(filepath.Join(s.objectsDir(bucket), encoded))
 	_ = os.Remove(filepath.Join(s.objmetaDir(bucket), encoded+".json"))
+	bs.index.forget(key, size, existed)
 	return nil
+}
+
+// objectSizeLocked returns the stored size of a key and whether it exists,
+// taking the object's own metadata first and falling back to a stat so an
+// object whose metadata is missing is still accounted for. Caller must hold the
+// bucket write lock.
+func (s *Store) objectSizeLocked(bucket, key string) (int64, bool) {
+	encoded := encodeKey(key)
+	if data, err := os.ReadFile(filepath.Join(s.objmetaDir(bucket), encoded+".json")); err == nil {
+		var meta objectMeta
+		if json.Unmarshal(data, &meta) == nil {
+			return meta.Size, true
+		}
+	}
+	if info, err := os.Stat(filepath.Join(s.objectsDir(bucket), encoded)); err == nil {
+		return info.Size(), true
+	}
+	return 0, false
 }
 
 // DeleteObjects removes multiple objects. Returns errors for any that failed.
@@ -447,9 +606,11 @@ func (s *Store) DeleteObjects(bucket string, keys []string) []types.DeleteError 
 
 	var errs []types.DeleteError
 	for _, key := range keys {
+		size, existed := s.objectSizeLocked(bucket, key)
 		encoded := encodeKey(key)
 		_ = os.Remove(filepath.Join(s.objectsDir(bucket), encoded))
 		_ = os.Remove(filepath.Join(s.objmetaDir(bucket), encoded+".json"))
+		bs.index.forget(key, size, existed)
 	}
 	return errs
 }
@@ -597,7 +758,9 @@ func (s *Store) ListObjects(bucket, prefix, delimiter, continuationToken string,
 	return result, nil
 }
 
-// ObjectCount returns the number of objects in a bucket.
+// ObjectCount returns the number of objects in a bucket. It reads the
+// maintained index, so it costs nothing and stays consistent with what
+// RecentObjects and ListObjects report. Caller must hold at least s.mu.
 func (s *Store) ObjectCount(bucket string) int {
 	s.mu.RLock()
 	bs, exists := s.buckets[bucket]
@@ -608,15 +771,11 @@ func (s *Store) ObjectCount(bucket string) int {
 
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
-
-	entries, err := os.ReadDir(s.objectsDir(bucket))
-	if err != nil {
-		return 0
-	}
-	return len(entries)
+	return bs.index.count
 }
 
-// TotalSize returns the total size of all objects in a bucket.
+// TotalSize returns the total size of all objects in a bucket, from the
+// maintained index.
 func (s *Store) TotalSize(bucket string) int64 {
 	s.mu.RLock()
 	bs, exists := s.buckets[bucket]
@@ -627,20 +786,20 @@ func (s *Store) TotalSize(bucket string) int64 {
 
 	bs.mu.RLock()
 	defer bs.mu.RUnlock()
+	return bs.index.totalSize
+}
 
-	var total int64
-	entries, err := os.ReadDir(s.objectsDir(bucket))
-	if err != nil {
-		return 0
+// RecentObjects returns up to limit of a bucket's newest objects, newest first.
+// It reads the maintained index, so unlike ListObjects with a large MaxResults
+// it neither walks the bucket nor reads every object's metadata.
+func (s *Store) RecentObjects(bucket string, limit int) ([]types.Object, error) {
+	s.mu.RLock()
+	bs, exists := s.buckets[bucket]
+	s.mu.RUnlock()
+	if !exists {
+		return nil, fmt.Errorf("NoSuchBucket")
 	}
-	for _, entry := range entries {
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-		total += info.Size()
-	}
-	return total
+	return bs.recentObjects(limit), nil
 }
 
 // PutBucketNotification stores notification config for a bucket.
