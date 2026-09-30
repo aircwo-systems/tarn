@@ -103,10 +103,36 @@ type logGroup struct {
 	name      string
 	createdAt time.Time
 	streams   map[string]*LogStream
+	// events grows on demand up to maxEvents, then works as a ring. While it
+	// is still growing, len(events) == count and head == count, so the ring
+	// arithmetic below reads it in order unchanged.
 	events    []LogEvent
 	head      int // next write position
 	count     int // number of stored events
 	maxEvents int
+}
+
+// initialLogCapacity is the first allocation for a group's events. Most
+// groups hold far fewer than maxEvents, so reserving the maximum up front
+// (880 KB per group at the default 10 000) mostly wastes memory.
+const initialLogCapacity = 64
+
+// put appends evt, growing the buffer until it reaches maxEvents and
+// overwriting the oldest event after that.
+func (g *logGroup) put(evt LogEvent) {
+	if len(g.events) < g.maxEvents {
+		if len(g.events) == cap(g.events) {
+			grown := make([]LogEvent, len(g.events), min(max(2*cap(g.events), initialLogCapacity), g.maxEvents))
+			copy(grown, g.events)
+			g.events = grown
+		}
+		g.events = append(g.events, evt)
+		g.count = len(g.events)
+		g.head = g.count % g.maxEvents
+		return
+	}
+	g.events[g.head] = evt
+	g.head = (g.head + 1) % g.maxEvents
 }
 
 // Store holds all log groups in memory.
@@ -139,7 +165,7 @@ func (s *Store) CreateGroup(name string) {
 		name:      name,
 		createdAt: time.Now().UTC(),
 		streams:   make(map[string]*LogStream),
-		events:    make([]LogEvent, s.maxEvents),
+		events:    nil,
 		maxEvents: s.maxEvents,
 	}
 }
@@ -163,7 +189,7 @@ func (s *Store) ClearGroup(name string) error {
 		return fmt.Errorf("log group not found: %s", name)
 	}
 
-	g.events = make([]LogEvent, g.maxEvents)
+	g.events = nil
 	g.head = 0
 	g.count = 0
 	g.streams = make(map[string]*LogStream)
@@ -194,11 +220,7 @@ func (s *Store) PutLogEvents(groupName, streamName string, events []LogEvent) {
 
 	for _, evt := range events {
 		evt.StreamName = streamName
-		g.events[g.head] = evt
-		g.head = (g.head + 1) % g.maxEvents
-		if g.count < g.maxEvents {
-			g.count++
-		}
+		g.put(evt)
 		if evt.Timestamp.After(stream.LastEvent) {
 			stream.LastEvent = evt.Timestamp
 		}
@@ -432,27 +454,33 @@ func (s *Store) PruneOlderThan(cutoff time.Time) int {
 			continue
 		}
 
-		// Rebuild the ring buffer keeping only events newer than cutoff
-		kept := make([]LogEvent, g.maxEvents)
-		keptCount := 0
 		start := (g.head - g.count + g.maxEvents) % g.maxEvents
-
+		expired := 0
 		for i := 0; i < g.count; i++ {
-			idx := (start + i) % g.maxEvents
-			evt := g.events[idx]
+			if g.events[(start+i)%g.maxEvents].Timestamp.Before(cutoff) {
+				expired++
+			}
+		}
+		// Most prunes find nothing to remove; leave the buffer alone then
+		// rather than rebuilding it every minute.
+		if expired == 0 {
+			continue
+		}
+
+		// Keep the survivors in order in a buffer sized to them, so a group
+		// that emptied out gives its memory back.
+		keptCount := g.count - expired
+		kept := make([]LogEvent, 0, min(max(keptCount, initialLogCapacity), g.maxEvents))
+		for i := 0; i < g.count; i++ {
+			evt := g.events[(start+i)%g.maxEvents]
 			if !evt.Timestamp.Before(cutoff) {
-				kept[keptCount%g.maxEvents] = evt
-				keptCount++
+				kept = append(kept, evt)
 			}
 		}
 
-		pruned := g.count - keptCount
-		totalPruned += pruned
+		totalPruned += expired
 		g.events = kept
-		g.count = keptCount
-		if keptCount > g.maxEvents {
-			g.count = g.maxEvents
-		}
+		g.count = len(kept)
 		g.head = g.count % g.maxEvents
 	}
 	return totalPruned
