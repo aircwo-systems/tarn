@@ -811,14 +811,20 @@ func scanDemuxedLines(muxed io.Reader, onLine func(line string, stderr bool)) er
 
 // FollowContainerLogs streams a running container's logs with follow
 // enabled, delivering decoded lines to onLine until the container stops or
-// ctx is cancelled. It does not format, classify or parse lines — T7
-// decides where they go (CreateLogGroup/PutLogEvents per the design doc).
-func (e *Engine) FollowContainerLogs(ctx context.Context, containerID string, onLine func(line string, stderr bool)) error {
-	reader, err := e.client.ContainerLogs(ctx, containerID, container.LogsOptions{
+// ctx is cancelled. Lines written before since are skipped (all of them when
+// since is zero), which is what keeps a restart from re-ingesting a container's
+// entire log. It does not format, classify or parse lines — T7 decides where
+// they go (CreateLogGroup/PutLogEvents per the design doc).
+func (e *Engine) FollowContainerLogs(ctx context.Context, containerID string, since time.Time, onLine func(line string, stderr bool)) error {
+	opts := container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     true,
-	})
+	}
+	if !since.IsZero() {
+		opts.Since = since.Format(time.RFC3339Nano)
+	}
+	reader, err := e.client.ContainerLogs(ctx, containerID, opts)
 	if err != nil {
 		return err
 	}

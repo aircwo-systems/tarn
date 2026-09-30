@@ -94,7 +94,7 @@ type taskEngine interface {
 	EnsureImageRef(ctx context.Context, ref string) error
 	CreateAndStartTaskContainer(ctx context.Context, spec engine.TaskContainerSpec) (*engine.TaskContainerHandle, error)
 	WaitTaskContainer(ctx context.Context, containerID string) (int64, error)
-	FollowContainerLogs(ctx context.Context, containerID string, onLine func(line string, stderr bool)) error
+	FollowContainerLogs(ctx context.Context, containerID string, since time.Time, onLine func(line string, stderr bool)) error
 	ListContainersByLabel(ctx context.Context, selector map[string]string) ([]engine.TaskContainerSummary, error)
 	RemoveTaskContainer(ctx context.Context, containerID string) error
 	StopContainer(ctx context.Context, containerID string, timeoutSec int) error
@@ -220,6 +220,10 @@ type Runner struct {
 	// and let RemoveTaskContainer's force removal race the graceful stop.
 	lifecycleCtx    context.Context
 	lifecycleCancel context.CancelFunc
+	// startedAt is when this runner came up. A container recovered from a
+	// previous run started before it, so its log pump resumes from here rather
+	// than re-ingesting everything the container wrote while Tarn was down.
+	startedAt time.Time
 	// wg tracks every log-pump and wait goroutine currently in flight, so
 	// Stop() can block until all of them have finished cleaning up.
 	wg sync.WaitGroup
@@ -262,6 +266,7 @@ func NewRunner(cfg *config.Config, svc *Service, eng taskEngine, sink logSink) *
 		cancel:          cancel,
 		lifecycleCtx:    lifecycleCtx,
 		lifecycleCancel: lifecycleCancel,
+		startedAt:       time.Now(),
 		reconcileDone:   make(chan struct{}),
 		reconcileKick:   make(chan struct{}, 1),
 		tasks:           make(map[string]*runningTask),
@@ -988,7 +993,7 @@ func (r *Runner) startContainer(ctx context.Context, cluster *types.Cluster, tas
 
 	logGroup := resolveLogGroup(td, cd)
 	streamName := taskIDFromRef(task.TaskArn) + "/" + cd.Name
-	exited := r.spawnLifecycle(task.TaskArn, cd.Name, handle.ID, logGroup, streamName, rt)
+	exited := r.spawnLifecycle(task.TaskArn, cd.Name, handle.ID, logGroup, streamName, time.Time{}, rt)
 	if cd.HealthCheck != nil && !stopping {
 		r.spawnHealthPoller(task.TaskArn, cd.Name, handle.ID, rt, exited)
 	}
@@ -1567,7 +1572,17 @@ func (r *Runner) recoverTask(ctx context.Context, task *types.Task, summaries ma
 		}
 		logGroup := recoveredLogGroup(td, container.Name, task.TaskDefinitionArn)
 		streamName := taskIDFromRef(task.TaskArn) + "/" + container.Name
-		r.spawnLifecycle(task.TaskArn, container.Name, summary.ID, logGroup, streamName, rt)
+		// The container outlived the previous Tarn, so its log already holds
+		// everything it wrote before this runner existed. Reading from the
+		// runner's start time skips that; without it every restart re-ingests
+		// the container's full history as duplicate events.
+		exited := r.spawnLifecycle(task.TaskArn, container.Name, summary.ID, logGroup, streamName, r.startedAt, rt)
+		// A recovered container can be the one that fails its health check,
+		// and nothing else in recovery would ever notice. A container already
+		// being stopped has its outcome recorded by the stop below instead.
+		if recoveredHealthCheck(td, container.Name) != nil && task.DesiredStatus != types.TaskDesiredStatusStopped {
+			r.spawnHealthPoller(task.TaskArn, container.Name, summary.ID, rt, exited)
+		}
 	}
 
 	stopCtx, cancel := context.WithTimeout(ctx, stopContainerTimeout)
@@ -1611,6 +1626,22 @@ func recoveredLogGroup(td *types.TaskDefinition, containerName, taskDefinitionAR
 	return "/ecs/recovered"
 }
 
+// recoveredHealthCheck returns the health check a recovered container was
+// launched with, or nil when it had none. The task definition is the record of
+// what was asked for; the container definition may be unresolvable at recovery
+// time, in which case there is nothing to poll.
+func recoveredHealthCheck(td *types.TaskDefinition, containerName string) *types.ContainerHealthCheck {
+	if td == nil {
+		return nil
+	}
+	for _, container := range td.ContainerDefinitions {
+		if container.Name == containerName {
+			return container.HealthCheck
+		}
+	}
+	return nil
+}
+
 func (r *Runner) cleanupOrphanContainer(ctx context.Context, summary engine.TaskContainerSummary) {
 	if summary.ID == "" {
 		return
@@ -1636,7 +1667,11 @@ func (r *Runner) cleanupOrphanContainer(ctx context.Context, summary engine.Task
 // waiting (bounded by stopContainerTimeout) for every r.wg goroutine,
 // including that poller, to finish. Without this signal a health poller
 // with nothing else to wake it keeps ticking for the full timeout.
-func (r *Runner) spawnLifecycle(taskArn, containerName, containerID, logGroup, streamName string, rt *runningTask) <-chan struct{} {
+// spawnLifecycle attaches the log pump and exit watcher to one container.
+// since bounds what the pump re-reads: zero for a container this runner just
+// created, and the runner's start time for one recovered from a previous run,
+// so a restart does not re-ingest the whole log a long-lived container wrote.
+func (r *Runner) spawnLifecycle(taskArn, containerName, containerID, logGroup, streamName string, since time.Time, rt *runningTask) <-chan struct{} {
 	pumpCtx, pumpCancel := context.WithCancel(r.lifecycleCtx)
 	pumpDone := make(chan struct{})
 	exited := make(chan struct{})
@@ -1645,7 +1680,7 @@ func (r *Runner) spawnLifecycle(taskArn, containerName, containerID, logGroup, s
 	go func() {
 		defer r.wg.Done()
 		defer close(pumpDone)
-		r.pumpLogs(pumpCtx, logGroup, streamName, containerID)
+		r.pumpLogs(pumpCtx, logGroup, streamName, containerID, since)
 	}()
 
 	r.wg.Add(1)
@@ -1826,9 +1861,9 @@ func taskRanStabilityWindow(task *types.Task) bool {
 // logsSvc.IngestContainerLogs — that method hardcodes the "/aws/lambda/"
 // group prefix and classifies RIE-emulator lines ECS containers never
 // produce (see docs/design/ecs-support.md).
-func (r *Runner) pumpLogs(ctx context.Context, logGroup, streamName, containerID string) {
+func (r *Runner) pumpLogs(ctx context.Context, logGroup, streamName, containerID string, since time.Time) {
 	r.logs.CreateLogGroup(logGroup)
-	err := r.eng.FollowContainerLogs(ctx, containerID, func(line string, stderr bool) {
+	err := r.eng.FollowContainerLogs(ctx, containerID, since, func(line string, stderr bool) {
 		level := logs.DetectLevel(line)
 		if stderr && level == logs.LevelINFO {
 			// Plain containers carry no level metadata: anything they write

@@ -60,6 +60,10 @@ type fakeEngine struct {
 	// callback (with their stream flags) before it blocks on ctx, letting
 	// pumpLogs tests feed deterministic stdout/stderr output with no Docker.
 	scriptLines []scriptLogLine
+	// logSince records the non-zero since each FollowContainerLogs call was
+	// given, so tests can assert that a recovered container's log pump resumes
+	// instead of re-reading the whole log.
+	logSince []time.Time
 	// health maps a container ID to the Docker inspect Health.Status string
 	// InspectContainerHealth returns for it ("", "starting", "healthy",
 	// "unhealthy"). Missing entries return "" (no HEALTHCHECK defined).
@@ -196,9 +200,12 @@ func (f *fakeEngine) WaitTaskContainer(ctx context.Context, containerID string) 
 	}
 }
 
-func (f *fakeEngine) FollowContainerLogs(ctx context.Context, containerID string, onLine func(line string, stderr bool)) error {
+func (f *fakeEngine) FollowContainerLogs(ctx context.Context, containerID string, since time.Time, onLine func(line string, stderr bool)) error {
 	f.record("logs-start:" + containerID)
 	f.mu.Lock()
+	if !since.IsZero() {
+		f.logSince = append(f.logSince, since)
+	}
 	lines := append([]scriptLogLine(nil), f.scriptLines...)
 	f.mu.Unlock()
 	for _, l := range lines {
@@ -1973,6 +1980,171 @@ func TestRunnerRecoversPersistedRuntimeIDAndLifecycle(t *testing.T) {
 	r.Stop()
 }
 
+// TestRunnerRecoversContainerLogPumpSinceStartTime covers the recovery log
+// pump: a recovered container predates this runner, so its log already holds
+// everything it wrote before Tarn came back. Reading from the runner's start
+// time skips that; without a Since every restart re-ingests the container's
+// full history as duplicate events.
+func TestRunnerRecoversContainerLogPumpSinceStartTime(t *testing.T) {
+	origGrace := logDrainGracePeriod
+	logDrainGracePeriod = 20 * time.Millisecond
+	defer func() { logDrainGracePeriod = origGrace }()
+
+	r, svc, eng, _ := newTestRunner(t)
+	td := registerSingleContainerTaskDef(t, svc, "fam-recover-since")
+	cluster, err := svc.ResolveCluster("")
+	if err != nil {
+		t.Fatalf("ResolveCluster: %v", err)
+	}
+	task, err := svc.NewTaskRecord(cluster, td, nil, types.LaunchTypeFargate, "")
+	if err != nil {
+		t.Fatalf("NewTaskRecord: %v", err)
+	}
+	if _, err := svc.SetContainerID(task.TaskArn, "app", "old-container"); err != nil {
+		t.Fatalf("SetContainerID: %v", err)
+	}
+	if _, err := svc.SetTaskStatus(task.TaskArn, types.TaskStatusRunning); err != nil {
+		t.Fatalf("SetTaskStatus: %v", err)
+	}
+
+	eng.addExistingContainer("old-container")
+	eng.listResult = []engine.TaskContainerSummary{{
+		ID:     "old-container",
+		State:  "running",
+		Labels: map[string]string{labelAccount: testConfig().AccountID, labelTaskArn: task.TaskArn},
+	}}
+
+	r.Start()
+	waitForCall(t, eng, "logs-start:old-container")
+
+	eng.mu.Lock()
+	sinces := append([]time.Time(nil), eng.logSince...)
+	eng.mu.Unlock()
+	if len(sinces) != 1 {
+		t.Fatalf("log pump read %d times with a since, want 1", len(sinces))
+	}
+	if since := sinces[0]; since.Before(r.startedAt) || since.After(time.Now()) {
+		t.Fatalf("recovered pump read from %s, want between the runner start %s and now",
+			since.Format(time.RFC3339), r.startedAt.Format(time.RFC3339))
+	}
+
+	r.Stop()
+}
+
+// TestRunnerStartsHealthPollerForRecoveredContainers covers the other half of
+// recovery: a recovered container can be the one that fails its health check,
+// and nothing else on that path would notice.
+func TestRunnerStartsHealthPollerForRecoveredContainers(t *testing.T) {
+	origInterval := healthPollInterval
+	healthPollInterval = 5 * time.Millisecond
+	defer func() { healthPollInterval = origInterval }()
+	origGrace := logDrainGracePeriod
+	logDrainGracePeriod = 20 * time.Millisecond
+	defer func() { logDrainGracePeriod = origGrace }()
+
+	r, svc, eng, _ := newTestRunner(t)
+	tdOut, err := svc.RegisterTaskDefinition(&types.RegisterTaskDefinitionInput{
+		Family: "fam-recover-health",
+		ContainerDefinitions: []types.ContainerDefinition{{
+			Name:        "app",
+			Image:       "example/app:latest",
+			HealthCheck: &types.ContainerHealthCheck{Command: []string{"CMD-SHELL", "true"}},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("RegisterTaskDefinition: %v", err)
+	}
+	td := tdOut.TaskDefinition
+	cluster, err := svc.ResolveCluster("")
+	if err != nil {
+		t.Fatalf("ResolveCluster: %v", err)
+	}
+	task, err := svc.NewTaskRecord(cluster, td, nil, types.LaunchTypeFargate, "")
+	if err != nil {
+		t.Fatalf("NewTaskRecord: %v", err)
+	}
+	if _, err := svc.SetContainerID(task.TaskArn, "app", "sick-container"); err != nil {
+		t.Fatalf("SetContainerID: %v", err)
+	}
+	if _, err := svc.SetTaskStatus(task.TaskArn, types.TaskStatusRunning); err != nil {
+		t.Fatalf("SetTaskStatus: %v", err)
+	}
+
+	eng.addExistingContainer("sick-container")
+	eng.listResult = []engine.TaskContainerSummary{{
+		ID:     "sick-container",
+		State:  "running",
+		Labels: map[string]string{labelAccount: testConfig().AccountID, labelTaskArn: task.TaskArn},
+	}}
+	eng.setHealth("sick-container", "unhealthy")
+
+	r.Start()
+	// Only the recovery path can produce this outcome, so it proves the poller
+	// is running for a container the runner did not launch itself.
+	waitForTaskDesiredStopped(t, svc, task.TaskArn)
+	got, err := svc.GetTask(task.TaskArn)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.StoppedReason != "Task failed container health checks" {
+		t.Fatalf("StoppedReason = %q, want %q", got.StoppedReason, "Task failed container health checks")
+	}
+
+	r.Stop()
+}
+
+// TestRunnerLeavesRecoveredHealthChecklessContainersUnpolled guards the other
+// side: recovery must not start a poller for a container that never had a
+// health check, or every recovered container would cost a Docker inspect a tick.
+func TestRunnerLeavesRecoveredHealthChecklessContainersUnpolled(t *testing.T) {
+	origInterval := healthPollInterval
+	healthPollInterval = 5 * time.Millisecond
+	defer func() { healthPollInterval = origInterval }()
+	origGrace := logDrainGracePeriod
+	logDrainGracePeriod = 20 * time.Millisecond
+	defer func() { logDrainGracePeriod = origGrace }()
+
+	r, svc, eng, _ := newTestRunner(t)
+	td := registerSingleContainerTaskDef(t, svc, "fam-recover-nohealth")
+	cluster, err := svc.ResolveCluster("")
+	if err != nil {
+		t.Fatalf("ResolveCluster: %v", err)
+	}
+	task, err := svc.NewTaskRecord(cluster, td, nil, types.LaunchTypeFargate, "")
+	if err != nil {
+		t.Fatalf("NewTaskRecord: %v", err)
+	}
+	if _, err := svc.SetContainerID(task.TaskArn, "app", "plain-container"); err != nil {
+		t.Fatalf("SetContainerID: %v", err)
+	}
+	if _, err := svc.SetTaskStatus(task.TaskArn, types.TaskStatusRunning); err != nil {
+		t.Fatalf("SetTaskStatus: %v", err)
+	}
+
+	eng.addExistingContainer("plain-container")
+	eng.listResult = []engine.TaskContainerSummary{{
+		ID:     "plain-container",
+		State:  "running",
+		Labels: map[string]string{labelAccount: testConfig().AccountID, labelTaskArn: task.TaskArn},
+	}}
+
+	r.Start()
+	waitForCall(t, eng, "logs-start:plain-container")
+	// Several poll intervals' worth, so a poller that had started would have
+	// called InspectContainerHealth by now.
+	time.Sleep(50 * time.Millisecond)
+
+	recovered, err := svc.GetTask(task.TaskArn)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if recovered.DesiredStatus == types.TaskDesiredStatusStopped {
+		t.Fatalf("task stopped without a health check: %q", recovered.StoppedReason)
+	}
+
+	r.Stop()
+}
+
 func TestRunnerRecoveryMarksMissingContainerStoppedWithoutDeletingTask(t *testing.T) {
 	r, svc, eng, _ := newTestRunner(t)
 	td := registerSingleContainerTaskDef(t, svc, "fam-missing")
@@ -2375,7 +2547,7 @@ func TestPumpLogsMarksStderrLinesAsError(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		r.pumpLogs(ctx, "/ecs/test", "stream-1", "container-1")
+		r.pumpLogs(ctx, "/ecs/test", "stream-1", "container-1", time.Time{})
 	}()
 	deadline := time.Now().Add(5 * time.Second)
 	for {

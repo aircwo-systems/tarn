@@ -3,7 +3,7 @@
 Status: open items from the September 2026 resource audit
 Scope: idle CPU and wakeups, containers left running, and memory growth on a developer laptop
 
-The audit covered three areas: containers and processes, background loops and pollers, and in-memory data. Every item below was traced through the code. Items marked **verified** were also checked by hand against the source. Line numbers are as of commit `fb961df`.
+The audit covered three areas: containers and processes, background loops and pollers, and in-memory data. Every item below was traced through the code. Items marked **verified** were also checked by hand against the source. Line numbers are as of commit `fb961df`, so treat them as a pointer to where to look rather than an exact location.
 
 See also `docs/aws-parity-and-performance-audit.md`, which lists older items (P0/P1) that are still referenced here.
 
@@ -24,6 +24,7 @@ See also `docs/aws-parity-and-performance-audit.md`, which lists older items (P0
 | `fb961df` | The ECS reconcile loop idles with no services, backs off while services are steady, and wakes on service changes and task exits |
 | `38ffd64` | Streams cap retained records, evict the oldest on append, bisect the checkpoint and clone only the returned window |
 | `510da69` | Step Functions caps executions per state machine, deletes them with the machine, and filters before copying |
+| `bd216fa` | Lambda burst containers get a short keep-alive; the startup sweep reclaims orphans from any port |
 
 ## Open: medium, one focused change each
 
@@ -42,8 +43,15 @@ iterator moves past records that aged out.
 poll finds nothing) went from 119 761 009 ns and 99 MB allocated per poll to 149 ns and
 zero allocations — about 99 MB of garbage a second per idle mapping, gone.
 
-Still open: the poller wakes once a second rather than on write. Each wake is now
-cheap, but a per-stream signal would remove it, as SQS long polls already do.
+Still open: nothing. `Store` now keeps one wake channel per stream that a reader
+is parked on, closed and dropped by `appendStreamRecordLocked` and by the paths
+that retire a stream (table delete, stream disable). `StreamBatchUntil` is the
+wait-capable read the event source poller uses, bounded at
+`streamLongPollSeconds` (20s) with the poller's own stop channel as the cancel,
+so a mapping sleeps until a write instead of re-reading the stream every second.
+The signal collapses a burst of writes into one wake, and every reader on that
+stream is released. A one-shot `StreamBatch` creates no channel, so nothing
+accumulates for reads that are not going to wait.
 
 ### 2. Step Functions executions are kept forever and cloned on every dashboard poll
 
@@ -92,12 +100,25 @@ pull. Set `TARN_LAMBDA_OVERFLOW_KEEPALIVE_MS` to the full keep-alive to opt out.
 
 ### 4. ECS recovery replays whole logs and loses health checks
 
-`internal/ecs/runner.go` `recoverTask` (around line 1553), `internal/engine/task.go` log pump
+`internal/ecs/runner.go` `recoverTask`, `internal/engine/task.go` `FollowContainerLogs`
 
 - Recovered tasks follow logs with no `Since` or `Tail`, so every restart re-ingests each container's full log, duplicating events.
 - `spawnHealthPoller` is not called on the recovery path, so recovered containers with health checks are never polled.
 
-Fix: pass `Since` (Tarn start time, or the last ingested time) for recovered containers, and start the health poller in recovery.
+Fixed. `FollowContainerLogs` takes a `since`, and recovery passes the runner's
+start time: a recovered container predates this Tarn, so everything it logged
+before the runner existed was already ingested and does not need reading twice.
+A container the runner launched itself still passes a zero `since`, which makes
+the Docker request identical to the old one.
+
+`recoverTask` now starts a health poller for any recovered container whose
+task definition declares a health check, mirroring the launch path. A recovered
+container could otherwise go UNHEALTHY with nothing watching it, and its task
+would sit RUNNING until the container exited. Containers on a task already
+desired-stopped are skipped, since the recovery path stops them directly and
+records the outcome itself. The health check is read off the resolved task
+definition (via `recoveredHealthCheck`, alongside `recoveredLogGroup`), so a
+container that never had one still costs no inspect per tick.
 
 ### 5. Any 12-digit access key creates a full account that is never released
 
