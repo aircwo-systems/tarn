@@ -7,7 +7,6 @@ import (
 	"os"
 	"sort"
 	"sync"
-	"sync/atomic"
 
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/internal/persist"
@@ -19,7 +18,7 @@ import (
 // other Tarn services (in-memory maps + a dirty flag + a periodic flusher).
 type Store struct {
 	mu         sync.RWMutex
-	dirty      atomic.Bool
+	dirty      persist.Dirty
 	flusher    *persist.Flusher
 	cfg        *config.Config
 	machines   map[string]*types.StateMachine // key: state machine ARN

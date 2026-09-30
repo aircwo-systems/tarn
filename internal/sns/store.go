@@ -8,7 +8,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
@@ -20,7 +19,7 @@ import (
 // Store is an in-memory store for SNS topics and subscriptions.
 type Store struct {
 	mu            sync.RWMutex
-	dirty         atomic.Bool
+	dirty         persist.Dirty
 	flusher       *persist.Flusher
 	cfg           *config.Config
 	topics        map[string]*types.SNSTopic        // key: topic ARN

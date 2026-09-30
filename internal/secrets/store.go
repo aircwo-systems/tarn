@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
@@ -22,7 +21,7 @@ import (
 // Store is an in-memory secrets store.
 type Store struct {
 	mu      sync.RWMutex
-	dirty   atomic.Bool
+	dirty   persist.Dirty
 	flusher *persist.Flusher
 	secrets map[string]*types.Secret // keyed by secret name
 	cfg     *config.Config

@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
@@ -29,7 +28,7 @@ const defaultStaleReceiveCount = 5
 // Store is an in-memory store for SQS queues and messages.
 type Store struct {
 	mu      sync.RWMutex
-	dirty   atomic.Bool
+	dirty   persist.Dirty
 	flusher *persist.Flusher
 	queues  map[string]*queue
 	cfg     *config.Config

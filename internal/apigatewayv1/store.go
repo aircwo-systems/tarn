@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"sort"
 	"sync"
-	"sync/atomic"
 
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/internal/persist"
@@ -17,7 +16,7 @@ import (
 // Store persists REST API (v1) state.
 type Store struct {
 	mu      sync.RWMutex
-	dirty   atomic.Bool
+	dirty   persist.Dirty
 	flusher *persist.Flusher
 	apis    map[string]*restAPIRecord
 	cfg     *config.Config

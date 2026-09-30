@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
@@ -26,7 +25,7 @@ const (
 
 type Store struct {
 	mu      sync.RWMutex
-	dirty   atomic.Bool
+	dirty   persist.Dirty
 	flusher *persist.Flusher
 	cfg     *config.Config
 	tables  map[string]*tableState

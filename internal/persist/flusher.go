@@ -8,8 +8,37 @@ import (
 	"time"
 )
 
-// FlushInterval is how often a dirty store is written to disk.
+// FlushInterval is how long after a store is first marked dirty its snapshot
+// is written. Changes made in that window are coalesced into one write.
 const FlushInterval = 250 * time.Millisecond
+
+// Dirty is a store's "has unsaved changes" flag. Marking it dirty wakes the
+// store's Flusher, so a clean store costs no timer wakeups at all. The zero
+// value is ready to use.
+type Dirty struct {
+	flag atomic.Bool
+	kick atomic.Pointer[chan struct{}]
+}
+
+// Store sets the flag. Setting it on a clean store wakes the flusher.
+func (d *Dirty) Store(v bool) {
+	if !v {
+		d.flag.Store(false)
+		return
+	}
+	if d.flag.Swap(true) {
+		return // already dirty: a write is already scheduled
+	}
+	if c := d.kick.Load(); c != nil {
+		select {
+		case *c <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// Load reports whether there are unsaved changes.
+func (d *Dirty) Load() bool { return d.flag.Load() }
 
 // Flusher writes a store's snapshot to disk shortly after it is marked dirty.
 // Writes are serialized, so a slower, older snapshot can never be renamed over
@@ -17,7 +46,7 @@ const FlushInterval = 250 * time.Millisecond
 // just before shutdown are not lost. A nil *Flusher is a valid no-op, for
 // stores running with persistence disabled.
 type Flusher struct {
-	dirty *atomic.Bool
+	dirty *Dirty
 	write func()
 
 	mu   sync.Mutex // serializes write
@@ -26,35 +55,49 @@ type Flusher struct {
 	once sync.Once
 }
 
-// StartFlusher starts writing dirty state every FlushInterval. The store marks
-// itself dirty by setting *dirty; write must snapshot and persist the store.
-func StartFlusher(dirty *atomic.Bool, write func()) *Flusher {
+// StartFlusher writes the store FlushInterval after it becomes dirty. The
+// store marks itself dirty through *dirty; write must snapshot and persist it.
+func StartFlusher(dirty *Dirty, write func()) *Flusher {
 	return startFlusher(dirty, FlushInterval, write)
 }
 
-func startFlusher(dirty *atomic.Bool, interval time.Duration, write func()) *Flusher {
+func startFlusher(dirty *Dirty, delay time.Duration, write func()) *Flusher {
 	f := &Flusher{
 		dirty: dirty,
 		write: write,
 		stop:  make(chan struct{}),
 		done:  make(chan struct{}),
 	}
-	go f.run(interval)
+	kick := make(chan struct{}, 1)
+	dirty.kick.Store(&kick)
+	if dirty.Load() {
+		kick <- struct{}{} // marked before the flusher existed
+	}
+	go f.run(kick, delay)
 	return f
 }
 
-func (f *Flusher) run(interval time.Duration) {
+// run sleeps until the store is marked dirty, waits delay so a burst of
+// changes lands in one write, then writes.
+func (f *Flusher) run(kick <-chan struct{}, delay time.Duration) {
 	defer close(f.done)
-	t := time.NewTicker(interval)
-	defer t.Stop()
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
 	for {
 		select {
 		case <-f.stop:
 			return
-		case <-t.C:
-			if f.dirty.Load() {
-				f.Flush()
-			}
+		case <-kick:
+		}
+		timer.Reset(delay)
+		select {
+		case <-f.stop:
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		if f.dirty.Load() {
+			f.Flush()
 		}
 	}
 }
@@ -67,7 +110,7 @@ func (f *Flusher) Flush() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	// Clear before writing: a change made during the write re-marks the store
-	// and is picked up by the next tick.
+	// and schedules another write.
 	f.dirty.Store(false)
 	f.write()
 }

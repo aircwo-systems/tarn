@@ -7,7 +7,6 @@ import (
 	"os"
 	"sort"
 	"sync"
-	"sync/atomic"
 
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/internal/persist"
@@ -17,7 +16,7 @@ import (
 // Store is an in-memory rule store with optional JSON persistence.
 type Store struct {
 	mu      sync.RWMutex
-	dirty   atomic.Bool
+	dirty   persist.Dirty
 	flusher *persist.Flusher
 	cfg     *config.Config
 	rules   map[string]*types.EventBridgeRule // key: rule name

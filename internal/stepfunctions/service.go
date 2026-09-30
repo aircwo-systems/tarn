@@ -539,7 +539,7 @@ const ecsRunTaskSyncResource = "arn:aws:states:::ecs:runTask.sync"
 const (
 	ecsTaskPollInterval    = 100 * time.Millisecond
 	ecsTaskMaxPollInterval = 2 * time.Second
-	ecsTaskStopTimeout  = 5 * time.Second
+	ecsTaskStopTimeout     = 5 * time.Second
 )
 
 // httpInvokeResource is the AWS optimised-integration ARN for HTTP tasks.
