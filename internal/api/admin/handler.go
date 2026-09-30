@@ -540,6 +540,68 @@ func pickBodyExample(events map[string]json.RawMessage, method string) json.RawM
 	return nil
 }
 
+// ResourceCounts returns how many of each resource kind the account holds,
+// using only list lengths so it stays cheap enough for the accounts view.
+// Kinds with no resources are omitted.
+func (h *Handler) ResourceCounts() map[string]int {
+	counts := map[string]int{}
+	add := func(kind string, n int) {
+		if n > 0 {
+			counts[kind] += n
+		}
+	}
+	if h.lambda != nil {
+		if fns, err := h.lambda.ListFunctions(); err == nil {
+			add("functions", len(fns))
+		}
+	}
+	if h.sqs != nil {
+		add("queues", len(h.sqs.ListQueues("")))
+	}
+	if h.sns != nil {
+		add("topics", len(h.sns.ListTopics()))
+	}
+	if h.s3 != nil {
+		add("buckets", len(h.s3.ListBuckets()))
+	}
+	if h.dynamodb != nil {
+		if names, _, err := h.dynamodb.ListTables(1000, ""); err == nil {
+			add("tables", len(names))
+		}
+	}
+	if h.secrets != nil {
+		add("secrets", len(h.secrets.ListSecrets()))
+	}
+	if h.stepfunctions != nil {
+		add("stateMachines", len(h.stepfunctions.ListStateMachines()))
+	}
+	if h.eventbridge != nil {
+		if rules, _, err := h.eventbridge.ListRules("", "", 1000, ""); err == nil {
+			add("rules", len(rules))
+		}
+	}
+	if h.apigw != nil {
+		add("apis", len(h.apigw.ListAPIs()))
+	}
+	if h.apigwv1 != nil {
+		add("apis", len(h.apigwv1.ListAPIs()))
+	}
+	if h.ecs != nil {
+		if out, err := h.ecs.ListClusters(&types.ListClustersInput{}); err == nil && out != nil {
+			// Every account gets an implicit "default" cluster; it isn't
+			// something the user created.
+			n := 0
+			for _, arn := range out.ClusterArns {
+				if !strings.HasSuffix(arn, "/default") {
+					n++
+				}
+			}
+			add("clusters", n)
+		}
+	}
+	return counts
+}
+
 // Overview returns a dashboard-friendly snapshot of current resources.
 func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	gateways := h.apigw.ListAPIs()

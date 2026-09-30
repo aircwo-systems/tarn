@@ -76,6 +76,16 @@ type HandlerRegistry struct {
 	mu      sync.RWMutex
 	bundles map[string]*AccountBundle
 	factory func(accountID string) (*AccountBundle, error)
+
+	// Account lifecycle (see accounts.go). metaMu is taken after mu when both
+	// are held.
+	metaMu    sync.RWMutex
+	writeMu   sync.Mutex     // serialises account.json writes
+	writes    sync.WaitGroup // background activity writes in flight
+	metas     map[string]*accountMeta
+	baseDir   string
+	defaultID string
+	onRelease func(accountID string)
 }
 
 // NewHandlerRegistry creates a registry backed by factory.
@@ -92,6 +102,9 @@ func (r *HandlerRegistry) PreInit(accountID string) (*AccountBundle, error) {
 	defer r.mu.Unlock()
 	if b, ok := r.bundles[accountID]; ok {
 		return b, nil
+	}
+	if r.IsArchived(accountID) {
+		return nil, fmt.Errorf("account %s is archived", accountID)
 	}
 	b, err := r.factory(accountID)
 	if err != nil {
@@ -114,6 +127,10 @@ func (r *HandlerRegistry) get(accountID string) *HandlerSet {
 	if b, ok = r.bundles[accountID]; ok {
 		return b.handlers
 	}
+	// An archived account is never loaded; callers reject its requests.
+	if r.IsArchived(accountID) {
+		return nil
+	}
 	b, err := r.factory(accountID)
 	if err != nil {
 		log.Printf("[account] init failed for %s: %v", accountID, err)
@@ -132,6 +149,7 @@ func (r *HandlerRegistry) StopAll() {
 			b.stop()
 		}
 	}
+	r.persistActivity()
 }
 
 // Server is the main Tarn API server.
@@ -178,7 +196,8 @@ func (s *Server) hs(r *http.Request) *HandlerSet {
 	accountID := account.FromRequest(r, s.cfg.AccountID)
 	hs := s.registry.get(accountID)
 	if hs == nil {
-		// Factory failed; fall back to the default account.
+		// Factory failed; fall back to the default account. Archived accounts
+		// never reach here: withLogging rejects their requests first.
 		return s.registry.get(s.cfg.AccountID)
 	}
 	return hs
@@ -193,6 +212,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Admin routes — account-resolved so the dashboard always falls back to
 	// the default account (no SigV4 from the browser), but API callers with
 	// a 12-digit AKID get their own account's view.
+	// Account lifecycle — global, not account-resolved.
+	mux.HandleFunc("GET /_tarn/admin/accounts", s.listAccountsHandler)
+	mux.HandleFunc("POST /_tarn/admin/accounts/{id}/archive", s.accountActionHandler(s.registry.Archive))
+	mux.HandleFunc("POST /_tarn/admin/accounts/{id}/restore", s.accountActionHandler(s.registry.Restore))
+	mux.HandleFunc("DELETE /_tarn/admin/accounts/{id}", s.accountActionHandler(s.registry.Delete))
+
 	mux.HandleFunc("GET /_tarn/admin/overview", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.Overview(w, r)
 	})
@@ -598,6 +623,12 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		accountID := account.FromRequest(r, s.cfg.AccountID)
+		if accountID != s.cfg.AccountID && !isAccountExemptPath(r.URL.Path) && s.registry.IsArchived(accountID) {
+			writeAccountArchived(w, accountID)
+			log.Printf("%s %s 403 (account %s archived)", r.Method, r.URL.Path, accountID)
+			return
+		}
 		wrapped := &statusWriter{ResponseWriter: w, status: 200}
 		// AWS JSON/query protocol clients may send service requests on non-root
 		// paths when custom endpoints include path components. Route these early
@@ -613,6 +644,9 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 			log.Printf("%s %s %d %s", r.Method, r.URL.Path, wrapped.status, duration)
 		}
 		if !strings.HasPrefix(r.URL.Path, "/_tarn/") {
+			// Only AWS API calls count as activity: the dashboard polls with
+			// the selected account's key, which must not keep it from going stale.
+			s.registry.Touch(accountID)
 			// Record the request in the resolved account's own log so request
 			// logs stay account-specific; fall back to the server-level logs
 			// service if the account has none.
@@ -625,6 +659,12 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 			}
 		}
 	})
+}
+
+// isAccountExemptPath reports paths served even for an archived account's
+// key: health, and the account endpoints needed to restore it.
+func isAccountExemptPath(p string) bool {
+	return p == "/_tarn/health" || strings.HasPrefix(p, "/_tarn/admin/accounts")
 }
 
 func wantsHTML(r *http.Request) bool {

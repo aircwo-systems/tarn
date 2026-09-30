@@ -474,6 +474,12 @@ func startServer(cfg *config.Config) error {
 	}
 
 	registry := api.NewHandlerRegistry(factory)
+	// Archiving or deleting an account frees its warm Lambda containers too.
+	registry.ConfigureAccounts(cfg.DataDir, cfg.AccountID, func(accountID string) {
+		if n := eng.EvictAccount(accountID); n > 0 {
+			log.Printf("[account] removed %d Lambda container(s) for %s", n, accountID)
+		}
+	})
 
 	// Pre-initialize the default account so it's ready before the first request.
 	// Any startup errors (e.g. corrupt state files) surface here rather than on
@@ -587,6 +593,10 @@ func preInitPersistedAccounts(cfg *config.Config, registry *api.HandlerRegistry)
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() || !validAccountDirectoryName(entry.Name()) || entry.Name() == cfg.AccountID {
+			continue
+		}
+		// Archived accounts stay unloaded: no services, no background work.
+		if registry.IsArchived(entry.Name()) {
 			continue
 		}
 		if _, err := registry.PreInit(entry.Name()); err != nil {

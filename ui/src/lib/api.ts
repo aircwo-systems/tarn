@@ -44,6 +44,53 @@ function awsEndpoint(path: string): string {
   return `${awsProtocolBase}${path}`;
 }
 
+/** Thrown when the selected account has been archived on the server. */
+export class AccountArchivedError extends Error {
+  constructor() {
+    super("This account is archived. Restore it from Settings to use it again.");
+    this.name = "AccountArchivedError";
+  }
+}
+
+/** An account as the server tracks it. */
+export interface ServerAccount {
+  id: string;
+  default: boolean;
+  loaded: boolean;
+  archived: boolean;
+  archivedAt?: string;
+  lastActivityAt?: string;
+  resources: Record<string, number>;
+  resourceTotal: number;
+}
+
+export async function fetchAccounts(signal?: AbortSignal): Promise<ServerAccount[]> {
+  const response = await fetch(endpoint("/_tarn/admin/accounts"), {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `Failed to load accounts: HTTP ${response.status}`));
+  }
+  const body = (await response.json()) as { accounts?: ServerAccount[] };
+  return Array.isArray(body.accounts) ? body.accounts : [];
+}
+
+/** Archives, restores or deletes an account, returning the updated list. */
+export async function changeAccount(id: string, action: "archive" | "restore" | "delete"): Promise<ServerAccount[]> {
+  const base = `/_tarn/admin/accounts/${encodeURIComponent(id)}`;
+  const response = await fetch(endpoint(action === "delete" ? base : `${base}/${action}`), {
+    method: action === "delete" ? "DELETE" : "POST",
+    headers: { Accept: "application/json" },
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `Failed to ${action} account: HTTP ${response.status}`));
+  }
+  const body = (await response.json()) as { accounts?: ServerAccount[] };
+  return Array.isArray(body.accounts) ? body.accounts : [];
+}
+
 export async function fetchOverview(signal?: AbortSignal): Promise<OverviewResponse> {
   const overviewPath = "/_tarn/admin/overview";
   const healthPath = "/_tarn/health";
@@ -75,6 +122,9 @@ export async function fetchOverview(signal?: AbortSignal): Promise<OverviewRespo
     }
   }
 
+  if (response.headers.get("x-amzn-ErrorType") === "AccountArchived") {
+    throw new AccountArchivedError();
+  }
   if (!response.ok) {
     let message = `HTTP ${response.status}`;
     try {

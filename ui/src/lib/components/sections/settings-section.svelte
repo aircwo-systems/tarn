@@ -1,9 +1,10 @@
 <script lang="ts">
-  import { PlusIcon, TrashIcon, CheckIcon, MonitorIcon, SunIcon, MoonIcon } from "phosphor-svelte";
+  import { PlusIcon, TrashIcon, CheckIcon, MonitorIcon, SunIcon, MoonIcon, ArchiveIcon, ArrowCounterClockwiseIcon, CaretRightIcon } from "phosphor-svelte";
   import { onMount, untrack } from "svelte";
   import { fly } from "svelte/transition";
 
   import type { UserService } from "$lib/types";
+  import { fetchAccounts, changeAccount, type ServerAccount } from "$lib/api";
   import SectionHeader from "$lib/components/sections/section-header.svelte";
   import {
     getUISettings,
@@ -158,6 +159,87 @@
     newAccountLabel = "";
   }
 
+  // Accounts the server knows about: anything used by an access key, even ones
+  // never added here. Staleness is judged from AWS API calls only; the
+  // dashboard's own polling doesn't count.
+  const DEFAULT_ID = "000000000000";
+  const STALE_DAYS = 7;
+  const DAY_MS = 86_400_000;
+  let serverAccounts = $state<ServerAccount[]>([]);
+  let accountsError = $state("");
+  let accountBusy = $state("");
+  let confirmDelete = $state("");
+  let showArchived = $state(false);
+
+  async function loadServerAccounts() {
+    try {
+      serverAccounts = await fetchAccounts();
+      accountsError = "";
+    } catch (err) {
+      accountsError = err instanceof Error ? err.message : "Failed to load accounts";
+    }
+  }
+
+  onMount(() => { void loadServerAccounts(); });
+
+  type AccountRow = { id: string; label: string; known: boolean; server?: ServerAccount; stale: string };
+
+  function daysSince(ts?: string): number | null {
+    if (!ts) return null;
+    const t = Date.parse(ts);
+    return Number.isNaN(t) ? null : Math.floor((Date.now() - t) / DAY_MS);
+  }
+
+  /** A reason the account looks unused, or "" when it doesn't. */
+  function staleReason(a?: ServerAccount): string {
+    if (!a || a.default || a.archived) return "";
+    const days = daysSince(a.lastActivityAt);
+    if (days !== null && days >= STALE_DAYS) return `No API calls for ${days} days`;
+    if (a.resourceTotal === 0 && (days === null || days >= 1)) return "No resources";
+    return "";
+  }
+
+  function activityLabel(a?: ServerAccount): string {
+    if (!a) return "not used yet";
+    const parts = [`${a.resourceTotal} ${a.resourceTotal === 1 ? "resource" : "resources"}`];
+    const days = daysSince(a.lastActivityAt);
+    if (days === null) parts.push("no API calls recorded");
+    else if (days === 0) parts.push("used today");
+    else parts.push(`last API call ${days}d ago`);
+    return parts.join(" · ");
+  }
+
+  const accountRows = $derived.by(() => {
+    const byId = new Map(serverAccounts.map((a) => [a.id, a]));
+    const rows: AccountRow[] = accountSettings.knownAccounts.map((k) => ({
+      id: k.id, label: k.label, known: true, server: byId.get(k.id), stale: staleReason(byId.get(k.id)),
+    }));
+    for (const a of serverAccounts) {
+      if (!rows.some((r) => r.id === a.id)) {
+        rows.push({ id: a.id, label: a.default ? "Default" : a.id, known: false, server: a, stale: staleReason(a) });
+      }
+    }
+    return rows;
+  });
+  const activeRows = $derived(accountRows.filter((r) => !r.server?.archived));
+  const archivedRows = $derived(accountRows.filter((r) => r.server?.archived));
+  const staleCount = $derived(activeRows.filter((r) => r.stale).length);
+
+  async function accountAction(id: string, action: "archive" | "restore" | "delete") {
+    accountBusy = id;
+    accountsError = "";
+    try {
+      serverAccounts = await changeAccount(id, action);
+      if (action !== "restore" && id === accountSettings.activeAccountId) switchAccount(DEFAULT_ID);
+      if (action === "delete") removeKnownAccount(id);
+    } catch (err) {
+      accountsError = err instanceof Error ? err.message : `Failed to ${action} account`;
+    } finally {
+      accountBusy = "";
+      confirmDelete = "";
+    }
+  }
+
   // ── Additional services ──────────────────────────────────────────
   let newTargetName = $state("");
   let newTargetUrl  = $state("");
@@ -256,29 +338,97 @@
           <h2>Accounts</h2>
           <p>The active account scopes every API request. Switching applies immediately.</p>
         </header>
+        {#if staleCount > 0}
+          <p class="callout" transition:fly={{ y: -4, duration: 160 }}>
+            {staleCount} {staleCount === 1 ? "account looks" : "accounts look"} unused. Archiving stops an account's
+            background work and removes its containers; its data stays on disk until you delete it.
+          </p>
+        {/if}
         <ul class="rows">
-          {#each accountSettings.knownAccounts as acct (acct.id)}
+          {#each activeRows as acct (acct.id)}
             {@const isActive = acct.id === accountSettings.activeAccountId}
-            <li class="row" class:is-active={isActive}>
+            {@const isDefault = acct.id === DEFAULT_ID}
+            <li class="row" class:is-active={isActive} class:is-stale={!!acct.stale}>
               <span class="row-main">
                 <span class="row-title">{acct.label}</span>
-                <span class="row-sub mono">{acct.id}</span>
+                <span class="row-sub mono">{acct.id} · {activityLabel(acct.server)}</span>
               </span>
+              {#if acct.stale}
+                <span class="pill pill-stale" title={acct.stale}>{acct.stale}</span>
+              {/if}
               {#if isActive}
                 <span class="pill pill-accent"><CheckIcon size={10} weight="bold" />Active</span>
               {:else}
                 <button type="button" class="pill pill-btn" onclick={() => switchAccount(acct.id)}>Switch</button>
               {/if}
-              {#if acct.id !== "000000000000"}
-                <button type="button" class="icon-btn danger" onclick={() => removeKnownAccount(acct.id)} aria-label="Remove account {acct.id}">
+              {#if !isDefault && acct.server}
+                <button type="button" class="icon-btn" class:show={!!acct.stale} disabled={accountBusy === acct.id}
+                  onclick={() => accountAction(acct.id, "archive")} title="Archive: stop its services and containers, keep its data"
+                  aria-label="Archive account {acct.id}">
+                  <ArchiveIcon size={12} />
+                </button>
+              {/if}
+              {#if isDefault}
+                <span class="icon-spacer"></span>
+              {:else if acct.server}
+                {#if confirmDelete === acct.id}
+                  <button type="button" class="pill pill-btn danger" disabled={accountBusy === acct.id}
+                    onclick={() => accountAction(acct.id, "delete")} onblur={() => (confirmDelete = "")}>
+                    Delete data
+                  </button>
+                {:else}
+                  <button type="button" class="icon-btn danger" onclick={() => (confirmDelete = acct.id)}
+                    title="Delete this account and all of its data" aria-label="Delete account {acct.id}">
+                    <TrashIcon size={12} />
+                  </button>
+                {/if}
+              {:else}
+                <button type="button" class="icon-btn danger" onclick={() => removeKnownAccount(acct.id)}
+                  title="Forget this account on this dashboard" aria-label="Forget account {acct.id}">
                   <TrashIcon size={12} />
                 </button>
-              {:else}
-                <span class="icon-spacer"></span>
               {/if}
             </li>
           {/each}
         </ul>
+        {#if archivedRows.length > 0}
+          <button type="button" class="archived-toggle" aria-expanded={showArchived} onclick={() => (showArchived = !showArchived)}>
+            <CaretRightIcon size={10} class={showArchived ? "rotated" : ""} />
+            Archived ({archivedRows.length})
+          </button>
+          {#if showArchived}
+            <ul class="rows archived" transition:fly={{ y: -4, duration: 160 }}>
+              {#each archivedRows as acct (acct.id)}
+                <li class="row">
+                  <span class="row-main">
+                    <span class="row-title">{acct.label}</span>
+                    <span class="row-sub mono">{acct.id} · {acct.server?.resourceTotal ?? 0} resources · archived {daysSince(acct.server?.archivedAt) ?? 0}d ago</span>
+                  </span>
+                  <button type="button" class="pill pill-btn" disabled={accountBusy === acct.id} onclick={() => accountAction(acct.id, "restore")}>
+                    <ArrowCounterClockwiseIcon size={10} />Restore
+                  </button>
+                  {#if confirmDelete === acct.id}
+                    <button type="button" class="pill pill-btn danger" disabled={accountBusy === acct.id}
+                      onclick={() => accountAction(acct.id, "delete")} onblur={() => (confirmDelete = "")}>
+                      Delete data
+                    </button>
+                  {:else}
+                    <button type="button" class="icon-btn danger" onclick={() => (confirmDelete = acct.id)}
+                      title="Delete this account and all of its data" aria-label="Delete account {acct.id}">
+                      <TrashIcon size={12} />
+                    </button>
+                  {/if}
+                </li>
+              {/each}
+            </ul>
+          {/if}
+        {/if}
+        {#if confirmDelete}
+          <p class="hint">Deleting removes the account's functions, queues, tables, buckets and other data. Traces are shared and stay.</p>
+        {/if}
+        {#if accountsError}
+          <p class="error" role="alert">{accountsError}</p>
+        {/if}
         <div class="add-row accounts">
           <input class="field mono" maxlength="12" inputmode="numeric" placeholder="012345678901"
             aria-label="New AWS account ID"
@@ -599,6 +749,33 @@
   }
   .add-btn:hover { color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 45%, transparent); background: color-mix(in srgb, var(--accent-green) 10%, transparent); }
   .error { margin-top: 6px; font-size: 11px; color: var(--accent-red); }
+  .callout {
+    margin-bottom: 8px; padding: 8px 10px; border-radius: 8px; font-size: 11.5px; line-height: 1.5;
+    color: var(--text-secondary);
+    border: 1px solid color-mix(in srgb, var(--accent-amber) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-amber) 8%, transparent);
+  }
+  .pill-stale {
+    color: var(--accent-amber); border-color: color-mix(in srgb, var(--accent-amber) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-amber) 8%, transparent);
+  }
+  .row.is-stale:not(.is-active)::before {
+    content: ""; position: absolute; left: 3px; top: 10px; bottom: 10px; width: 2.5px;
+    border-radius: 2px; background: var(--accent-amber); opacity: 0.8;
+  }
+  .icon-btn.show { opacity: 1; }
+  .icon-btn:not(.danger):hover { color: var(--text-primary); background: var(--bg-element-hover); }
+  .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .pill-btn.danger { color: var(--accent-red); border-color: color-mix(in srgb, var(--accent-red) 40%, transparent); }
+  .pill-btn.danger:hover { background: color-mix(in srgb, var(--accent-red) 10%, transparent); color: var(--accent-red); }
+  .archived-toggle {
+    display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 4px 6px; border-radius: 8px;
+    font-size: 11px; color: var(--text-tertiary); transition: color 120ms ease, background 120ms ease;
+  }
+  .archived-toggle:hover { color: var(--text-primary); background: var(--bg-element-hover); }
+  .archived-toggle :global(.rotated) { transform: rotate(90deg); }
+  .archived-toggle :global(svg) { transition: transform 200ms var(--ease-snappy); }
+  .rows.archived .row-title { color: var(--text-secondary); }
 
   /* Segmented */
   .segmented {

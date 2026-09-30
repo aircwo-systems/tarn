@@ -1,4 +1,4 @@
-import { fetchOverview, fetchUserServices, pruneOldLogs, saveUserServices, setApiAccount } from "$lib/api";
+import { AccountArchivedError, fetchOverview, fetchUserServices, pruneOldLogs, saveUserServices, setApiAccount } from "$lib/api";
 import type { InfraProbe, OverviewResponse, UserService } from "$lib/types";
 
 export type InfraProbeKind =
@@ -144,6 +144,12 @@ async function refreshDashboard() {
         lastRefresh = new Date().toLocaleTimeString();
         error = "";
       } catch (err) {
+        if (err instanceof AccountArchivedError && activeAccountId !== DEFAULT_ACCOUNT.id) {
+          // The selected account was archived (here or by another client):
+          // fall back to the default account rather than showing an error.
+          switchAccount(DEFAULT_ACCOUNT.id);
+          continue;
+        }
         error = err instanceof Error ? err.message : "Failed to load dashboard data";
       } finally {
         loading = false;
