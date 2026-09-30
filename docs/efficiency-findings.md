@@ -32,6 +32,10 @@ See also `docs/aws-parity-and-performance-audit.md`, which lists older items (P0
 | `65b0675` | Stopping an event source poller waits for its poll and drain loops to exit |
 | `1c90e39` | Log stream names per group are capped, evicting the least recently written |
 | `752d26d` | `make ui-build` leaves no committable `200.html`; a partial build skips in CI |
+| `10a1f9e` | S3 bucket counts and a recent-objects index are maintained on write instead of walked per poll |
+| `a0c0106` | Lambda event examples are cached by code SHA and read once per gateway walk |
+| `edbd03c` | ECS task definition revisions are listed as light refs instead of deep clones |
+| `334580d` | One overview is shared between pollers; unchanged polls answer 304 on a content ETag |
 
 ## Fixed: medium, one focused change each
 
@@ -138,7 +142,9 @@ container that never had one still costs no inspect per tick.
 
 Fix: create the account directory on first write rather than first request, skip pre-initialising empty account directories, and consider unloading accounts with no resources and no traffic after an idle period.
 
-## Open: larger, needs design
+## Fixed: larger, needs design
+
+Items 6 to 9 are still open.
 
 ### 6. S3 multipart uploads are buffered in RAM (verified)
 
@@ -159,7 +165,47 @@ Each 5-second poll:
 - queries 50 traces, describes every ECS task definition revision (including INACTIVE), and parses every function config;
 - encodes everything with no cache and no "not modified" response. Multiple tabs or an MCP client multiply the cost.
 
-Fix: keep per-bucket counts and a recent-objects list updated on write; cache event examples by code SHA; share a 1 to 2 second cached response across pollers with a version counter for 304s; load task definition revisions on demand.
+Fixed, in four parts. The traces were already cheap — 50 rows off an indexed,
+continuously pruned store — so nothing was spent there.
+
+- **S3 buckets are indexed on write.** `ObjectCount`, `TotalSize` and the
+  object preview walked the bucket: two directory reads, a stat per object, and
+  a metadata read plus JSON parse per object, to show a dozen entries. A
+  maintained per-bucket index (count, total size, the newest 32 objects)
+  replaces all three, updated by `PutObject`/`DeleteObject`/`DeleteObjects`
+  and rebuilt once at `Init`. `RecentObjects` serves the preview. With 2000
+  objects in a bucket, `BenchmarkBucketSummaryStats` went from about 29 ms,
+  5.6 MB and 48 082 allocations per poll to about 180 ns, 1.1 KB and 1. The
+  count is now meta-based, so it agrees with what `ListObjects` reports; an
+  object whose body survived a crash but whose metadata did not is still on
+  disk, so `DeleteBucket` still refuses to remove the bucket.
+- **Lambda event fixtures are cached by code SHA.** Reading them extracts the
+  function zip, takes the function's *write* lock and re-validates every
+  fixture. The SHA is already in hand from `ListFunctions`, so the key is free,
+  and a code update retires the entry. The per-API memo also became one memo
+  for the whole walk — two APIs routing to the same function used to extract
+  its zip twice per poll.
+- **ECS task definitions are listed as light refs.** The overview paged
+  `ListTaskDefinitions` once per status and then `DescribeTaskDefinition`'d
+  every ARN, and each of those deep-cloned every container definition, twice,
+  to read a family, a revision and a status. `TaskDefinitionRef` carries those
+  four fields; the overview names every revision in one unpaged walk, and
+  `ListTaskDefinitions` filters the refs instead of cloning definitions.
+  `BenchmarkListTaskDefinitions` (10 families, 20 revisions, two statuses
+  paged) went from about 152 µs, 630 KB and 2 515 allocations to about 59 µs,
+  167 KB and 148.
+- **One computed overview is shared, and unchanged polls get a 304.** The body
+  is encoded once and held for `overviewCacheWindow` (1.5s), so several tabs,
+  an MCP client and a just-opened page cost one computation rather than one
+  each; pollers arriving during a computation wait for it rather than starting
+  a second. The `ETag` is a hash of the body, not a change counter: there is no
+  notification channel that could be missed, so the tag cannot go stale, and a
+  poll that finds the same bytes costs no body and no recomputation. The
+  dashboard sends `If-None-Match` and answers a 304 from what it already holds.
+
+The remaining per-poll cost is proportional to the number of resources, which
+is what it should be: the three filesystem walks, the zip extractions and the
+per-revision clones are gone.
 
 ### 8. Log live tail copies and sorts every event
 
