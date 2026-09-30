@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -318,6 +319,9 @@ func TestOverviewReadsEventExamplesOnceForUnchangedCode(t *testing.T) {
 
 	bodyExample := func() string {
 		t.Helper()
+		// The response cache is a separate concern with its own tests; drop it so
+		// this walks the gateway path and reaches the event-example cache.
+		h.overview = overviewCache{}
 		req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
 		rec := httptest.NewRecorder()
 		h.Overview(rec, req)
@@ -389,6 +393,161 @@ func TestOverviewReadsEventExamplesOnceForUnchangedCode(t *testing.T) {
 	}
 	if _, ok := h.eventExamplesCache.get("orders", after.CodeSHA256); !ok {
 		t.Fatalf("cache holds no entry for the new SHA %q", after.CodeSHA256)
+	}
+}
+
+// TestOverviewSharesOneComputationBetweenPollers covers the reason the response
+// is cached: every open tab polls on its own timer, and without this each one
+// recomputed the whole snapshot.
+func TestOverviewSharesOneComputationBetweenPollers(t *testing.T) {
+	h := newTestHandler(t)
+
+	// Counting the store's S3 listing is a cheap proxy for "did this request do
+	// the work", and it is reached on every poll.
+	var lists int
+	h.overview.serve(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil), func() ([]byte, error) {
+		lists++
+		return []byte(`{"status":"running"}`), nil
+	})
+
+	for range 5 {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
+		h.overview.serve(rec, req, func() ([]byte, error) {
+			lists++
+			return []byte(`{"status":"running"}`), nil
+		})
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+		}
+	}
+	if lists != 1 {
+		t.Fatalf("built the overview %d times for 6 polls, want 1", lists)
+	}
+
+	// Past the window it has to recompute, or the dashboard would go stale.
+	h.overview.mu.Lock()
+	h.overview.computed = time.Now().Add(-2 * overviewCacheWindow)
+	h.overview.mu.Unlock()
+
+	rec := httptest.NewRecorder()
+	h.overview.serve(rec, httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil), func() ([]byte, error) {
+		lists++
+		return []byte(`{"status":"running"}`), nil
+	})
+	if lists != 2 {
+		t.Fatalf("built the overview %d times, want a rebuild past the window", lists)
+	}
+}
+
+// TestOverviewAnswersNotModifiedWhenUnchanged covers the conditional request.
+// The ETag is a hash of the body, so it cannot go stale: the same bytes always
+// produce the same tag, and different bytes always produce a different one.
+func TestOverviewAnswersNotModifiedWhenUnchanged(t *testing.T) {
+	h := newTestHandler(t)
+
+	rec := httptest.NewRecorder()
+	h.Overview(rec, httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("no ETag on the overview response")
+	}
+	body := rec.Body.Bytes()
+	if len(body) == 0 {
+		t.Fatal("empty overview body")
+	}
+
+	// A caller holding that ETag gets a 304 with no body.
+	rec2 := httptest.NewRecorder()
+	req2 := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
+	req2.Header.Set("If-None-Match", etag)
+	h.Overview(rec2, req2)
+	if rec2.Code != http.StatusNotModified {
+		t.Fatalf("status with If-None-Match = %d, want %d", rec2.Code, http.StatusNotModified)
+	}
+	if rec2.Body.Len() != 0 {
+		t.Fatalf("304 carried a %d-byte body", rec2.Body.Len())
+	}
+	if got := rec2.Header().Get("ETag"); got != etag {
+		t.Fatalf("304 ETag = %q, want %q", got, etag)
+	}
+
+	// A different tag gets the full body again.
+	rec3 := httptest.NewRecorder()
+	req3 := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
+	req3.Header.Set("If-None-Match", `"something-else"`)
+	h.Overview(rec3, req3)
+	if rec3.Code != http.StatusOK {
+		t.Fatalf("status with a stale If-None-Match = %d, want %d", rec3.Code, http.StatusOK)
+	}
+	if rec3.Body.Len() != len(body) {
+		t.Fatalf("body = %d bytes, want the full %d", rec3.Body.Len(), len(body))
+	}
+}
+
+// TestOverviewETagTracksContent covers the property the 304 rests on: the tag is
+// derived from the bytes, so any change to the response changes the tag.
+func TestOverviewETagTracksContent(t *testing.T) {
+	a := overviewETag([]byte(`{"a":1}`))
+	if a == "" {
+		t.Fatal("empty ETag")
+	}
+	if a != overviewETag([]byte(`{"a":1}`)) {
+		t.Error("the same content produced two different ETags")
+	}
+	if a == overviewETag([]byte(`{"a":2}`)) {
+		t.Error("different content produced the same ETag")
+	}
+	if a != `"`+a[1:len(a)-1]+`"` {
+		t.Errorf("ETag %q is not a quoted strong validator", a)
+	}
+}
+
+// TestOverviewCacheDoesNotDuplicateConcurrentWork covers the stampede: several
+// pollers arriving while one computation is in flight must share its result
+// rather than each starting their own.
+func TestOverviewCacheDoesNotDuplicateConcurrentWork(t *testing.T) {
+	var cache overviewCache
+	release := make(chan struct{})
+	var builds int
+	var mu sync.Mutex
+
+	build := func() ([]byte, error) {
+		mu.Lock()
+		builds++
+		mu.Unlock()
+		<-release
+		return []byte(`{"status":"running"}`), nil
+	}
+
+	const pollers = 8
+	done := make(chan int, pollers)
+	for range pollers {
+		go func() {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil)
+			cache.serve(rec, req, build)
+			done <- rec.Code
+		}()
+	}
+
+	// Let the first poller start and the rest pile up behind it.
+	time.Sleep(50 * time.Millisecond)
+	close(release)
+	for range pollers {
+		if code := <-done; code != http.StatusOK {
+			t.Fatalf("poller status = %d, want %d", code, http.StatusOK)
+		}
+	}
+
+	mu.Lock()
+	got := builds
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("built %d times for %d concurrent pollers, want 1", got, pollers)
 	}
 }
 

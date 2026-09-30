@@ -1,7 +1,10 @@
 package admin
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -65,6 +68,11 @@ type Handler struct {
 	// were read from, so a poll does not re-extract and re-validate a zip whose
 	// code has not changed. The Handler is per-account, so this is too.
 	eventExamplesCache eventExampleCache
+
+	// overview shares one computed overview body between pollers, so several
+	// dashboard tabs, an MCP client and a just-opened page cost one computation
+	// rather than one each. The Handler is per-account, so this is too.
+	overview overviewCache
 }
 
 func NewHandler(cfg *config.Config, apigw *apigatewaysvc.Service, apigwv1 *apigatewayv1svc.Service, lambda *lambdasvc.Service, logs *logssvc.Service, sqs *sqssvc.Service, sns *snssvc.Service, dynamodb *dynamodbsvc.Service, secrets *secretssvc.Service, infra *infrasvc.Service, s3 *s3svc.Service, esm *eventsourcesvc.Service, eventbridge *eventbridgesvc.Service, stepfunctions *stepfunctionssvc.Service, traceStore *tracesvc.Store) *Handler {
@@ -608,8 +616,114 @@ func (h *Handler) ResourceCounts() map[string]int {
 	return counts
 }
 
+// overviewCacheWindow is how long a computed overview is shared between
+// pollers. The dashboard polls every five seconds, so a window of a second or
+// two collapses several tabs, an MCP client and a just-opened page onto one
+// computation without anything noticing a stale second.
+const overviewCacheWindow = 1500 * time.Millisecond
+
+// overviewCache holds the most recently computed overview body and its ETag.
+// It is what keeps the number of tabs open from multiplying the work: the
+// second tab to poll within the window is served the first one's bytes.
+type overviewCache struct {
+	mu        sync.Mutex
+	body      []byte
+	etag      string
+	computed  time.Time
+	computing bool
+	// waiters lets a poller that arrives during a computation wait for it
+	// rather than starting a second one.
+	waiters chan struct{}
+}
+
+// serve writes the cached body, recomputing it when the window has passed or
+// nothing is cached. build is called at most once per window however many
+// pollers arrive.
+func (c *overviewCache) serve(w http.ResponseWriter, r *http.Request, build func() ([]byte, error)) {
+	c.mu.Lock()
+	if c.body != nil && time.Since(c.computed) < overviewCacheWindow {
+		body, etag := c.body, c.etag
+		c.mu.Unlock()
+		writeOverviewBody(w, r, body, etag)
+		return
+	}
+	if c.computing {
+		// A computation is in flight. Wait for it rather than duplicating the
+		// work, then use whatever it produced.
+		wait := c.waiters
+		c.mu.Unlock()
+		select {
+		case <-wait:
+		case <-r.Context().Done():
+			return
+		}
+		c.mu.Lock()
+		body, etag := c.body, c.etag
+		fresh := c.body != nil && time.Since(c.computed) < overviewCacheWindow
+		c.mu.Unlock()
+		if fresh {
+			writeOverviewBody(w, r, body, etag)
+			return
+		}
+		// The computation finished but nothing usable was cached (an error, or
+		// it landed as another window's edge). Fall through and compute.
+	}
+	c.computing = true
+	c.waiters = make(chan struct{})
+	wait := c.waiters
+	c.mu.Unlock()
+
+	body, err := build()
+
+	c.mu.Lock()
+	if err == nil {
+		c.body = body
+		c.etag = overviewETag(body)
+		c.computed = time.Now()
+	}
+	etag := c.etag
+	c.computing = false
+	close(wait)
+	c.mu.Unlock()
+
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to build overview")
+		return
+	}
+	writeOverviewBody(w, r, body, etag)
+}
+
+// overviewETag is a content hash of the response, so an unchanged overview
+// answers a conditional request with 304 and no body. Keying it on the content
+// rather than on a change counter is what makes it safe: there is no
+// notification channel to miss, so the tag cannot go stale.
+func overviewETag(body []byte) string {
+	sum := sha256.Sum256(body)
+	return `"` + hex.EncodeToString(sum[:16]) + `"`
+}
+
+// writeOverviewBody serves a pre-encoded overview, answering 304 when the caller
+// already has it.
+func writeOverviewBody(w http.ResponseWriter, r *http.Request, body []byte, etag string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "no-cache")
+	if etag != "" && r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
+}
+
 // Overview returns a dashboard-friendly snapshot of current resources.
 func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
+	h.overview.serve(w, r, h.buildOverview)
+}
+
+// buildOverview assembles the overview and encodes it once, so the bytes can be
+// shared between pollers and hashed for an ETag.
+func (h *Handler) buildOverview() ([]byte, error) {
 	gateways := h.apigw.ListAPIs()
 	var v1APIs []*types.RestAPI
 	if h.apigwv1 != nil {
@@ -618,8 +732,7 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 
 	functions, err := h.lambda.ListFunctions()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list functions")
-		return
+		return nil, err
 	}
 
 	queues := h.sqs.ListQueues("")
@@ -1063,9 +1176,11 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(resp.Buckets, func(i, j int) bool { return resp.Buckets[i].Name < resp.Buckets[j].Name })
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_ = json.NewEncoder(w).Encode(resp)
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(resp); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (h *Handler) listECSOverview() *ecsOverview {

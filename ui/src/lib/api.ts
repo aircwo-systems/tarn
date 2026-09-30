@@ -91,14 +91,24 @@ export async function changeAccount(id: string, action: "archive" | "restore" | 
   return Array.isArray(body.accounts) ? body.accounts : [];
 }
 
+// The overview answers 304 when nothing has changed since the last poll, keyed
+// on an ETag the server hashes from the response body. The last response is
+// kept per account so a 304 can be answered from it, and so a poll that
+// returns nothing new costs no body and no recomputation server-side.
+let lastOverview: { key: string; etag: string; data: OverviewResponse } | null = null;
+
 export async function fetchOverview(signal?: AbortSignal): Promise<OverviewResponse> {
   const overviewPath = "/_tarn/admin/overview";
   const healthPath = "/_tarn/health";
   const overviewURL = endpoint(overviewPath);
+  const accountKey = overviewURL + "|" + _activeAccountId;
+  const conditional =
+    lastOverview && lastOverview.key === accountKey ? lastOverview : null;
   const response = await fetch(overviewURL, {
     method: "GET",
     headers: {
       Accept: "application/json",
+      ...(conditional ? { "If-None-Match": conditional.etag } : {}),
       ...accountHeaders(),
     },
     signal,
@@ -125,6 +135,12 @@ export async function fetchOverview(signal?: AbortSignal): Promise<OverviewRespo
   if (response.headers.get("x-amzn-ErrorType") === "AccountArchived") {
     throw new AccountArchivedError();
   }
+  // Checked before !response.ok, because a 304 is not an "ok" response.
+  if (response.status === 304 && conditional) {
+    // Nothing changed. The body is the one already held, so there is nothing to
+    // re-hydrate and nothing to replace.
+    return conditional.data;
+  }
   if (!response.ok) {
     let message = `HTTP ${response.status}`;
     try {
@@ -139,6 +155,8 @@ export async function fetchOverview(signal?: AbortSignal): Promise<OverviewRespo
   }
 
   const overview = (await response.json()) as OverviewResponse;
+  const etag = response.headers.get("ETag");
+  lastOverview = etag ? { key: accountKey, etag, data: overview } : null;
   await hydrateQueueMessages(overview, signal);
   return overview;
 }
