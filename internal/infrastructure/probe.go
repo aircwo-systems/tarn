@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -56,7 +57,21 @@ type Service struct {
 	mu         sync.RWMutex
 	cancel     context.CancelFunc
 	done       chan struct{}
+
+	// Probes only matter while someone is looking at them. lastViewed is when
+	// results were last read (unix nanos); viewed wakes a paused probe loop.
+	lastViewed atomic.Int64
+	viewed     chan struct{}
 }
+
+// Package vars so tests can shorten them.
+var (
+	// probeInterval is how often targets are probed while results are viewed.
+	probeInterval = 30 * time.Second
+	// probeIdleAfter pauses probing when nothing has read results this long.
+	// The dashboard reads them on every poll, so this means "no dashboard open".
+	probeIdleAfter = 2 * time.Minute
+)
 
 // NewService creates a probe service from a config target string.
 // Format: "kind:host:port,kind:host:port,..."
@@ -64,6 +79,7 @@ type Service struct {
 func NewService(targets string, enabled bool) *Service {
 	s := &Service{
 		done:    make(chan struct{}),
+		viewed:  make(chan struct{}, 1),
 		enabled: enabled,
 	}
 	if !enabled {
@@ -141,8 +157,10 @@ func kindDisplayName(kind string) string {
 	}
 }
 
-// Start begins background probing every 30 seconds.
-// When enabled it runs even with no targets so services registered later are picked up.
+// Start probes once, then every probeInterval while results are being read.
+// With no dashboard open it stops dialling the targets and resumes on the
+// next read. When enabled it runs even with no targets so services
+// registered later are picked up.
 func (s *Service) Start(ctx context.Context) {
 	if !s.enabled {
 		return
@@ -151,20 +169,53 @@ func (s *Service) Start(ctx context.Context) {
 
 	// Initial probe
 	s.ProbeAll(ctx)
+	s.lastViewed.Store(time.Now().UnixNano())
 
 	go func() {
 		defer close(s.done)
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
+		timer := time.NewTimer(probeInterval)
+		defer timer.Stop()
 		for {
+			if !s.recentlyViewed() {
+				timer.Stop()
+				// Drop reads signalled before the pause, then wait for a new one.
+				select {
+				case <-s.viewed:
+				default:
+				}
+				if !s.recentlyViewed() {
+					select {
+					case <-ctx.Done():
+						return
+					case <-s.viewed:
+					}
+				}
+				// Results are stale after a pause; refresh them straight away.
+				s.ProbeAll(ctx)
+				timer.Reset(probeInterval)
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-timer.C:
 				s.ProbeAll(ctx)
+				timer.Reset(probeInterval)
 			}
 		}
 	}()
+}
+
+func (s *Service) recentlyViewed() bool {
+	return time.Since(time.Unix(0, s.lastViewed.Load())) < probeIdleAfter
+}
+
+// markViewed records that results were read, waking a paused probe loop.
+func (s *Service) markViewed() {
+	s.lastViewed.Store(time.Now().UnixNano())
+	select {
+	case s.viewed <- struct{}{}:
+	default:
+	}
 }
 
 // Stop cancels background probing.
@@ -208,6 +259,7 @@ func (s *Service) ProbeAll(ctx context.Context) []ProbeResult {
 
 // Results returns the last cached probe results.
 func (s *Service) Results() []ProbeResult {
+	s.markViewed()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]ProbeResult, 0, len(s.injected)+len(s.results))
