@@ -779,13 +779,10 @@ func (h *Handler) Overview(w http.ResponseWriter, r *http.Request) {
 	for _, sm := range stateMachines {
 		var execs []stateMachineExecutionSummary
 		if h.stepfunctions != nil {
-			list, _ := h.stepfunctions.ListExecutions(sm.Arn, "")
-			// Cap how many executions (with their full event history) we surface
-			// per machine to keep the overview payload bounded; ListExecutions is
-			// already newest-first.
-			if len(list) > maxOverviewExecutions {
-				list = list[:maxOverviewExecutions]
-			}
+			// Ask for only the executions that get surfaced, so the store
+			// copies that many rather than every run the machine ever made.
+			// ListExecutions is already newest-first.
+			list, _ := h.stepfunctions.ListExecutions(sm.Arn, "", maxOverviewExecutions)
 			execs = make([]stateMachineExecutionSummary, 0, len(list))
 			for _, ex := range list {
 				summary := stateMachineExecutionSummary{

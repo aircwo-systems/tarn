@@ -426,20 +426,9 @@ func (s *Service) StopExecution(arn string) (*types.Execution, error) {
 }
 
 // ListExecutions returns executions, optionally filtered by state machine ARN
-// and/or status.
-func (s *Service) ListExecutions(stateMachineArn, statusFilter string) ([]*types.Execution, error) {
-	all := s.store.ListExecutions()
-	out := make([]*types.Execution, 0, len(all))
-	for _, ex := range all {
-		if stateMachineArn != "" && ex.StateMachineArn != stateMachineArn {
-			continue
-		}
-		if statusFilter != "" && ex.Status != statusFilter {
-			continue
-		}
-		out = append(out, ex)
-	}
-	return out, nil
+// and/or status. A limit of zero or less returns every match.
+func (s *Service) ListExecutions(stateMachineArn, statusFilter string, limit int) ([]*types.Execution, error) {
+	return s.store.ListExecutions(stateMachineArn, statusFilter, limit), nil
 }
 
 // GetExecutionHistory returns an execution's events. For a running execution the

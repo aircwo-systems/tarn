@@ -6,12 +6,19 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/internal/persist"
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
+
+// maxExecutionsPerMachine bounds how many executions one state machine keeps.
+// Every execution holds its full history, roughly 12 to 30 KB for a typical run
+// and more for Map states, so keeping every run forever grew without limit and
+// made each dashboard poll walk the lot.
+const maxExecutionsPerMachine = 100
 
 // Store is an in-memory store for state machines and executions with optional
 // JSON snapshot persistence. It mirrors the persistence pattern used by the
@@ -85,6 +92,16 @@ func (s *Store) Init() error {
 		}
 		s.executions[ex.Arn] = cloneExecution(ex)
 	}
+	// A snapshot written before executions were capped can hold more than one
+	// machine is allowed to keep.
+	seen := make(map[string]struct{}, len(s.machines))
+	for _, ex := range s.executions {
+		if _, ok := seen[ex.StateMachineArn]; ok {
+			continue
+		}
+		seen[ex.StateMachineArn] = struct{}{}
+		s.evictExecutionsLocked(ex.StateMachineArn)
+	}
 	return nil
 }
 
@@ -110,7 +127,8 @@ func (s *Store) GetStateMachine(arn string) (*types.StateMachine, error) {
 	return cloneStateMachine(sm), nil
 }
 
-// DeleteStateMachine removes a state machine by ARN.
+// DeleteStateMachine removes a state machine by ARN, along with its executions.
+// Leaving them behind pinned every history the machine had ever produced.
 func (s *Store) DeleteStateMachine(arn string) error {
 	s.mu.Lock()
 	if _, ok := s.machines[arn]; !ok {
@@ -118,6 +136,11 @@ func (s *Store) DeleteStateMachine(arn string) error {
 		return fmt.Errorf("state machine %s not found", arn)
 	}
 	delete(s.machines, arn)
+	for exArn, ex := range s.executions {
+		if ex.StateMachineArn == arn {
+			delete(s.executions, exArn)
+		}
+	}
 	s.mu.Unlock()
 	return s.persist()
 }
@@ -141,8 +164,42 @@ func (s *Store) SaveExecution(ex *types.Execution) error {
 	}
 	s.mu.Lock()
 	s.executions[ex.Arn] = cloneExecution(ex)
+	s.evictExecutionsLocked(ex.StateMachineArn)
 	s.mu.Unlock()
 	return s.persist()
+}
+
+// evictExecutionsLocked drops a state machine's oldest finished executions once
+// it keeps more than maxExecutionsPerMachine. Running executions are never
+// dropped, so a machine with more live runs than the cap keeps all of them.
+// Caller holds the write lock.
+func (s *Store) evictExecutionsLocked(stateMachineArn string) {
+	if strings.TrimSpace(stateMachineArn) == "" {
+		return
+	}
+	owned := make([]*types.Execution, 0, maxExecutionsPerMachine+1)
+	for _, ex := range s.executions {
+		if ex.StateMachineArn == stateMachineArn {
+			owned = append(owned, ex)
+		}
+	}
+	if len(owned) <= maxExecutionsPerMachine {
+		return
+	}
+	// Oldest first, so what gets dropped is what is least likely to still be
+	// running.
+	sort.Slice(owned, func(i, j int) bool { return owned[i].StartDate.Before(owned[j].StartDate) })
+	remaining := len(owned)
+	for _, ex := range owned {
+		if remaining <= maxExecutionsPerMachine {
+			return
+		}
+		if ex.Status == types.ExecutionStatusRunning {
+			continue
+		}
+		delete(s.executions, ex.Arn)
+		remaining--
+	}
 }
 
 // GetExecution returns the execution with the given ARN.
@@ -156,15 +213,39 @@ func (s *Store) GetExecution(arn string) (*types.Execution, error) {
 	return cloneExecution(ex), nil
 }
 
-// ListExecutions returns all executions sorted by start date (newest first).
-func (s *Store) ListExecutions() []*types.Execution {
+// ListExecutions returns executions sorted by start date (newest first),
+// optionally restricted to one state machine and/or status, and truncated to
+// limit newest. A limit of zero or less returns every match.
+//
+// Only the returned window is deep-copied, and the copy happens after the lock
+// is released: callers such as the dashboard poll this every few seconds, and
+// cloning every execution ever run before filtering by machine made each poll
+// cost the whole history once per state machine.
+func (s *Store) ListExecutions(stateMachineArn, status string, limit int) []*types.Execution {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]*types.Execution, 0, len(s.executions))
+	matched := make([]*types.Execution, 0, min(len(s.executions), maxExecutionsPerMachine))
 	for _, ex := range s.executions {
+		if stateMachineArn != "" && ex.StateMachineArn != stateMachineArn {
+			continue
+		}
+		if status != "" && ex.Status != status {
+			continue
+		}
+		matched = append(matched, ex)
+	}
+	s.mu.RUnlock()
+
+	sort.Slice(matched, func(i, j int) bool { return matched[i].StartDate.After(matched[j].StartDate) })
+	if limit > 0 && len(matched) > limit {
+		matched = matched[:limit]
+	}
+
+	// SaveExecution replaces the stored pointer rather than mutating the
+	// execution, so a pointer taken under the lock stays valid and unchanged.
+	out := make([]*types.Execution, 0, len(matched))
+	for _, ex := range matched {
 		out = append(out, cloneExecution(ex))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].StartDate.After(out[j].StartDate) })
 	return out
 }
 

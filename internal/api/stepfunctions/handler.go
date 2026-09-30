@@ -307,7 +307,7 @@ func (h *Handler) listExecutions(w http.ResponseWriter, body []byte) {
 		h.badRequest(w, err)
 		return
 	}
-	execs, err := h.svc.ListExecutions(req.StateMachineArn, req.StatusFilter)
+	execs, err := h.svc.ListExecutions(req.StateMachineArn, req.StatusFilter, 0)
 	if err != nil {
 		writeSvcError(w, err)
 		return
