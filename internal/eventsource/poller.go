@@ -91,6 +91,16 @@ type SQSInterface interface {
 	MoveToDLQIfExceeded(srcQueue string, msg *types.SQSMessage) (bool, string, error)
 }
 
+// waitingReceiver is implemented by SQS services whose long polls can be
+// cancelled. The poller uses it to wait for messages instead of re-polling
+// every second, and still stops promptly when the mapping is removed.
+type waitingReceiver interface {
+	ReceiveMessageUntil(queueName string, maxCount, visTimeout, waitTimeSec int, cancel <-chan struct{}) ([]*types.SQSMessage, error)
+}
+
+// sqsLongPollSeconds matches the long poll AWS's own SQS pollers use.
+const sqsLongPollSeconds = 20
+
 // StreamInterface abstracts DynamoDB Streams operations needed by the poller.
 type StreamInterface interface {
 	StreamBatch(streamArn, lastSequence string, limit int) ([]*types.StreamRecord, string, error)
@@ -241,9 +251,16 @@ func (p *poller) poll() bool {
 	if normalizeSourceType(p.mapping) == "dynamodb-stream" {
 		return p.pollDynamoStream()
 	}
+	var msgs []*types.SQSMessage
+	var err error
+	if w, ok := p.sqs.(waitingReceiver); ok {
+		msgs, err = w.ReceiveMessageUntil(p.mapping.QueueName, p.mapping.BatchSize, -1, sqsLongPollSeconds, p.done)
+	} else {
+		msgs, err = p.sqs.ReceiveMessage(p.mapping.QueueName, p.mapping.BatchSize, -1, 1)
+	}
+	// Measured from receipt: time spent waiting on an empty queue is not
+	// part of handling the batch.
 	pollStart := time.Now()
-
-	msgs, err := p.sqs.ReceiveMessage(p.mapping.QueueName, p.mapping.BatchSize, -1, 1)
 	if err != nil {
 		if isNotFoundError(err) {
 			p.disableWithError(err)

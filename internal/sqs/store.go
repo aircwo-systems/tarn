@@ -40,6 +40,27 @@ type queue struct {
 	messages []*types.SQSMessage
 	mu       sync.Mutex
 	dedup    map[string]int64 // FIFO dedup: dedupId → expiry epoch ms
+
+	// wake is closed (and replaced) whenever a message may have become
+	// receivable, so long polls wait on it instead of re-scanning on a timer.
+	// Guarded by mu.
+	wake chan struct{}
+}
+
+// waitChan returns the channel the next signal will close. Caller holds q.mu.
+func (q *queue) waitChan() chan struct{} {
+	if q.wake == nil {
+		q.wake = make(chan struct{})
+	}
+	return q.wake
+}
+
+// signal wakes every long poll waiting on the queue. Caller holds q.mu.
+func (q *queue) signal() {
+	if q.wake != nil {
+		close(q.wake)
+		q.wake = nil
+	}
 }
 
 // NewStore creates a new SQS store.
@@ -199,10 +220,14 @@ func (s *Store) DeleteQueue(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.queues[name]; !exists {
+	q, exists := s.queues[name]
+	if !exists {
 		return fmt.Errorf("queue %s not found", name)
 	}
 	delete(s.queues, name)
+	q.mu.Lock()
+	q.signal() // waiting long polls re-check and find the queue gone
+	q.mu.Unlock()
 	s.dirty.Store(true)
 	return nil
 }
@@ -405,6 +430,7 @@ func (s *Store) SendMessage(name string, body string, delaySec int, attrs map[st
 	}
 
 	q.messages = append(q.messages, msg)
+	q.signal()
 	q.mu.Unlock()
 	s.dirty.Store(true)
 	return msg, nil
@@ -412,11 +438,19 @@ func (s *Store) SendMessage(name string, body string, delaySec int, attrs map[st
 
 // ReceiveMessage returns up to maxCount visible messages and makes them invisible.
 func (s *Store) ReceiveMessage(name string, maxCount, visTimeout int) ([]*types.SQSMessage, error) {
+	msgs, _, _, err := s.receive(name, maxCount, visTimeout)
+	return msgs, err
+}
+
+// receive is ReceiveMessage plus what a long poll needs when nothing was
+// receivable: a channel closed when a message may have arrived, and the epoch
+// ms at which an in-flight or delayed message next becomes visible (0 if none).
+func (s *Store) receive(name string, maxCount, visTimeout int) ([]*types.SQSMessage, <-chan struct{}, int64, error) {
 	s.mu.RLock()
 	q, exists := s.queues[name]
 	s.mu.RUnlock()
 	if !exists {
-		return nil, fmt.Errorf("queue %s not found", name)
+		return nil, nil, 0, fmt.Errorf("queue %s not found", name)
 	}
 
 	q.mu.Lock()
@@ -432,9 +466,18 @@ func (s *Store) ReceiveMessage(name string, maxCount, visTimeout int) ([]*types.
 
 	now := nowMs()
 	var result []*types.SQSMessage
+	var nextAt int64
+	later := func(at int64) {
+		if at > now && (nextAt == 0 || at < nextAt) {
+			nextAt = at
+		}
+	}
 
 	// For FIFO queues, track which groups we've started serving
-	seenGroups := make(map[string]bool)
+	var seenGroups map[string]bool
+	if q.config.FifoQueue {
+		seenGroups = make(map[string]bool)
+	}
 
 	for _, m := range q.messages {
 		if len(result) >= maxCount {
@@ -446,6 +489,8 @@ func (s *Store) ReceiveMessage(name string, maxCount, visTimeout int) ([]*types.
 		if m.ExpiresAt <= now {
 			continue
 		}
+		later(m.VisibleAt)
+		later(m.DelayUntil)
 
 		// FIFO: the oldest live message heads its group. While it is in flight
 		// or delayed, nothing behind it in the same group may be delivered.
@@ -478,9 +523,16 @@ func (s *Store) ReceiveMessage(name string, maxCount, visTimeout int) ([]*types.
 			seenGroups[m.MessageGroupId] = true
 		}
 	}
+	var wake <-chan struct{}
+	if len(result) == 0 {
+		wake = q.waitChan()
+	}
 	q.mu.Unlock()
-	s.dirty.Store(true)
-	return result, nil
+	// An empty receive changes nothing, so it must not trigger a state flush.
+	if len(result) > 0 {
+		s.dirty.Store(true)
+	}
+	return result, wake, nextAt, nil
 }
 
 // PeekMessages returns up to limit non-expired messages without mutating visibility state.
@@ -527,6 +579,9 @@ func (s *Store) DeleteMessage(name string, receiptHandle string) error {
 	for _, m := range q.messages {
 		if m.ReceiptHandle == receiptHandle && !m.Deleted {
 			m.Deleted = true
+			if q.config.FifoQueue {
+				q.signal() // the next message in its group can now be delivered
+			}
 			q.mu.Unlock()
 			s.dirty.Store(true)
 			return nil
@@ -569,6 +624,7 @@ func (s *Store) ChangeMessageVisibility(name string, receiptHandle string, timeo
 	for _, m := range q.messages {
 		if m.ReceiptHandle == receiptHandle && !m.Deleted {
 			m.VisibleAt = nowMs() + int64(timeout)*1000
+			q.signal() // a shorter timeout may make it visible sooner than waiters expect
 			q.mu.Unlock()
 			s.dirty.Store(true)
 			return nil
@@ -599,6 +655,7 @@ func (s *Store) ReleaseMessage(name string, receiptHandle string) error {
 					m.ApproximateFirstReceiveTimestamp = 0
 				}
 			}
+			q.signal()
 			q.mu.Unlock()
 			s.dirty.Store(true)
 			return nil
@@ -708,7 +765,9 @@ func (s *Store) Reap() {
 			dlqName = queueNameFromArn(q.config.DeadLetterTargetArn)
 		}
 
-		alive := make([]*types.SQSMessage, 0, len(q.messages))
+		// Filter in place: most ticks remove nothing, and allocating a fresh
+		// slice per queue per second is pure garbage.
+		alive := q.messages[:0]
 		var toMove []*types.SQSMessage
 
 		staleThreshold := defaultStaleReceiveCount
@@ -737,6 +796,7 @@ func (s *Store) Reap() {
 			}
 			alive = append(alive, m)
 		}
+		clear(q.messages[len(alive):]) // drop references to removed messages
 		q.messages = alive
 
 		// Clean stale dedup entries
@@ -774,6 +834,7 @@ func (s *Store) Reap() {
 				MessageGroupId:    m.MessageGroupId,
 			})
 		}
+		dlq.signal()
 		dlq.mu.Unlock()
 		log.Printf("[sqs] moved %d message(s) to DLQ %q", len(move.messages), move.dlqName)
 	}

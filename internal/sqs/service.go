@@ -135,6 +135,14 @@ func (s *Service) ListDisruptorRules() []Rule {
 
 // ReceiveMessage receives messages from a queue, supporting long polling.
 func (s *Service) ReceiveMessage(queueName string, maxCount, visTimeout, waitTimeSec int) ([]*types.SQSMessage, error) {
+	return s.ReceiveMessageUntil(queueName, maxCount, visTimeout, waitTimeSec, nil)
+}
+
+// ReceiveMessageUntil is ReceiveMessage with a cancel channel: closing it ends
+// a long poll early with no messages. A long poll sleeps until a message may
+// have arrived or an in-flight one becomes visible, rather than re-scanning
+// the queue on a timer.
+func (s *Service) ReceiveMessageUntil(queueName string, maxCount, visTimeout, waitTimeSec int, cancel <-chan struct{}) ([]*types.SQSMessage, error) {
 	if visTimeout < 0 {
 		// Use queue default
 		q, err := s.store.GetQueue(queueName)
@@ -149,12 +157,13 @@ func (s *Service) ReceiveMessage(queueName string, maxCount, visTimeout, waitTim
 		return s.store.ReceiveMessage(queueName, maxCount, visTimeout)
 	}
 
-	// Long polling: wait up to waitTimeSec for messages
 	deadline := time.Now().Add(time.Duration(waitTimeSec) * time.Second)
-	pollInterval := 100 * time.Millisecond
+	// Go 1.23+ timers: Reset needs no drain and a stopped timer never delivers.
+	timer := time.NewTimer(time.Hour)
+	defer timer.Stop()
 
 	for {
-		msgs, err := s.store.ReceiveMessage(queueName, maxCount, visTimeout)
+		msgs, wake, nextAt, err := s.store.receive(queueName, maxCount, visTimeout)
 		if err != nil {
 			return nil, err
 		}
@@ -162,12 +171,22 @@ func (s *Service) ReceiveMessage(queueName string, maxCount, visTimeout, waitTim
 			return msgs, nil
 		}
 
-		if time.Now().After(deadline) {
+		wait := time.Until(deadline)
+		if wait <= 0 {
 			return []*types.SQSMessage{}, nil
 		}
+		if nextAt > 0 {
+			if d := time.Until(time.UnixMilli(nextAt)); d < wait {
+				wait = max(d, time.Millisecond)
+			}
+		}
+		timer.Reset(wait)
 
 		select {
-		case <-time.After(pollInterval):
+		case <-wake:
+		case <-timer.C:
+		case <-cancel:
+			return []*types.SQSMessage{}, nil
 		case <-s.done:
 			return nil, fmt.Errorf("service shutting down")
 		}
