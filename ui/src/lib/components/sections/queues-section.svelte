@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
   import QueueList from "$lib/components/queues/queue-list.svelte";
   import QueueDetail from "$lib/components/queues/queue-detail.svelte";
@@ -38,6 +39,24 @@
   const totalProcessed = $derived(
     queues.reduce((total, queue) => total + (queue.processedCount ?? 0), 0),
   );
+
+  let listCollapsed = $state(false);
+
+  function toggleListCollapse() {
+    listCollapsed = !listCollapsed;
+    try {
+      localStorage.setItem("tarn-queues-list-collapsed", String(listCollapsed));
+    } catch {}
+  }
+
+  let query = $state("");
+  const visible = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return queues;
+    return queues.filter((queue) => queue.name.toLowerCase().includes(q));
+  });
+
+  const disruptedCount = $derived(queues.filter((q) => q.disruptEnabled).length);
 
   // Keyed by name: polling replaces the objects, so holding one would freeze the panel.
   let selectedName = $state<string | null>(null);
@@ -109,10 +128,26 @@
     history.replaceState(null, "", `#queues?queue=${encodeURIComponent(name)}`);
   }
 
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (visible.length === 0) return;
+    e.preventDefault();
+    const idx = visible.findIndex((queue) => queue.name === selected?.name);
+    const forward = e.key === "ArrowDown" || e.key === "ArrowRight";
+    const next = forward ? Math.min(visible.length - 1, idx + 1) : Math.max(0, idx - 1);
+    select(visible[next].name);
+  }
+
   onMount(() => {
     const qs = window.location.hash.split("?")[1];
     const queue = qs ? new URLSearchParams(qs).get("queue") : null;
     if (queue) selectedName = queue;
+    try {
+      const saved = localStorage.getItem("tarn-queues-list-collapsed");
+      if (saved !== null) {
+        listCollapsed = saved === "true";
+      }
+    } catch {}
   });
 
   async function refreshSelectedQueueMessages() {
@@ -121,22 +156,20 @@
     await loadQueueMessages(selected.name);
   }
 
-  async function loadQueueMessages(queueName: string) {
+  async function loadQueueMessages(name: string) {
     const token = ++requestToken;
     selectedLoading = true;
     selectedError = "";
     try {
-      const messages = await fetchQueueMessages(queueName);
-      if (token !== requestToken) return;
-      selectedMessages = messages;
-    } catch (error) {
-      if (token !== requestToken) return;
-      const queue = queues.find((item) => item.name === queueName);
-      selectedMessages = queue?.recentMessages ?? [];
-      selectedError =
-        error instanceof Error
-          ? error.message
-          : "Failed to load queue messages";
+      const messages = await fetchQueueMessages(name);
+      if (token === requestToken) {
+        selectedMessages = messages;
+      }
+    } catch (err) {
+      if (token === requestToken) {
+        selectedError =
+          err instanceof Error ? err.message : "Failed to load messages";
+      }
     } finally {
       if (token === requestToken) {
         selectedLoading = false;
@@ -153,13 +186,31 @@
     {onToggleSidebar}
   >
     {#snippet actions()}
+      <div class="header-filter">
+        <MagnifyingGlassIcon size={12} />
+        <input
+          placeholder="Filter queues..."
+          bind:value={query}
+          aria-label="Filter queues"
+        />
+        {#if query}
+          <button
+            type="button"
+            class="clear-query-btn"
+            onclick={() => (query = "")}
+            aria-label="Clear filter"
+          >
+            &times;
+          </button>
+        {/if}
+      </div>
       {#if filters.tagFilter}
         <span class="filter" title={filters.tagFilter}>Tag <span>{filters.tagFilter}</span></span>
       {/if}
     {/snippet}
   </SectionHeader>
 
-  {#if dashboard.loading && !dashboard.data}
+  {#if dashboard.loading && !dashboard.data}\
     <div class="layout">
       <div class="skeleton-list">
         {#each Array(6) as _, i (i)}<span style:--i={i}></span>{/each}
@@ -179,19 +230,98 @@
         </button>
       </div>
     {/if}
-    <div class="layout">
-      <RcResizableAside storageKey="tarn-queues-list-width">
-        <QueueList
-          queues={queues}
-          selectedName={selected?.name ?? null}
-          onselect={select}
-          selection={disruptTargets}
-          ontoggleselect={toggleDisruptTarget}
-        />
-        {#if disruptTargets.size === 0}
-          <p class="bulk-hint">Tick queues to target several at once with the disruptor.</p>
-        {/if}
-      </RcResizableAside>
+    <div class="layout" class:list-collapsed={listCollapsed}>
+      {#if listCollapsed}
+        <div class="list-toolbar" role="toolbar" aria-label="Queues overview">
+          <div class="toolbar-leading">
+            <button
+              type="button"
+              class="expand-list-btn"
+              onclick={toggleListCollapse}
+              title="Expand queue list"
+              aria-label="Expand queue list"
+            >
+              <SidebarSimpleIcon size={13} weight="fill" />
+              <span class="expand-label">Queue list</span>
+              <span class="count-badge">{queues.length}</span>
+            </button>
+
+            {#if sidebarCollapsed}
+              <span class="toolbar-divider" aria-hidden="true"></span>
+              <div class="toolbar-stats">
+                <span class="toolbar-stat" title="{totalVisible} visible messages">
+                  <span class="status-dot green"></span>
+                  <span>{totalVisible} visible</span>
+                </span>
+                {#if totalInFlight > 0}
+                  <span class="toolbar-stat" title="{totalInFlight} in flight">
+                    <span class="status-dot amber"></span>
+                    <span>{totalInFlight} in flight</span>
+                  </span>
+                {/if}
+                {#if disruptedCount > 0}
+                  <span class="toolbar-stat" title="{disruptedCount} queues disrupted">
+                    <span class="status-dot red"></span>
+                    <span>{disruptedCount} disrupted</span>
+                  </span>
+                {/if}
+              </div>
+            {/if}
+          </div>
+
+          <div class="toolbar-trailing">
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="chips-row" role="tablist" tabindex="0" aria-label="Queue switcher" onkeydown={onKeydown}>
+              {#each visible as q (q.name)}
+                <button
+                  type="button"
+                  role="tab"
+                  class="item-chip"
+                  class:selected={q.name === selected?.name}
+                  aria-selected={q.name === selected?.name}
+                  onclick={() => select(q.name)}
+                  title="{q.name} ({q.fifo ? 'FIFO' : 'Standard'} · {q.approxVisible} visible)"
+                >
+                  <span
+                    class="chip-dot"
+                    style:background={q.disruptEnabled ? "var(--accent-red, #fb7185)" : (q.approxStale ?? 0) > 0 ? "var(--accent-amber, #f59e0b)" : q.approxVisible > 0 ? "var(--accent-green, #10b981)" : "var(--text-tertiary)"}
+                  ></span>
+                  <span class="chip-name">{q.name}</span>
+                  {#if q.approxVisible > 0}
+                    <span class="chip-badge">{q.approxVisible}</span>
+                  {:else if q.fifo}
+                    <span class="chip-badge">FIFO</span>
+                  {/if}
+                </button>
+              {:else}
+                <span class="chips-none">No match for "{query}"</span>
+              {/each}
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      {#if !listCollapsed}
+        <RcResizableAside
+          storageKey="tarn-queues-list-width"
+          collapsible={true}
+          onToggleCollapse={toggleListCollapse}
+        >
+          <QueueList
+            queues={queues}
+            selectedName={selected?.name ?? null}
+            onselect={select}
+            selection={disruptTargets}
+            ontoggleselect={toggleDisruptTarget}
+            bind:query
+            onToggleCollapse={toggleListCollapse}
+          />
+          {#if disruptTargets.size === 0}
+            <p class="bulk-hint">Tick queues to target several at once with the disruptor.</p>
+          {/if}
+        </RcResizableAside>
+      {/if}
+
       {#if selected}
         {#key selected.name}
           <QueueDetail
@@ -218,18 +348,35 @@
   }
 
   .filter {
-    display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 8px;
+    display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border-radius: 8px;
     border: 1px solid var(--border-subtle); font-size: 11px; color: var(--text-tertiary);
+    background: #ffffff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
   }
   .filter span { font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-primary); }
 
-  .bulk { max-width: 1320px; padding-top: 16px; display: flex; flex-direction: column; gap: 6px; }
-  .clear-targets {
-    align-self: flex-start; font-size: 11px; color: var(--text-tertiary);
-    transition: color 120ms ease;
+  :global(.dark) .filter {
+    background: var(--bg-element);
+    box-shadow: none;
   }
-  .clear-targets:hover { color: var(--text-primary); }
-  .bulk-hint { margin-top: 8px; font-size: 11px; color: var(--text-tertiary); }
+
+  .bulk {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    padding: 10px 14px; margin-bottom: 8px; border-radius: 8px;
+    background: color-mix(in srgb, var(--accent-red) 6%, var(--bg-element));
+    border: 1px solid color-mix(in srgb, var(--accent-red) 22%, transparent);
+    animation: fadeUp 180ms var(--ease-snappy) both;
+  }
+  .clear-targets {
+    font-size: 11px; color: var(--text-tertiary); background: transparent; border: 0;
+    cursor: pointer; padding: 2px 6px; border-radius: 4px;
+    transition: color 100ms ease, background 100ms ease;
+  }
+  .clear-targets:hover { color: var(--text-primary); background: var(--bg-element); }
+
+  .bulk-hint {
+    margin: 8px 4px 0; font-size: 11px; color: var(--text-tertiary); line-height: 1.4;
+  }
 
   .blank { padding: 64px 0; text-align: center; animation: fadeUp 320ms var(--ease-snappy) both; }
   .blank h2 { font-size: 14px; font-weight: 600; color: var(--text-primary); }
@@ -244,6 +391,6 @@
   @keyframes pulse { 50% { opacity: 0.5; } }
   @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } }
   @media (prefers-reduced-motion: reduce) {
-    .blank, .skeleton-list span { animation: none; }
+    .blank, .bulk, .skeleton-list span { animation: none; }
   }
 </style>

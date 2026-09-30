@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
   import TopicList from "$lib/components/sns/topic-list.svelte";
   import SubscriptionList from "$lib/components/sns/subscription-list.svelte";
@@ -44,9 +45,36 @@
     subscriptions.filter((sub) => sub.protocol.toLowerCase() === "sqs").length,
   );
 
+  let listCollapsed = $state(false);
+
+  function toggleListCollapse() {
+    listCollapsed = !listCollapsed;
+    try {
+      localStorage.setItem("tarn-sns-list-collapsed", String(listCollapsed));
+    } catch {}
+  }
+
   let scope = $state<"topics" | "subscriptions">("topics");
   let selectedTopicName = $state<string | null>(null);
   let selectedSubscriptionArn = $state<string | null>(null);
+  let query = $state("");
+
+  const visibleTopics = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return topics;
+    return topics.filter((t) => t.name.toLowerCase().includes(q));
+  });
+
+  const visibleSubscriptions = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return subscriptions;
+    return subscriptions.filter(
+      (sub) =>
+        sub.topicName.toLowerCase().includes(q) ||
+        sub.protocol.toLowerCase().includes(q) ||
+        sub.endpoint.toLowerCase().includes(q),
+    );
+  });
 
   // Keyed by name/arn: polling replaces the objects, so holding one would freeze the panel.
   const selectedTopic = $derived(
@@ -75,6 +103,24 @@
     history.replaceState(null, "", `#sns?sub=${encodeURIComponent(subscriptionArn)}`);
   }
 
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    const forward = e.key === "ArrowDown" || e.key === "ArrowRight";
+    if (scope === "topics") {
+      if (visibleTopics.length === 0) return;
+      e.preventDefault();
+      const idx = visibleTopics.findIndex((t) => t.name === selectedTopic?.name);
+      const next = forward ? Math.min(visibleTopics.length - 1, idx + 1) : Math.max(0, idx - 1);
+      selectTopic(visibleTopics[next].name);
+    } else {
+      if (visibleSubscriptions.length === 0) return;
+      e.preventDefault();
+      const idx = visibleSubscriptions.findIndex((s) => s.subscriptionArn === selectedSubscription?.subscriptionArn);
+      const next = forward ? Math.min(visibleSubscriptions.length - 1, idx + 1) : Math.max(0, idx - 1);
+      selectSubscription(visibleSubscriptions[next].subscriptionArn);
+    }
+  }
+
   onMount(() => {
     const qs = window.location.hash.split("?")[1];
     const params = qs ? new URLSearchParams(qs) : null;
@@ -87,6 +133,12 @@
       selectedTopicName = topic;
       scope = "topics";
     }
+    try {
+      const saved = localStorage.getItem("tarn-sns-list-collapsed");
+      if (saved !== null) {
+        listCollapsed = saved === "true";
+      }
+    } catch {}
   });
 </script>
 
@@ -98,6 +150,24 @@
     {onToggleSidebar}
   >
     {#snippet actions()}
+      <div class="header-filter">
+        <MagnifyingGlassIcon size={12} />
+        <input
+          placeholder="Filter {scope}..."
+          bind:value={query}
+          aria-label="Filter {scope}"
+        />
+        {#if query}
+          <button
+            type="button"
+            class="clear-query-btn"
+            onclick={() => (query = "")}
+            aria-label="Clear filter"
+          >
+            &times;
+          </button>
+        {/if}
+      </div>
       {#if filters.tagFilter}
         <span class="filter" title={filters.tagFilter}>Tag <span>{filters.tagFilter}</span></span>
       {/if}
@@ -116,30 +186,120 @@
       <p>Create one with <code>aws sns create-topic</code> or deploy through your IaC, and it appears here.</p>
     </div>
   {:else}
-    <div class="layout">
-      <RcResizableAside storageKey="tarn-sns-list-width">
-        <div class="scope-toggle" role="group" aria-label="SNS scope">
-          <button
-            type="button"
-            class:active={scope === "topics"}
-            onclick={() => (scope = "topics")}
-          >Topics <span>{topics.length}</span></button>
-          <button
-            type="button"
-            class:active={scope === "subscriptions"}
-            onclick={() => (scope = "subscriptions")}
-          >Subscriptions <span>{subscriptions.length}</span></button>
+    <div class="layout" class:list-collapsed={listCollapsed}>
+      {#if listCollapsed}
+        <div class="list-toolbar" role="toolbar" aria-label="SNS overview">
+          <div class="toolbar-leading">
+            <button
+              type="button"
+              class="expand-list-btn"
+              onclick={toggleListCollapse}
+              title="Expand {scope} list"
+              aria-label="Expand {scope} list"
+            >
+              <SidebarSimpleIcon size={13} weight="fill" />
+              <span class="expand-label">{scope === "topics" ? "Topic list" : "Subscription list"}</span>
+              <span class="count-badge">{scope === "topics" ? topics.length : subscriptions.length}</span>
+            </button>
+
+            {#if sidebarCollapsed}
+              <span class="toolbar-divider" aria-hidden="true"></span>
+              <div class="toolbar-stats">
+                <span class="toolbar-stat" title="{topics.length} topics">
+                  <span class="status-dot red"></span>
+                  <span>{topics.length} topics</span>
+                </span>
+                <span class="toolbar-stat" title="{subscriptions.length} subscriptions">
+                  <span class="status-dot green"></span>
+                  <span>{subscriptions.length} subs</span>
+                </span>
+              </div>
+            {/if}
+          </div>
+
+          <div class="toolbar-trailing">
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="chips-row" role="tablist" tabindex="0" aria-label="SNS switcher" onkeydown={onKeydown}>
+              {#if scope === "topics"}
+                {#each visibleTopics as topic (topic.name)}
+                  <button
+                    type="button"
+                    role="tab"
+                    class="item-chip"
+                    class:selected={topic.name === selectedTopic?.name}
+                    aria-selected={topic.name === selectedTopic?.name}
+                    onclick={() => selectTopic(topic.name)}
+                    title="{topic.name} ({topic.fifo ? 'FIFO' : 'Standard'} · {topic.subscriptions} subscriptions)"
+                  >
+                    <span class="chip-dot" style:background="var(--accent-red, #fb7185)"></span>
+                    <span class="chip-name">{topic.name}</span>
+                    <span class="chip-badge">{topic.subscriptions} sub{topic.subscriptions === 1 ? '' : 's'}</span>
+                  </button>
+                {:else}
+                  <span class="chips-none">No match for "{query}"</span>
+                {/each}
+              {:else}
+                {#each visibleSubscriptions as sub (sub.subscriptionArn)}
+                  <button
+                    type="button"
+                    role="tab"
+                    class="item-chip"
+                    class:selected={sub.subscriptionArn === selectedSubscription?.subscriptionArn}
+                    aria-selected={sub.subscriptionArn === selectedSubscription?.subscriptionArn}
+                    onclick={() => selectSubscription(sub.subscriptionArn)}
+                    title="{sub.endpoint} ({sub.protocol} · {sub.topicName})"
+                  >
+                    <span class="chip-dot" style:background="var(--accent-green, #10b981)"></span>
+                    <span class="chip-name">{sub.endpoint}</span>
+                    <span class="chip-badge">{sub.protocol}</span>
+                  </button>
+                {:else}
+                  <span class="chips-none">No match for "{query}"</span>
+                {/each}
+              {/if}
+            </div>
+          </div>
         </div>
-        {#if scope === "topics"}
-          <TopicList topics={topics} selectedName={selectedTopic?.name ?? null} onselect={selectTopic} />
-        {:else}
-          <SubscriptionList
-            subscriptions={subscriptions}
-            selectedArn={selectedSubscription?.subscriptionArn ?? null}
-            onselect={selectSubscription}
-          />
-        {/if}
-      </RcResizableAside>
+      {/if}
+
+      {#if !listCollapsed}
+        <RcResizableAside
+          storageKey="tarn-sns-list-width"
+          collapsible={true}
+          onToggleCollapse={toggleListCollapse}
+        >
+          <div class="scope-toggle" role="group" aria-label="SNS scope">
+            <button
+              type="button"
+              class:active={scope === "topics"}
+              onclick={() => (scope = "topics")}
+            >Topics <span>{topics.length}</span></button>
+            <button
+              type="button"
+              class:active={scope === "subscriptions"}
+              onclick={() => (scope = "subscriptions")}
+            >Subscriptions <span>{subscriptions.length}</span></button>
+          </div>
+          {#if scope === "topics"}
+            <TopicList
+              {topics}
+              selectedName={selectedTopic?.name ?? null}
+              onselect={selectTopic}
+              bind:query
+              onToggleCollapse={toggleListCollapse}
+            />
+          {:else}
+            <SubscriptionList
+              {subscriptions}
+              selectedArn={selectedSubscription?.subscriptionArn ?? null}
+              onselect={selectSubscription}
+              bind:query
+              onToggleCollapse={toggleListCollapse}
+            />
+          {/if}
+        </RcResizableAside>
+      {/if}
+
       {#if scope === "topics" && selectedTopic}
         {#key selectedTopic.name}
           <TopicDetail
@@ -173,34 +333,48 @@
   }
 
   .filter {
-    display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 8px;
+    display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border-radius: 8px;
     border: 1px solid var(--border-subtle); font-size: 11px; color: var(--text-tertiary);
+    background: #ffffff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
   }
   .filter span { font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-primary); }
 
+  :global(.dark) .filter {
+    background: var(--bg-element);
+    box-shadow: none;
+  }
+
   .scope-toggle {
-    display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; margin-bottom: 8px;
-    border-radius: 8px; border: 1px solid var(--border-subtle); background: var(--bg-app);
+    display: flex; gap: 4px; padding: 3px; border-radius: 8px;
+    background: var(--bg-element); border: 1px solid var(--border-subtle);
+    margin-bottom: 8px;
   }
   .scope-toggle button {
-    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-    height: 26px; border-radius: 6px; font-size: 11.5px; color: var(--text-tertiary);
-    transition: color 120ms ease, background 120ms ease;
+    flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    height: 26px; border: 0; border-radius: 6px; background: transparent;
+    font-size: 11.5px; font-weight: 500; color: var(--text-secondary); cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
   }
-  .scope-toggle button:hover { color: var(--text-secondary); }
-  .scope-toggle button.active { color: var(--text-primary); background: var(--bg-element); }
+  .scope-toggle button.active {
+    background: #ffffff; color: var(--text-primary);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  }
   .scope-toggle button span {
-    font: 10.5px var(--font-mono, ui-monospace, monospace); font-variant-numeric: tabular-nums;
-    color: var(--text-tertiary);
+    font-size: 10px; font-variant-numeric: tabular-nums; opacity: 0.7;
   }
-  .scope-toggle button.active span { color: var(--text-secondary); }
+
+  :global(.dark) .scope-toggle button.active {
+    background: var(--bg-surface, #1e1e24);
+    box-shadow: none;
+  }
 
   .blank { padding: 64px 0; text-align: center; animation: fadeUp 320ms var(--ease-snappy) both; }
   .blank h2 { font-size: 14px; font-weight: 600; color: var(--text-primary); }
   .blank p { margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
   .blank code { font-family: var(--font-mono, ui-monospace, monospace); font-size: 11.5px; color: var(--text-primary); }
 
-  .skeleton-list { display: flex; flex-direction: column; gap: 6px; }
+  .skeleton-list { display: flex; flex-direction: column; gap: 6px; width: 260px; }
   .skeleton-list span {
     height: 34px; border-radius: 8px; background: var(--bg-element);
     animation: pulse 1.4s ease-in-out infinite; animation-delay: calc(var(--i) * 80ms);

@@ -5,6 +5,7 @@
   import type { Component } from "svelte";
   import { onMount } from "svelte";
   import type { LogPulse } from "$lib/log-pulse.svelte";
+  import SidebarWidget, { type SidebarWidgetData } from "./sidebar-widget.svelte";
 
   export interface NavItem {
     id: string;
@@ -13,6 +14,7 @@
     count: number | null;
     /** Recent-activity sparkline + error pill (used by Logs). */
     pulse?: LogPulse;
+    widget?: SidebarWidgetData;
   }
 
   export interface NavSection {
@@ -43,8 +45,9 @@
 
   let contentEl = $state<HTMLElement | null>(null);
   const itemEls = new Map<string, HTMLElement>();
+  let itemObserver: ResizeObserver | undefined;
 
-  // ─── Zero-Lag Precision Motion Pills ───
+  // ─── Zero-Lag Precision Motion Indicators ───
   let activePillTop = $state(0);
   let activePillHeight = $state(0);
   let activePillVisible = $state(false);
@@ -56,6 +59,7 @@
 
   function registerItem(node: HTMLElement, id: string) {
     itemEls.set(id, node);
+    itemObserver?.observe(node);
     if (id === activeTab) {
       requestAnimationFrame(() => syncActivePill(false));
     }
@@ -67,6 +71,7 @@
         }
       },
       destroy() {
+        itemObserver?.unobserve(node);
         itemEls.delete(id);
       },
     };
@@ -199,13 +204,16 @@
   }
 
   onMount(() => {
-    requestAnimationFrame(() => {
+    itemObserver = new ResizeObserver(() => {
       syncActivePill(false);
     });
+    for (const item of itemEls.values()) itemObserver.observe(item);
+
     const onResize = () => syncActivePill(false);
     window.addEventListener("resize", onResize);
     window.addEventListener("keydown", onKeydown);
     return () => {
+      itemObserver?.disconnect();
       window.removeEventListener("resize", onResize);
       window.removeEventListener("keydown", onKeydown);
       window.removeEventListener("pointermove", onResizeMove);
@@ -315,6 +323,7 @@
           {#each section.items as item (item.id)}
             {@const Icon = item.icon}
             {@const active = item.id === activeTab}
+            {@const hasWidget = !!item.widget && !sidebarCollapsed && (item.id === "overview" ? width >= 240 : width >= 340)}
             <button
               type="button"
               use:registerItem={item.id}
@@ -322,6 +331,8 @@
               onpointerenter={() => handleItemPointerEnter(item.id)}
               class="nav-item"
               class:active
+              class:has-widget={hasWidget}
+              aria-describedby={hasWidget ? `nav-${item.id}-widget` : undefined}
               aria-current={active ? "page" : undefined}
             >
               <div class="nav-item-left">
@@ -361,6 +372,14 @@
                 <div class="nav-item-right">
                   <span class="nav-badge">{item.count}</span>
                 </div>
+              {/if}
+
+              {#if hasWidget}
+                <span class="nav-widget" id="nav-{item.id}-widget">
+                  <span class="nav-widget-inner">
+                    <SidebarWidget data={item.widget!} />
+                  </span>
+                </span>
               {/if}
             </button>
           {/each}
@@ -710,7 +729,7 @@
     border-radius: 2px;
   }
 
-  /* ─── Zero-Lag Precision Motion Pills (from rack_console prototype) ─── */
+  /* ─── Zero-Lag Precision Motion Indicators (from rack_console prototype) ─── */
   .nav-hover-pill {
     position: absolute;
     top: 0;
@@ -796,6 +815,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
     padding: 5px 8px;
     border-radius: 5px;
     color: var(--text-secondary);
@@ -811,6 +831,29 @@
     width: 100%;
     text-align: left;
     z-index: 3;
+  }
+
+  .nav-item.has-widget {
+    padding: 8px 10px 10px;
+  }
+
+  .nav-item.has-widget + .nav-item {
+    margin-top: 3px;
+  }
+
+  .nav-item.has-widget .nav-pulse {
+    display: none;
+  }
+
+  .nav-widget {
+    flex-basis: 100%;
+    min-width: 0;
+    padding-left: 23px;
+    padding-top: 8px;
+  }
+
+  .nav-widget-inner {
+    min-height: 0;
   }
 
   .nav-item:focus-visible {
@@ -966,7 +1009,7 @@
   }
 
   .account-pill-btn {
-    display: flex;
+    display: inline-flex;
     align-items: center;
     gap: 5px;
     padding: 3px 6px;

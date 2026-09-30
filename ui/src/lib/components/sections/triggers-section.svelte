@@ -1,7 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
-  import TriggerList, { type TriggerRow } from "$lib/components/triggers/trigger-list.svelte";
+  import TriggerList, { type TriggerRow, triggerStateTone } from "$lib/components/triggers/trigger-list.svelte";
   import TriggerDetail from "$lib/components/triggers/trigger-detail.svelte";
   import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
   import {
@@ -308,15 +309,33 @@
     { id: "API", label: "API", count: apiCount },
   ]);
 
-  const filteredTriggers = $derived(
-    typeFilter === "ALL" ? triggerRows : triggerRows.filter((t) => t.type === typeFilter),
-  );
+  let listCollapsed = $state(false);
+
+  function toggleListCollapse() {
+    listCollapsed = !listCollapsed;
+    try {
+      localStorage.setItem("tarn-triggers-list-collapsed", String(listCollapsed));
+    } catch {}
+  }
+
+  let query = $state("");
+
+  const visibleTriggers = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    const base = typeFilter === "ALL" ? triggerRows : triggerRows.filter((t) => t.type === typeFilter);
+    if (!q) return base;
+    return base.filter((trigger) =>
+      `${trigger.sourceName} ${trigger.targetName} ${trigger.type} ${trigger.state}`
+        .toLowerCase()
+        .includes(q),
+    );
+  });
 
   // Keyed by id: polling replaces the objects, so holding one would freeze the panel.
   let selectedTriggerID = $state<string | null>(null);
   const selectedTrigger = $derived(
-    filteredTriggers.find((trigger) => trigger.id === selectedTriggerID) ??
-      filteredTriggers[0] ??
+    visibleTriggers.find((trigger) => trigger.id === selectedTriggerID) ??
+      visibleTriggers[0] ??
       null,
   );
 
@@ -345,10 +364,26 @@
     history.replaceState(null, "", `#triggers?id=${encodeURIComponent(id)}`);
   }
 
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (visibleTriggers.length === 0) return;
+    e.preventDefault();
+    const idx = visibleTriggers.findIndex((t) => t.id === selectedTrigger?.id);
+    const forward = e.key === "ArrowDown" || e.key === "ArrowRight";
+    const next = forward ? Math.min(visibleTriggers.length - 1, idx + 1) : Math.max(0, idx - 1);
+    select(visibleTriggers[next].id);
+  }
+
   onMount(() => {
     const qs = window.location.hash.split("?")[1];
     const id = qs ? new URLSearchParams(qs).get("id") : null;
     if (id) selectedTriggerID = id;
+    try {
+      const saved = localStorage.getItem("tarn-triggers-list-collapsed");
+      if (saved !== null) {
+        listCollapsed = saved === "true";
+      }
+    } catch {}
   });
 </script>
 
@@ -360,6 +395,24 @@
     {onToggleSidebar}
   >
     {#snippet actions()}
+      <div class="header-filter">
+        <MagnifyingGlassIcon size={12} />
+        <input
+          placeholder="Filter triggers..."
+          bind:value={query}
+          aria-label="Filter triggers"
+        />
+        {#if query}
+          <button
+            type="button"
+            class="clear-query-btn"
+            onclick={() => (query = "")}
+            aria-label="Clear filter"
+          >
+            &times;
+          </button>
+        {/if}
+      </div>
       {#if filters.tagFilter}
         <span class="filter" title={filters.tagFilter}>Tag <span>{filters.tagFilter}</span></span>
       {/if}
@@ -378,27 +431,103 @@
       <p>Wire a queue, topic, rule or route to a function and the mapping appears here.</p>
     </div>
   {:else}
-    <div class="layout">
-      <RcResizableAside storageKey="tarn-triggers-list-width">
-        <div class="type-filter" role="group" aria-label="Trigger type filter">
-          {#each typeOptions as option (option.id)}
+    <div class="layout" class:list-collapsed={listCollapsed}>
+      {#if listCollapsed}
+        <div class="list-toolbar" role="toolbar" aria-label="Triggers overview">
+          <div class="toolbar-leading">
             <button
               type="button"
-              class:active={typeFilter === option.id}
-              onclick={() => (typeFilter = option.id)}
-              aria-pressed={typeFilter === option.id}
+              class="expand-list-btn"
+              onclick={toggleListCollapse}
+              title="Expand trigger list"
+              aria-label="Expand trigger list"
             >
-              {option.label}
-              <span>{option.count}</span>
+              <SidebarSimpleIcon size={13} weight="fill" />
+              <span class="expand-label">Trigger list</span>
+              <span class="count-badge">{triggerRows.length}</span>
             </button>
-          {/each}
+
+            {#if sidebarCollapsed}
+              <span class="toolbar-divider" aria-hidden="true"></span>
+              <div class="toolbar-stats">
+                <span class="toolbar-stat" title="{sqsCount} SQS triggers">
+                  <span class="status-dot green"></span>
+                  <span>{sqsCount} sqs</span>
+                </span>
+                <span class="toolbar-stat" title="{snsCount} SNS triggers">
+                  <span class="status-dot red"></span>
+                  <span>{snsCount} sns</span>
+                </span>
+                <span class="toolbar-stat" title="{dynamodbCount} DynamoDB triggers">
+                  <span class="status-dot purple"></span>
+                  <span>{dynamodbCount} ddb</span>
+                </span>
+                <span class="toolbar-stat" title="{apiCount} API triggers">
+                  <span class="status-dot blue"></span>
+                  <span>{apiCount} api</span>
+                </span>
+              </div>
+            {/if}
+          </div>
+
+          <div class="toolbar-trailing">
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="chips-row" role="tablist" tabindex="0" aria-label="Trigger switcher" onkeydown={onKeydown}>
+              {#each visibleTriggers as trigger (trigger.id)}
+                {@const tone = triggerStateTone(trigger.state)}
+                <button
+                  type="button"
+                  role="tab"
+                  class="item-chip"
+                  class:selected={trigger.id === selectedTrigger?.id}
+                  aria-selected={trigger.id === selectedTrigger?.id}
+                  onclick={() => select(trigger.id)}
+                  title="{trigger.sourceName} → {trigger.targetName} ({trigger.type} · {trigger.state})"
+                >
+                  <span
+                    class="chip-dot"
+                    style:background={tone === "green" ? "var(--accent-green, #10b981)" : tone === "amber" ? "var(--accent-amber, #f59e0b)" : tone === "red" ? "var(--accent-red, #fb7185)" : "var(--text-tertiary)"}
+                  ></span>
+                  <span class="chip-name">{trigger.sourceName} → {trigger.targetName}</span>
+                  <span class="chip-badge">{trigger.type}</span>
+                </button>
+              {:else}
+                <span class="chips-none">No match for "{query}"</span>
+              {/each}
+            </div>
+          </div>
         </div>
-        <TriggerList
-          triggers={filteredTriggers}
-          selectedId={selectedTrigger?.id ?? null}
-          onselect={select}
-        />
-      </RcResizableAside>
+      {/if}
+
+      {#if !listCollapsed}
+        <RcResizableAside
+          storageKey="tarn-triggers-list-width"
+          collapsible={true}
+          onToggleCollapse={toggleListCollapse}
+        >
+          <div class="type-filter" role="group" aria-label="Trigger type filter">
+            {#each typeOptions as option (option.id)}
+              <button
+                type="button"
+                class:active={typeFilter === option.id}
+                onclick={() => (typeFilter = option.id)}
+                aria-pressed={typeFilter === option.id}
+              >
+                {option.label}
+                <span>{option.count}</span>
+              </button>
+            {/each}
+          </div>
+          <TriggerList
+            triggers={visibleTriggers}
+            selectedId={selectedTrigger?.id ?? null}
+            onselect={select}
+            bind:query
+            onToggleCollapse={toggleListCollapse}
+          />
+        </RcResizableAside>
+      {/if}
+
       {#if selectedTrigger}
         {#key selectedTrigger.id}
           <TriggerDetail trigger={selectedTrigger} />
@@ -424,34 +553,47 @@
   }
 
   .filter {
-    display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border-radius: 8px;
+    display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 9px; border-radius: 8px;
     border: 1px solid var(--border-subtle); font-size: 11px; color: var(--text-tertiary);
+    background: #ffffff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
   }
   .filter span { font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-primary); }
 
-  .type-filter { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
-  .type-filter button {
-    display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px;
-    border-radius: 8px; border: 1px solid var(--border-subtle); font-size: 11.5px;
-    color: var(--text-secondary); background: transparent;
-    transition: color 120ms ease, background 120ms ease, border-color 120ms ease, transform 120ms ease;
+  :global(.dark) .filter {
+    background: var(--bg-element);
+    box-shadow: none;
   }
-  .type-filter button:hover { color: var(--text-primary); border-color: var(--border-default); background: var(--bg-element-hover); }
-  .type-filter button:active { transform: scale(0.96); }
+
+  .type-filter {
+    display: flex; gap: 4px; padding: 3px; border-radius: 8px;
+    background: var(--bg-element); border: 1px solid var(--border-subtle);
+    margin-bottom: 8px;
+  }
+  .type-filter button {
+    flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
+    height: 26px; border: 0; border-radius: 6px; background: transparent;
+    font-size: 11px; font-weight: 500; color: var(--text-secondary); cursor: pointer;
+    transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease;
+  }
   .type-filter button.active {
-    color: var(--text-primary); border-color: var(--border-default); background: var(--bg-element);
+    background: #ffffff; color: var(--text-primary);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
   }
   .type-filter button span {
-    font: 10.5px var(--font-mono, ui-monospace, monospace); font-variant-numeric: tabular-nums;
-    color: var(--text-tertiary);
+    font-size: 10px; font-variant-numeric: tabular-nums; opacity: 0.7;
   }
-  .type-filter button.active span { color: var(--text-secondary); }
+
+  :global(.dark) .type-filter button.active {
+    background: var(--bg-surface, #1e1e24);
+    box-shadow: none;
+  }
 
   .blank { padding: 64px 0; text-align: center; animation: fadeUp 320ms var(--ease-snappy) both; }
   .blank h2 { font-size: 14px; font-weight: 600; color: var(--text-primary); }
   .blank p { margin-top: 4px; font-size: 12px; color: var(--text-secondary); }
 
-  .skeleton-list { display: flex; flex-direction: column; gap: 6px; }
+  .skeleton-list { display: flex; flex-direction: column; gap: 6px; width: 260px; }
   .skeleton-list span {
     height: 34px; border-radius: 8px; background: var(--bg-element);
     animation: pulse 1.4s ease-in-out infinite; animation-delay: calc(var(--i) * 80ms);

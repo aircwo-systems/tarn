@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MagnifyingGlassIcon } from "phosphor-svelte";
+  import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import RcListRow from "$lib/components/rack/rc-list-row.svelte";
   import type { SubscriptionSummary } from "$lib/types";
 
@@ -7,13 +7,15 @@
     subscriptions,
     selectedArn,
     onselect,
+    query = $bindable(""),
+    onToggleCollapse,
   }: {
     subscriptions: SubscriptionSummary[];
     selectedArn: string | null;
     onselect: (subscriptionArn: string) => void;
+    query?: string;
+    onToggleCollapse?: () => void;
   } = $props();
-
-  let query = $state("");
 
   const visible = $derived.by(() => {
     const q = query.trim().toLowerCase();
@@ -38,25 +40,36 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="subscription-list" onkeydown={onKeydown}>
-  <label class="search">
-    <MagnifyingGlassIcon size={12} />
-    <input placeholder="Filter subscriptions" bind:value={query} aria-label="Filter subscriptions" />
-    <span class="count">{visible.length}</span>
-  </label>
+  <div class="search-row">
+    <label class="search">
+      <MagnifyingGlassIcon size={12} />
+      <input placeholder="Filter subscriptions" bind:value={query} aria-label="Filter subscriptions" />
+      <span class="count">{visible.length}</span>
+    </label>
+    {#if onToggleCollapse}
+      <button
+        type="button"
+        class="collapse-list-btn"
+        onclick={onToggleCollapse}
+        title="Collapse subscription list"
+        aria-label="Collapse subscription list"
+      >
+        <SidebarSimpleIcon size={13} />
+      </button>
+    {/if}
+  </div>
 
   <div class="rows">
     {#each visible as sub (sub.subscriptionArn)}
       <RcListRow
         mono
         title={sub.endpoint}
-        sub="{sub.topicName} · {sub.protocol}"
+        sub="{sub.protocol} · {sub.topicName}"
         selected={sub.subscriptionArn === selectedArn}
         onclick={() => onselect(sub.subscriptionArn)}
       >
         {#snippet trailing()}
-          {#if sub.filterPolicy}
-            <span class="filtered">filtered</span>
-          {/if}
+          <span class="protocol">{sub.protocol}</span>
         {/snippet}
       </RcListRow>
     {:else}
@@ -69,7 +82,8 @@
   .subscription-list { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
   .search {
     display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border-radius: 8px;
-    border: 1px solid var(--border-subtle); background: var(--bg-app); color: var(--text-tertiary);
+    border: 1px solid var(--border-subtle); background: #ffffff; color: var(--text-tertiary);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
     transition: border-color 120ms ease;
   }
   .search:hover { border-color: var(--border-default); }
@@ -78,9 +92,14 @@
   .search input::placeholder { color: var(--text-tertiary); }
   .count { font-size: 10.5px; font-variant-numeric: tabular-nums; }
   .rows { display: flex; flex-direction: column; gap: 2px; }
-  .filtered {
-    font-size: 10px; padding: 1px 6px; border-radius: 6px; color: var(--accent-green);
-    background: color-mix(in srgb, var(--accent-green) 10%, transparent);
+  .protocol {
+    font-size: 9.5px; font-weight: 600; padding: 1px 5px; border-radius: 4px;
+    background: var(--bg-element); color: var(--text-secondary); text-transform: uppercase;
   }
   .none { padding: 12px 10px; font-size: 11.5px; color: var(--text-tertiary); }
+
+  :global(.dark) .search {
+    background: var(--bg-element);
+    box-shadow: none;
+  }
 </style>

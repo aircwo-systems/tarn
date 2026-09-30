@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
   import StateMachineList from "$lib/components/stepfunctions/state-machine-list.svelte";
   import StateMachineDetail from "$lib/components/stepfunctions/state-machine-detail.svelte";
@@ -20,6 +21,24 @@
     machines.reduce((sum, machine) => sum + (machine.executions?.length ?? 0), 0),
   );
 
+  let listCollapsed = $state(false);
+
+  function toggleListCollapse() {
+    listCollapsed = !listCollapsed;
+    try {
+      localStorage.setItem("tarn-stepfunctions-list-collapsed", String(listCollapsed));
+    } catch {}
+  }
+
+  let query = $state("");
+  const visible = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return machines;
+    return machines.filter((machine) =>
+      `${machine.name} ${machine.type} ${machine.status}`.toLowerCase().includes(q),
+    );
+  });
+
   // Keyed by arn: polling replaces the objects, so holding one would freeze the panel.
   let selectedArn = $state<string | null>(null);
   const selectedMachine = $derived(
@@ -31,10 +50,26 @@
     history.replaceState(null, "", `#stepfunctions?machine=${encodeURIComponent(arn)}`);
   }
 
+  function onKeydown(e: KeyboardEvent) {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (visible.length === 0) return;
+    e.preventDefault();
+    const idx = visible.findIndex((machine) => machine.arn === selectedMachine?.arn);
+    const forward = e.key === "ArrowDown" || e.key === "ArrowRight";
+    const next = forward ? Math.min(visible.length - 1, idx + 1) : Math.max(0, idx - 1);
+    select(visible[next].arn);
+  }
+
   onMount(() => {
     const qs = window.location.hash.split("?")[1];
     const machine = qs ? new URLSearchParams(qs).get("machine") : null;
     if (machine) selectedArn = machine;
+    try {
+      const saved = localStorage.getItem("tarn-stepfunctions-list-collapsed");
+      if (saved !== null) {
+        listCollapsed = saved === "true";
+      }
+    } catch {}
   });
 </script>
 
@@ -44,7 +79,28 @@
     description="{machines.length} state machine{machines.length === 1 ? '' : 's'} · {totalExecutions} executions"
     {sidebarCollapsed}
     {onToggleSidebar}
-  />
+  >
+    {#snippet actions()}
+      <div class="header-filter">
+        <MagnifyingGlassIcon size={12} />
+        <input
+          placeholder="Filter state machines..."
+          bind:value={query}
+          aria-label="Filter state machines"
+        />
+        {#if query}
+          <button
+            type="button"
+            class="clear-query-btn"
+            onclick={() => (query = "")}
+            aria-label="Clear filter"
+          >
+            &times;
+          </button>
+        {/if}
+      </div>
+    {/snippet}
+  </SectionHeader>
 
   {#if dashboard.loading && !dashboard.data}
     <div class="layout">
@@ -58,14 +114,77 @@
       <p>Create one with the AWS CLI, SDK, or Terraform.</p>
     </div>
   {:else}
-    <div class="layout">
-      <RcResizableAside storageKey="tarn-stepfunctions-list-width">
-        <StateMachineList
-          machines={machines}
-          selectedArn={selectedMachine?.arn ?? null}
-          onselect={select}
-        />
-      </RcResizableAside>
+    <div class="layout" class:list-collapsed={listCollapsed}>
+      {#if listCollapsed}
+        <div class="list-toolbar" role="toolbar" aria-label="State machines overview">
+          <div class="toolbar-leading">
+            <button
+              type="button"
+              class="expand-list-btn"
+              onclick={toggleListCollapse}
+              title="Expand state machine list"
+              aria-label="Expand state machine list"
+            >
+              <SidebarSimpleIcon size={13} weight="fill" />
+              <span class="expand-label">State machines</span>
+              <span class="count-badge">{machines.length}</span>
+            </button>
+
+            {#if sidebarCollapsed}
+              <span class="toolbar-divider" aria-hidden="true"></span>
+              <div class="toolbar-stats">
+                <span class="toolbar-stat" title="{totalExecutions} executions">
+                  <span class="status-dot green"></span>
+                  <span>{totalExecutions} executions</span>
+                </span>
+              </div>
+            {/if}
+          </div>
+
+          <div class="toolbar-trailing">
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="chips-row" role="tablist" tabindex="0" aria-label="State machine switcher" onkeydown={onKeydown}>
+              {#each visible as machine (machine.arn)}
+                <button
+                  type="button"
+                  role="tab"
+                  class="item-chip"
+                  class:selected={machine.arn === selectedMachine?.arn}
+                  aria-selected={machine.arn === selectedMachine?.arn}
+                  onclick={() => select(machine.arn)}
+                  title="{machine.name} ({machine.type} · {machine.status})"
+                >
+                  <span
+                    class="chip-dot"
+                    style:background={machine.status === "ACTIVE" ? "var(--accent-green, #10b981)" : machine.status === "DELETING" ? "var(--accent-amber, #f59e0b)" : "var(--accent-blue, #3b82f6)"}
+                  ></span>
+                  <span class="chip-name">{machine.name}</span>
+                  <span class="chip-badge">{machine.executions?.length ?? 0} exec</span>
+                </button>
+              {:else}
+                <span class="chips-none">No match for "{query}"</span>
+              {/each}
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      {#if !listCollapsed}
+        <RcResizableAside
+          storageKey="tarn-stepfunctions-list-width"
+          collapsible={true}
+          onToggleCollapse={toggleListCollapse}
+        >
+          <StateMachineList
+            {machines}
+            selectedArn={selectedMachine?.arn ?? null}
+            onselect={select}
+            bind:query
+            onToggleCollapse={toggleListCollapse}
+          />
+        </RcResizableAside>
+      {/if}
+
       {#if selectedMachine}
         {#key selectedMachine.arn}
           <StateMachineDetail machine={selectedMachine} />

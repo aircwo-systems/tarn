@@ -14,6 +14,9 @@ const POLL_MS = 4_000;
 const SAMPLE_LIMIT = 200;
 
 export interface LogPulse {
+  status: "loading" | "ready" | "unavailable";
+  sampledAt: number;
+  now: number;
   /** Event counts per bucket, oldest → newest, spanning PULSE_WINDOW_MS. */
   bars: number[];
   /** Highest severity per bucket: 0 none/info, 1 warn, 2 error. */
@@ -26,6 +29,8 @@ export interface LogPulse {
 
 let sample = $state<LogEvent[]>([]);
 let now = $state(Date.now());
+let status = $state<LogPulse["status"]>("loading");
+let sampledAt = $state(0);
 let handle: ReturnType<typeof setInterval> | null = null;
 let controller: AbortController | null = null;
 let consumers = 0;
@@ -38,8 +43,10 @@ async function poll() {
   try {
     const result = await fetchAllLogEvents({ limit: SAMPLE_LIMIT, order: "desc" }, ctrl.signal);
     sample = result.events ?? [];
+    sampledAt = Date.now();
+    status = "ready";
   } catch {
-    /* keep last sample; the pulse is advisory */
+    if (!ctrl.signal.aborted) status = "unavailable";
   } finally {
     if (controller === ctrl) controller = null;
     now = Date.now();
@@ -96,7 +103,17 @@ const pulse = $derived.by<LogPulse>(() => {
     severity[idx] = Math.max(severity[idx], severityOf(ev.level));
   }
 
-  return { bars, severity, recentErrors, recentWarnings, lastEventAt, lastLevel };
+  return {
+    bars,
+    severity,
+    recentErrors,
+    recentWarnings,
+    lastEventAt,
+    lastLevel,
+    status,
+    sampledAt,
+    now,
+  };
 });
 
 export function getLogPulse(): LogPulse {

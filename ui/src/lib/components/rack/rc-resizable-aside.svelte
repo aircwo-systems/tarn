@@ -7,6 +7,8 @@
     min = 220,
     max = 560,
     wideWidth = 420,
+    collapsible = false,
+    onToggleCollapse,
     children,
   }: {
     /** localStorage key the width is remembered under */
@@ -16,11 +18,14 @@
     max?: number;
     /** width the handle snaps to on double-click / Enter */
     wideWidth?: number;
+    collapsible?: boolean;
+    onToggleCollapse?: () => void;
     children?: Snippet;
   } = $props();
 
   let width = $state(260);
   let dragging = $state(false);
+  let releaseToCollapse = $state(false);
   let handleY = $state<number | null>(null);
 
   const clamp = (w: number) => Math.round(Math.min(max, Math.max(min, w)));
@@ -49,13 +54,27 @@
     const startW = width;
     handle.setPointerCapture(e.pointerId);
     dragging = true;
+    releaseToCollapse = false;
     document.body.classList.add("is-resizing");
 
-    const move = (ev: PointerEvent) => (width = clamp(startW + ev.clientX - startX));
+    const move = (ev: PointerEvent) => {
+      const nextW = startW + ev.clientX - startX;
+      if (collapsible && nextW < min - 40) {
+        releaseToCollapse = true;
+      } else {
+        releaseToCollapse = false;
+        width = clamp(nextW);
+      }
+    };
     const up = () => {
       dragging = false;
       document.body.classList.remove("is-resizing");
-      commit(width);
+      if (collapsible && releaseToCollapse) {
+        releaseToCollapse = false;
+        onToggleCollapse?.();
+      } else {
+        commit(width);
+      }
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", up);
       handle.removeEventListener("pointercancel", up);
@@ -73,8 +92,13 @@
 
   function onKeydown(e: KeyboardEvent) {
     const step = e.shiftKey ? 60 : 20;
-    if (e.key === "ArrowLeft") commit(width - step);
-    else if (e.key === "ArrowRight") commit(width + step);
+    if (e.key === "ArrowLeft") {
+      if (collapsible && width <= min) {
+        onToggleCollapse?.();
+      } else {
+        commit(width - step);
+      }
+    } else if (e.key === "ArrowRight") commit(width + step);
     else if (e.key === "Enter" || e.key === " ") toggle();
     else return;
     e.preventDefault();
@@ -103,7 +127,13 @@
     <div class="resizer-line"></div>
     <div class="resizer-pill-handle" style:top={handleY === null ? undefined : `${handleY}px`}></div>
     {#if dragging}
-      <div class="resizer-width-badge" style:top={handleY === null ? undefined : `${handleY}px`}>{width}px</div>
+      <div
+        class="resizer-width-badge"
+        class:collapse-hint={releaseToCollapse}
+        style:top={handleY === null ? undefined : `${handleY}px`}
+      >
+        {releaseToCollapse ? "Release to collapse" : `${width}px`}
+      </div>
     {/if}
   </div>
 </aside>
@@ -149,6 +179,12 @@
     background: var(--bg-element); border: 1px solid var(--border-default); color: var(--text-primary);
     font: 10.5px var(--font-mono, ui-monospace, monospace); padding: 2px 7px; border-radius: 6px;
     pointer-events: none; white-space: nowrap; z-index: 10;
+  }
+  .resizer-width-badge.collapse-hint {
+    background: var(--accent-red, #fb7185);
+    color: #ffffff;
+    border-color: var(--accent-red, #fb7185);
+    font-weight: 500;
   }
 
   @media (max-width: 900px) {

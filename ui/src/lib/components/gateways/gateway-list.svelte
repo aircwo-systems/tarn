@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MagnifyingGlassIcon } from "phosphor-svelte";
+  import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import RcListRow from "$lib/components/rack/rc-list-row.svelte";
   import type { GatewaySummary } from "$lib/types";
 
@@ -7,13 +7,15 @@
     gateways,
     selectedId,
     onselect,
+    query = $bindable(""),
+    onToggleCollapse,
   }: {
     gateways: GatewaySummary[];
     selectedId: string | null;
     onselect: (apiId: string) => void;
+    query?: string;
+    onToggleCollapse?: () => void;
   } = $props();
-
-  let query = $state("");
 
   const visible = $derived.by(() => {
     const q = query.trim().toLowerCase();
@@ -35,11 +37,24 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="gateway-list" onkeydown={onKeydown}>
-  <label class="search">
-    <MagnifyingGlassIcon size={12} />
-    <input placeholder="Filter gateways" bind:value={query} aria-label="Filter gateways" />
-    <span class="count">{visible.length}</span>
-  </label>
+  <div class="search-row">
+    <label class="search">
+      <MagnifyingGlassIcon size={12} />
+      <input placeholder="Filter gateways" bind:value={query} aria-label="Filter gateways" />
+      <span class="count">{visible.length}</span>
+    </label>
+    {#if onToggleCollapse}
+      <button
+        type="button"
+        class="collapse-list-btn"
+        onclick={onToggleCollapse}
+        title="Collapse gateway list"
+        aria-label="Collapse gateway list"
+      >
+        <SidebarSimpleIcon size={13} />
+      </button>
+    {/if}
+  </div>
 
   <div class="rows">
     {#each visible as gateway (gateway.apiId)}
@@ -66,7 +81,8 @@
   .gateway-list { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
   .search {
     display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border-radius: 8px;
-    border: 1px solid var(--border-subtle); background: var(--bg-app); color: var(--text-tertiary);
+    border: 1px solid var(--border-subtle); background: #ffffff; color: var(--text-tertiary);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
     transition: border-color 120ms ease;
   }
   .search:hover { border-color: var(--border-default); }
@@ -77,4 +93,9 @@
   .rows { display: flex; flex-direction: column; gap: 2px; }
   .calls { font: 10.5px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
   .none { padding: 12px 10px; font-size: 11.5px; color: var(--text-tertiary); }
+
+  :global(.dark) .search {
+    background: var(--bg-element);
+    box-shadow: none;
+  }
 </style>

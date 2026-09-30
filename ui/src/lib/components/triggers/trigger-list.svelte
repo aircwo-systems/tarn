@@ -25,7 +25,7 @@
 </script>
 
 <script lang="ts">
-  import { MagnifyingGlassIcon } from "phosphor-svelte";
+  import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import RcListRow from "$lib/components/rack/rc-list-row.svelte";
   import RcTonePill from "$lib/components/rack/rc-tone-pill.svelte";
 
@@ -33,13 +33,15 @@
     triggers,
     selectedId,
     onselect,
+    query = $bindable(""),
+    onToggleCollapse,
   }: {
     triggers: TriggerRow[];
     selectedId: string | null;
     onselect: (id: string) => void;
+    query?: string;
+    onToggleCollapse?: () => void;
   } = $props();
-
-  let query = $state("");
 
   const visible = $derived.by(() => {
     const q = query.trim().toLowerCase();
@@ -63,23 +65,38 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="trigger-list" onkeydown={onKeydown}>
-  <label class="search">
-    <MagnifyingGlassIcon size={12} />
-    <input placeholder="Filter triggers" bind:value={query} aria-label="Filter triggers" />
-    <span class="count">{visible.length}</span>
-  </label>
+  <div class="search-row">
+    <label class="search">
+      <MagnifyingGlassIcon size={12} />
+      <input placeholder="Filter triggers" bind:value={query} aria-label="Filter triggers" />
+      <span class="count">{visible.length}</span>
+    </label>
+    {#if onToggleCollapse}
+      <button
+        type="button"
+        class="collapse-list-btn"
+        onclick={onToggleCollapse}
+        title="Collapse trigger list"
+        aria-label="Collapse trigger list"
+      >
+        <SidebarSimpleIcon size={13} />
+      </button>
+    {/if}
+  </div>
 
   <div class="rows">
     {#each visible as trigger (trigger.id)}
       <RcListRow
         mono
-        title="{trigger.sourceName} → {trigger.targetName}"
-        sub="{trigger.type} · {trigger.detail}"
+        title={`${trigger.sourceName} → ${trigger.targetName}`}
+        sub={`${trigger.type} · ${trigger.detail}`}
         selected={trigger.id === selectedId}
         onclick={() => onselect(trigger.id)}
       >
         {#snippet trailing()}
-          <RcTonePill tone={triggerStateTone(trigger.state)}>{trigger.state.toLowerCase()}</RcTonePill>
+          <RcTonePill tone={triggerStateTone(trigger.state)}>
+            {trigger.state.toLowerCase()}
+          </RcTonePill>
         {/snippet}
       </RcListRow>
     {:else}
@@ -92,7 +109,8 @@
   .trigger-list { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
   .search {
     display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border-radius: 8px;
-    border: 1px solid var(--border-subtle); background: var(--bg-app); color: var(--text-tertiary);
+    border: 1px solid var(--border-subtle); background: #ffffff; color: var(--text-tertiary);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
     transition: border-color 120ms ease;
   }
   .search:hover { border-color: var(--border-default); }
@@ -102,4 +120,9 @@
   .count { font-size: 10.5px; font-variant-numeric: tabular-nums; }
   .rows { display: flex; flex-direction: column; gap: 2px; }
   .none { padding: 12px 10px; font-size: 11.5px; color: var(--text-tertiary); }
+
+  :global(.dark) .search {
+    background: var(--bg-element);
+    box-shadow: none;
+  }
 </style>

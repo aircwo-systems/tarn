@@ -20,7 +20,7 @@
   } from "phosphor-svelte";
   import { onMount } from "svelte";
 
-  import AppSidebar from "$lib/components/layout/app-sidebar.svelte";
+  import AppSidebar, { type NavSection } from "$lib/components/layout/app-sidebar.svelte";
   import { getLogPulse, startLogPulse } from "$lib/log-pulse.svelte";
   import TagFilter from "$lib/components/layout/tag-filter.svelte";
   import OverviewPulse from "$lib/components/layout/overview-pulse.svelte";
@@ -176,9 +176,11 @@
   }
 
   const countGateways    = $derived((dashboard.data?.gateways ?? []).filter(g => matchesPrototypeResourceFilter("gateway", g.tags)).length);
-  const countFunctions   = $derived((dashboard.data?.functions ?? []).filter(f => matchesPrototypeResourceFilter("function", f.tags)).length);
+  const visibleFunctions = $derived((dashboard.data?.functions ?? []).filter(f => matchesPrototypeResourceFilter("function", f.tags)));
+  const countFunctions   = $derived(visibleFunctions.length);
   const countECS         = $derived(directPrototypeFilter ? 0 : ((dashboard.data?.ecs?.clusters?.length ?? 0) + (dashboard.data?.ecs?.services?.length ?? 0) + (dashboard.data?.ecs?.tasks?.length ?? 0)));
-  const countQueues      = $derived((dashboard.data?.queues ?? []).filter(q => matchesPrototypeResourceFilter("queue", q.tags)).length);
+  const visibleQueues = $derived((dashboard.data?.queues ?? []).filter(q => matchesPrototypeResourceFilter("queue", q.tags)));
+  const countQueues      = $derived(visibleQueues.length);
   const countTopics      = $derived((dashboard.data?.topics ?? []).filter(t => matchesPrototypeResourceFilter("topic", t.tags)).length);
   const countDynamoTables = $derived((dashboard.data?.dynamodbTables ?? []).filter(() => matchesPrototypeResourceFilter("dynamodb")).length);
   const countSecrets     = $derived((dashboard.data?.secrets ?? []).filter(s => matchesPrototypeResourceFilter("secret", s.tags)).length);
@@ -192,6 +194,19 @@
     getVisibleInfra(dashboard.data?.infrastructure ?? []).filter(p => matchesPrototypeInfraFilter(p.kind)),
   );
   const activeServiceCount = $derived(visibleInfra.length);
+  const sidebarServices = $derived(visibleInfra.map((probe) => {
+    const id = `${probe.kind}-${probe.host}-${probe.port}`;
+    return {
+      id,
+      name: probe.name,
+      kind: probe.kind,
+      status: probe.status,
+      latencyMs: probe.latencyMs,
+      linkedFunctions: new Set((dashboard.data?.connections ?? [])
+        .filter((connection) => connection.targetId === id)
+        .map((connection) => connection.sourceFunction)).size,
+    };
+  }));
 
   const infraLegend = $derived(
     (() => {
@@ -254,20 +269,69 @@
   ]);
 
   // ── Navigation config ──────────────────────────────────────────
-  const navSections = $derived([
+  const navSections = $derived<NavSection[]>([
     {
       id: "overview",
       label: "Overview",
-      items: [{ id: "overview", label: "Overview", icon: SquaresFourIcon, count: null }],
+      items: [{
+        id: "overview", label: "Overview", icon: SquaresFourIcon, count: null,
+        widget: {
+          kind: "summary",
+          rows: [
+            { label: "AWS resources", value: countGateways + countFunctions + countECS + countQueues + countTopics + countDynamoTables + countSecrets + countBuckets + countEventBridge + countStateMachines + countTriggers },
+            { label: "Last sync", value: dashboard.lastRefresh || "Waiting" },
+          ],
+          note: dashboard.error ? "Refresh failed · showing last known data" : undefined,
+        },
+      }],
     },
     {
       id: "infra",
       label: "Infra",
       items: [
         { id: "gateways",     label: "Gateways",       icon: GlobeHemisphereWestIcon, count: countGateways      },
-        { id: "functions",    label: "Functions",      icon: LightningIcon,            count: countFunctions     },
+        {
+          id: "functions", label: "Functions", icon: LightningIcon, count: countFunctions,
+          widget: {
+            kind: "summary",
+            rows: [
+              {
+                label: "Active", value: `${visibleFunctions.filter((fn) => fn.state.toLowerCase() === "active").length} / ${countFunctions}`,
+                blocks: visibleFunctions.map((fn) => {
+                  const state = fn.state.toLowerCase();
+                  return {
+                    id: fn.name,
+                    title: `${fn.name} · ${state} · ${fn.invocations === undefined ? "invocations unavailable" : `${fn.invocations} invocations`}`,
+                    color: state === "failed" ? "var(--accent-red)" : state === "active" ? "var(--accent-green)" : "var(--accent-amber)",
+                    dimmed: state !== "active" && state !== "failed",
+                  };
+                }),
+              },
+              { label: "Invocations", value: visibleFunctions.some((fn) => fn.invocations !== undefined) ? visibleFunctions.reduce((sum, fn) => sum + (fn.invocations ?? 0), 0) : "--" },
+            ],
+            note: dashboard.error ? "Refresh failed · showing last known data" : undefined,
+          },
+        },
         { id: "ecs",          label: "ECS",            icon: CubeIcon,                 count: countECS           },
-        { id: "queues",       label: "Queues",         icon: ChatCircleIcon,           count: countQueues        },
+        {
+          id: "queues", label: "Queues", icon: ChatCircleIcon, count: countQueues,
+          widget: {
+            kind: "summary",
+            rows: [
+              {
+                label: "Waiting", value: `≈ ${visibleQueues.reduce((sum, queue) => sum + queue.approxVisible, 0)}`,
+                blocks: visibleQueues.map((queue) => ({
+                  id: queue.name,
+                  title: `${queue.name} · ≈ ${queue.approxVisible} waiting · ≈ ${queue.approxInFlight} in flight${queue.approxDelayed > 0 ? ` · ≈ ${queue.approxDelayed} delayed` : ""}${queue.approxStale > 0 ? ` · ≈ ${queue.approxStale} stale` : ""}${queue.disruptEnabled ? " · disruptor armed" : ""}`,
+                  color: queue.disruptEnabled || queue.approxStale > 0 ? "var(--accent-red)" : "var(--accent-amber)",
+                  dimmed: !queue.disruptEnabled && !(queue.approxStale > 0 || queue.approxVisible > 0 || queue.approxInFlight > 0 || queue.approxDelayed > 0),
+                })),
+              },
+              { label: "In flight", value: `≈ ${visibleQueues.reduce((sum, queue) => sum + queue.approxInFlight, 0)}` },
+            ],
+            note: dashboard.error ? "Refresh failed · showing last known data" : undefined,
+          },
+        },
         { id: "dynamodb",     label: "DynamoDB",       icon: DatabaseIcon,             count: countDynamoTables  },
         { id: "sns",          label: "SNS",            icon: BellIcon,                 count: countTopics        },
         { id: "secrets",      label: "Secrets",        icon: KeyIcon,                  count: countSecrets       },
@@ -275,15 +339,31 @@
         { id: "eventbridge",  label: "EventBridge",    icon: BridgeIcon,               count: countEventBridge   },
         { id: "stepfunctions", label: "Step Functions", icon: FlowArrowIcon,           count: countStateMachines },
         { id: "storage",      label: "Storage",        icon: HardDriveIcon,            count: countBuckets       },
-        { id: "services",     label: "Services",       icon: PlugsConnectedIcon,       count: activeServiceCount },
+        {
+          id: "services", label: "Services", icon: PlugsConnectedIcon, count: activeServiceCount,
+          widget: { kind: "services", services: sidebarServices, stale: !!dashboard.error },
+        },
       ],
     },
     {
       id: "observability",
       label: "Observability",
       items: [
-        { id: "logs", label: "Logs",   icon: ScrollIcon,    count: null, pulse: logPulse },
-        { id: "xray", label: "Traces", icon: DetectiveIcon, count: null },
+        {
+          id: "logs", label: "Logs", icon: ScrollIcon, count: null, pulse: logPulse,
+          widget: { kind: "logs", pulse: logPulse, groups: dashboard.data?.counts.logGroups ?? 0 },
+        },
+        {
+          id: "xray", label: "Traces", icon: DetectiveIcon, count: null,
+          widget: {
+            kind: "summary",
+            rows: [
+              { label: "Requests", value: recentTraces.length },
+              { label: "5xx responses", value: recentTraces.filter((trace) => trace.status >= 500).length, tone: recentTraces.some((trace) => trace.status >= 500) ? "error" : undefined },
+            ],
+            note: "Recent request sample",
+          },
+        },
         { id: "stack", label: "Stack", icon: StackIcon, count: null },
       ],
     },

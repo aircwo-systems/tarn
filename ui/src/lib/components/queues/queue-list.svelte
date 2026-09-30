@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { MagnifyingGlassIcon } from "phosphor-svelte";
+  import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import RcListRow from "$lib/components/rack/rc-list-row.svelte";
   import type { QueueSummary } from "$lib/types";
 
@@ -9,6 +9,8 @@
     onselect,
     selection = null,
     ontoggleselect = null,
+    query = $bindable(""),
+    onToggleCollapse,
   }: {
     queues: QueueSummary[];
     selectedName: string | null;
@@ -16,9 +18,10 @@
     /** When set, rows show checkboxes for bulk disruptor targeting. */
     selection?: Set<string> | null;
     ontoggleselect?: ((name: string) => void) | null;
+    query?: string;
+    onToggleCollapse?: () => void;
   } = $props();
 
-  let query = $state("");
   const numberFormatter = new Intl.NumberFormat("en-GB", { notation: "compact" });
 
   const visible = $derived.by(() => {
@@ -39,11 +42,24 @@
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="queue-list" onkeydown={onKeydown}>
-  <label class="search">
-    <MagnifyingGlassIcon size={12} />
-    <input placeholder="Filter queues" bind:value={query} aria-label="Filter queues" />
-    <span class="count">{visible.length}</span>
-  </label>
+  <div class="search-row">
+    <label class="search">
+      <MagnifyingGlassIcon size={12} />
+      <input placeholder="Filter queues" bind:value={query} aria-label="Filter queues" />
+      <span class="count">{visible.length}</span>
+    </label>
+    {#if onToggleCollapse}
+      <button
+        type="button"
+        class="collapse-list-btn"
+        onclick={onToggleCollapse}
+        title="Collapse queue list"
+        aria-label="Collapse queue list"
+      >
+        <SidebarSimpleIcon size={13} />
+      </button>
+    {/if}
+  </div>
 
   <div class="rows">
     {#each visible as queue (queue.name)}
@@ -88,9 +104,11 @@
 </div>
 
 <style>
-  .queue-list { display: flex; flex-direction: column; gap: 8px; min-height: 0; }  .search {
+  .queue-list { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  .search {
     display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border-radius: 8px;
-    border: 1px solid var(--border-subtle); background: var(--bg-app); color: var(--text-tertiary);
+    border: 1px solid var(--border-subtle); background: #ffffff; color: var(--text-tertiary);
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
     transition: border-color 120ms ease;
   }
   .search:hover { border-color: var(--border-default); }
@@ -110,4 +128,9 @@
   .state.failed { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 10%, transparent); }
   .state.disrupted { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 12%, transparent); }
   .none { padding: 12px 10px; font-size: 11.5px; color: var(--text-tertiary); }
+
+  :global(.dark) .search {
+    background: var(--bg-element);
+    box-shadow: none;
+  }
 </style>
