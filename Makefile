@@ -75,3 +75,10 @@ ui-build:
 	cd ui && bun run build
 	find internal/api/ui-dist -mindepth 1 ! -name .gitkeep -delete
 	cp -R ui/build/. internal/api/ui-dist/
+	@# The build's 200.html is SvelteKit's SPA fallback and has to be embedded,
+	@# so unlike the CI placeholder it cannot simply be skipped. What must not
+	@# happen is it being committed over that placeholder: a checkout would
+	@# then ship a shell referencing _app assets it does not have. Mark it
+	@# skip-worktree so a local build never shows up as a pending change.
+	@git update-index --skip-worktree internal/api/ui-dist/200.html 2>/dev/null || \
+		echo "note: not a git checkout; the built 200.html will show as modified"

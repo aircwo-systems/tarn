@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -336,6 +337,16 @@ func TestRootDispatchServesReferencedUIAsset(t *testing.T) {
 		t.Fatalf("could not parse module asset from ui shell: %q", rootBody[assetStart:])
 	}
 	assetPath := rootBody[assetStart : assetStart+assetEnd]
+
+	// A real shell whose _app assets were not embedded is a partial build: the
+	// built 200.html was committed over the CI placeholder without the rest of
+	// the output. That is what make ui-build's skip-worktree is there to prevent,
+	// but if it happens anyway the dispatch is not what is broken, so skip
+	// rather than fail. Checking the embedded FS is what keeps this from hiding
+	// a genuine "asset present but served as the shell" regression.
+	if _, err := fs.Stat(uiFS, "ui-dist"+assetPath); err != nil {
+		t.Skipf("shell references %s but it is not embedded; run make ui-build", assetPath)
+	}
 
 	assetReq := httptest.NewRequest(http.MethodGet, assetPath, nil)
 	assetRec := httptest.NewRecorder()
