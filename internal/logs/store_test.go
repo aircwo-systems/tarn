@@ -385,6 +385,53 @@ func TestIngestContainerLogsUsesStructuredLogLevel(t *testing.T) {
 	}
 }
 
+// TestLogStreamNamesAreCappedPerGroup covers the unbounded growth of a group's
+// stream map: a Lambda stream is named after its container, so every cold start
+// added an entry that only ClearGroup removed. Evicting the least recently
+// written name is safe because the group's event ring, not this map, decides
+// what is still readable.
+func TestLogStreamNamesAreCappedPerGroup(t *testing.T) {
+	store := NewStore(10000)
+	group := "/aws/lambda/orders"
+	store.CreateGroup(group)
+
+	// One more than the cap, oldest first, so eviction has to pick the front.
+	total := maxStreamsPerGroup + 1
+	for i := range total {
+		store.PutLogEvents(group, fmt.Sprintf("container-%03d", i), []LogEvent{{
+			Timestamp: time.Date(2026, 1, 15, 10, 0, i, 0, time.UTC),
+			Message:   fmt.Sprintf("line %d", i),
+			Level:     LevelINFO,
+		}})
+	}
+
+	streams := store.ListStreams(group)
+	if len(streams) != maxStreamsPerGroup {
+		t.Fatalf("group holds %d stream names, want the cap of %d", len(streams), maxStreamsPerGroup)
+	}
+	if _, evicted := findStream(streams, "container-000"); evicted {
+		t.Fatal("the least recently written stream name was kept")
+	}
+	// The newest must survive: it is the one events are still arriving on.
+	if _, kept := findStream(streams, fmt.Sprintf("container-%03d", total-1)); !kept {
+		t.Fatal("the newest stream name was evicted")
+	}
+
+	// Events are untouched by the eviction — only the name list shrinks.
+	if _, count, _ := store.GetLogEvents(group, nil); count != total {
+		t.Fatalf("group holds %d events, want all %d", count, total)
+	}
+}
+
+func findStream(streams []LogStream, name string) (LogStream, bool) {
+	for _, s := range streams {
+		if s.Name == name {
+			return s, true
+		}
+	}
+	return LogStream{}, false
+}
+
 func TestDetectLevel(t *testing.T) {
 	tests := []struct {
 		msg   string

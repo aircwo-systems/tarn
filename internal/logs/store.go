@@ -117,6 +117,36 @@ type logGroup struct {
 // (880 KB per group at the default 10 000) mostly wastes memory.
 const initialLogCapacity = 64
 
+// maxStreamsPerGroup caps the stream names one group remembers. A Lambda
+// stream is named after its container, so every cold start added an entry that
+// nothing ever removed except ClearGroup — a function that cold-started a
+// thousand times held a thousand names whose events the ring had long since
+// evicted. The group's event buffer, not this map, decides what is still
+// readable, so dropping the oldest names loses nothing.
+const maxStreamsPerGroup = 100
+
+// evictStreamsLocked drops the least recently written stream names until the
+// group is back within maxStreamsPerGroup. Caller must hold the write lock.
+func (g *logGroup) evictStreamsLocked() {
+	for len(g.streams) > maxStreamsPerGroup {
+		oldestName := ""
+		var oldestAt time.Time
+		for name, stream := range g.streams {
+			at := stream.LastEvent
+			if at.IsZero() {
+				at = stream.CreatedAt
+			}
+			if oldestName == "" || at.Before(oldestAt) {
+				oldestName, oldestAt = name, at
+			}
+		}
+		if oldestName == "" {
+			return
+		}
+		delete(g.streams, oldestName)
+	}
+}
+
 // put appends evt, growing the buffer until it reaches maxEvents and
 // overwriting the oldest event after that.
 func (g *logGroup) put(evt LogEvent) {
@@ -225,6 +255,7 @@ func (s *Store) PutLogEvents(groupName, streamName string, events []LogEvent) {
 			stream.LastEvent = evt.Timestamp
 		}
 	}
+	g.evictStreamsLocked()
 }
 
 // GetLogEvents returns filtered events from a group in the requested order.
