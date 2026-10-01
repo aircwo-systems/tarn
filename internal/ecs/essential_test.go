@@ -41,11 +41,8 @@ func runAppWithSidecar(t *testing.T, r *Runner, svc *Service, family string) (st
 }
 
 func TestEssentialContainerExitStopsTaskAndSiblings(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 10 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 10 * time.Millisecond
 	store := tracesvc.NewStore()
 	defer store.Close()
 	r.SetTraceStore(store)
@@ -104,11 +101,8 @@ func TestEssentialContainerExitStopsTaskAndSiblings(t *testing.T) {
 }
 
 func TestNonEssentialContainerExitKeepsTaskRunning(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 10 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 10 * time.Millisecond
 	taskArn, ids := runAppWithSidecar(t, r, svc, "fam-sidecar-exit")
 
 	eng.finish(ids["sidecar"], 1, nil)
@@ -132,11 +126,8 @@ func TestNonEssentialContainerExitKeepsTaskRunning(t *testing.T) {
 }
 
 func TestStopTaskIsNotReportedAsEssentialContainerExit(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 10 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, _, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 10 * time.Millisecond
 	taskArn, _ := runAppWithSidecar(t, r, svc, "fam-essential-user-stop")
 
 	if err := r.StopTask(context.Background(), "", taskArn, "user stop"); err != nil {

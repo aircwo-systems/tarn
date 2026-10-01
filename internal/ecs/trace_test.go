@@ -116,11 +116,8 @@ func TestRunnerContainerOverrideEnvironmentReachesSpec(t *testing.T) {
 // carrying the same CorrelationID, Method "ECS", and a Path scoped to the
 // cluster/task-definition-family.
 func TestRunnerRecordsRunningAndStoppedTracesWithMatchingCorrelationID(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 10 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 10 * time.Millisecond
 	store := tracesvc.NewStore()
 	defer store.Close()
 	r.SetTraceStore(store)
@@ -191,11 +188,8 @@ func TestRunnerRecordsRunningAndStoppedTracesWithMatchingCorrelationID(t *testin
 // code on the (essential-by-default) container marks the STOPPED trace's
 // span status "error" and its Trace.Status 500.
 func TestRunnerRecordsErrorStoppedTraceOnNonZeroExit(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 10 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 10 * time.Millisecond
 	store := tracesvc.NewStore()
 	defer store.Close()
 	r.SetTraceStore(store)
@@ -260,11 +254,8 @@ func TestRunnerSkipsTraceRecordingWithNoTraceStore(t *testing.T) {
 // stopped on purpose is not reported as a failure: the SIGKILL exit code a
 // container returns when it is told to stop is the expected outcome.
 func TestRunnerRecordsOKStoppedTraceWhenStopWasRequested(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 10 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 10 * time.Millisecond
 	store := tracesvc.NewStore()
 	defer store.Close()
 	r.SetTraceStore(store)

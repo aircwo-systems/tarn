@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/internal/logs"
@@ -170,6 +171,31 @@ func TestArchiveSurvivesRestartAndRestoreReloads(t *testing.T) {
 	}
 	if a := h.accounts()[otherAccount]; a.Archived || !a.Loaded || a.LastActivityAt == nil {
 		t.Errorf("restored account listed as %+v", a)
+	}
+}
+
+func TestQueuedActivityWritePreservesArchiveState(t *testing.T) {
+	h := newAccountHarness(t)
+	archivedAt := time.Now().UTC()
+	func() {
+		// Defer the real activity write until after the account's lifecycle changes.
+		h.registry.writeMu.Lock()
+		defer h.registry.writeMu.Unlock()
+		if rec := h.listQueues(otherAccount); rec.Code != http.StatusOK {
+			t.Fatalf("first request: %d %s", rec.Code, rec.Body.String())
+		}
+		h.registry.unload(otherAccount, func(m *accountMeta) {
+			m.Archived = true
+			m.ArchivedAt = &archivedAt
+		})
+	}()
+	h.registry.writes.Wait()
+	saved := readAccountMeta(h.registry.metaPath(otherAccount))
+	if saved == nil || !saved.Archived || saved.ArchivedAt == nil || !saved.ArchivedAt.Equal(archivedAt) {
+		t.Fatalf("queued activity write lost the current archive state: %+v", saved)
+	}
+	if saved.LastActivityAt == nil {
+		t.Fatal("queued activity write lost the request's activity timestamp")
 	}
 }
 

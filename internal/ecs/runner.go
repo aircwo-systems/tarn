@@ -37,8 +37,9 @@ const (
 	// stopTimeoutGracePeriod bounds how long past the longest SIGTERM grace
 	// stopContainerIDs waits. With all-default timeouts the context is
 	// 5s + 5s = 10s, exactly the previous stopContainerTimeout behavior.
-	stopTimeoutGracePeriod = 5 * time.Second
-	maxRunTaskCount        = 10
+	stopTimeoutGracePeriod     = 5 * time.Second
+	maxRunTaskCount            = 10
+	defaultLogDrainGracePeriod = 2 * time.Second
 )
 
 var (
@@ -57,14 +58,6 @@ var (
 	// reconcileIdleInterval is the pass interval with no ACTIVE services,
 	// when a pass only prunes old task and service records.
 	reconcileIdleInterval = 5 * time.Minute
-
-	// logDrainGracePeriod bounds how long the per-container wait goroutine
-	// waits for the log pump to finish on its own after the container exits,
-	// before forcing it closed. Docker's follow stream normally ends shortly
-	// after the container stops, but this keeps cleanup from hanging forever
-	// against a stream Docker never closes. A package var for the same
-	// test-speed reason as reconcileTickInterval.
-	logDrainGracePeriod = 2 * time.Second
 
 	// stoppedTaskRetention keeps enough history for normal DescribeTasks calls
 	// without allowing repeated launch failures to grow the JSON store forever.
@@ -227,6 +220,9 @@ type Runner struct {
 	// wg tracks every log-pump and wait goroutine currently in flight, so
 	// Stop() can block until all of them have finished cleaning up.
 	wg sync.WaitGroup
+	// Bounds log draining after container exit. Set before launching tasks so
+	// tests can shorten it without changing another runner's lifecycle workers.
+	logDrainGracePeriod time.Duration
 
 	reconcileDone     chan struct{}
 	reconcileKick     chan struct{} // task exits wake the loop
@@ -258,20 +254,21 @@ func NewRunner(cfg *config.Config, svc *Service, eng taskEngine, sink logSink) *
 	ctx, cancel := context.WithCancel(context.Background())
 	lifecycleCtx, lifecycleCancel := context.WithCancel(context.Background())
 	return &Runner{
-		cfg:             cfg,
-		svc:             svc,
-		eng:             eng,
-		logs:            sink,
-		ctx:             ctx,
-		cancel:          cancel,
-		lifecycleCtx:    lifecycleCtx,
-		lifecycleCancel: lifecycleCancel,
-		startedAt:       time.Now(),
-		reconcileDone:   make(chan struct{}),
-		reconcileKick:   make(chan struct{}, 1),
-		tasks:           make(map[string]*runningTask),
-		launchBackoff:   make(map[string]launchBackoffState),
-		serviceGates:    make(map[string]*serviceGate),
+		cfg:                 cfg,
+		svc:                 svc,
+		eng:                 eng,
+		logs:                sink,
+		logDrainGracePeriod: defaultLogDrainGracePeriod,
+		ctx:                 ctx,
+		cancel:              cancel,
+		lifecycleCtx:        lifecycleCtx,
+		lifecycleCancel:     lifecycleCancel,
+		startedAt:           time.Now(),
+		reconcileDone:       make(chan struct{}),
+		reconcileKick:       make(chan struct{}, 1),
+		tasks:               make(map[string]*runningTask),
+		launchBackoff:       make(map[string]launchBackoffState),
+		serviceGates:        make(map[string]*serviceGate),
 	}
 }
 
@@ -1716,7 +1713,7 @@ func (r *Runner) spawnLifecycle(taskArn, containerName, containerID, logGroup, s
 		// doesn't close.
 		select {
 		case <-pumpDone:
-		case <-time.After(logDrainGracePeriod):
+		case <-time.After(r.logDrainGracePeriod):
 		}
 		pumpCancel()
 		<-pumpDone

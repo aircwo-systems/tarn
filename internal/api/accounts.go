@@ -100,17 +100,15 @@ func (r *HandlerRegistry) Touch(accountID string) {
 	m := r.metaLocked(accountID)
 	m.LastActivityAt = &now
 	persist := now.Sub(m.persistedAt) >= activityPersistInterval
-	var snapshot accountMeta
 	if persist {
 		m.persistedAt = now
-		snapshot = *m
 	}
 	r.metaMu.Unlock()
 	if persist {
 		r.writes.Add(1)
 		go func() {
 			defer r.writes.Done()
-			_ = r.writeMeta(accountID, &snapshot)
+			_ = r.writeMeta(accountID)
 		}()
 	}
 }
@@ -136,9 +134,8 @@ func (r *HandlerRegistry) Archive(accountID string) error {
 	if counts != nil {
 		m.Resources = counts
 	}
-	snapshot := *m
 	r.metaMu.Unlock()
-	return r.writeMeta(accountID, &snapshot)
+	return r.writeMeta(accountID)
 }
 
 // Restore reactivates an archived account. Its services load on the next request.
@@ -153,9 +150,8 @@ func (r *HandlerRegistry) Restore(accountID string) error {
 	m.ArchivedAt = nil
 	// A restore is a deliberate use; don't flag it stale straight away.
 	m.LastActivityAt = &now
-	snapshot := *m
 	r.metaMu.Unlock()
-	return r.writeMeta(accountID, &snapshot)
+	return r.writeMeta(accountID)
 }
 
 // Delete stops an account's services and removes all of its data from disk.
@@ -248,16 +244,16 @@ func (r *HandlerRegistry) Accounts() []AccountInfo {
 func (r *HandlerRegistry) persistActivity() {
 	r.writes.Wait()
 	r.metaMu.Lock()
-	pending := map[string]accountMeta{}
+	var pending []string
 	for id, m := range r.metas {
 		if m.LastActivityAt != nil && m.LastActivityAt.After(m.persistedAt) {
 			m.persistedAt = *m.LastActivityAt
-			pending[id] = *m
+			pending = append(pending, id)
 		}
 	}
 	r.metaMu.Unlock()
-	for id, m := range pending {
-		_ = r.writeMeta(id, &m)
+	for _, id := range pending {
+		_ = r.writeMeta(id)
 	}
 }
 
@@ -331,14 +327,20 @@ func (r *HandlerRegistry) metaPath(accountID string) string {
 	return filepath.Join(r.baseDir, "accounts", accountID, accountMetaFile)
 }
 
-func (r *HandlerRegistry) writeMeta(accountID string, m *accountMeta) error {
+func (r *HandlerRegistry) writeMeta(accountID string) error {
 	if r.baseDir == "" {
 		return nil
 	}
 	r.writeMu.Lock()
 	defer r.writeMu.Unlock()
 	r.metaMu.RLock()
-	_, exists := r.metas[accountID]
+	m, exists := r.metas[accountID]
+	var snapshot accountMeta
+	if exists {
+		// Read current state only after acquiring the disk-write lock. A delayed
+		// activity writer must not overwrite a more recent archive or restore.
+		snapshot = *m
+	}
 	r.metaMu.RUnlock()
 	if !exists {
 		return nil // deleted since the write was scheduled
@@ -347,7 +349,7 @@ func (r *HandlerRegistry) writeMeta(accountID string, m *accountMeta) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(m, "", "  ")
+	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return err
 	}

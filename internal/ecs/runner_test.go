@@ -705,11 +705,9 @@ func TestRunnerRemovesTaskScopedVolumeOnStopButNotShared(t *testing.T) {
 	// A task only reaches STOPPED after its log pump has been given the drain
 	// grace period, so without shrinking that the wait below races a 2s drain
 	// against its own 2s deadline and loses whenever the machine is loaded.
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 20 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
 
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 20 * time.Millisecond
 	tdOut, err := svc.RegisterTaskDefinition(&types.RegisterTaskDefinitionInput{
 		Family: "volume-remove-on-stop",
 		Volumes: []types.Volume{
@@ -974,11 +972,8 @@ func finishAllContainers(eng *fakeEngine, code int64, err error) {
 // --- exit code nil vs zero -------------------------------------------------------
 
 func TestExitCodeZeroIsNotCollapsedToNil(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 20 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 20 * time.Millisecond
 	td := registerSingleContainerTaskDef(t, svc, "fam-zero")
 	cluster, _ := svc.ResolveCluster("")
 
@@ -1112,11 +1107,8 @@ func waitForTaskStopped(t *testing.T, svc *Service, taskArn string) {
 // --- cleanup ordering ------------------------------------------------------------
 
 func TestCleanupOrderingReadExitDrainThenRemove(t *testing.T) {
-	orig := logDrainGracePeriod
-	logDrainGracePeriod = 20 * time.Millisecond
-	defer func() { logDrainGracePeriod = orig }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 20 * time.Millisecond
 	td := registerSingleContainerTaskDef(t, svc, "fam-order")
 
 	out, err := r.RunTask(context.Background(), &types.RunTaskInput{TaskDefinition: td.Family})
@@ -1183,11 +1175,8 @@ func waitForCall(t *testing.T, eng *fakeEngine, call string) {
 // --- reconcile scaling -----------------------------------------------------------
 
 func TestReconcileRollsServiceTaskAfterTaskDefinitionUpdate(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 20 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 20 * time.Millisecond
 	oldTD := registerSingleContainerTaskDef(t, svc, "fam-rollout")
 	cluster, err := svc.ResolveCluster("")
 	if err != nil {
@@ -1513,11 +1502,8 @@ func TestReconcileOnceIgnoresTombstonedService(t *testing.T) {
 }
 
 func TestReconcileScaleDownDoesNotCountTaskDrainingFromDocker(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 10 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 10 * time.Millisecond
 	td := registerSingleContainerTaskDef(t, svc, "fam-scaledown-delay")
 	cluster, _ := svc.ResolveCluster("")
 	svcOut, err := svc.CreateService(&types.CreateServiceInput{
@@ -1585,11 +1571,8 @@ func TestReconcileScaleDownDoesNotCountTaskDrainingFromDocker(t *testing.T) {
 }
 
 func TestPartialTaskLaunchStopsContainersAlreadyStarted(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 10 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 10 * time.Millisecond
 	_, err := svc.RegisterTaskDefinition(&types.RegisterTaskDefinitionInput{
 		Family: "fam-partial-launch",
 		ContainerDefinitions: []types.ContainerDefinition{
@@ -1623,11 +1606,8 @@ func TestPartialTaskLaunchStopsContainersAlreadyStarted(t *testing.T) {
 }
 
 func TestStopTaskRacingWithLaunchStopsContainerCreatedAfterRequest(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 10 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 10 * time.Millisecond
 	td := registerSingleContainerTaskDef(t, svc, "fam-stop-race")
 	eng.ensureStarted = make(chan struct{})
 	eng.ensureRelease = make(chan struct{})
@@ -1923,11 +1903,8 @@ func TestServicePropagatesTagsToLaunchedTasks(t *testing.T) {
 // --- startup recovery ----------------------------------------------------------
 
 func TestRunnerRecoversPersistedRuntimeIDAndLifecycle(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 20 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 20 * time.Millisecond
 	td := registerSingleContainerTaskDef(t, svc, "fam-recover")
 	cluster, err := svc.ResolveCluster("")
 	if err != nil {
@@ -1993,11 +1970,8 @@ func TestRunnerRecoversPersistedRuntimeIDAndLifecycle(t *testing.T) {
 // time skips that; without a Since every restart re-ingests the container's
 // full history as duplicate events.
 func TestRunnerRecoversContainerLogPumpSinceStartTime(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 20 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 20 * time.Millisecond
 	td := registerSingleContainerTaskDef(t, svc, "fam-recover-since")
 	cluster, err := svc.ResolveCluster("")
 	if err != nil {
@@ -2045,11 +2019,9 @@ func TestRunnerStartsHealthPollerForRecoveredContainers(t *testing.T) {
 	origInterval := healthPollInterval
 	healthPollInterval = 5 * time.Millisecond
 	defer func() { healthPollInterval = origInterval }()
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 20 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
 
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 20 * time.Millisecond
 	tdOut, err := svc.RegisterTaskDefinition(&types.RegisterTaskDefinitionInput{
 		Family: "fam-recover-health",
 		ContainerDefinitions: []types.ContainerDefinition{{
@@ -2107,11 +2079,9 @@ func TestRunnerLeavesRecoveredHealthChecklessContainersUnpolled(t *testing.T) {
 	origInterval := healthPollInterval
 	healthPollInterval = 5 * time.Millisecond
 	defer func() { healthPollInterval = origInterval }()
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 20 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
 
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 20 * time.Millisecond
 	td := registerSingleContainerTaskDef(t, svc, "fam-recover-nohealth")
 	cluster, err := svc.ResolveCluster("")
 	if err != nil {
@@ -2249,11 +2219,8 @@ func TestRunnerRecoveryCleansUpAccountOrphanContainers(t *testing.T) {
 // RemoveTaskContainer so the container isn't force-removed while the
 // graceful stop is still racing it.
 func TestStopRecordsRealExitCodeInsteadOfContextCanceled(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 10 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 10 * time.Millisecond
 	eng.stopExitCode = 143
 	td := registerSingleContainerTaskDef(t, svc, "fam-graceful-stop")
 
@@ -2296,11 +2263,8 @@ func TestStopRecordsRealExitCodeInsteadOfContextCanceled(t *testing.T) {
 // DrainService for a different service, which used to share that single
 // account-wide lock.
 func TestDrainServiceDoesNotBlockOnAnUnrelatedServicesLaunch(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 10 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 10 * time.Millisecond
 	tdA := registerSingleContainerTaskDef(t, svc, "fam-drain-gate-a")
 	tdB := registerSingleContainerTaskDef(t, svc, "fam-drain-gate-b")
 	cluster, err := svc.ResolveCluster("")
@@ -2420,11 +2384,8 @@ func TestDrainServiceRejectsLaunchAfterItConcludes(t *testing.T) {
 // goroutine that records the container's real exit code — so DrainService
 // could return before that exit code was actually recorded.
 func TestDrainServiceStopsTrackedTaskAndWaitsForRealExitCode(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 10 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 10 * time.Millisecond
 	td := registerSingleContainerTaskDef(t, svc, "fam-drain-dead-loop")
 	cluster, err := svc.ResolveCluster("")
 	if err != nil {
@@ -2486,11 +2447,8 @@ func TestDrainServiceStopsTrackedTaskAndWaitsForRealExitCode(t *testing.T) {
 // container crashes immediately after start must see growing retry delays,
 // not relaunch on every reconcile tick forever.
 func TestServiceLaunchBackoffGrowsOnRepeatedInstantCrashes(t *testing.T) {
-	origGrace := logDrainGracePeriod
-	logDrainGracePeriod = 10 * time.Millisecond
-	defer func() { logDrainGracePeriod = origGrace }()
-
 	r, svc, eng, _ := newTestRunner(t)
+	r.logDrainGracePeriod = 10 * time.Millisecond
 	td := registerSingleContainerTaskDef(t, svc, "fam-crashloop")
 	cluster, err := svc.ResolveCluster("")
 	if err != nil {
