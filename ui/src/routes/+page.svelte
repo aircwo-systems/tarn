@@ -395,7 +395,7 @@
   />
 
   <!-- ═══════════════════════════════════════════════════ MAIN ══ -->
-  {#key activeTab}
+  {#key `${accountSettings.activeAccountId}:${activeTab}`}
     {#if activeTab === "overview"}
     <main id="main-stage-content" tabindex="-1" class="tab-content-view main-stage flex min-w-0 flex-1 flex-col overflow-hidden outline-none" class:sidebar-collapsed={sidebarCollapsed && uiSettings.collapsedSidebarMode === "hidden"}>
       <div class="flex flex-1 flex-col overflow-hidden {canvasExpanded ? 'px-6 py-5' : 'px-4 py-4'}">

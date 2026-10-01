@@ -11,7 +11,7 @@
 
   let { secret }: { secret: SecretSummary } = $props();
 
-  // Value is fetched on demand and dropped when the panel unmounts (parent keys on name).
+  // Value is fetched on demand and dropped when the resource or account changes.
   let value = $state<SecretValueResult | null>(null);
   let visible = $state(false);
   let loading = $state(false);
