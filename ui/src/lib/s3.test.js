@@ -55,4 +55,12 @@ describe("S3 account routing", () => {
     expect(await s3.getObject("audit-bucket", "file.txt", controller.signal)).toBe(response);
     expect(fetchSpy.mock.calls[0][1].signal).toBe(controller.signal);
   });
+
+  test("listing passes cancellation to the account-aware request", async () => {
+    const controller = new AbortController();
+    await expect(s3.listObjects("audit-bucket", "folder/", controller.signal)).rejects.toThrow(
+      "503",
+    );
+    expect(fetchSpy.mock.calls[0][1].signal).toBe(controller.signal);
+  });
 });

@@ -29,10 +29,10 @@ export function objectPath(bucket: string, key = ""): string {
 }
 
 /** ListObjectsV2 scoped to one "folder" level: delimiter "/" splits keys into prefixes + objects. */
-export async function listObjects(bucket: string, prefix: string): Promise<S3Listing> {
+export async function listObjects(bucket: string, prefix: string, signal?: AbortSignal): Promise<S3Listing> {
   const qs = new URLSearchParams({ "list-type": "2", delimiter: "/", "max-keys": "1000" });
   if (prefix) qs.set("prefix", prefix);
-  const resp = await fetchAccountResource(`${objectPath(bucket)}?${qs}`);
+  const resp = await fetchAccountResource(`${objectPath(bucket)}?${qs}`, { signal });
   if (!resp.ok) throw new Error(`List failed: HTTP ${resp.status}`);
   const xml = new DOMParser().parseFromString(await resp.text(), "text/xml");
   const text = (el: Element, tag: string) => el.getElementsByTagName(tag)[0]?.textContent ?? "";

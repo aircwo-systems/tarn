@@ -29,15 +29,15 @@
     {#each Array(Math.max(0, BARS - strip.length)) as _, i (i)}
       <span class="bar empty"></span>
     {/each}
-    {#each strip as inv (inv.traceId)}
+    {#each strip as inv (inv.id)}
       <button
         type="button"
         class="bar"
         class:err={inv.status === "error"}
-        class:hot={hovered === inv.traceId}
+        class:hot={hovered === inv.id}
         style:--h="{Math.max(8, (inv.durationMs / peak) * 100)}%"
         title="{formatMs(inv.durationMs)} · {timeAgo(inv.startedAt)}"
-        onmouseenter={() => (hovered = inv.traceId)}
+        onmouseenter={() => (hovered = inv.id)}
         onmouseleave={() => (hovered = null)}
         onclick={() => onopen(inv.traceId)}
         aria-label="Open trace, {formatMs(inv.durationMs)}"
@@ -50,14 +50,14 @@
   </div>
 
   <ul class="rows">
-    {#each invocations.slice(0, LIMIT) as inv, i (inv.traceId)}
+    {#each invocations.slice(0, LIMIT) as inv, i (inv.id)}
       <li in:fly={{ y: 4, duration: 220, delay: i * 25 }}>
         <button
           type="button"
           class="row"
           class:err={inv.status === "error"}
-          class:hot={hovered === inv.traceId}
-          onmouseenter={() => (hovered = inv.traceId)}
+          class:hot={hovered === inv.id}
+          onmouseenter={() => (hovered = inv.id)}
           onmouseleave={() => (hovered = null)}
           onclick={() => onopen(inv.traceId)}
         >

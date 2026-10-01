@@ -12,6 +12,7 @@
   import RcStat from "$lib/components/rack/rc-stat.svelte";
   import RcButton from "$lib/components/rack/rc-button.svelte";
   import ObjectPreview from "./object-preview.svelte";
+  import { onDestroy } from "svelte";
   import { deleteObject, leafName, listObjects, putObject, type S3Listing } from "$lib/s3";
   import { refresh } from "$lib/state.svelte";
   import { formatBytes, formatDate, timeAgo } from "$lib/utils";
@@ -34,18 +35,43 @@
   let loading = $state(false);
   let error = $state("");
   let query = $state("");
+  let listingController: AbortController | null = null;
+  let listedBucket = "";
+  let listedPrefix = "";
 
   async function load() {
+    listingController?.abort();
+    const ctrl = new AbortController();
+    listingController = ctrl;
+    const bucketName = bucket.name;
+    const folderPrefix = prefix;
+    if (listedBucket !== bucketName || listedPrefix !== folderPrefix) {
+      listing = null;
+      listedBucket = bucketName;
+      listedPrefix = folderPrefix;
+    }
     loading = true;
     error = "";
     try {
-      listing = await listObjects(bucket.name, prefix);
+      const result = await listObjects(bucketName, folderPrefix, ctrl.signal);
+      if (listingController !== ctrl || ctrl.signal.aborted) return;
+      listing = result;
     } catch (err) {
+      if (listingController !== ctrl || ctrl.signal.aborted) return;
       error = err instanceof Error ? err.message : "Failed to list objects";
     } finally {
-      loading = false;
+      if (listingController === ctrl) {
+        listingController = null;
+        loading = false;
+      }
     }
   }
+
+  onDestroy(() => {
+    listingController?.abort();
+    listingController = null;
+    clearTimeout(copyTimer);
+  });
 
   // Reload when the folder changes, and when the dashboard reports a different
   // object count. Guarded by value (not object identity): the dashboard

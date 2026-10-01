@@ -368,7 +368,8 @@
     if (!opts.merge) eventsLoading = true;
     eventsError = "";
     try {
-      const params: FetchLogEventsParams = { limit: eventsLimit, order: sortOrder };
+      // Tail the newest page even when the buffer is displayed oldest first.
+      const params: FetchLogEventsParams = { limit: eventsLimit, order: opts.merge ? "desc" : sortOrder };
       if (eventsCursor && !opts.merge) params.cursor = eventsCursor;
       if (filterLevels.length) params.level = filterLevels.join(",");
       if (filterPattern) params.pattern = filterPattern;

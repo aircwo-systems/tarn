@@ -15,6 +15,7 @@ export interface FunctionCaller {
 
 /** One invocation of the function, reconstructed from a recorded trace. */
 export interface FunctionInvocation {
+  id: string;
   traceId: string;
   startedAt: string;
   durationMs: number;
@@ -134,36 +135,51 @@ function isFunctionSpan(span: TraceSpan, fn: FunctionSummary): boolean {
 }
 
 /** Invocations of `fn` found in recorded traces, newest first. */
-export function invocationsFromTraces(fn: FunctionSummary, traces: RequestTrace[] | undefined): FunctionInvocation[] {
+export function invocationsFromTraces(
+  fn: FunctionSummary,
+  traces: RequestTrace[] | undefined,
+): FunctionInvocation[] {
   const out: FunctionInvocation[] = [];
   for (const trace of traces ?? []) {
-    const idx = trace.spans.findIndex((s) => isFunctionSpan(s, fn));
-    if (idx < 0) continue;
-    const span = trace.spans[idx];
+    for (let idx = 0; idx < trace.spans.length; idx++) {
+      const span = trace.spans[idx];
+      if (!isFunctionSpan(span, fn)) continue;
 
-    let caller: TraceSpan | undefined;
-    for (let i = idx - 1; i >= 0; i--) {
-      if (!SUB_SPAN_KINDS.has(trace.spans[i].kind.toLowerCase())) { caller = trace.spans[i]; break; }
+      let caller: TraceSpan | undefined;
+      for (let i = idx - 1; i >= 0; i--) {
+        if (!SUB_SPAN_KINDS.has(trace.spans[i].kind.toLowerCase())) {
+          caller = trace.spans[i];
+          break;
+        }
+      }
+
+      const downstream: TraceSpan[] = [];
+      for (let i = idx + 1; i < trace.spans.length; i++) {
+        const s = trace.spans[i];
+        if (!SUB_SPAN_KINDS.has(s.kind.toLowerCase())) break;
+        downstream.push(s);
+      }
+
+      const failed = span.status === "error" || downstream.some((s) => s.status === "error");
+      out.push({
+        id: `${trace.id}:${idx}`,
+        traceId: trace.id,
+        startedAt: trace.startedAt,
+        durationMs: span.durationMs,
+        status: failed ? "error" : "ok",
+        callerKind: caller?.kind ?? "direct",
+        callerName:
+          caller?.name ??
+          (trace.method && trace.path ? `${trace.method} ${trace.path}` : "Direct invoke"),
+        title:
+          trace.method && trace.path
+            ? `${trace.method} ${trace.path}`
+            : caller
+              ? `${spanKindLabel(caller.kind)} → ${caller.name}`
+              : "Direct invoke",
+        downstream,
+      });
     }
-
-    const downstream: TraceSpan[] = [];
-    for (let i = idx + 1; i < trace.spans.length; i++) {
-      const s = trace.spans[i];
-      if (!SUB_SPAN_KINDS.has(s.kind.toLowerCase())) break;
-      downstream.push(s);
-    }
-
-    const failed = span.status === "error" || downstream.some((s) => s.status === "error");
-    out.push({
-      traceId: trace.id,
-      startedAt: trace.startedAt,
-      durationMs: span.durationMs,
-      status: failed ? "error" : "ok",
-      callerKind: caller?.kind ?? "direct",
-      callerName: caller?.name ?? (trace.method && trace.path ? `${trace.method} ${trace.path}` : "Direct invoke"),
-      title: trace.method && trace.path ? `${trace.method} ${trace.path}` : caller ? `${spanKindLabel(caller.kind)} → ${caller.name}` : "Direct invoke",
-      downstream,
-    });
   }
   return out.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
 }
