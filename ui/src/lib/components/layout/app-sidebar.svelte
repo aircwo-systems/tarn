@@ -685,7 +685,6 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    border-bottom: 1px solid var(--border-subtle);
     flex-shrink: 0;
   }
 
@@ -1014,7 +1013,6 @@
   /* ─── Footer Dock ─── */
   .sidebar-footer {
     padding: 8px 10px 10px;
-    border-top: 1px solid var(--border-subtle);
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -1022,7 +1020,7 @@
     position: relative;
     z-index: 10;
     background: var(--bg-sidebar);
-    transition: background-color 150ms ease, border-color 150ms ease;
+    transition: background-color 150ms ease;
     flex-shrink: 0;
   }
 
