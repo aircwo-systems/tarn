@@ -2,6 +2,7 @@
   export interface RuleDraft {
     name: string;
     scheduleExpression: string;
+    eventPattern: string;
     description: string;
     enabled: boolean;
   }
@@ -11,7 +12,7 @@
   import { untrack } from "svelte";
   import RcButton from "$lib/components/rack/rc-button.svelte";
   import ScheduleField from "./schedule-field.svelte";
-  import { describeSchedule } from "$lib/eventbridge-schedule";
+  import { ruleDefinitionError } from "$lib/eventbridge-rule";
 
   let {
     initial,
@@ -33,21 +34,22 @@
   let busy = $state(false);
 
   const nameValid = $derived(/^[\w.-]{1,64}$/.test(draft.name.trim()));
-  const scheduleValid = $derived(describeSchedule(draft.scheduleExpression).kind !== "invalid");
+  const definitionError = $derived(ruleDefinitionError(draft));
   const dirty = $derived(
     creating ||
       draft.scheduleExpression.trim() !== initial.scheduleExpression ||
+      draft.eventPattern.trim() !== initial.eventPattern ||
       draft.description.trim() !== initial.description ||
       draft.enabled !== initial.enabled,
   );
-  const canSubmit = $derived(dirty && scheduleValid && (!creating || nameValid) && !busy);
+  const canSubmit = $derived(dirty && !definitionError && (!creating || nameValid) && !busy);
 
   async function submit(e: SubmitEvent) {
     e.preventDefault();
     if (!canSubmit) return;
     busy = true;
     try {
-      await onsubmit({ ...draft, name: draft.name.trim(), scheduleExpression: draft.scheduleExpression.trim(), description: draft.description.trim() });
+      await onsubmit({ ...draft, name: draft.name.trim(), scheduleExpression: draft.scheduleExpression.trim(), eventPattern: draft.eventPattern.trim(), description: draft.description.trim() });
     } finally {
       busy = false;
     }
@@ -74,6 +76,12 @@
   </div>
 
   <label class="field">
+    <span>Event pattern <em>use instead of a schedule</em></span>
+    <textarea bind:value={draft.eventPattern} spellcheck="false" placeholder={'{"source":["my.application"]}'} aria-invalid={!!definitionError && !!draft.eventPattern.trim()} aria-describedby="rule-definition-error"></textarea>
+  </label>
+  {#if definitionError}<small id="rule-definition-error" role="status">{definitionError}</small>{/if}
+
+  <label class="field">
     <span>Description <em>optional</em></span>
     <input bind:value={draft.description} placeholder="What this rule is for" />
   </label>
@@ -81,7 +89,7 @@
   <label class="toggle">
     <input type="checkbox" bind:checked={draft.enabled} />
     <span class="switch" aria-hidden="true"></span>
-    <span>{draft.enabled ? "Enabled — runs on schedule" : "Disabled — only fires manually"}</span>
+    <span>{draft.enabled ? (draft.scheduleExpression.trim() ? "Enabled — runs on schedule" : "Enabled — matches events") : "Disabled — only fires manually"}</span>
   </label>
 
   {#if dirty}
@@ -101,12 +109,13 @@
   .field { display: flex; flex-direction: column; gap: 6px; }
   .field > span, .field > label { font-size: 11px; color: var(--text-secondary); }
   em { font-style: normal; color: var(--text-tertiary); margin-left: 4px; }
-  .field > input {
+  .field > input, .field > textarea {
     height: 34px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--border-subtle); background: var(--bg-app);
     font-size: 12.5px; color: var(--text-primary); outline: none; transition: border-color 120ms ease;
   }
-  .field > input:hover { border-color: var(--border-default); }
-  .field > input:focus { border-color: var(--border-focus); }
+  .field > textarea { min-height: 100px; padding: 10px 12px; resize: vertical; font-family: var(--font-mono, monospace); }
+  .field > input:hover, .field > textarea:hover { border-color: var(--border-default); }
+  .field > input:focus, .field > textarea:focus { border-color: var(--border-focus); }
   .field > input.invalid { border-color: color-mix(in srgb, var(--accent-red) 45%, transparent); }
   small { font-size: 10.5px; color: var(--accent-red); }
 

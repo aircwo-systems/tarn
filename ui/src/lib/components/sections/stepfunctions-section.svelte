@@ -1,11 +1,12 @@
 <script lang="ts">
+  import { matchesResourceType } from "$lib/filter-utils";
   import { onMount } from "svelte";
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
   import StateMachineList from "$lib/components/stepfunctions/state-machine-list.svelte";
   import StateMachineDetail from "$lib/components/stepfunctions/state-machine-detail.svelte";
   import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
-  import { getDashboard } from "$lib/state.svelte";
+  import { getDashboard, getDashboardFilters } from "$lib/state.svelte";
 
   let {
     sidebarCollapsed = false,
@@ -16,7 +17,8 @@
   } = $props();
 
   const dashboard = getDashboard();
-  const machines = $derived(dashboard.data?.stateMachines ?? []);
+  const filters = getDashboardFilters();
+  const machines = $derived(matchesResourceType("stepfunctions", filters.tagFilter) ? dashboard.data?.stateMachines ?? [] : []);
   const totalExecutions = $derived(
     machines.reduce((sum, machine) => sum + (machine.executions?.length ?? 0), 0),
   );

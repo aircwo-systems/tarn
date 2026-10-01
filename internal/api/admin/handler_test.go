@@ -641,6 +641,38 @@ func TestOverviewIncludesEventBridgeTargetInput(t *testing.T) {
 	}
 }
 
+func TestOverviewPreservesEventBridgePatternForEdits(t *testing.T) {
+	h := newTestHandler(t)
+	pattern := `{"source":["audit.orders"],"detail-type":["OrderCreated"]}`
+	if _, err := h.eventbridge.PutRule("order-rule", "", pattern, "ENABLED", "original", "default"); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	h.Overview(rec, httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("overview status = %d", rec.Code)
+	}
+	var payload struct {
+		Rules []struct {
+			Name         string `json:"name"`
+			EventPattern string `json:"eventPattern"`
+		} `json:"eventBridgeRules"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.Rules) != 1 || payload.Rules[0].EventPattern != pattern {
+		t.Fatalf("overview lost the event pattern needed to save an edit: %+v", payload.Rules)
+	}
+	saved, err := h.eventbridge.PutRule(payload.Rules[0].Name, "", payload.Rules[0].EventPattern, "DISABLED", "edited", "default")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.EventPattern != pattern || saved.Description != "edited" || saved.State != "DISABLED" {
+		t.Fatalf("edit did not preserve the pattern: %+v", saved)
+	}
+}
+
 func TestOverviewIncludesResourceTags(t *testing.T) {
 	h := newTestHandler(t)
 

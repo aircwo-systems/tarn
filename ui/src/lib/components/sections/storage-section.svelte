@@ -1,11 +1,12 @@
 <script lang="ts">
+  import { matchesResourceFilter } from "$lib/filter-utils";
   import { onMount } from "svelte";
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
   import RcListRow from "$lib/components/rack/rc-list-row.svelte";
   import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
   import BucketDetail from "$lib/components/s3/bucket-detail.svelte";
-  import { getDashboard } from "$lib/state.svelte";
+  import { getDashboard, getDashboardFilters } from "$lib/state.svelte";
   import { formatBytes } from "$lib/utils";
 
   let {
@@ -17,7 +18,8 @@
   } = $props();
 
   const dashboard = getDashboard();
-  const buckets = $derived(dashboard.data?.buckets ?? []);
+  const filters = getDashboardFilters();
+  const buckets = $derived((dashboard.data?.buckets ?? []).filter(() => matchesResourceFilter("bucket", filters.tagFilter)));
 
   let listCollapsed = $state(false);
 

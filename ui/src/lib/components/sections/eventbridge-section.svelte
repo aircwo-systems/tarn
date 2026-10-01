@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { matchesResourceFilter } from "$lib/filter-utils";
   import { onMount } from "svelte";
   import { fly } from "svelte/transition";
   import { MagnifyingGlassIcon, SidebarSimpleIcon, PlusIcon } from "phosphor-svelte";
@@ -18,7 +19,7 @@
     removeEventBridgeTargets,
     fireEventBridgeRule,
   } from "$lib/api";
-  import { getDashboard, refresh } from "$lib/state.svelte";
+  import { getDashboard, getDashboardFilters, refresh } from "$lib/state.svelte";
 
   let {
     sidebarCollapsed = false,
@@ -29,8 +30,9 @@
   } = $props();
 
   const dashboard = getDashboard();
+  const filters = getDashboardFilters();
   const functions = $derived(dashboard.data?.functions ?? []);
-  const rules = $derived(dashboard.data?.eventBridgeRules ?? []);
+  const rules = $derived((dashboard.data?.eventBridgeRules ?? []).filter(() => matchesResourceFilter("eventbridge", filters.tagFilter)));
 
   let listCollapsed = $state(false);
 
@@ -100,13 +102,14 @@
     }
   }
 
-  const blankDraft: RuleDraft = { name: "", scheduleExpression: "rate(5 minutes)", description: "", enabled: true };
+  const blankDraft: RuleDraft = { name: "", scheduleExpression: "rate(5 minutes)", eventPattern: "", description: "", enabled: true };
 
   async function create(draft: RuleDraft) {
     const ok = await run(() =>
       putEventBridgeRule({
         name: draft.name,
         scheduleExpression: draft.scheduleExpression,
+        eventPattern: draft.eventPattern,
         description: draft.description,
         state: draft.enabled ? "ENABLED" : "DISABLED",
       }),
@@ -121,6 +124,7 @@
       putEventBridgeRule({
         name,
         scheduleExpression: draft.scheduleExpression,
+        eventPattern: draft.eventPattern,
         description: draft.description,
         state: draft.enabled ? "ENABLED" : "DISABLED",
       }),
@@ -222,7 +226,7 @@
   {:else if rules.length === 0 && !creating}
     <div class="blank">
       <h2>No rules yet</h2>
-      <p>Rules run Lambda functions on a schedule, or whenever you fire them by hand.</p>
+      <p>Rules run targets on a schedule, when an event matches a pattern, or when you fire them by hand.</p>
       <RcButton variant="primary" onclick={() => (creating = true)}><PlusIcon size={12} />Create your first rule</RcButton>
     </div>
   {:else}
@@ -302,7 +306,7 @@
       {/if}
 
       {#if creating}
-        <RcPanel title="New rule" description="Schedule first, then add targets once it exists.">
+        <RcPanel title="New rule" description="Choose a schedule or event pattern, then add targets.">
           <RuleForm initial={blankDraft} creating submitLabel="Create rule" onsubmit={create} oncancel={() => (creating = false)} />
         </RcPanel>
       {:else if selected}

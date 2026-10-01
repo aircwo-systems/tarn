@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { matchesResourceFilter } from "$lib/filter-utils";
   import { onMount } from "svelte";
   import { MagnifyingGlassIcon, SidebarSimpleIcon, DownloadSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
@@ -8,7 +9,6 @@
   import {
     getDashboard,
     getDashboardFilters,
-    matchesTagFilter,
   } from "$lib/state.svelte";
   import { buildCombinedCollection, downloadJSON } from "$lib/postman";
 
@@ -24,7 +24,7 @@
   const filters = getDashboardFilters();
   const gateways = $derived(
     (dashboard.data?.gateways ?? []).filter((gateway) =>
-      matchesTagFilter(gateway.tags, filters.tagFilter),
+      matchesResourceFilter("gateway", filters.tagFilter, gateway.tags),
     ),
   );
 
@@ -116,7 +116,7 @@
         {/if}
       </div>
       {#if filters.tagFilter}
-        <span class="filter" title={filters.tagFilter}>Tag <span>{filters.tagFilter}</span></span>
+        <span class="filter" title={filters.tagFilter}>Filter <span>{filters.tagFilter}</span></span>
       {/if}
       {#if gateways.length > 0}
         <button type="button" onclick={downloadAll} class="export-btn">

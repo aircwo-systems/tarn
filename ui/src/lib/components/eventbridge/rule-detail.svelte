@@ -69,10 +69,11 @@
   const initial = $derived<RuleDraft>({
     name: rule.name,
     scheduleExpression: rule.scheduleExpression,
+    eventPattern: rule.eventPattern ?? "",
     description: rule.description ?? "",
     enabled,
   });
-  const formKey = $derived(`${initial.scheduleExpression}|${initial.description}|${initial.enabled}`);
+  const formKey = $derived(JSON.stringify(initial));
 </script>
 
 <div class="detail">

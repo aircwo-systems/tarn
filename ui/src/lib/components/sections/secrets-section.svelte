@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { matchesResourceFilter } from "$lib/filter-utils";
   import { onMount } from "svelte";
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
@@ -8,7 +9,6 @@
   import {
     getDashboard,
     getDashboardFilters,
-    matchesTagFilter,
   } from "$lib/state.svelte";
   import { timeAgo } from "$lib/utils";
 
@@ -24,7 +24,7 @@
   const filters = getDashboardFilters();
   const secrets = $derived(
     (dashboard.data?.secrets ?? []).filter((s) =>
-      matchesTagFilter(s.tags, filters.tagFilter),
+      matchesResourceFilter("secret", filters.tagFilter, s.tags),
     ),
   );
 
@@ -108,7 +108,7 @@
         {/if}
       </div>
       {#if filters.tagFilter}
-        <span class="filter" title={filters.tagFilter}>Tag <span>{filters.tagFilter}</span></span>
+        <span class="filter" title={filters.tagFilter}>Filter <span>{filters.tagFilter}</span></span>
       {/if}
     {/snippet}
   </SectionHeader>
@@ -121,7 +121,7 @@
     </div>
   {:else if secrets.length === 0}
     <div class="blank">
-      <h2>{filters.tagFilter ? "No secrets match this tag filter" : "No secrets yet"}</h2>
+      <h2>{filters.tagFilter ? "No secrets match this filter" : "No secrets yet"}</h2>
       <p>Create one from your terminal, or deploy through your IaC, and it shows up here.</p>
       <pre>tarn secrets create --name my-secret --value '&#123;"password":"hunter2"&#125;'</pre>
     </div>

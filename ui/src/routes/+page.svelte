@@ -58,12 +58,12 @@
     getInfraSettings,
     getAccountSettings,
     getVisibleInfra,
-    matchesTagFilter,
   } from "$lib/state.svelte";
 
   import {
-    resolveDirectPrototypeFilter,
-    extractTagOnlyFilterQuery,
+    matchesResourceFilter,
+    matchesResourceType,
+    matchesInfrastructureFilter,
   } from "$lib/filter-utils";
   import {
     TabNavigationHistory,
@@ -156,42 +156,24 @@
   $effect(() => { sidebarCollapsed = canvasExpanded; });
 
   // ── Filter-derived counts ──────────────────────────────────────
-  const directPrototypeFilter = $derived(resolveDirectPrototypeFilter(filters.tagFilter));
-  const tagOnlyFilterQuery = $derived(extractTagOnlyFilterQuery(filters.tagFilter));
 
-  function matchesPrototypeResourceFilter(
-    kind: "gateway" | "eventbridge" | "topic" | "queue" | "dynamodb" | "function" | "secret" | "bucket",
-    tags?: Record<string, string>,
-  ): boolean {
-    if (directPrototypeFilter && directPrototypeFilter.kind !== kind) return false;
-    if (!tagOnlyFilterQuery) return true;
-    return matchesTagFilter(tags, tagOnlyFilterQuery);
-  }
-
-  function matchesPrototypeInfraFilter(kind: string): boolean {
-    if (!directPrototypeFilter) return true;
-    if (directPrototypeFilter.kind !== "infra") return false;
-    if (!directPrototypeFilter.infraKind) return true;
-    return normalizeTopologyInfraKind(kind) === directPrototypeFilter.infraKind;
-  }
-
-  const countGateways    = $derived((dashboard.data?.gateways ?? []).filter(g => matchesPrototypeResourceFilter("gateway", g.tags)).length);
-  const visibleFunctions = $derived((dashboard.data?.functions ?? []).filter(f => matchesPrototypeResourceFilter("function", f.tags)));
+  const countGateways    = $derived((dashboard.data?.gateways ?? []).filter(g => matchesResourceFilter("gateway", filters.tagFilter, g.tags)).length);
+  const visibleFunctions = $derived((dashboard.data?.functions ?? []).filter(f => matchesResourceFilter("function", filters.tagFilter, f.tags)));
   const countFunctions   = $derived(visibleFunctions.length);
-  const countECS         = $derived(directPrototypeFilter ? 0 : ((dashboard.data?.ecs?.clusters?.length ?? 0) + (dashboard.data?.ecs?.services?.length ?? 0) + (dashboard.data?.ecs?.tasks?.length ?? 0)));
-  const visibleQueues = $derived((dashboard.data?.queues ?? []).filter(q => matchesPrototypeResourceFilter("queue", q.tags)));
+  const countECS         = $derived(!matchesResourceType("ecs", filters.tagFilter) ? 0 : ((dashboard.data?.ecs?.clusters?.length ?? 0) + (dashboard.data?.ecs?.services?.length ?? 0) + (dashboard.data?.ecs?.tasks?.length ?? 0)));
+  const visibleQueues = $derived((dashboard.data?.queues ?? []).filter(q => matchesResourceFilter("queue", filters.tagFilter, q.tags)));
   const countQueues      = $derived(visibleQueues.length);
-  const countTopics      = $derived((dashboard.data?.topics ?? []).filter(t => matchesPrototypeResourceFilter("topic", t.tags)).length);
-  const countDynamoTables = $derived((dashboard.data?.dynamodbTables ?? []).filter(() => matchesPrototypeResourceFilter("dynamodb")).length);
-  const countSecrets     = $derived((dashboard.data?.secrets ?? []).filter(s => matchesPrototypeResourceFilter("secret", s.tags)).length);
-  const countBuckets     = $derived((dashboard.data?.buckets ?? []).filter(() => matchesPrototypeResourceFilter("bucket")).length);
-  const countEventBridge = $derived((dashboard.data?.eventBridgeRules ?? []).filter(() => matchesPrototypeResourceFilter("eventbridge")).length);
-  const countStateMachines = $derived(directPrototypeFilter ? 0 : (dashboard.data?.stateMachines ?? []).length);
-  const countTriggers    = $derived(directPrototypeFilter ? 0 : (dashboard.data?.eventSourceMappings ?? []).length);
+  const countTopics      = $derived((dashboard.data?.topics ?? []).filter(t => matchesResourceFilter("topic", filters.tagFilter, t.tags)).length);
+  const countDynamoTables = $derived((dashboard.data?.dynamodbTables ?? []).filter(() => matchesResourceFilter("dynamodb", filters.tagFilter)).length);
+  const countSecrets     = $derived((dashboard.data?.secrets ?? []).filter(s => matchesResourceFilter("secret", filters.tagFilter, s.tags)).length);
+  const countBuckets     = $derived((dashboard.data?.buckets ?? []).filter(() => matchesResourceFilter("bucket", filters.tagFilter)).length);
+  const countEventBridge = $derived((dashboard.data?.eventBridgeRules ?? []).filter(() => matchesResourceFilter("eventbridge", filters.tagFilter)).length);
+  const countStateMachines = $derived(!matchesResourceType("stepfunctions", filters.tagFilter) ? 0 : (dashboard.data?.stateMachines ?? []).length);
+  const countTriggers    = $derived(!matchesResourceType("trigger", filters.tagFilter) ? 0 : (dashboard.data?.eventSourceMappings ?? []).length);
 
   const recentTraces = $derived(dashboard.data?.recentTraces ?? []);
   const visibleInfra = $derived(
-    getVisibleInfra(dashboard.data?.infrastructure ?? []).filter(p => matchesPrototypeInfraFilter(p.kind)),
+    getVisibleInfra(dashboard.data?.infrastructure ?? []).filter(p => matchesInfrastructureFilter(normalizeTopologyInfraKind(p.kind), filters.tagFilter)),
   );
   const activeServiceCount = $derived(visibleInfra.length);
   const sidebarServices = $derived(visibleInfra.map((probe) => {

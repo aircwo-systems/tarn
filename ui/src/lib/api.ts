@@ -539,6 +539,7 @@ export async function fetchTraceForLog(
 export interface PutEventBridgeRuleInput {
   name: string;
   scheduleExpression: string;
+  eventPattern?: string;
   state?: "ENABLED" | "DISABLED";
   description?: string;
 }
@@ -571,6 +572,7 @@ export async function putEventBridgeRule(
   const payload = await eventBridgeCall<{ RuleArn?: string }>("PutRule", {
     Name: input.name,
     ScheduleExpression: input.scheduleExpression,
+    EventPattern: input.eventPattern,
     State: input.state,
     Description: input.description ?? "",
     EventBusName: "default",

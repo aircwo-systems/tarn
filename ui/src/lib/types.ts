@@ -393,6 +393,7 @@ export interface EventBridgeRuleSummary {
   name: string;
   arn: string;
   scheduleExpression: string;
+  eventPattern?: string;
   state: "ENABLED" | "DISABLED" | string;
   description?: string;
   lastRunAt?: string;

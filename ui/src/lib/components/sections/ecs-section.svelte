@@ -1,11 +1,12 @@
 <script lang="ts">
+  import { matchesResourceType } from "$lib/filter-utils";
   import { onMount } from "svelte";
   import { PlayIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
   import EcsList from "$lib/components/ecs/ecs-list.svelte";
   import EcsDetail from "$lib/components/ecs/ecs-detail.svelte";
   import EcsRunTaskDialog from "$lib/components/ecs/ecs-run-task-dialog.svelte";
-  import { getDashboard, refresh } from "$lib/state.svelte";
+  import { getDashboard, getDashboardFilters, refresh } from "$lib/state.svelte";
   import { ecsKey, type EcsSelection } from "$lib/ecs";
 
   let {
@@ -17,7 +18,8 @@
   } = $props();
 
   const dashboard = getDashboard();
-  const ecs = $derived(dashboard.data?.ecs);
+  const filters = getDashboardFilters();
+  const ecs = $derived(matchesResourceType("ecs", filters.tagFilter) ? dashboard.data?.ecs : undefined);
   const clusters = $derived(ecs?.clusters ?? []);
   const services = $derived(ecs?.services ?? []);
   const tasks = $derived(ecs?.tasks ?? []);

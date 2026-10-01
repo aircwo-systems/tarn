@@ -304,6 +304,7 @@ type eventBridgeRuleSummary struct {
 	Name               string                     `json:"name"`
 	Arn                string                     `json:"arn"`
 	ScheduleExpression string                     `json:"scheduleExpression"`
+	EventPattern       string                     `json:"eventPattern,omitempty"`
 	State              string                     `json:"state"`
 	Description        string                     `json:"description,omitempty"`
 	LastRunAt          *time.Time                 `json:"lastRunAt,omitempty"`
@@ -884,6 +885,7 @@ func (h *Handler) buildOverview() ([]byte, error) {
 			Name:               rule.Name,
 			Arn:                rule.Arn,
 			ScheduleExpression: rule.ScheduleExpression,
+			EventPattern:       rule.EventPattern,
 			State:              rule.State,
 			Description:        rule.Description,
 			LastRunAt:          rule.LastRunAt,

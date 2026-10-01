@@ -9,7 +9,6 @@
     getDashboard,
     getDashboardFilters,
     getVisibleInfra,
-    matchesTagFilter,
   } from "$lib/state.svelte";
   import type { InfraProbe } from "$lib/types";
   import type {
@@ -22,66 +21,57 @@
   import TopologyComponentsView from "./TopologyComponentsView.svelte";
   import TopologyConnectionView from "./TopologyConnectionView.svelte";
   import type { NodeKind } from "./types";
+  import { resolveDirectPrototypeFilter, matchesResourceFilter, matchesInfrastructureFilter } from "$lib/filter-utils";
 
   const dashboard = getDashboard();
   const filters = getDashboardFilters();
   const directTopologyFilter = $derived(
-    resolveDirectTopologyFilter(filters.tagFilter),
+    resolveDirectPrototypeFilter(filters.tagFilter),
   );
-  const tagOnlyTopologyFilterQuery = $derived(
-    extractTagOnlyTopologyFilterQuery(filters.tagFilter),
-  );
-
   const gateways = $derived(
     (dashboard.data?.gateways ?? []).filter((gw) =>
-      matchesTopologyResourceFilter("gateway", filters.tagFilter, gw.tags),
+      matchesResourceFilter("gateway", filters.tagFilter, gw.tags),
     ),
   );
   const functions = $derived(
     (dashboard.data?.functions ?? []).filter((fn) =>
-      matchesTopologyResourceFilter("function", filters.tagFilter, fn.tags),
+      matchesResourceFilter("function", filters.tagFilter, fn.tags),
     ),
   );
   const queues = $derived(
     (dashboard.data?.queues ?? []).filter((q) =>
-      matchesTopologyResourceFilter("queue", filters.tagFilter, q.tags),
+      matchesResourceFilter("queue", filters.tagFilter, q.tags),
     ),
   );
   const dynamodbTables = $derived(
     (dashboard.data?.dynamodbTables ?? []).filter(() =>
-      matchesTopologyResourceFilter("dynamodb", filters.tagFilter),
+      matchesResourceFilter("dynamodb", filters.tagFilter),
     ),
   );
   const topics = $derived(
     (dashboard.data?.topics ?? []).filter((t) =>
-      matchesTopologyResourceFilter("topic", filters.tagFilter, t.tags),
+      matchesResourceFilter("topic", filters.tagFilter, t.tags),
     ),
   );
   const secrets = $derived(
     (dashboard.data?.secrets ?? []).filter((s) =>
-      matchesTopologyResourceFilter("secret", filters.tagFilter, s.tags),
+      matchesResourceFilter("secret", filters.tagFilter, s.tags),
     ),
   );
   const buckets = $derived(
     (dashboard.data?.buckets ?? []).filter((bucket) =>
-      matchesTopologyResourceFilter("bucket", filters.tagFilter),
+      matchesResourceFilter("bucket", filters.tagFilter),
     ),
   );
   const eventSourceMappings = $derived(
     directTopologyFilter ? [] : (dashboard.data?.eventSourceMappings ?? []),
   );
   const eventBridgeRules = $derived(
-    directTopologyFilter?.kind && directTopologyFilter.kind !== "eventbridge"
-      ? []
-      : (dashboard.data?.eventBridgeRules ?? []).filter(
-          () =>
-            !directTopologyFilter ||
-            directTopologyFilter.kind === "eventbridge",
-        ),
+    (dashboard.data?.eventBridgeRules ?? []).filter(() => matchesResourceFilter("eventbridge", filters.tagFilter)),
   );
   const infra = $derived(
     getVisibleInfra(dashboard.data?.infrastructure ?? []).filter((probe) =>
-      matchesTopologyInfraFilter(probe, filters.tagFilter),
+      matchesInfrastructureFilter(normalizeTopologyExternalKind(probe.kind), filters.tagFilter),
     ),
   );
   const infraConnections = $derived(
@@ -131,131 +121,6 @@
 
   function nodePositionStorageKey(kind: NodeKind, id: string): string {
     return `${kind}:${id}`;
-  }
-
-  type DirectTopologyFilter = {
-    kind: NodeKind;
-    infraKind?: string;
-  } | null;
-
-  function resolveDirectTopologyFilter(query: string): DirectTopologyFilter {
-    for (const token of parseTopologyFilterTokens(query)) {
-      const normalized = token.toLowerCase();
-      switch (normalized) {
-        case "gateway":
-        case "gateways":
-        case "api":
-        case "apigateway":
-        case "api-gateway":
-        case "api gateway":
-          return { kind: "gateway" };
-        case "eventbridge":
-        case "event-bridge":
-        case "event bridge":
-        case "schedule":
-        case "schedules":
-        case "rule":
-        case "rules":
-          return { kind: "eventbridge" };
-        case "topic":
-        case "topics":
-        case "sns":
-          return { kind: "topic" };
-        case "queue":
-        case "queues":
-        case "sqs":
-          return { kind: "queue" };
-        case "dynamodb":
-        case "dynamo":
-        case "ddb":
-        case "table":
-        case "tables":
-        case "stream":
-        case "streams":
-          return { kind: "dynamodb" };
-        case "lambda":
-        case "lambdas":
-        case "function":
-        case "functions":
-          return { kind: "function" };
-        case "secret":
-        case "secrets":
-          return { kind: "secret" };
-        case "bucket":
-        case "buckets":
-        case "s3":
-        case "storage":
-          return { kind: "bucket" };
-        case "extension":
-        case "extensions":
-        case "cache":
-        case "secrets cache":
-          return { kind: "extension" };
-        case "external":
-        case "externals":
-        case "infra":
-        case "infrastructure":
-          return { kind: "infra" };
-        case "postgres":
-        case "postgresql":
-          return { kind: "infra", infraKind: "postgresql" };
-        case "mysql":
-          return { kind: "infra", infraKind: "mysql" };
-        case "redis":
-          return { kind: "infra", infraKind: "redis" };
-        case "mongo":
-        case "mongodb":
-          return { kind: "infra", infraKind: "mongodb" };
-        case "docker":
-          return { kind: "infra", infraKind: "docker" };
-        case "http":
-        case "https":
-          return { kind: "infra", infraKind: "http" };
-      }
-    }
-    return null;
-  }
-
-  function parseTopologyFilterTokens(query: string): string[] {
-    return query
-      .trim()
-      .split(/\s+/)
-      .map((token) => token.trim())
-      .filter(Boolean);
-  }
-
-  function extractTagOnlyTopologyFilterQuery(query: string): string {
-    return parseTopologyFilterTokens(query)
-      .filter((token) => !resolveDirectTopologyFilter(token))
-      .join(" ");
-  }
-
-  function matchesTopologyResourceFilter(
-    kind: NodeKind,
-    query: string,
-    tags?: Record<string, string>,
-  ): boolean {
-    if (directTopologyFilter) {
-      if (directTopologyFilter.kind !== kind) {
-        return false;
-      }
-      if (!tagOnlyTopologyFilterQuery) return true;
-      return matchesTagFilter(tags, tagOnlyTopologyFilterQuery);
-    }
-    return matchesTagFilter(tags, query);
-  }
-
-  function matchesTopologyInfraFilter(
-    probe: InfraProbe,
-    query: string,
-  ): boolean {
-    if (!directTopologyFilter) return true;
-    if (directTopologyFilter.kind !== "infra") return false;
-    if (!directTopologyFilter.infraKind) return true;
-    return (
-      normalizeTopologyExternalKind(probe.kind) ===
-      directTopologyFilter.infraKind
-    );
   }
 
   function parseOverrideKind(overrideKey: string): NodeKind | null {

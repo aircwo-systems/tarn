@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { matchesResourceFilter } from "$lib/filter-utils";
   import { onMount } from "svelte";
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
@@ -10,7 +11,6 @@
   import {
     getDashboard,
     getDashboardFilters,
-    matchesTagFilter,
   } from "$lib/state.svelte";
   import type { QueueMessageSummary } from "$lib/types";
 
@@ -26,7 +26,7 @@
   const filters = getDashboardFilters();
   const queues = $derived(
     (dashboard.data?.queues ?? []).filter((queue) =>
-      matchesTagFilter(queue.tags, filters.tagFilter),
+      matchesResourceFilter("queue", filters.tagFilter, queue.tags),
     ),
   );
 
@@ -205,7 +205,7 @@
         {/if}
       </div>
       {#if filters.tagFilter}
-        <span class="filter" title={filters.tagFilter}>Tag <span>{filters.tagFilter}</span></span>
+        <span class="filter" title={filters.tagFilter}>Filter <span>{filters.tagFilter}</span></span>
       {/if}
     {/snippet}
   </SectionHeader>

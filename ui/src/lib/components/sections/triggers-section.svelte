@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { matchesResourceType } from "$lib/filter-utils";
   import { onMount } from "svelte";
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
@@ -21,31 +22,32 @@
 
   const dashboard = getDashboard();
   const filters = getDashboardFilters();
+  const data = $derived(matchesResourceType("trigger", filters.tagFilter) ? dashboard.data : null);
 
   const gateways = $derived(
-    (dashboard.data?.gateways ?? []).filter((gateway) =>
+    (data?.gateways ?? []).filter((gateway) =>
       matchesTagFilter(gateway.tags, filters.tagFilter),
     ),
   );
   const functions = $derived(
-    (dashboard.data?.functions ?? []).filter((fn) =>
+    (data?.functions ?? []).filter((fn) =>
       matchesTagFilter(fn.tags, filters.tagFilter),
     ),
   );
   const queues = $derived(
-    (dashboard.data?.queues ?? []).filter((queue) =>
+    (data?.queues ?? []).filter((queue) =>
       matchesTagFilter(queue.tags, filters.tagFilter),
     ),
   );
   const topics = $derived(
-    (dashboard.data?.topics ?? []).filter((topic) =>
+    (data?.topics ?? []).filter((topic) =>
       matchesTagFilter(topic.tags, filters.tagFilter),
     ),
   );
-  const subscriptions = $derived(dashboard.data?.subscriptions ?? []);
-  const mappings = $derived(dashboard.data?.eventSourceMappings ?? []);
-  const eventBridgeRules = $derived(dashboard.data?.eventBridgeRules ?? []);
-  const connections = $derived(dashboard.data?.connections ?? []);
+  const subscriptions = $derived(data?.subscriptions ?? []);
+  const mappings = $derived(data?.eventSourceMappings ?? []);
+  const eventBridgeRules = $derived(data?.eventBridgeRules ?? []);
+  const connections = $derived(data?.connections ?? []);
 
   const functionsByName = $derived(
     new Map(functions.map((fn) => [fn.name, fn])),

@@ -1,11 +1,12 @@
 <script lang="ts">
+  import { matchesResourceFilter } from "$lib/filter-utils";
   import { onMount } from "svelte";
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
   import RcListRow from "$lib/components/rack/rc-list-row.svelte";
   import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
   import DynamoTableDetail from "$lib/components/dynamodb/dynamodb-table-detail.svelte";
-  import { getDashboard } from "$lib/state.svelte";
+  import { getDashboard, getDashboardFilters } from "$lib/state.svelte";
 
   let {
     sidebarCollapsed = false,
@@ -16,8 +17,9 @@
   } = $props();
 
   const dashboard = getDashboard();
-  const tables = $derived(dashboard.data?.dynamodbTables ?? []);
-  const streams = $derived(dashboard.data?.dynamodbStreams ?? []);
+  const filters = getDashboardFilters();
+  const tables = $derived((dashboard.data?.dynamodbTables ?? []).filter(() => matchesResourceFilter("dynamodb", filters.tagFilter)));
+  const streams = $derived((dashboard.data?.dynamodbStreams ?? []).filter(() => matchesResourceFilter("dynamodb", filters.tagFilter)));
   const config = $derived(dashboard.data?.config ?? null);
   const streamEnabledCount = $derived(tables.filter((table) => table.streamEnabled).length);
   const totalItems = $derived(tables.reduce((acc, t) => acc + (t.itemCount ?? 0), 0));

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { matchesInfrastructureFilter } from "$lib/filter-utils";
   import { onMount } from "svelte";
   import { replaceState } from "$app/navigation";
   import { MagnifyingGlassIcon, PlusIcon, SidebarSimpleIcon } from "phosphor-svelte";
@@ -9,7 +10,7 @@
   import RcKv from "$lib/components/rack/rc-kv.svelte";
   import RcStat from "$lib/components/rack/rc-stat.svelte";
   import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import { getDashboard, getVisibleInfra } from "$lib/state.svelte";
+  import { getDashboard, getDashboardFilters, getVisibleInfra } from "$lib/state.svelte";
   import { infraKindCssVar, normalizeTopologyInfraKind } from "$lib/components/topology/topology-canvas-theme";
   import type { InfraConnection, InfraProbe } from "$lib/types";
   import { formatDate, timeAgo } from "$lib/utils";
@@ -25,6 +26,7 @@
   } = $props();
 
   const dashboard = getDashboard();
+  const filters = getDashboardFilters();
 
   const KIND_LABELS: Record<string, string> = {
     docker: "Docker",
@@ -48,7 +50,7 @@
 
   const services = $derived.by<Service[]>(() => {
     const connections = dashboard.data?.connections ?? [];
-    return getVisibleInfra(dashboard.data?.infrastructure ?? [])
+    return getVisibleInfra(dashboard.data?.infrastructure ?? []).filter((probe) => matchesInfrastructureFilter(normalizeTopologyInfraKind(probe.kind), filters.tagFilter))
       .map((p) => {
         const id = serviceId(p);
         return {
