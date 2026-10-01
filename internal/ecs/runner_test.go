@@ -754,6 +754,10 @@ func TestRunnerRemovesTaskScopedVolumeOnStopButNotShared(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	// STOPPED is recorded before best-effort volume removal. Join the
+	// lifecycle workers before checking which volumes they removed.
+	r.Stop()
+
 	removed := eng.volumeRemoveCallsSnapshot()
 	if len(removed) != 1 || removed[0] != wantScratchVolume {
 		t.Fatalf("volume remove calls = %v, want exactly [%s]", removed, wantScratchVolume)
@@ -763,8 +767,6 @@ func TestRunnerRemovesTaskScopedVolumeOnStopButNotShared(t *testing.T) {
 			t.Fatalf("shared volume %s must never be removed automatically", wantSharedVolume)
 		}
 	}
-
-	r.Stop()
 }
 
 // TestRecoverOrphanTaskVolumesRemovesOnlyStoppedOrUnknownTasks verifies
