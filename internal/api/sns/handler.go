@@ -316,12 +316,14 @@ func (h *Handler) publish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	out, err := h.svc.Publish(r.Context(), snssvc.PublishInput{
-		TopicArn:          strings.TrimSpace(r.FormValue("TopicArn")),
-		TargetArn:         strings.TrimSpace(r.FormValue("TargetArn")),
-		Message:           msg,
-		Subject:           r.FormValue("Subject"),
-		MessageStructure:  messageStructure,
-		MessageAttributes: parseMessageAttributes(r),
+		TopicArn:               strings.TrimSpace(r.FormValue("TopicArn")),
+		TargetArn:              strings.TrimSpace(r.FormValue("TargetArn")),
+		Message:                msg,
+		Subject:                r.FormValue("Subject"),
+		MessageStructure:       messageStructure,
+		MessageGroupID:         strings.TrimSpace(r.FormValue("MessageGroupId")),
+		MessageDeduplicationID: strings.TrimSpace(r.FormValue("MessageDeduplicationId")),
+		MessageAttributes:      parseMessageAttributes(r),
 	})
 	if err != nil {
 		if isNotFoundErr(err) {
@@ -344,17 +346,25 @@ func (h *Handler) publishBatch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	type batchEntry struct {
-		id      string
-		message string
+		id    string
+		input snssvc.PublishInput
 	}
 	var entries []batchEntry
 	for i := 1; i <= 100; i++ {
-		id := strings.TrimSpace(r.FormValue(fmt.Sprintf("PublishBatchRequestEntries.member.%d.Id", i)))
+		prefix := fmt.Sprintf("PublishBatchRequestEntries.member.%d.", i)
+		id := strings.TrimSpace(r.FormValue(prefix + "Id"))
 		if id == "" {
 			break
 		}
-		msg := r.FormValue(fmt.Sprintf("PublishBatchRequestEntries.member.%d.Message", i))
-		entries = append(entries, batchEntry{id: id, message: msg})
+		entries = append(entries, batchEntry{
+			id: id,
+			input: snssvc.PublishInput{
+				TopicArn:               topicArn,
+				Message:                r.FormValue(prefix + "Message"),
+				MessageGroupID:         strings.TrimSpace(r.FormValue(prefix + "MessageGroupId")),
+				MessageDeduplicationID: strings.TrimSpace(r.FormValue(prefix + "MessageDeduplicationId")),
+			},
+		})
 	}
 
 	if len(entries) == 0 {
@@ -365,10 +375,7 @@ func (h *Handler) publishBatch(w http.ResponseWriter, r *http.Request) {
 	var successful strings.Builder
 	var failed strings.Builder
 	for _, entry := range entries {
-		out, err := h.svc.Publish(r.Context(), snssvc.PublishInput{
-			TopicArn: topicArn,
-			Message:  entry.message,
-		})
+		out, err := h.svc.Publish(r.Context(), entry.input)
 		if err != nil {
 			fmt.Fprintf(&failed, `<member><Id>%s</Id><Code>InternalError</Code><Message>%s</Message><SenderFault>false</SenderFault></member>`,
 				xmlEscape(entry.id), xmlEscape(err.Error()))

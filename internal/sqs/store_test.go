@@ -360,12 +360,13 @@ func TestFIFOOrdering(t *testing.T) {
 	}
 
 	msgs, _ := s.ReceiveMessage("order.fifo", 5, 30)
-	if len(msgs) != 1 {
-		// FIFO returns one message per group at a time
-		t.Fatalf("expected 1 message (one per group), got %d", len(msgs))
+	if len(msgs) != 5 {
+		t.Fatalf("expected 5 messages from the same group in one batch, got %d", len(msgs))
 	}
-	if msgs[0].Body != "A" {
-		t.Fatalf("expected first message 'A', got %q", msgs[0].Body)
+	for i, msg := range msgs {
+		if msg.Body != string(rune('A'+i)) {
+			t.Fatalf("message %d out of order: %q", i, msg.Body)
+		}
 	}
 }
 

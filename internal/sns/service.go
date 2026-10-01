@@ -31,12 +31,14 @@ type LambdaInterface interface {
 
 // PublishInput captures publish request fields.
 type PublishInput struct {
-	TopicArn          string
-	TargetArn         string
-	Message           string
-	Subject           string
-	MessageStructure  string
-	MessageAttributes map[string]types.SNSMessageAttribute
+	TopicArn               string
+	TargetArn              string
+	Message                string
+	Subject                string
+	MessageStructure       string
+	MessageGroupID         string
+	MessageDeduplicationID string
+	MessageAttributes      map[string]types.SNSMessageAttribute
 }
 
 // PublishOutput captures publish response data.
@@ -198,7 +200,11 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 				}
 				body = envelope
 			}
-			if _, sendErr := s.sqs.SendMessage(queueName, body, 0, snsToSQSMessageAttributes(messageAttrs), "", ""); sendErr != nil {
+			groupID, dedupID := "", ""
+			if strings.HasSuffix(queueName, ".fifo") {
+				groupID, dedupID = input.MessageGroupID, input.MessageDeduplicationID
+			}
+			if _, sendErr := s.sqs.SendMessage(queueName, body, 0, snsToSQSMessageAttributes(messageAttrs), groupID, dedupID); sendErr != nil {
 				status = "error"
 			}
 

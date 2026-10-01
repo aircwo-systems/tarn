@@ -472,10 +472,10 @@ func (s *Store) receive(name string, maxCount, visTimeout int) ([]*types.SQSMess
 		}
 	}
 
-	// For FIFO queues, track which groups we've started serving
-	var seenGroups map[string]bool
+	// FIFO groups with an earlier unavailable message cannot be served.
+	var blockedGroups map[string]bool
 	if q.config.FifoQueue {
-		seenGroups = make(map[string]bool)
+		blockedGroups = make(map[string]bool)
 	}
 
 	for _, m := range q.messages {
@@ -491,14 +491,14 @@ func (s *Store) receive(name string, maxCount, visTimeout int) ([]*types.SQSMess
 		later(m.VisibleAt)
 		later(m.DelayUntil)
 
-		// FIFO: the oldest live message heads its group. While it is in flight
-		// or delayed, nothing behind it in the same group may be delivered.
+		// Available messages from a FIFO group can share this batch. An earlier
+		// in-flight or delayed message blocks later messages from that group.
 		if q.config.FifoQueue {
-			if seenGroups[m.MessageGroupId] {
+			if blockedGroups[m.MessageGroupId] {
 				continue
 			}
 			if m.VisibleAt > now || m.DelayUntil > now {
-				seenGroups[m.MessageGroupId] = true
+				blockedGroups[m.MessageGroupId] = true
 				continue
 			}
 		}
@@ -517,10 +517,6 @@ func (s *Store) receive(name string, maxCount, visTimeout int) ([]*types.SQSMess
 		m.VisibleAt = now + int64(visTimeout)*1000
 
 		result = append(result, m)
-
-		if q.config.FifoQueue {
-			seenGroups[m.MessageGroupId] = true
-		}
 	}
 	var wake <-chan struct{}
 	if len(result) == 0 {
