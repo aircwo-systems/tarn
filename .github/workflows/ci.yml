@@ -68,6 +68,10 @@ jobs:
         working-directory: ui
         run: bun install --frozen-lockfile
 
+      - name: Test UI
+        working-directory: ui
+        run: bun test src/lib
+
       - name: Type check UI
         working-directory: ui
         run: bun run check

@@ -1,3 +1,5 @@
+import { fetchAccountResource } from "$lib/api";
+
 export interface S3Object {
   key: string;
   size: number;
@@ -30,7 +32,7 @@ export function objectPath(bucket: string, key = ""): string {
 export async function listObjects(bucket: string, prefix: string): Promise<S3Listing> {
   const qs = new URLSearchParams({ "list-type": "2", delimiter: "/", "max-keys": "1000" });
   if (prefix) qs.set("prefix", prefix);
-  const resp = await fetch(`${objectPath(bucket)}?${qs}`);
+  const resp = await fetchAccountResource(`${objectPath(bucket)}?${qs}`);
   if (!resp.ok) throw new Error(`List failed: HTTP ${resp.status}`);
   const xml = new DOMParser().parseFromString(await resp.text(), "text/xml");
   const text = (el: Element, tag: string) => el.getElementsByTagName(tag)[0]?.textContent ?? "";
@@ -50,8 +52,8 @@ export async function listObjects(bucket: string, prefix: string): Promise<S3Lis
   };
 }
 
-export async function headObject(bucket: string, key: string): Promise<S3ObjectHead> {
-  const resp = await fetch(objectPath(bucket, key), { method: "HEAD" });
+export async function headObject(bucket: string, key: string, signal?: AbortSignal): Promise<S3ObjectHead> {
+  const resp = await fetchAccountResource(objectPath(bucket, key), { method: "HEAD", signal });
   if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
   return {
     contentType: resp.headers.get("content-type") ?? "application/octet-stream",
@@ -61,8 +63,14 @@ export async function headObject(bucket: string, key: string): Promise<S3ObjectH
   };
 }
 
+export async function getObject(bucket: string, key: string, signal?: AbortSignal): Promise<Response> {
+  const resp = await fetchAccountResource(objectPath(bucket, key), { signal });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+  return resp;
+}
+
 export async function putObject(bucket: string, key: string, file: File): Promise<void> {
-  const resp = await fetch(objectPath(bucket, key), {
+  const resp = await fetchAccountResource(objectPath(bucket, key), {
     method: "PUT",
     headers: { "content-type": file.type || "application/octet-stream" },
     body: file,
@@ -71,7 +79,7 @@ export async function putObject(bucket: string, key: string, file: File): Promis
 }
 
 export async function deleteObject(bucket: string, key: string): Promise<void> {
-  const resp = await fetch(objectPath(bucket, key), { method: "DELETE" });
+  const resp = await fetchAccountResource(objectPath(bucket, key), { method: "DELETE" });
   if (!resp.ok) throw new Error(`Delete failed: HTTP ${resp.status}`);
 }
 

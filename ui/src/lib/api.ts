@@ -40,6 +40,13 @@ function endpoint(path: string): string {
   return `${configuredBase}${path}`;
 }
 
+/** Fetch a backend resource using the configured base and the currently selected account. */
+export function fetchAccountResource(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  for (const [name, value] of Object.entries(accountHeaders())) headers.set(name, value);
+  return fetch(endpoint(path), { ...init, headers });
+}
+
 function awsEndpoint(path: string): string {
   return `${awsProtocolBase}${path}`;
 }

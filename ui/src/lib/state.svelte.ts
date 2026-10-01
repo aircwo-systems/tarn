@@ -33,6 +33,8 @@ let lastRefresh = $state("");
 let pollHandle: ReturnType<typeof setInterval> | null = null;
 let refreshPromise: Promise<void> | null = null;
 let refreshQueued = false;
+let refreshController: AbortController | null = null;
+let accountGeneration = 0;
 
 const SETTINGS_COOKIE = "tarn-ui-settings";
 const INFRA_SETTINGS_KEY = "tarn-infra-settings";
@@ -134,34 +136,42 @@ export function refresh(): Promise<void> {
     return refreshPromise;
   }
 
-  refreshPromise = refreshDashboard();
+  refreshController = new AbortController();
+  refreshPromise = refreshDashboard(accountGeneration, refreshController.signal);
   return refreshPromise;
 }
 
-async function refreshDashboard() {
+async function refreshDashboard(generation: number, signal: AbortSignal) {
   try {
     do {
       refreshQueued = false;
       if (!loading) error = "";
 
       try {
-        data = await fetchOverview();
+        const overview = await fetchOverview(signal);
+        if (generation !== accountGeneration) return;
+        data = overview;
         lastRefresh = new Date().toLocaleTimeString();
         error = "";
       } catch (err) {
+        if (generation !== accountGeneration) return;
         if (err instanceof AccountArchivedError && activeAccountId !== DEFAULT_ACCOUNT.id) {
           // The selected account was archived (here or by another client):
           // fall back to the default account rather than showing an error.
           switchAccount(DEFAULT_ACCOUNT.id);
-          continue;
+          return;
         }
         error = err instanceof Error ? err.message : "Failed to load dashboard data";
       } finally {
-        loading = false;
+        if (generation === accountGeneration) loading = false;
       }
     } while (refreshQueued);
   } finally {
-    refreshPromise = null;
+    // A superseded load must not clear the newer account's in-flight refresh.
+    if (generation === accountGeneration) {
+      refreshPromise = null;
+      refreshController = null;
+    }
   }
 }
 
@@ -225,6 +235,15 @@ export function switchAccount(id: string) {
   if (id === activeAccountId) return;
   activeAccountId = id;
   setApiAccount(id);
+  accountGeneration += 1;
+  refreshController?.abort();
+  refreshController = null;
+  refreshPromise = null;
+  refreshQueued = false;
+  data = null;
+  error = "";
+  lastRefresh = "";
+  loading = true;
   persistAccountSettings();
   refresh();
 }
@@ -242,9 +261,7 @@ export function removeKnownAccount(id: string) {
   if (id === "000000000000") return;
   knownAccounts = knownAccounts.filter((a) => a.id !== id);
   if (activeAccountId === id) {
-    activeAccountId = "000000000000";
-    setApiAccount("000000000000");
-    refresh();
+    switchAccount(DEFAULT_ACCOUNT.id);
   }
   persistAccountSettings();
 }
