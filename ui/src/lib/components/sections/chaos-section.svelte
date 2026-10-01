@@ -61,14 +61,20 @@
 
   // Selection — start with all selectable routes ticked
   let selected = $state<Set<string>>(new Set<string>());
+  let selectionInitialized = false;
   $effect.pre(() => {
-    if (selected.size === 0 && probeableGateways.length > 0) {
-      selected = new Set(
-        probeableGateways.flatMap((gw) =>
-          (gw.routeDetails ?? []).map((d) => rid(gw.apiId, d.routeKey)),
-        ),
-      );
+    const available = new Set(
+      probeableGateways.flatMap((gw) =>
+        (gw.routeDetails ?? []).map((d) => rid(gw.apiId, d.routeKey)),
+      ),
+    );
+    if (!selectionInitialized && available.size > 0) {
+      selected = available;
+      selectionInitialized = true;
+      return;
     }
+    const retained = new Set([...selected].filter((id) => available.has(id)));
+    if (retained.size !== selected.size) selected = retained;
   });
 
   let probing = $state(false);

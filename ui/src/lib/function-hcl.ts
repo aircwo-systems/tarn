@@ -5,7 +5,28 @@ import { formatBytes, formatDate } from "$lib/utils";
 export function functionToHcl(f: FunctionSummary): string {
   const COL = 13;
   const s = (key: string, val: string) => `  ${key.padEnd(COL)} = ${val}`;
-  const q = (v: string) => `"${v}"`;
+  const q = (value: string) => {
+    const escaped = value
+      .replace(/[\\"\u0000-\u001f]/g, (character) => {
+        switch (character) {
+          case "\\":
+            return "\\\\";
+          case '"':
+            return '\\"';
+          case "\n":
+            return "\\n";
+          case "\r":
+            return "\\r";
+          case "\t":
+            return "\\t";
+          default:
+            return `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`;
+        }
+      })
+      // HCL interprets these markers even inside a quoted string.
+      .replace(/([$%])\{/g, "$1$1{");
+    return `"${escaped}"`;
+  };
 
   const lines: string[] = [];
   lines.push(`resource "aws_lambda_function" ${q(f.name)} {`);
@@ -26,7 +47,7 @@ export function functionToHcl(f: FunctionSummary): string {
   if (f.tags && Object.keys(f.tags).length > 0) {
     lines.push(``);
     lines.push(`  tags = {`);
-    for (const [k, v] of Object.entries(f.tags)) lines.push(`    ${k} = ${q(v)}`);
+    for (const [k, v] of Object.entries(f.tags)) lines.push(`    ${q(k)} = ${q(v)}`);
     lines.push(`  }`);
   }
   lines.push(`}`);
