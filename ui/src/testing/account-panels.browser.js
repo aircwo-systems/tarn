@@ -1,4 +1,5 @@
 import { getAccountSettings, refresh, stopPolling, switchAccount } from "$lib/state.svelte";
+import { pinnedLogId, savePinnedLogs } from "$lib/pinned-logs";
 
 // Run in a dashboard dev-server tab:
 // await (await import('/src/testing/account-panels.browser.js')).checkAccountPanels()
@@ -9,6 +10,8 @@ export async function checkAccountPanels() {
   const originalAccount = getAccountSettings().activeAccountId;
   const originalHash = location.hash;
   const savedAccounts = localStorage.getItem("tarn-accounts");
+  const pinKeys = [accountA, accountB].map((id) => `tarn:pinned-logs:v2:${id}`);
+  const savedPins = pinKeys.map((key) => localStorage.getItem(key));
   const originalFetch = window.fetch;
   const requests = [];
   const date = "2026-10-01T00:00:00Z";
@@ -135,6 +138,25 @@ export async function checkAccountPanels() {
   };
 
   try {
+    for (const accountId of [accountA, accountB]) {
+      const group = "/aws/lambda/audit-shared";
+      savePinnedLogs(
+        [
+          {
+            accountId,
+            id: pinnedLogId(group, "synthetic-event", accountId),
+            group,
+            event: {
+              timestamp: date,
+              message: `AUDIT_PIN_${accountId}`,
+              level: "INFO",
+              streamName: "shared-stream",
+            },
+          },
+        ],
+        accountId,
+      );
+    }
     await showTab("logs", "Log groups");
     await selectAccount(accountA);
     // Entering from another tab isolates this check from whichever account was initially selected.
@@ -144,6 +166,9 @@ export async function checkAccountPanels() {
       () => visibleText().includes(`AUDIT_LOG_${accountA}`),
       "Account A log groups missing",
     );
+    await waitFor(() => visibleText().includes(`AUDIT_PIN_${accountA}`), "Account A pin missing");
+    if (visibleText().includes(`AUDIT_PIN_${accountB}`))
+      throw new Error("Account B pin leaked into A");
     await selectAccount(accountB);
     await waitFor(
       () => visibleText().includes(`AUDIT_LOG_${accountB}`),
@@ -151,6 +176,16 @@ export async function checkAccountPanels() {
     );
     if (visibleText().includes(`AUDIT_LOG_${accountA}`))
       throw new Error("Old log groups remain visible");
+    await waitFor(() => visibleText().includes(`AUDIT_PIN_${accountB}`), "Account B pin missing");
+    if (visibleText().includes(`AUDIT_PIN_${accountA}`))
+      throw new Error("Account A pin leaked into B");
+    document.querySelector('button[aria-label="Unpin log from /aws/lambda/audit-shared"]').click();
+    await waitFor(() => !visibleText().includes(`AUDIT_PIN_${accountB}`), "Unpin did not update B");
+    await selectAccount(accountA);
+    await waitFor(
+      () => visibleText().includes(`AUDIT_PIN_${accountA}`),
+      "Unpin in B removed A's pin",
+    );
 
     await showTab("functions", "Functions");
     await selectAccount(accountA);
@@ -177,6 +212,7 @@ export async function checkAccountPanels() {
     return {
       passed: [
         "logs reload on account switch",
+        "pins are isolated and unpinning another account preserves them",
         "environment values reset",
         "secret values reset",
         "ordinary polls preserve panel state",
@@ -189,5 +225,9 @@ export async function checkAccountPanels() {
     else localStorage.setItem("tarn-accounts", savedAccounts);
     window.fetch = originalFetch;
     location.hash = originalHash;
+    pinKeys.forEach((key, index) => {
+      if (savedPins[index] === null) localStorage.removeItem(key);
+      else localStorage.setItem(key, savedPins[index]);
+    });
   }
 }

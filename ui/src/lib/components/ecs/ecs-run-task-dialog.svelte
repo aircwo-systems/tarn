@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { PlayIcon, XIcon } from "phosphor-svelte";
   import { describeECSTaskDefinition, runECSTask } from "$lib/api";
+  import { parseCommandOverride } from "$lib/ecs-command";
   import type {
     ECSClusterSummary,
     ECSRunTaskResult,
@@ -45,6 +46,7 @@
 
   let detail = $state<ECSTaskDefinitionDetail | null>(null);
   let detailLoading = $state(false);
+  let detailError = $state("");
   let detailToken = 0;
 
   let busy = $state(false);
@@ -61,30 +63,44 @@
   const selectedDef = $derived(
     taskDefinitions.find((d) => d.taskDefinitionArn === taskDefArn) ?? null,
   );
+  const definitionRef = $derived(selectedDef ? `${selectedDef.family}:${selectedDef.revision}` : "");
+  const overrideContainerReady = $derived(
+    !detailLoading && detail?.taskDefinitionArn === taskDefArn &&
+    detail?.containers.some((container) => container.name === containerName),
+  );
+  const hasOverrideDraft = $derived(!!envText.trim() || !!commandText.trim());
+  const canRun = $derived(!busy && !!clusterArn && !!taskDefArn && (!hasOverrideDraft || overrideContainerReady));
 
   $effect(() => {
-    const family = selectedDef?.family ?? "";
-    if (!family) {
-      detail = null;
-      return;
-    }
+    const reference = definitionRef;
     const token = ++detailToken;
+    detail = null;
+    containerName = "";
+    detailError = "";
+    detailLoading = false;
+    if (!reference) return;
+    const controller = new AbortController();
     detailLoading = true;
-    describeECSTaskDefinition(family)
+    describeECSTaskDefinition(reference, controller.signal)
       .then((d) => {
         if (token !== detailToken) return;
         detail = d;
         const essential = d.containers.find((c) => c.essential) ?? d.containers[0];
         containerName = essential?.name ?? "";
       })
-      .catch(() => {
+      .catch((error) => {
         if (token !== detailToken) return;
         detail = null;
         containerName = "";
+        detailError = error instanceof Error ? error.message : "Could not load task definition containers";
       })
       .finally(() => {
         if (token === detailToken) detailLoading = false;
       });
+    return () => {
+      if (token === detailToken) detailToken++;
+      controller.abort();
+    };
   });
 
   function parseEnv(text: string): { name: string; value: string }[] {
@@ -108,15 +124,19 @@
     result = null;
     try {
       const environment = parseEnv(envText);
-      const command = commandText.trim() ? commandText.trim().split(/\s+/) : undefined;
+      const command = parseCommandOverride(commandText);
+      const hasOverrides = environment.length > 0 || !!command;
+      if (hasOverrides && !overrideContainerReady) {
+        throw new Error("Container overrides require loaded details for the selected task definition");
+      }
       const payload = await runECSTask({
         cluster: clusterArn,
         taskDefinition: taskDefArn,
         count,
         launchType,
         overrides:
-          environment.length > 0 || command
-            ? { containerOverrides: [{ name: containerName || detail?.containers[0]?.name || "", command, environment }] }
+          hasOverrides
+            ? { containerOverrides: [{ name: containerName, command, environment }] }
             : undefined,
       });
       result = payload;
@@ -214,6 +234,10 @@
         </select>
       </label>
 
+      {#if detailError}
+        <p class="status err" role="alert">Could not load containers: {detailError}. Select another task definition and try again.</p>
+      {/if}
+
       <label class="field">
         <span class="field-label">Environment overrides <span class="dim">one KEY=value per line, optional</span></span>
         <textarea
@@ -226,7 +250,7 @@
       </label>
 
       <label class="field">
-        <span class="field-label">Command override <span class="dim">optional, space-separated</span></span>
+        <span class="field-label">Command override <span class="dim">optional, quotes group arguments</span></span>
         <input
           type="text"
           spellcheck={false}
@@ -238,7 +262,7 @@
     {/if}
 
     {#if status}
-      <p class="status" class:err={statusTone === "err"}>{status}</p>
+      <p class="status" class:err={statusTone === "err"} role={statusTone === "err" ? "alert" : "status"}>{status}</p>
     {/if}
 
     {#if result && (failedToStart(result).length > 0 || (result.failures?.length ?? 0) > 0)}
@@ -267,7 +291,7 @@
       type="button"
       class="btn primary"
       onclick={run}
-      disabled={busy || !clusterArn || !taskDefArn}
+      disabled={!canRun}
     >
       <PlayIcon size={12} weight="fill" />{busy ? "Launching…" : "Run task"}
     </button>

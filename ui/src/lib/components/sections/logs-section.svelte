@@ -58,6 +58,7 @@
   } from "$lib/trace-utils";
   import type { LogGroupSummary, LogEvent, RequestTrace } from "$lib/types";
   import { nextPinnedIndex, pinContextRows, pinEventKey, pinEventSnapshot, pinnedLogId, pinnedLogRow, pinsForView, readPinnedLogs, savePinnedLogs, type PinnedLog } from "$lib/pinned-logs";
+  import { getAccountSettings } from "$lib/state.svelte";
   import {
     logLocationWithFilters,
     type LogNavigationFilters,
@@ -86,6 +87,8 @@
 
   const LIVE_POLL_MS = 2000;
   const LIVE_BUFFER = 5000;
+  // The page remounts this section when the account changes.
+  const accountId = getAccountSettings().activeAccountId;
   const LEVELS = ["ERROR", "WARN", "INFO", "DEBUG"] as const;
 
   // ── State ────────────────────────────────────────────────────────────
@@ -226,7 +229,7 @@
   });
 
   $effect(() => {
-    pinnedLogs = readPinnedLogs();
+    pinnedLogs = readPinnedLogs(accountId);
   });
 
   $effect(() => {
@@ -286,12 +289,13 @@
   const displayKeys = $derived(pinsOnly ? pinRows.map((row) => row.key) : keys);
   const pinnedKeys = $derived(new Set(displayKeys.filter((key, index) => {
     const group = groupForEvent(displayEvents[index]);
-    return group && pinnedIds.has(pinnedLogId(group, pinEventKey(group, displayEvents[index], key)));
+    return group && pinnedIds.has(pinnedLogId(group, pinEventKey(group, displayEvents[index], key), accountId));
   })));
   const selectedIsPinned = $derived(
     !!selectedEvent && !!selectedKey && pinnedIds.has(pinnedLogId(
       groupForEvent(selectedEvent),
       pinEventKey(groupForEvent(selectedEvent), selectedEvent, selectedKey),
+      accountId,
     )),
   );
 
@@ -789,15 +793,15 @@
       pinError = "Could not identify this event's log group";
       return;
     }
-    const id = pinnedLogId(group, pinEventKey(group, event, key));
+    const id = pinnedLogId(group, pinEventKey(group, event, key), accountId);
     const next = pinnedIds.has(id)
       ? pinnedLogs.filter((pin) => pin.id !== id)
-      : [{ id, group, event: pinEventSnapshot(group, event) }, ...pinnedLogs];
+      : [{ accountId, id, group, event: pinEventSnapshot(group, event) }, ...pinnedLogs];
     try {
-      savePinnedLogs(next);
+      savePinnedLogs(next, accountId);
       pinnedLogs = next;
       pinError = "";
-      if (pinsOnly && selectedEvent && selectedKey && pinnedLogId(groupForEvent(selectedEvent), pinEventKey(groupForEvent(selectedEvent), selectedEvent, selectedKey)) === id) closeDetail();
+      if (pinsOnly && selectedEvent && selectedKey && pinnedLogId(groupForEvent(selectedEvent), pinEventKey(groupForEvent(selectedEvent), selectedEvent, selectedKey), accountId) === id) closeDetail();
     } catch {
       pinError = "Could not save pinned logs in this browser";
     }
@@ -826,7 +830,7 @@
   async function nextPin() {
     if (scopedPins.length === 0) return;
     const selectedId = selectedEvent && selectedKey
-      ? pinnedLogId(groupForEvent(selectedEvent), pinEventKey(groupForEvent(selectedEvent), selectedEvent, selectedKey))
+      ? pinnedLogId(groupForEvent(selectedEvent), pinEventKey(groupForEvent(selectedEvent), selectedEvent, selectedKey), accountId)
       : "";
     const currentId = scopedPins.some((pin) => pin.id === selectedId)
       ? selectedId
@@ -838,7 +842,7 @@
   function unpin(pin: PinnedLog) {
     try {
       const next = pinnedLogs.filter((item) => item.id !== pin.id);
-      savePinnedLogs(next);
+      savePinnedLogs(next, accountId);
       pinnedLogs = next;
       pinError = "";
     } catch {
