@@ -1,6 +1,6 @@
 import { sveltekit } from "@sveltejs/kit/vite";
 import tailwindcss from "@tailwindcss/vite";
-import { defineConfig, loadEnv } from "vite";
+import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from "vite";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, ".", "");
@@ -17,7 +17,7 @@ export default defineConfig(({ mode }) => {
   };
 
   return {
-    plugins: [tailwindcss(), sveltekit()],
+    plugins: [svelteStyles(), tailwindcss(), sveltekit()],
     server: {
       proxy,
     },
@@ -26,6 +26,30 @@ export default defineConfig(({ mode }) => {
     },
   };
 });
+
+function svelteStyles(): Plugin {
+  let server: ViteDevServer | undefined;
+
+  return {
+    name: "svelte-styles",
+    apply: "serve",
+    enforce: "pre",
+    configureServer(devServer) {
+      server = devServer;
+    },
+    async load(id) {
+      const [filename, query] = id.split("?", 2);
+      if (!server || !filename.endsWith(".svelte") || !query) return;
+
+      const params = new URLSearchParams(query);
+      if (!params.has("svelte") || params.get("type") !== "style" || params.has("raw")) return;
+
+      // Svelte's style loader needs the component compiled before it can return cached CSS.
+      // Otherwise Vite loads the whole .svelte file and Tailwind tries to parse it as CSS.
+      await server.transformRequest(filename);
+    },
+  };
+}
 
 function normalizeProxyTarget(raw: string): string {
   try {
