@@ -8,6 +8,7 @@ export interface OverviewResponse {
     endpoint: string;
     dataDir: string;
     uiEnabled: boolean;
+    version?: string;
   };
   counts: {
     gateways: number;

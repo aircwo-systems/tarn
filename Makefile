@@ -1,5 +1,5 @@
 BINARY_NAME := tarn
-VERSION := 0.1.0-dev
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.1.0)-dev
 BUILD_DIR := ./build
 GO_FILES := $(shell git ls-files '*.go')
 LDFLAGS := -ldflags "-X github.com/aircwo-systems/tarn/internal/cli.version=$(VERSION)"

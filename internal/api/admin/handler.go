@@ -221,6 +221,7 @@ type overviewConfig struct {
 	Endpoint  string `json:"endpoint"`
 	DataDir   string `json:"dataDir"`
 	UIEnabled bool   `json:"uiEnabled"`
+	Version   string `json:"version"`
 }
 
 type overviewCounts struct {
@@ -781,6 +782,7 @@ func (h *Handler) buildOverview() ([]byte, error) {
 			Endpoint:  h.cfg.Endpoint(),
 			DataDir:   h.cfg.DataDir,
 			UIEnabled: h.cfg.UIEnabled,
+			Version:   h.cfg.Version,
 		},
 		Counts: overviewCounts{
 			Gateways:            len(gateways) + len(v1APIs),

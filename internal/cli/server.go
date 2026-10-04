@@ -57,6 +57,7 @@ import (
 func buildConfig(cmd *cobra.Command) (*config.Config, error) {
 	cfg := config.Default()
 	cfg.LoadFromEnv()
+	cfg.Version = version
 
 	if v, _ := cmd.Flags().GetString("host"); v != "" {
 		cfg.Host = v

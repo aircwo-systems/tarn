@@ -40,6 +40,8 @@ type Config struct {
 	AccountID string
 	// UIEnabled enables the built-in dashboard UI.
 	UIEnabled bool
+	// Version is the Tarn build version, reported by the admin API.
+	Version string
 	// UIDir is the filesystem path to the built UI assets.
 	UIDir string
 	// PersistenceEnabled controls whether non-Lambda service state is restored across sessions.
