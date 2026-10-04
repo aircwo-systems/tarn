@@ -1631,3 +1631,134 @@ func TestLogSummaryGroupsAndValidates(t *testing.T) {
 		t.Errorf("no match: %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestSendQueueMessageEndpoint(t *testing.T) {
+	h := newTestHandler(t)
+	if _, err := h.sqs.CreateQueue("inbox", nil, nil); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+
+	body := `{"body":"test-message-1","delaySeconds":0}`
+	req := httptest.NewRequest(http.MethodPost, "/_tarn/admin/queues/inbox/send", strings.NewReader(body))
+	req.SetPathValue("name", "inbox")
+	rec := httptest.NewRecorder()
+
+	h.SendQueueMessage(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var res map[string]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if res["messageId"] == "" {
+		t.Fatalf("expected non-empty messageId, got %+v", res)
+	}
+
+	msgs, _ := h.sqs.PeekMessages("inbox", 10)
+	if len(msgs) != 1 || msgs[0].Body != "test-message-1" {
+		t.Fatalf("unexpected queue messages: %+v", msgs)
+	}
+}
+
+func TestPurgeQueueEndpoint(t *testing.T) {
+	h := newTestHandler(t)
+	if _, err := h.sqs.CreateQueue("orders", nil, nil); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+	_, _ = h.sqs.SendMessage("orders", "msg1", 0, nil, "", "")
+	_, _ = h.sqs.SendMessage("orders", "msg2", 0, nil, "", "")
+
+	req := httptest.NewRequest(http.MethodPost, "/_tarn/admin/queues/orders/purge", nil)
+	req.SetPathValue("name", "orders")
+	rec := httptest.NewRecorder()
+
+	h.PurgeQueue(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	msgs, _ := h.sqs.PeekMessages("orders", 10)
+	if len(msgs) != 0 {
+		t.Fatalf("expected 0 messages after purge, got %d", len(msgs))
+	}
+}
+
+func TestDeleteQueueMessageEndpoint(t *testing.T) {
+	h := newTestHandler(t)
+	if _, err := h.sqs.CreateQueue("tasks", nil, nil); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+	msg, _ := h.sqs.SendMessage("tasks", "task-body", 0, nil, "", "")
+
+	req := httptest.NewRequest(http.MethodDelete, "/_tarn/admin/queues/tasks/messages/"+msg.MessageId, nil)
+	req.SetPathValue("name", "tasks")
+	req.SetPathValue("id", msg.MessageId)
+	rec := httptest.NewRecorder()
+
+	h.DeleteQueueMessage(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	msgs, _ := h.sqs.PeekMessages("tasks", 10)
+	if len(msgs) != 0 {
+		t.Fatalf("expected 0 messages after delete, got %d", len(msgs))
+	}
+}
+
+func TestRedriveQueueMessagesEndpoint(t *testing.T) {
+	h := newTestHandler(t)
+	if _, err := h.sqs.CreateQueue("main-q", nil, nil); err != nil {
+		t.Fatalf("create main-q: %v", err)
+	}
+	if _, err := h.sqs.CreateQueue("dlq-q", nil, nil); err != nil {
+		t.Fatalf("create dlq-q: %v", err)
+	}
+	_, _ = h.sqs.SendMessage("dlq-q", "bad-message-1", 0, nil, "", "")
+	_, _ = h.sqs.SendMessage("dlq-q", "bad-message-2", 0, nil, "", "")
+
+	body := `{"targetQueue":"main-q"}`
+	req := httptest.NewRequest(http.MethodPost, "/_tarn/admin/queues/dlq-q/redrive", strings.NewReader(body))
+	req.SetPathValue("name", "dlq-q")
+	rec := httptest.NewRecorder()
+
+	h.RedriveQueueMessages(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+
+	var res map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &res)
+	if res["moved"].(float64) != 2 {
+		t.Fatalf("expected 2 moved messages, got %v", res["moved"])
+	}
+
+	mainMsgs, _ := h.sqs.PeekMessages("main-q", 10)
+	if len(mainMsgs) != 2 {
+		t.Fatalf("expected 2 messages in main-q, got %d", len(mainMsgs))
+	}
+}
+
+func TestInvokeFunctionEndpointValidation(t *testing.T) {
+	h := newTestHandler(t)
+
+	// Missing function
+	req := httptest.NewRequest(http.MethodPost, "/_tarn/admin/functions/nonexistent/invoke", strings.NewReader(`{"payload":"{}"}`))
+	req.SetPathValue("name", "nonexistent")
+	rec := httptest.NewRecorder()
+
+	h.InvokeFunction(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (error returned in body): %s", rec.Code, rec.Body.String())
+	}
+	var res map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &res)
+	if res["statusCode"].(float64) != 500 {
+		t.Fatalf("expected statusCode 500 for missing function, got %v", res["statusCode"])
+	}
+	if res["functionError"] == "" {
+		t.Fatalf("expected functionError to be set")
+	}
+}

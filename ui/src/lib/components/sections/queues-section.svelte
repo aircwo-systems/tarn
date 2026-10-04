@@ -329,6 +329,8 @@
             messages={selectedMessages}
             loading={selectedLoading}
             error={selectedError}
+            allQueues={queues}
+            functions={dashboard.data?.functions ?? []}
             onrefresh={() => void refreshSelectedQueueMessages()}
           />
         {/key}

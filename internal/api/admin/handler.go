@@ -39,6 +39,7 @@ import (
 	stepfunctionssvc "github.com/aircwo-systems/tarn/internal/stepfunctions"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	"github.com/google/uuid"
 )
 
 // Handler serves JSON endpoints used by the dashboard UI.
@@ -1522,6 +1523,128 @@ func (h *Handler) FunctionEnvironment(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type invokeFunctionRequest struct {
+	Payload        json.RawMessage `json:"payload"`
+	InvocationType string          `json:"invocationType"`
+}
+
+type invokeFunctionResponse struct {
+	StatusCode    int    `json:"statusCode"`
+	Payload       string `json:"payload"`
+	FunctionError string `json:"functionError,omitempty"`
+	Logs          string `json:"logs,omitempty"`
+	RequestID     string `json:"requestId,omitempty"`
+	LogGroup      string `json:"logGroup,omitempty"`
+	LogStream     string `json:"logStream,omitempty"`
+	DurationMs    int64  `json:"durationMs"`
+	TraceID       string `json:"traceId,omitempty"`
+}
+
+// InvokeFunction executes a function directly from the dashboard and records its trace.
+func (h *Handler) InvokeFunction(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "function name is required")
+		return
+	}
+	if h.lambda == nil {
+		writeError(w, http.StatusServiceUnavailable, "lambda service unavailable")
+		return
+	}
+
+	var req invokeFunctionRequest
+	if r.Body != nil {
+		bodyBytes, _ := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, &req); err != nil {
+				req.Payload = bodyBytes
+			}
+		}
+	}
+
+	invType := strings.TrimSpace(req.InvocationType)
+	if invType == "" {
+		invType = "RequestResponse"
+	}
+
+	payloadBytes := []byte(req.Payload)
+	var rawPayload string
+	if err := json.Unmarshal(req.Payload, &rawPayload); err == nil {
+		payloadBytes = []byte(rawPayload)
+	}
+	if len(payloadBytes) == 0 {
+		payloadBytes = []byte("{}")
+	}
+
+	traceID := uuid.NewString()[:8]
+	start := time.Now()
+
+	input := &types.InvokeInput{
+		FunctionName:   name,
+		Payload:        payloadBytes,
+		InvocationType: invType,
+		LogType:        "Tail",
+	}
+
+	output, err := h.lambda.Invoke(r.Context(), input)
+	durationMs := time.Since(start).Milliseconds()
+
+	statusCode := 200
+	spanStatus := "ok"
+	functionError := ""
+	if err != nil {
+		statusCode = 500
+		spanStatus = "error"
+		functionError = err.Error()
+	} else if output != nil && output.FunctionError != "" {
+		spanStatus = "error"
+		functionError = output.FunctionError
+		if output.StatusCode > 0 {
+			statusCode = output.StatusCode
+		}
+	} else if output != nil && output.StatusCode > 0 {
+		statusCode = output.StatusCode
+	}
+
+	if h.traceStore != nil {
+		h.traceStore.Add(&tracesvc.Trace{
+			ID:            traceID,
+			CorrelationID: traceID,
+			StartedAt:     start,
+			DurationMs:    durationMs,
+			Status:        statusCode,
+			Spans: []tracesvc.Span{
+				{Kind: "lambda", Name: name, DurationMs: durationMs, Status: spanStatus},
+			},
+		})
+	}
+
+	resp := invokeFunctionResponse{
+		StatusCode:    statusCode,
+		FunctionError: functionError,
+		DurationMs:    durationMs,
+		TraceID:       traceID,
+	}
+
+	if output != nil {
+		resp.Payload = string(output.Payload)
+		resp.RequestID = output.RequestID
+		resp.LogGroup = output.LogGroup
+		resp.LogStream = output.LogStream
+		if output.LogResult != "" {
+			if decoded, decErr := base64.StdEncoding.DecodeString(output.LogResult); decErr == nil {
+				resp.Logs = string(decoded)
+			} else {
+				resp.Logs = output.LogResult
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
 // SecretValue returns a single secret value by secret name.
 func (h *Handler) SecretValue(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
@@ -1638,6 +1761,186 @@ func parseDLQRetryCount(attrs map[string]*types.MessageAttribute) int {
 		return 0
 	}
 	return value
+}
+
+type sendQueueMessageRequest struct {
+	Body                   string                             `json:"body"`
+	DelaySeconds           int                                `json:"delaySeconds,omitempty"`
+	MessageGroupID         string                             `json:"messageGroupId,omitempty"`
+	MessageDeduplicationID string                             `json:"messageDeduplicationId,omitempty"`
+	Attributes             map[string]*types.MessageAttribute `json:"attributes,omitempty"`
+}
+
+// SendQueueMessage sends a message to the specified queue.
+func (h *Handler) SendQueueMessage(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "queue name is required")
+		return
+	}
+	if h.sqs == nil {
+		writeError(w, http.StatusServiceUnavailable, "sqs service unavailable")
+		return
+	}
+
+	var req sendQueueMessageRequest
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if strings.TrimSpace(req.Body) == "" {
+		writeError(w, http.StatusBadRequest, "message body is required")
+		return
+	}
+
+	msg, err := h.sqs.SendMessage(name, req.Body, req.DelaySeconds, req.Attributes, req.MessageGroupID, req.MessageDeduplicationID)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		} else if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") {
+			status = http.StatusBadRequest
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"messageId": msg.MessageId,
+		"md5OfBody": msg.MD5OfBody,
+	})
+}
+
+// PurgeQueue removes all messages from the specified queue.
+func (h *Handler) PurgeQueue(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "queue name is required")
+		return
+	}
+	if h.sqs == nil {
+		writeError(w, http.StatusServiceUnavailable, "sqs service unavailable")
+		return
+	}
+
+	if err := h.sqs.PurgeQueue(name); err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status": "ok",
+		"queue":  name,
+	})
+}
+
+// DeleteQueueMessage deletes a single message from the queue by ID or receipt handle.
+func (h *Handler) DeleteQueueMessage(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	messageID := r.PathValue("id")
+	if name == "" || messageID == "" {
+		writeError(w, http.StatusBadRequest, "queue name and message id are required")
+		return
+	}
+	if h.sqs == nil {
+		writeError(w, http.StatusServiceUnavailable, "sqs service unavailable")
+		return
+	}
+
+	if err := h.sqs.DeleteMessageByID(name, messageID); err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":    "ok",
+		"messageId": messageID,
+	})
+}
+
+type redriveQueueMessagesRequest struct {
+	TargetQueue string `json:"targetQueue,omitempty"`
+	MaxMessages int    `json:"maxMessages,omitempty"`
+}
+
+// RedriveQueueMessages redrives messages from a dead letter queue back to the target queue.
+func (h *Handler) RedriveQueueMessages(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "queue name is required")
+		return
+	}
+	if h.sqs == nil {
+		writeError(w, http.StatusServiceUnavailable, "sqs service unavailable")
+		return
+	}
+
+	var req redriveQueueMessagesRequest
+	if r.Body != nil {
+		_ = json.NewDecoder(io.LimitReader(r.Body, 1<<16)).Decode(&req)
+	}
+
+	fromQueue := name
+	toQueue := strings.TrimSpace(req.TargetQueue)
+
+	// If target queue is not specified, infer it:
+	if toQueue == "" {
+		cfg, err := h.sqs.GetQueue(name)
+		if err == nil && cfg != nil && cfg.DeadLetterTargetArn != "" {
+			dlqName := queueNameFromEndpoint(cfg.DeadLetterTargetArn)
+			if dlqName != "" && dlqName != name {
+				fromQueue = dlqName
+				toQueue = name
+			}
+		}
+
+		if toQueue == "" {
+			allQueues := h.sqs.ListQueues("")
+			for _, q := range allQueues {
+				if q.DeadLetterTargetArn != "" && queueNameFromEndpoint(q.DeadLetterTargetArn) == name {
+					toQueue = q.QueueName
+					break
+				}
+			}
+		}
+	}
+
+	if toQueue == "" {
+		writeError(w, http.StatusBadRequest, "target queue could not be inferred; please specify targetQueue")
+		return
+	}
+
+	moved, err := h.sqs.RedriveMessages(fromQueue, toQueue, req.MaxMessages)
+	if err != nil {
+		status := http.StatusInternalServerError
+		if strings.Contains(err.Error(), "not found") {
+			status = http.StatusNotFound
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"sourceQueue": fromQueue,
+		"targetQueue": toQueue,
+		"moved":       moved,
+	})
 }
 
 // disruptorRulePayload is the JSON body for setting SQS send-failure rules.

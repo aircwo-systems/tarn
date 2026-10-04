@@ -14,6 +14,11 @@ import type {
   LogEventsResponse,
   LogEvent,
   RequestTrace,
+  InvokeFunctionInput,
+  InvokeFunctionResult,
+  SendQueueMessageInput,
+  SendQueueMessageResult,
+  RedriveQueueResult,
 } from "$lib/types";
 
 let _activeAccountId = "000000000000";
@@ -245,6 +250,110 @@ export async function fetchFunctionEnvironment(
     throw new Error(`Failed to load function environment: HTTP ${response.status}`);
   }
   return (await response.json()) as FunctionEnvironmentResult;
+}
+
+export async function invokeFunction(
+  functionName: string,
+  input: InvokeFunctionInput,
+  signal?: AbortSignal,
+): Promise<InvokeFunctionResult> {
+  const path = `/_tarn/admin/functions/${encodeURIComponent(functionName)}/invoke`;
+  const response = await fetch(endpoint(path), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...accountHeaders(),
+    },
+    body: JSON.stringify(input),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `Failed to invoke function: HTTP ${response.status}`));
+  }
+  return (await response.json()) as InvokeFunctionResult;
+}
+
+export async function sendQueueMessage(
+  queueName: string,
+  input: SendQueueMessageInput,
+  signal?: AbortSignal,
+): Promise<SendQueueMessageResult> {
+  const path = `/_tarn/admin/queues/${encodeURIComponent(queueName)}/send`;
+  const response = await fetch(endpoint(path), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...accountHeaders(),
+    },
+    body: JSON.stringify(input),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `Failed to send queue message: HTTP ${response.status}`));
+  }
+  return (await response.json()) as SendQueueMessageResult;
+}
+
+export async function purgeQueue(
+  queueName: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const path = `/_tarn/admin/queues/${encodeURIComponent(queueName)}/purge`;
+  const response = await fetch(endpoint(path), {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      ...accountHeaders(),
+    },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `Failed to purge queue: HTTP ${response.status}`));
+  }
+}
+
+export async function deleteQueueMessage(
+  queueName: string,
+  messageId: string,
+  signal?: AbortSignal,
+): Promise<void> {
+  const path = `/_tarn/admin/queues/${encodeURIComponent(queueName)}/messages/${encodeURIComponent(messageId)}`;
+  const response = await fetch(endpoint(path), {
+    method: "DELETE",
+    headers: {
+      Accept: "application/json",
+      ...accountHeaders(),
+    },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `Failed to delete queue message: HTTP ${response.status}`));
+  }
+}
+
+export async function redriveQueueMessages(
+  queueName: string,
+  targetQueue?: string,
+  maxMessages?: number,
+  signal?: AbortSignal,
+): Promise<RedriveQueueResult> {
+  const path = `/_tarn/admin/queues/${encodeURIComponent(queueName)}/redrive`;
+  const response = await fetch(endpoint(path), {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      ...accountHeaders(),
+    },
+    body: JSON.stringify({ targetQueue, maxMessages }),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `Failed to redrive messages: HTTP ${response.status}`));
+  }
+  return (await response.json()) as RedriveQueueResult;
 }
 
 export async function fetchOpenAPI(apiId: string, signal?: AbortSignal): Promise<unknown> {

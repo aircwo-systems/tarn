@@ -2,6 +2,7 @@ package sqs
 
 import (
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	"github.com/aircwo-systems/tarn/internal/config"
@@ -73,5 +74,95 @@ func TestMoveToDLQIfExceededPreservesRetryCount(t *testing.T) {
 	}
 	if dlqMsgs[0].MessageAttributes[dlqRetryCountAttribute].StringValue != "3" {
 		t.Fatalf("retry count attr = %q, want %q", dlqMsgs[0].MessageAttributes[dlqRetryCountAttribute].StringValue, "3")
+	}
+}
+
+func TestDeleteMessageByID(t *testing.T) {
+	svc := NewService(&config.Config{DataDir: t.TempDir()})
+	defer svc.Close()
+	if err := svc.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	if _, err := svc.CreateQueue("work", nil, nil); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+
+	msg1, err := svc.SendMessage("work", "hello", 0, nil, "", "")
+	if err != nil {
+		t.Fatalf("send 1: %v", err)
+	}
+	_, err = svc.SendMessage("work", "world", 0, nil, "", "")
+	if err != nil {
+		t.Fatalf("send 2: %v", err)
+	}
+
+	if err := svc.DeleteMessageByID("work", msg1.MessageId); err != nil {
+		t.Fatalf("delete message by id: %v", err)
+	}
+
+	peeked, err := svc.PeekMessages("work", 10)
+	if err != nil {
+		t.Fatalf("peek: %v", err)
+	}
+	if len(peeked) != 1 {
+		t.Fatalf("expected 1 remaining message, got %d", len(peeked))
+	}
+	if peeked[0].Body != "world" {
+		t.Fatalf("remaining message body = %q, want %q", peeked[0].Body, "world")
+	}
+}
+
+func TestRedriveMessages(t *testing.T) {
+	svc := NewService(&config.Config{DataDir: t.TempDir()})
+	defer svc.Close()
+	if err := svc.Init(); err != nil {
+		t.Fatalf("init: %v", err)
+	}
+
+	if _, err := svc.CreateQueue("main", nil, nil); err != nil {
+		t.Fatalf("create main queue: %v", err)
+	}
+	if _, err := svc.CreateQueue("dlq", nil, nil); err != nil {
+		t.Fatalf("create dlq: %v", err)
+	}
+
+	attrs := map[string]*types.MessageAttribute{
+		"TarnRetryCount": {DataType: "Number", StringValue: "3"},
+		"OriginalAction": {DataType: "String", StringValue: "process"},
+	}
+
+	for i := 0; i < 3; i++ {
+		if _, err := svc.SendMessage("dlq", fmt.Sprintf("dead-item-%d", i), 0, attrs, "", ""); err != nil {
+			t.Fatalf("send dlq %d: %v", i, err)
+		}
+	}
+
+	moved, err := svc.RedriveMessages("dlq", "main", 0)
+	if err != nil {
+		t.Fatalf("redrive: %v", err)
+	}
+	if moved != 3 {
+		t.Fatalf("moved = %d, want 3", moved)
+	}
+
+	// dlq should now have 0 messages
+	dlqPeek, _ := svc.PeekMessages("dlq", 10)
+	if len(dlqPeek) != 0 {
+		t.Fatalf("dlq still has %d messages", len(dlqPeek))
+	}
+
+	// main queue should have 3 messages with TarnRetryCount stripped
+	mainPeek, _ := svc.PeekMessages("main", 10)
+	if len(mainPeek) != 3 {
+		t.Fatalf("main has %d messages, want 3", len(mainPeek))
+	}
+	for _, m := range mainPeek {
+		if m.MessageAttributes["TarnRetryCount"] != nil {
+			t.Errorf("expected TarnRetryCount to be stripped, got %+v", m.MessageAttributes)
+		}
+		if m.MessageAttributes["OriginalAction"] == nil || m.MessageAttributes["OriginalAction"].StringValue != "process" {
+			t.Errorf("expected OriginalAction attribute preserved, got %+v", m.MessageAttributes)
+		}
 	}
 }

@@ -21,6 +21,7 @@
   import { onMount } from "svelte";
 
   import AppSidebar, { type NavSection } from "$lib/components/layout/app-sidebar.svelte";
+  import CommandPalette from "$lib/components/layout/command-palette.svelte";
   import { getLogPulse, startLogPulse } from "$lib/log-pulse.svelte";
   import TagFilter from "$lib/components/layout/tag-filter.svelte";
   import OverviewPulse from "$lib/components/layout/overview-pulse.svelte";
@@ -89,6 +90,7 @@
   let logsInitialStream = $state("");
   let logsInitialOrder = $state<LogSortOrder>("desc");
   let xrayInitialTraceId = $state("");
+  let commandPaletteOpen = $state(false);
 
   function readHash() {
     const raw = window.location.hash.replace("#", "");
@@ -143,9 +145,17 @@
       tabHistory.remember(new URL(event.oldURL).hash);
       readHash();
     };
+    const handleGlobalKeydown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        commandPaletteOpen = !commandPaletteOpen;
+      }
+    };
     window.addEventListener("hashchange", handleHashChange);
+    window.addEventListener("keydown", handleGlobalKeydown);
     return () => {
       window.removeEventListener("hashchange", handleHashChange);
+      window.removeEventListener("keydown", handleGlobalKeydown);
       stopLogPulse();
     };
   });
@@ -374,6 +384,7 @@
     activeAccountId={accountSettings.activeAccountId}
     onSetTab={setTab}
     onOpenSettings={() => setTab("settings")}
+    onOpenCommandPalette={() => (commandPaletteOpen = true)}
   />
 
   <!-- ═══════════════════════════════════════════════════ MAIN ══ -->
@@ -503,6 +514,11 @@
     </main>
     {/if}
   {/key}
+
+  <CommandPalette
+    bind:open={commandPaletteOpen}
+    onNavigate={(tab) => setTab(tab)}
+  />
 </div>
 
 

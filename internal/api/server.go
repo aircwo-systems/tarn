@@ -224,11 +224,26 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /_tarn/admin/functions/{name}/environment", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.FunctionEnvironment(w, r)
 	})
+	mux.HandleFunc("POST /_tarn/admin/functions/{name}/invoke", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.InvokeFunction(w, r)
+	})
 	mux.HandleFunc("GET /_tarn/admin/secrets/{name}/value", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.SecretValue(w, r)
 	})
 	mux.HandleFunc("GET /_tarn/admin/queues/{name}/messages", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.QueueMessages(w, r)
+	})
+	mux.HandleFunc("POST /_tarn/admin/queues/{name}/send", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.SendQueueMessage(w, r)
+	})
+	mux.HandleFunc("POST /_tarn/admin/queues/{name}/purge", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.PurgeQueue(w, r)
+	})
+	mux.HandleFunc("DELETE /_tarn/admin/queues/{name}/messages/{id}", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.DeleteQueueMessage(w, r)
+	})
+	mux.HandleFunc("POST /_tarn/admin/queues/{name}/redrive", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.RedriveQueueMessages(w, r)
 	})
 	mux.HandleFunc("GET /_tarn/admin/sqs/disruptor", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.ListDisruptorRules(w, r)

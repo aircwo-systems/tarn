@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { CheckIcon, CopyIcon, ListBulletsIcon, PathIcon } from "phosphor-svelte";
+  import { CheckIcon, CopyIcon, ListBulletsIcon, PathIcon, PlayIcon } from "phosphor-svelte";
   import RcPanel from "$lib/components/rack/rc-panel.svelte";
   import RcStat from "$lib/components/rack/rc-stat.svelte";
   import RcKv from "$lib/components/rack/rc-kv.svelte";
@@ -8,6 +8,7 @@
   import FunctionLinksList, { type LinkItem } from "./function-links-list.svelte";
   import FunctionLogs from "./function-logs.svelte";
   import FunctionEnvironment from "./function-environment.svelte";
+  import FunctionInvoke from "./function-invoke.svelte";
   import {
     configuredCallers,
     dependencies,
@@ -131,6 +132,9 @@
       </p>
     </div>
     <div class="hero-actions">
+      <button type="button" class="btn highlight-btn" onclick={() => document.getElementById("invoke-panel")?.scrollIntoView({ behavior: "smooth" })}>
+        <PlayIcon size={12} weight="fill" />Test
+      </button>
       <a class="btn" href={logsHref}><ListBulletsIcon size={12} />Logs</a>
       <a class="btn" href="#xray"><PathIcon size={12} />Traces</a>
       <button type="button" class="btn" onclick={() => copy("hcl")}>
@@ -153,7 +157,20 @@
     />
   </div>
 
-  <RcPanel title="Recent invocations" description="Reconstructed from recorded traces. Select one to open its trace." index={0}>
+  <div id="invoke-panel">
+    <FunctionInvoke
+      functionName={fn.name}
+      {examples}
+      onTraceOpen={openTrace}
+      onLogsOpen={(grp, strm) => {
+        window.location.hash = strm
+          ? `logs?groups=${encodeURIComponent(grp)}&stream=${encodeURIComponent(strm)}`
+          : `logs?groups=${encodeURIComponent(grp)}`;
+      }}
+    />
+  </div>
+
+  <RcPanel title="Recent invocations" description="Reconstructed from recorded traces. Select one to open its trace." index={2}>
     {#if invocations.length === 0}
       <p class="empty">No traced invocations yet. Invoke the function through an API route, queue, rule or the SDK.</p>
     {:else}
@@ -233,6 +250,15 @@
   .btn:active { transform: scale(0.96); }
   .btn.ghost { height: 24px; padding: 0 9px; font-size: 11px; border-color: transparent; }
   .btn.ghost:hover { border-color: var(--border-subtle); }
+  .btn.highlight-btn {
+    color: var(--accent-green);
+    border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-green) 10%, transparent);
+  }
+  .btn.highlight-btn:hover {
+    background: color-mix(in srgb, var(--accent-green) 18%, transparent);
+    border-color: var(--accent-green);
+  }
   .btn :global(.ok) { color: var(--accent-green); }
   .btn:focus-visible { outline: 1px solid var(--border-focus); outline-offset: 2px; }
 

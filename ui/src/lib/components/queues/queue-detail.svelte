@@ -1,31 +1,50 @@
 <script lang="ts">
-  import { ArrowsClockwiseIcon, CaretDownIcon, CaretUpIcon } from "phosphor-svelte";
+  import {
+    ArrowsClockwiseIcon,
+    CaretDownIcon,
+    CaretUpIcon,
+    PaperPlaneTiltIcon,
+    TrashIcon,
+    FloppyDiskIcon,
+    CopyIcon,
+    WarningCircleIcon,
+  } from "phosphor-svelte";
   import RcPanel from "$lib/components/rack/rc-panel.svelte";
   import RcStat from "$lib/components/rack/rc-stat.svelte";
   import RcKv from "$lib/components/rack/rc-kv.svelte";
   import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
   import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
   import QueueDisruptor from "./queue-disruptor.svelte";
+  import QueueSendDialog from "./queue-send-dialog.svelte";
+  import QueueRedriveDialog from "./queue-redrive-dialog.svelte";
+  import QueueSaveEventDialog from "./queue-save-event-dialog.svelte";
   import { formatJSONForViewer } from "$lib/json-format";
   import { formatUnixSeconds } from "$lib/utils";
-  import type { QueueMessageSummary, QueueSummary } from "$lib/types";
+  import { purgeQueue, deleteQueueMessage } from "$lib/api";
+  import type { QueueMessageSummary, QueueSummary, FunctionSummary } from "$lib/types";
 
   let {
     queue,
     messages,
     loading,
     error,
+    allQueues = [],
+    functions = [],
     onrefresh,
   }: {
     queue: QueueSummary;
     messages: QueueMessageSummary[];
     loading: boolean;
     error: string;
+    allQueues?: QueueSummary[];
+    functions?: FunctionSummary[];
     onrefresh: () => void;
   } = $props();
 
   const numberFormatter = new Intl.NumberFormat("en-GB");
   const staleCount = $derived(queue.approxStale ?? 0);
+  const isDLQ = $derived(allQueues.some((q) => q.dlqName === queue.name));
+  const hasDLQRelationship = $derived(Boolean(queue.dlqName) || isDLQ);
 
   const config = $derived([
     { label: "Visibility", value: `${queue.visibilitySec}s`, mono: true },
@@ -76,6 +95,63 @@
     if (body.length <= PREVIEW_LENGTH) return body;
     return body.slice(0, PREVIEW_LENGTH) + "…";
   }
+
+  // Dialog & Action States
+  let sendDialogOpen = $state(false);
+  let sendDialogInitialBody = $state("");
+  let redriveDialogOpen = $state(false);
+  let saveEventOpen = $state(false);
+  let saveEventBody = $state("");
+
+  let purgeConfirmOpen = $state(false);
+  let purging = $state(false);
+  let purgeError = $state<string | null>(null);
+
+  let deletingIds = $state(new Set<string>());
+  let bannerMessage = $state<string | null>(null);
+
+  function openSendDialog(initial = "") {
+    sendDialogInitialBody = initial;
+    sendDialogOpen = true;
+  }
+
+  function openSaveEvent(body: string) {
+    saveEventBody = body;
+    saveEventOpen = true;
+  }
+
+  async function handlePurge() {
+    purging = true;
+    purgeError = null;
+    try {
+      await purgeQueue(queue.name);
+      purgeConfirmOpen = false;
+      bannerMessage = `Queue "${queue.name}" purged successfully.`;
+      setTimeout(() => (bannerMessage = null), 4000);
+      onrefresh();
+    } catch (err) {
+      purgeError = err instanceof Error ? err.message : "Failed to purge queue";
+    } finally {
+      purging = false;
+    }
+  }
+
+  async function handleDeleteMessage(id: string) {
+    const next = new Set(deletingIds);
+    next.add(id);
+    deletingIds = next;
+
+    try {
+      await deleteQueueMessage(queue.name, id);
+      onrefresh();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to delete message");
+    } finally {
+      const updated = new Set(deletingIds);
+      updated.delete(id);
+      deletingIds = updated;
+    }
+  }
 </script>
 
 <div class="detail">
@@ -97,11 +173,83 @@
       </p>
     </div>
     <div class="hero-actions">
+      <button
+        type="button"
+        class="btn primary-action"
+        onclick={() => openSendDialog()}
+        title="Send a new message to this queue"
+      >
+        <PaperPlaneTiltIcon size={12} weight="fill" />Send Message
+      </button>
+
+      {#if hasDLQRelationship}
+        <button
+          type="button"
+          class="btn dlq-action"
+          onclick={() => (redriveDialogOpen = true)}
+          title="Redrive messages between DLQ and source queue"
+        >
+          <ArrowsClockwiseIcon size={12} />Redrive DLQ
+        </button>
+      {/if}
+
+      <button
+        type="button"
+        class="btn danger-action"
+        onclick={() => (purgeConfirmOpen = !purgeConfirmOpen)}
+        title="Purge all messages in this queue"
+      >
+        <TrashIcon size={12} />Purge
+      </button>
+
       <button type="button" class="btn" onclick={onrefresh} disabled={loading}>
         <ArrowsClockwiseIcon size={12} class={loading ? "animate-spin" : ""} />Refresh
       </button>
     </div>
   </header>
+
+  {#if purgeConfirmOpen}
+    <div class="purge-banner" role="alert">
+      <div class="purge-info">
+        <WarningCircleIcon size={16} class="purge-icon" />
+        <div>
+          <p class="purge-title">Purge queue "{queue.name}"?</p>
+          <p class="purge-sub">
+            This permanently deletes all {queue.approxVisible + queue.approxInFlight + queue.approxDelayed} messages.
+            Inflight and delayed messages will also be removed.
+          </p>
+          {#if purgeError}
+            <p class="purge-err">{purgeError}</p>
+          {/if}
+        </div>
+      </div>
+      <div class="purge-actions">
+        <button
+          type="button"
+          class="btn ghost"
+          onclick={() => { purgeConfirmOpen = false; purgeError = null; }}
+          disabled={purging}
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          class="btn danger-confirm"
+          onclick={handlePurge}
+          disabled={purging}
+        >
+          <TrashIcon size={12} />
+          {purging ? "Purging…" : "Confirm Purge"}
+        </button>
+      </div>
+    </div>
+  {/if}
+
+  {#if bannerMessage}
+    <div class="success-banner" role="status">
+      <span>{bannerMessage}</span>
+    </div>
+  {/if}
 
   <!-- Numbers -->
   <div class="stats">
@@ -141,7 +289,12 @@
     {#if loading}
       <p class="empty">Loading messages...</p>
     {:else if messages.length === 0}
-      <p class="empty">No messages available for this queue.</p>
+      <div class="empty-box">
+        <p class="empty">No messages currently in queue.</p>
+        <button type="button" class="btn primary-action small" onclick={() => openSendDialog()}>
+          <PaperPlaneTiltIcon size={12} weight="fill" />Send a test message
+        </button>
+      </div>
     {:else}
       <div class="messages">
         {#each messages as message (message.id)}
@@ -149,7 +302,8 @@
           {@const large = isLargeBody(message.body ?? "")}
           {@const formatted = formatJSONForViewer(message.body ?? "")}
           {@const canExpand = large || formatted !== null}
-          <div class="message">
+          {@const isDeleting = deletingIds.has(message.id)}
+          <div class="message" class:is-deleting={isDeleting}>
             <div class="message-meta">
               <RcTonePill tone={messageTone(message.state)}>{message.state}</RcTonePill>
               <span class="message-id">{message.id}</span>
@@ -189,21 +343,55 @@
 
             <div class="message-foot">
               <p class="message-time">{formatSentAt(message.sentAt)}</p>
-              {#if canExpand}
+
+              <div class="message-actions">
                 <button
                   type="button"
-                  class="expand-btn"
-                  onclick={() => toggleExpanded(message.id)}
+                  class="action-btn"
+                  onclick={() => openSaveEvent(message.body ?? "")}
+                  title="Save payload as a Lambda test event fixture"
                 >
-                  {#if expanded}
-                    <CaretUpIcon size={12} />
-                    Collapse
-                  {:else}
-                    <CaretDownIcon size={12} />
-                    Expand
-                  {/if}
+                  <FloppyDiskIcon size={11} />
+                  <span>Save as test event</span>
                 </button>
-              {/if}
+
+                <button
+                  type="button"
+                  class="action-btn"
+                  onclick={() => openSendDialog(message.body ?? "")}
+                  title="Clone message and send again"
+                >
+                  <CopyIcon size={11} />
+                  <span>Re-send</span>
+                </button>
+
+                <button
+                  type="button"
+                  class="action-btn delete-btn"
+                  onclick={() => handleDeleteMessage(message.id)}
+                  disabled={isDeleting}
+                  title="Delete message from queue"
+                >
+                  <TrashIcon size={11} class={isDeleting ? "animate-spin" : ""} />
+                  <span>{isDeleting ? "Deleting…" : "Delete"}</span>
+                </button>
+
+                {#if canExpand}
+                  <button
+                    type="button"
+                    class="expand-btn"
+                    onclick={() => toggleExpanded(message.id)}
+                  >
+                    {#if expanded}
+                      <CaretUpIcon size={12} />
+                      Collapse
+                    {:else}
+                      <CaretDownIcon size={12} />
+                      Expand
+                    {/if}
+                  </button>
+                {/if}
+              </div>
             </div>
           </div>
         {/each}
@@ -225,6 +413,45 @@
   </RcPanel>
 </div>
 
+<!-- Send Message Dialog -->
+{#if sendDialogOpen}
+  <QueueSendDialog
+    {queue}
+    initialBody={sendDialogInitialBody}
+    onclose={() => {
+      sendDialogOpen = false;
+      sendDialogInitialBody = "";
+    }}
+    onsent={() => {
+      onrefresh();
+    }}
+  />
+{/if}
+
+<!-- Redrive DLQ Dialog -->
+{#if redriveDialogOpen}
+  <QueueRedriveDialog
+    {queue}
+    {allQueues}
+    onclose={() => (redriveDialogOpen = false)}
+    onredriven={() => onrefresh()}
+  />
+{/if}
+
+<!-- Save as Lambda Event Dialog -->
+{#if saveEventOpen}
+  <QueueSaveEventDialog
+    messageBody={saveEventBody}
+    sourceQueue={queue.name}
+    {functions}
+    onclose={() => {
+      saveEventOpen = false;
+      saveEventBody = "";
+    }}
+    onsaved={() => {}}
+  />
+{/if}
+
 <style>
   .detail { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 
@@ -237,7 +464,7 @@
   }
   .subline { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 11.5px; color: var(--text-tertiary); }
   .subline i { width: 3px; height: 3px; border-radius: 1px; background: var(--border-default); }
-  .hero-actions { display: flex; gap: 6px; }
+  .hero-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
   .btn {
     display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 11px; border-radius: 8px;
@@ -249,6 +476,102 @@
   .btn:disabled { opacity: 0.5; cursor: not-allowed; }
   .btn:focus-visible { outline: 1px solid var(--border-focus); outline-offset: 2px; }
 
+  .primary-action {
+    color: var(--accent-green, #10b981);
+    border-color: color-mix(in srgb, var(--accent-green, #10b981) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-green, #10b981) 8%, transparent);
+  }
+  .primary-action:hover:not(:disabled) {
+    color: var(--accent-green, #10b981);
+    background: color-mix(in srgb, var(--accent-green, #10b981) 16%, transparent);
+    border-color: var(--accent-green, #10b981);
+  }
+  .primary-action.small {
+    height: 24px;
+    padding: 0 9px;
+    font-size: 11px;
+    margin-top: 8px;
+  }
+
+  .dlq-action {
+    color: var(--accent-blue, #60a5fa);
+    border-color: color-mix(in srgb, var(--accent-blue, #60a5fa) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-blue, #60a5fa) 8%, transparent);
+  }
+  .dlq-action:hover:not(:disabled) {
+    color: var(--accent-blue, #60a5fa);
+    background: color-mix(in srgb, var(--accent-blue, #60a5fa) 16%, transparent);
+    border-color: var(--accent-blue, #60a5fa);
+  }
+
+  .danger-action {
+    color: var(--text-tertiary);
+  }
+  .danger-action:hover:not(:disabled) {
+    color: var(--accent-red, #fb7185);
+    border-color: color-mix(in srgb, var(--accent-red, #fb7185) 40%, transparent);
+  }
+
+  .purge-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 10px 14px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent-red, #fb7185) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-red, #fb7185) 30%, transparent);
+  }
+  .purge-info {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  :global(.purge-icon) {
+    color: var(--accent-red, #fb7185);
+    margin-top: 2px;
+    flex-shrink: 0;
+  }
+  .purge-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-red, #fb7185);
+  }
+  .purge-sub {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
+  .purge-err {
+    font-size: 11px;
+    color: var(--accent-red, #fb7185);
+    margin-top: 4px;
+  }
+  .purge-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .danger-confirm {
+    color: #fff;
+    background: var(--accent-red, #fb7185);
+    border-color: var(--accent-red, #fb7185);
+  }
+  .danger-confirm:hover:not(:disabled) {
+    color: #fff;
+    background: color-mix(in srgb, var(--accent-red, #fb7185) 85%, black);
+  }
+
+  .success-banner {
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent-green, #10b981) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-green, #10b981) 30%, transparent);
+    font-size: 11.5px;
+    color: var(--accent-green, #10b981);
+  }
+
   .stats {
     display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 16px; padding: 14px 2px 10px;
     animation: statsIn 320ms var(--ease-snappy) both;
@@ -256,6 +579,12 @@
   @keyframes statsIn { from { opacity: 0; transform: translateY(4px); } }
   @media (max-width: 1100px) { .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
+  .empty-box {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+  }
   .empty { font-size: 11.5px; color: var(--text-tertiary); }
   .error { margin-bottom: 10px; font-size: 11.5px; color: var(--accent-red); }
 
@@ -263,6 +592,11 @@
   .message {
     border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-app);
     padding: 10px 12px;
+    transition: opacity 120ms ease;
+  }
+  .message.is-deleting {
+    opacity: 0.4;
+    pointer-events: none;
   }
   .message-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; font-size: 11px; color: var(--text-tertiary); }
   .message-id { font-family: var(--font-mono, ui-monospace, monospace); }
@@ -273,11 +607,52 @@
     font-size: 12px; color: var(--text-secondary);
   }
   .stale-note { margin-top: 6px; font-size: 11px; color: var(--accent-red); }
-  .message-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; }
+  .message-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+    border-top: 1px solid var(--border-subtle);
+    padding-top: 8px;
+  }
   .message-time { font-size: 11px; color: var(--text-tertiary); }
+
+  .message-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .action-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 22px;
+    padding: 0 7px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-element);
+    font-size: 10.5px;
+    color: var(--text-secondary);
+    transition: all 120ms ease;
+  }
+  .action-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--border-default);
+    background: var(--bg-element-hover);
+  }
+  .delete-btn:hover {
+    color: var(--accent-red, #fb7185);
+    border-color: color-mix(in srgb, var(--accent-red, #fb7185) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-red, #fb7185) 10%, transparent);
+  }
+
   .expand-btn {
     display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--text-tertiary);
     transition: color 120ms ease;
+    margin-left: 4px;
   }
   .expand-btn:hover { color: var(--text-primary); }
 

@@ -257,6 +257,16 @@ func (s *Service) PurgeQueue(queueName string) error {
 	return s.store.PurgeQueue(queueName)
 }
 
+// DeleteMessageByID removes an active message by MessageId or ReceiptHandle.
+func (s *Service) DeleteMessageByID(queueName, messageID string) error {
+	return s.store.DeleteMessageByID(queueName, messageID)
+}
+
+// RedriveMessages moves up to maxMessages from fromQueue to toQueue.
+func (s *Service) RedriveMessages(fromQueue, toQueue string, maxMessages int) (int, error) {
+	return s.store.RedriveMessages(fromQueue, toQueue, maxMessages)
+}
+
 // TagQueue adds or overwrites tags on a queue.
 func (s *Service) TagQueue(queueName string, tags map[string]string) error {
 	return s.store.TagQueue(queueName, tags)

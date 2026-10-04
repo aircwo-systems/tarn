@@ -1,7 +1,24 @@
 <script lang="ts">
-  import { PlusIcon, TrashIcon, CheckIcon, MonitorIcon, SunIcon, MoonIcon, ArchiveIcon, ArrowCounterClockwiseIcon, CaretRightIcon } from "phosphor-svelte";
-  import { onMount, untrack } from "svelte";
-  import { fly } from "svelte/transition";
+  import {
+    PlusIcon,
+    TrashIcon,
+    CheckIcon,
+    MonitorIcon,
+    SunIcon,
+    MoonIcon,
+    ArchiveIcon,
+    ArrowCounterClockwiseIcon,
+    CaretRightIcon,
+    UsersIcon,
+    PaintBrushIcon,
+    TimerIcon,
+    HardDrivesIcon,
+    InfoIcon,
+    SpinnerGapIcon,
+    ArrowSquareOutIcon,
+  } from "phosphor-svelte";
+  import { onMount } from "svelte";
+  import { fly, fade } from "svelte/transition";
 
   import type { UserService } from "$lib/types";
   import { fetchAccounts, changeAccount, type ServerAccount } from "$lib/api";
@@ -40,154 +57,120 @@
   const infraSettings = getInfraSettings();
   const accountSettings = getAccountSettings();
 
-  const INFRA_KINDS: Array<{ id: InfraProbeKind; label: string; detail: string }> = [
-    { id: "docker",     label: "Docker",     detail: "daemon" },
-    { id: "postgresql", label: "PostgreSQL", detail: ":5432"  },
-    { id: "redis",      label: "Redis",      detail: ":6379"  },
-    { id: "mysql",      label: "MySQL",      detail: ":3306"  },
-    { id: "mongodb",    label: "MongoDB",    detail: ":27017" },
+  type SettingsTab = "accounts" | "appearance" | "engine" | "infra" | "instance";
+
+  const SETTINGS_TABS: Array<{ id: SettingsTab; label: string; icon: any; kicker: string }> = [
+    { id: "accounts",   label: "Accounts",          icon: UsersIcon,      kicker: "01" },
+    { id: "appearance", label: "Appearance",        icon: PaintBrushIcon, kicker: "02" },
+    { id: "engine",     label: "Engine & Polling",  icon: TimerIcon,      kicker: "03" },
+    { id: "infra",      label: "Infrastructure",    icon: HardDrivesIcon, kicker: "04" },
+    { id: "instance",   label: "System Instance",   icon: InfoIcon,       kicker: "05" },
   ];
-  const THEMES: Array<{ id: ThemeMode; label: string; icon: any }> = [
-    { id: "system", label: "System", icon: MonitorIcon },
-    { id: "light",  label: "Light",  icon: SunIcon },
-    { id: "dark",   label: "Dark",   icon: MoonIcon },
+
+  const INFRA_KINDS: Array<{ id: InfraProbeKind; label: string; detail: string; desc: string }> = [
+    { id: "docker",     label: "Docker Daemon", detail: "socket / var/run", desc: "Local container engine for Lambda" },
+    { id: "postgresql", label: "PostgreSQL",    detail: ":5432",            desc: "Relational database probe" },
+    { id: "redis",      label: "Redis",         detail: ":6379",            desc: "In-memory cache & key-value probe" },
+    { id: "mysql",      label: "MySQL",         detail: ":3306",            desc: "Relational database probe" },
+    { id: "mongodb",    label: "MongoDB",       detail: ":27017",           desc: "Document database probe" },
   ];
-  const POLL_PRESETS = [2, 5, 10, 30];
+
+  const THEMES: Array<{ id: ThemeMode; label: string; subtitle: string; icon: any }> = [
+    { id: "dark",   label: "Pure Pitch Black", subtitle: "Zero slate authentic rack console", icon: MoonIcon },
+    { id: "light",  label: "Clean Light",      subtitle: "High-contrast daylight theme",      icon: SunIcon },
+    { id: "system", label: "System Sync",      subtitle: "Follows OS dark/light appearance", icon: MonitorIcon },
+  ];
+
+  const SIDEBAR_MODES: Array<{ id: CollapsedSidebarMode; label: string; desc: string }> = [
+    { id: "icons",  label: "Icon Rail",       desc: "Keep navigation service icons accessible when collapsed" },
+    { id: "hidden", label: "Completely Hide", desc: "Hide sidebar fully to maximize screen real estate" },
+  ];
+
+  const POLL_PRESETS = [
+    { v: 2,  label: "2s",  sub: "Rapid live updates" },
+    { v: 5,  label: "5s",  sub: "Balanced (Default)" },
+    { v: 10, label: "10s", sub: "Lower CPU overhead" },
+    { v: 30, label: "30s", sub: "Relaxed polling" },
+  ];
+
   const RETENTION_PRESETS = [
-    { v: 30, label: "30m" }, { v: 60, label: "1h" }, { v: 360, label: "6h" }, { v: 1440, label: "24h" },
-  ];
-  const SECTIONS = [
-    { id: "accounts",   label: "Accounts" },
-    { id: "refresh",    label: "Refresh & retention" },
-    { id: "appearance", label: "Appearance" },
-    { id: "workspace",  label: "Workspace" },
-    { id: "infra",      label: "Infrastructure" },
-    { id: "instance",   label: "Instance" },
+    { v: 30,   label: "30 min", sub: "Transient session" },
+    { v: 60,   label: "1 hour", sub: "Short debugging" },
+    { v: 360,  label: "6 hours", sub: "Workday trace history" },
+    { v: 1440, label: "24 hours", sub: "Maximum buffer" },
   ];
 
-  // ── Drafts: edits stay local until saved ─────────────────────────
-  let pollingInterval = $state(uiSettings.pollingIntervalSeconds);
-  let themeMode       = $state<ThemeMode>(uiSettings.themeMode);
-  let collapsedSidebarMode = $state<CollapsedSidebarMode>(uiSettings.collapsedSidebarMode);
-  let schemaSourceDir = $state(uiSettings.schemaSourceDir);
-  let logRetention    = $state(uiSettings.logRetentionMinutes);
-  let enabledKinds    = $state<InfraProbeKind[]>([...infraSettings.enabledKinds]);
-  let services        = $state<UserService[]>(infraSettings.userServices.map((svc) => ({ ...svc })));
-
-  function reset() {
-    pollingInterval = uiSettings.pollingIntervalSeconds;
-    themeMode       = uiSettings.themeMode;
-    collapsedSidebarMode = uiSettings.collapsedSidebarMode;
-    schemaSourceDir = uiSettings.schemaSourceDir;
-    logRetention    = uiSettings.logRetentionMinutes;
-    enabledKinds    = [...infraSettings.enabledKinds];
-    services        = infraSettings.userServices.map((svc) => ({ ...svc }));
-    servicesError   = "";
-  }
-
-  const draftKey = () => JSON.stringify([
-    pollingInterval, themeMode, collapsedSidebarMode, sanitizeSchemaSourceDir(schemaSourceDir), logRetention,
-    [...enabledKinds].sort(), services,
-  ]);
-  const storedKey = () => JSON.stringify([
-    uiSettings.pollingIntervalSeconds, uiSettings.themeMode, uiSettings.collapsedSidebarMode,
-    uiSettings.schemaSourceDir, uiSettings.logRetentionMinutes,
-    [...infraSettings.enabledKinds].sort(), infraSettings.userServices,
-  ]);
-
-  const dirty = $derived(draftKey() !== storedKey());
-
-  // Settings hydrate from storage in the layout's onMount, after this mounts.
-  // Follow stored changes while the user hasn't diverged from the last baseline.
-  let baseline = untrack(storedKey);
-  $effect(() => {
-    const next = storedKey();
-    untrack(() => {
-      if (draftKey() === baseline) reset();
-      baseline = next;
-    });
-  });
-
-  let ready = $state(false); // skip the hydration blip on first load
+  let activeTab = $state<SettingsTab>("accounts");
   let savedFlash = $state(false);
-  let flashTimer: ReturnType<typeof setTimeout> | undefined;
+  let savedTimer: ReturnType<typeof setTimeout> | undefined;
 
-  async function save() {
-    if (saving) return;
-    saving = true;
-    try {
-      // Validated server-side; bail before touching local settings so the draft stays intact.
-      // Saving services re-probes them on the server, so skip it when only other settings changed.
-      if (JSON.stringify(services) !== JSON.stringify(infraSettings.userServices)) {
-        await setUserServices(services);
-      }
-    } catch (err) {
-      servicesError = err instanceof Error ? err.message : "Could not save services";
-      return;
-    } finally {
-      saving = false;
-    }
-    setPollingIntervalSeconds(pollingInterval);
-    setThemeMode(themeMode);
-    setCollapsedSidebarMode(collapsedSidebarMode);
-    setSchemaSourceDir(schemaSourceDir);
-    setLogRetentionMinutes(logRetention);
-    setInfraEnabledKinds(enabledKinds);
-    reset(); // pick up any clamping/normalisation done by the setters
+  function triggerSavedBadge() {
     savedFlash = true;
-    clearTimeout(flashTimer);
-    flashTimer = setTimeout(() => (savedFlash = false), 1600);
+    clearTimeout(savedTimer);
+    savedTimer = setTimeout(() => {
+      savedFlash = false;
+    }, 1800);
   }
 
-  function onKeydown(e: KeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s" && dirty) {
-      e.preventDefault();
-      save();
-    }
+  function handleSetTheme(mode: ThemeMode) {
+    setThemeMode(mode);
+    triggerSavedBadge();
   }
 
-  function toggleKind(id: InfraProbeKind) {
-    enabledKinds = enabledKinds.includes(id) ? enabledKinds.filter((k) => k !== id) : [...enabledKinds, id];
+  function handleSetSidebarMode(mode: CollapsedSidebarMode) {
+    setCollapsedSidebarMode(mode);
+    triggerSavedBadge();
   }
 
-  // ── Accounts (apply immediately, as before) ──────────────────────
-  let newAccountId = $state("");
-  let newAccountLabel = $state("");
-  let newAccountError = $state("");
-
-  function handleAddAccount() {
-    newAccountError = "";
-    const id = newAccountId.trim();
-    if (!/^\d{12}$/.test(id)) { newAccountError = "Must be exactly 12 digits"; return; }
-    if (!addKnownAccount(id, newAccountLabel)) { newAccountError = "Account already exists"; return; }
-    newAccountId = "";
-    newAccountLabel = "";
+  function handleSetPolling(seconds: number) {
+    setPollingIntervalSeconds(seconds);
+    triggerSavedBadge();
   }
 
-  // Accounts the server knows about: anything used by an access key, even ones
-  // never added here. Staleness is judged from AWS API calls only; the
-  // dashboard's own polling doesn't count.
+  function handleSetRetention(minutes: number) {
+    setLogRetentionMinutes(minutes);
+    triggerSavedBadge();
+  }
+
+  function handleSetSchemaDir(dir: string) {
+    setSchemaSourceDir(dir);
+    triggerSavedBadge();
+  }
+
+  function toggleInfraKind(id: InfraProbeKind) {
+    const current = infraSettings.enabledKinds;
+    const next = current.includes(id) ? current.filter((k) => k !== id) : [...current, id];
+    setInfraEnabledKinds(next);
+    triggerSavedBadge();
+  }
+
+  // ── Accounts Logic ────────────────────────────────────────────────
   const DEFAULT_ID = "000000000000";
   const STALE_DAYS = 7;
   const DAY_MS = 86_400_000;
+
   let serverAccounts = $state<ServerAccount[]>([]);
+  let accountsLoading = $state(false);
   let accountsError = $state("");
   let accountBusy = $state("");
   let confirmDelete = $state("");
   let showArchived = $state(false);
 
+  let newAccountId = $state("");
+  let newAccountLabel = $state("");
+  let newAccountError = $state("");
+
   async function loadServerAccounts() {
+    accountsLoading = true;
     try {
       serverAccounts = await fetchAccounts();
       accountsError = "";
     } catch (err) {
       accountsError = err instanceof Error ? err.message : "Failed to load accounts";
+    } finally {
+      accountsLoading = false;
     }
   }
-
-  onMount(() => { void loadServerAccounts(); });
-
-  type AccountRow = { id: string; label: string; known: boolean; server?: ServerAccount; stale: string };
 
   function daysSince(ts?: string): number | null {
     if (!ts) return null;
@@ -195,48 +178,91 @@
     return Number.isNaN(t) ? null : Math.floor((Date.now() - t) / DAY_MS);
   }
 
-  /** A reason the account looks unused, or "" when it doesn't. */
   function staleReason(a?: ServerAccount): string {
     if (!a || a.default || a.archived) return "";
     const days = daysSince(a.lastActivityAt);
-    if (days !== null && days >= STALE_DAYS) return `No API calls for ${days} days`;
+    if (days !== null && days >= STALE_DAYS) return `No calls for ${days}d`;
     if (a.resourceTotal === 0 && (days === null || days >= 1)) return "No resources";
     return "";
   }
 
   function activityLabel(a?: ServerAccount): string {
-    if (!a) return "not used yet";
+    if (!a) return "Not active yet";
     const parts = [`${a.resourceTotal} ${a.resourceTotal === 1 ? "resource" : "resources"}`];
     const days = daysSince(a.lastActivityAt);
     if (days === null) parts.push("no API calls recorded");
-    else if (days === 0) parts.push("used today");
+    else if (days === 0) parts.push("active today");
     else parts.push(`last API call ${days}d ago`);
     return parts.join(" · ");
   }
 
+  type AccountRow = { id: string; label: string; known: boolean; server?: ServerAccount; stale: string };
+
   const accountRows = $derived.by(() => {
     const byId = new Map(serverAccounts.map((a) => [a.id, a]));
     const rows: AccountRow[] = accountSettings.knownAccounts.map((k) => ({
-      id: k.id, label: k.label, known: true, server: byId.get(k.id), stale: staleReason(byId.get(k.id)),
+      id: k.id,
+      label: k.label,
+      known: true,
+      server: byId.get(k.id),
+      stale: staleReason(byId.get(k.id)),
     }));
     for (const a of serverAccounts) {
       if (!rows.some((r) => r.id === a.id)) {
-        rows.push({ id: a.id, label: a.default ? "Default" : a.id, known: false, server: a, stale: staleReason(a) });
+        rows.push({
+          id: a.id,
+          label: a.default ? "Default Account" : a.id,
+          known: false,
+          server: a,
+          stale: staleReason(a),
+        });
       }
     }
     return rows;
   });
-  const activeRows = $derived(accountRows.filter((r) => !r.server?.archived));
-  const archivedRows = $derived(accountRows.filter((r) => r.server?.archived));
-  const staleCount = $derived(activeRows.filter((r) => r.stale).length);
 
-  async function accountAction(id: string, action: "archive" | "restore" | "delete") {
+  const activeAccount = $derived(
+    accountRows.find((r) => r.id === accountSettings.activeAccountId) ?? {
+      id: accountSettings.activeAccountId,
+      label: accountSettings.activeAccountId === DEFAULT_ID ? "Default Account" : accountSettings.activeAccountId,
+      known: true,
+      stale: "",
+    }
+  );
+
+  const activeRows = $derived(accountRows.filter((r) => !r.server?.archived));
+  const otherActiveRows = $derived(activeRows.filter((r) => r.id !== accountSettings.activeAccountId));
+  const archivedRows = $derived(accountRows.filter((r) => r.server?.archived));
+  const staleCount = $derived(activeRows.filter((r) => !!r.stale).length);
+
+  function handleAddAccount() {
+    newAccountError = "";
+    const id = newAccountId.trim();
+    if (!/^\d{12}$/.test(id)) {
+      newAccountError = "Account ID must be exactly 12 numeric digits.";
+      return;
+    }
+    if (!addKnownAccount(id, newAccountLabel.trim() || id)) {
+      newAccountError = "This account is already registered.";
+      return;
+    }
+    newAccountId = "";
+    newAccountLabel = "";
+    triggerSavedBadge();
+  }
+
+  async function handleAccountAction(id: string, action: "archive" | "restore" | "delete") {
     accountBusy = id;
     accountsError = "";
     try {
       serverAccounts = await changeAccount(id, action);
-      if (action !== "restore" && id === accountSettings.activeAccountId) switchAccount(DEFAULT_ID);
-      if (action === "delete") removeKnownAccount(id);
+      if (action !== "restore" && id === accountSettings.activeAccountId) {
+        switchAccount(DEFAULT_ID);
+      }
+      if (action === "delete") {
+        removeKnownAccount(id);
+      }
+      triggerSavedBadge();
     } catch (err) {
       accountsError = err instanceof Error ? err.message : `Failed to ${action} account`;
     } finally {
@@ -245,592 +271,1443 @@
     }
   }
 
-  // ── Additional services ──────────────────────────────────────────
-  let newTargetName = $state("");
-  let newTargetUrl  = $state("");
+  // ── Custom Additional Services Logic ──────────────────────────────
+  let newServiceName = $state("");
+  let newServiceUrl = $state("");
+  let servicesSaving = $state(false);
   let servicesError = $state("");
-  let saving        = $state(false);
+  let newServiceNameInput: HTMLInputElement | null = $state(null);
 
-  // Bare ports mean a local service; anything else (host, IP, URL) is sent as typed
-  // and normalised by the server, which also reports what it could not parse.
-  function addTarget() {
-    let url = newTargetUrl.trim();
-    if (!url) return;
-    if (/^\d{1,5}$/.test(url)) url = `http://localhost:${url}`;
-    services = [...services, { name: newTargetName.trim(), url }];
+  async function handleAddService() {
     servicesError = "";
-    newTargetName = "";
-    newTargetUrl = "";
-  }
-
-  // ── Section index: scroll-spy with sliding pill ──────────────────
-  let activeSection = $state("accounts");
-  let scrollRoot: HTMLElement | null = null;
-  let root: HTMLElement;
-
-  let jumping: ReturnType<typeof setTimeout> | undefined;
-
-  function jump(id: string) {
-    activeSection = id;
-    clearTimeout(jumping);
-    // Hold the clicked item while smooth scroll settles (short sections may never reach the top).
-    jumping = setTimeout(() => (jumping = undefined), 700);
-    root.querySelector(`#settings-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
-  }
-
-  function spy() {
-    if (!scrollRoot || jumping) return;
-    const { top, height } = scrollRoot.getBoundingClientRect();
-    if (scrollRoot.scrollTop + scrollRoot.clientHeight >= scrollRoot.scrollHeight - 4) {
-      activeSection = SECTIONS[SECTIONS.length - 1].id;
+    const name = newServiceName.trim();
+    let url = newServiceUrl.trim();
+    if (!url) {
+      servicesError = "Service target URL or port is required.";
       return;
     }
-    const line = top + height * 0.3;
-    let current = SECTIONS[0].id;
-    for (const s of SECTIONS) {
-      const el = root.querySelector(`#settings-${s.id}`);
-      if (el && el.getBoundingClientRect().top <= line) current = s.id;
+    if (/^\d{1,5}$/.test(url)) {
+      url = `http://localhost:${url}`;
     }
-    activeSection = current;
+
+    servicesSaving = true;
+    try {
+      const next = [...infraSettings.userServices, { name: name || url, url }];
+      await setUserServices(next);
+      newServiceName = "";
+      newServiceUrl = "";
+      triggerSavedBadge();
+    } catch (err) {
+      servicesError = err instanceof Error ? err.message : "Failed to register service";
+    } finally {
+      servicesSaving = false;
+    }
   }
 
-  // Deep link from Services: "#settings?section=infra&add=service" jumps here and focuses the form.
-  let newServiceNameInput: HTMLInputElement | null = null;
+  async function handleRemoveService(index: number) {
+    servicesSaving = true;
+    servicesError = "";
+    try {
+      const next = infraSettings.userServices.filter((_, i) => i !== index);
+      await setUserServices(next);
+      triggerSavedBadge();
+    } catch (err) {
+      servicesError = err instanceof Error ? err.message : "Failed to remove service";
+    } finally {
+      servicesSaving = false;
+    }
+  }
+
+  // ── Route & Hash Synchronization ──────────────────────────────────
+  function selectTab(tab: SettingsTab) {
+    activeTab = tab;
+    const params = new URLSearchParams();
+    params.set("section", tab);
+    history.replaceState(null, "", `#settings?${params.toString()}`);
+  }
 
   onMount(() => {
-    requestAnimationFrame(() => (ready = true));
-    const params = new URLSearchParams(window.location.hash.split("?").slice(1).join("?"));
-    const section = params.get("section");
-    if (section && SECTIONS.some((s) => s.id === section)) {
-      requestAnimationFrame(() => {
-        jump(section);
-        if (params.get("add") === "service") newServiceNameInput?.focus();
-      });
-    }
-    scrollRoot = root.closest("main");
-    scrollRoot?.addEventListener("scroll", spy, { passive: true });
-    return () => { scrollRoot?.removeEventListener("scroll", spy); clearTimeout(flashTimer); clearTimeout(jumping); };
-  });
+    void loadServerAccounts();
 
-  const activeIndex = $derived(Math.max(0, SECTIONS.findIndex((s) => s.id === activeSection)));
-  const themeIndex = $derived(THEMES.findIndex((t) => t.id === themeMode));
+    const qs = window.location.hash.split("?").slice(1).join("?");
+    const params = new URLSearchParams(qs);
+    const section = params.get("section");
+
+    if (section === "accounts") activeTab = "accounts";
+    else if (section === "appearance") activeTab = "appearance";
+    else if (section === "refresh" || section === "workspace" || section === "engine") activeTab = "engine";
+    else if (section === "infra") {
+      activeTab = "infra";
+      if (params.get("add") === "service") {
+        setTimeout(() => newServiceNameInput?.focus(), 120);
+      }
+    } else if (section === "instance") activeTab = "instance";
+  });
 </script>
 
-<svelte:window onkeydown={onKeydown} />
-
-<div class="settings" bind:this={root}>
+<div class="settings-view">
   <SectionHeader
     title="Settings"
-    description="Saved to this browser (cookie + local storage)"
+    description="Configure local accounts, polling frequencies, UI appearance, and backend probes."
     {sidebarCollapsed}
     {onToggleSidebar}
-  />
-
-  <div class="settings-grid">
-    <nav class="index" aria-label="Settings sections">
-      <span class="index-pill" style="transform: translateY({activeIndex * 30}px)"></span>
-      {#each SECTIONS as s (s.id)}
-        <button type="button" class="index-item" class:active={s.id === activeSection} onclick={() => jump(s.id)}>
-          {s.label}
-        </button>
-      {/each}
-    </nav>
-
-    <div class="panels">
-      <!-- Accounts -->
-      <section id="settings-accounts" class="panel">
-        <header>
-          <h2>Accounts</h2>
-          <p>The active account scopes every API request. Switching applies immediately.</p>
-        </header>
-        {#if staleCount > 0}
-          <p class="callout" transition:fly={{ y: -4, duration: 160 }}>
-            {staleCount} {staleCount === 1 ? "account looks" : "accounts look"} unused. Archiving stops an account's
-            background work and removes its containers; its data stays on disk until you delete it.
-          </p>
+  >
+    {#snippet actions()}
+      <div class="header-saved-indicator">
+        {#if savedFlash}
+          <span class="saved-badge" in:fly={{ y: -4, duration: 150 }} out:fade={{ duration: 150 }}>
+            <CheckIcon size={12} weight="bold" />
+            <span>Saved</span>
+          </span>
+        {:else}
+          <span class="live-indicator">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span>Live Auto-Save</span>
+          </span>
         {/if}
-        <ul class="rows">
-          {#each activeRows as acct (acct.id)}
-            {@const isActive = acct.id === accountSettings.activeAccountId}
-            {@const isDefault = acct.id === DEFAULT_ID}
-            <li class="row" class:is-active={isActive} class:is-stale={!!acct.stale}>
-              <span class="row-main">
-                <span class="row-title">{acct.label}</span>
-                <span class="row-sub mono">{acct.id} · {activityLabel(acct.server)}</span>
-              </span>
-              {#if acct.stale}
-                <span class="pill pill-stale" title={acct.stale}>{acct.stale}</span>
-              {/if}
-              {#if isActive}
-                <span class="pill pill-accent"><CheckIcon size={10} weight="bold" />Active</span>
-              {:else}
-                <button type="button" class="pill pill-btn" onclick={() => switchAccount(acct.id)}>Switch</button>
-              {/if}
-              {#if !isDefault && acct.server}
-                <button type="button" class="icon-btn" class:show={!!acct.stale} disabled={accountBusy === acct.id}
-                  onclick={() => accountAction(acct.id, "archive")} title="Archive: stop its services and containers, keep its data"
-                  aria-label="Archive account {acct.id}">
-                  <ArchiveIcon size={12} />
-                </button>
-              {/if}
-              {#if isDefault}
-                <span class="icon-spacer"></span>
-              {:else if acct.server}
-                {#if confirmDelete === acct.id}
-                  <button type="button" class="pill pill-btn danger" disabled={accountBusy === acct.id}
-                    onclick={() => accountAction(acct.id, "delete")} onblur={() => (confirmDelete = "")}>
-                    Delete data
-                  </button>
-                {:else}
-                  <button type="button" class="icon-btn danger" onclick={() => (confirmDelete = acct.id)}
-                    title="Delete this account and all of its data" aria-label="Delete account {acct.id}">
-                    <TrashIcon size={12} />
-                  </button>
-                {/if}
-              {:else}
-                <button type="button" class="icon-btn danger" onclick={() => removeKnownAccount(acct.id)}
-                  title="Forget this account on this dashboard" aria-label="Forget account {acct.id}">
-                  <TrashIcon size={12} />
-                </button>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-        {#if archivedRows.length > 0}
-          <button type="button" class="archived-toggle" aria-expanded={showArchived} onclick={() => (showArchived = !showArchived)}>
-            <CaretRightIcon size={10} class={showArchived ? "rotated" : ""} />
-            Archived ({archivedRows.length})
-          </button>
-          {#if showArchived}
-            <ul class="rows archived" transition:fly={{ y: -4, duration: 160 }}>
-              {#each archivedRows as acct (acct.id)}
-                <li class="row">
-                  <span class="row-main">
-                    <span class="row-title">{acct.label}</span>
-                    <span class="row-sub mono">{acct.id} · {acct.server?.resourceTotal ?? 0} resources · archived {daysSince(acct.server?.archivedAt) ?? 0}d ago</span>
-                  </span>
-                  <button type="button" class="pill pill-btn" disabled={accountBusy === acct.id} onclick={() => accountAction(acct.id, "restore")}>
-                    <ArrowCounterClockwiseIcon size={10} />Restore
-                  </button>
-                  {#if confirmDelete === acct.id}
-                    <button type="button" class="pill pill-btn danger" disabled={accountBusy === acct.id}
-                      onclick={() => accountAction(acct.id, "delete")} onblur={() => (confirmDelete = "")}>
-                      Delete data
-                    </button>
-                  {:else}
-                    <button type="button" class="icon-btn danger" onclick={() => (confirmDelete = acct.id)}
-                      title="Delete this account and all of its data" aria-label="Delete account {acct.id}">
-                      <TrashIcon size={12} />
+      </div>
+    {/snippet}
+  </SectionHeader>
+
+  <!-- Module Selector Bar -->
+  <div class="module-bar" role="tablist" aria-label="Settings categories">
+    {#each SETTINGS_TABS as tab (tab.id)}
+      {@const isSelected = activeTab === tab.id}
+      {@const Icon = tab.icon}
+      <button
+        type="button"
+        role="tab"
+        aria-selected={isSelected}
+        class="module-tab"
+        class:selected={isSelected}
+        onclick={() => selectTab(tab.id)}
+      >
+        <span class="module-kicker">{tab.kicker}</span>
+        <Icon size={14} weight={isSelected ? "bold" : "regular"} class="module-icon" />
+        <span class="module-label">{tab.label}</span>
+        {#if tab.id === "accounts" && staleCount > 0}
+          <span class="tab-badge amber" title="{staleCount} stale accounts">{staleCount}</span>
+        {/if}
+      </button>
+    {/each}
+  </div>
+
+  <div class="settings-content">
+    <!-- ══════════════════════ TAB 1: ACCOUNTS ══════════════════════ -->
+    {#if activeTab === "accounts"}
+      <div class="panel-section" in:fade={{ duration: 120 }}>
+        <!-- Active Account Banner -->
+        <div class="rack-card active-account-card">
+          <div class="card-header">
+            <div class="header-left">
+              <span class="kicker">ACTIVE WORKSPACE SCOPE</span>
+              <h2 class="card-title">{activeAccount.label}</h2>
+            </div>
+            <span class="active-badge">
+              <span class="pulse-dot"></span>
+              ACTIVE
+            </span>
+          </div>
+
+          <div class="account-meta-row">
+            <div class="meta-field">
+              <span class="meta-label">AWS ACCOUNT ID</span>
+              <span class="meta-val mono">{activeAccount.id}</span>
+            </div>
+            <div class="meta-field">
+              <span class="meta-label">RESOURCES ACTIVE</span>
+              <span class="meta-val">{activeAccount.server?.resourceTotal ?? 0}</span>
+            </div>
+            <div class="meta-field">
+              <span class="meta-label">ACTIVITY STATUS</span>
+              <span class="meta-val">{activityLabel(activeAccount.server)}</span>
+            </div>
+          </div>
+          <p class="card-hint">
+            All AWS CLI, SDK, and console operations run in this isolated scope. Switching takes effect immediately across all dashboard views.
+          </p>
+        </div>
+
+        <!-- Registered Accounts Table -->
+        <div class="rack-card">
+          <div class="card-header">
+            <div class="header-left">
+              <span class="kicker">AVAILABLE SCOPES</span>
+              <h3 class="card-title">Registered Accounts ({activeRows.length})</h3>
+            </div>
+            {#if accountsLoading}
+              <SpinnerGapIcon size={14} class="spin text-tertiary" />
+            {/if}
+          </div>
+
+          {#if accountsError}
+            <div class="error-banner">{accountsError}</div>
+          {/if}
+
+          <div class="accounts-table">
+            {#each activeRows as acct (acct.id)}
+              {@const isCurrent = acct.id === accountSettings.activeAccountId}
+              {@const isDefault = acct.id === DEFAULT_ID}
+              <div class="account-row" class:is-active={isCurrent}>
+                <div class="account-info">
+                  <div class="account-title-line">
+                    <span class="account-label">{acct.label}</span>
+                    <span class="account-id mono">{acct.id}</span>
+                    {#if isCurrent}
+                      <span class="mini-pill green">ACTIVE</span>
+                    {/if}
+                    {#if acct.stale && !isCurrent}
+                      <span class="mini-pill amber" title={acct.stale}>{acct.stale}</span>
+                    {/if}
+                  </div>
+                  <span class="account-sub mono">{activityLabel(acct.server)}</span>
+                </div>
+
+                <div class="account-actions">
+                  {#if !isCurrent}
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-primary"
+                      disabled={accountBusy === acct.id}
+                      onclick={() => switchAccount(acct.id)}
+                    >
+                      Switch
                     </button>
                   {/if}
-                </li>
-              {/each}
-            </ul>
+
+                  {#if !isDefault && acct.server}
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-ghost"
+                      disabled={accountBusy === acct.id}
+                      onclick={() => handleAccountAction(acct.id, "archive")}
+                      title="Archive: suspends containers and background workers while keeping disk state."
+                    >
+                      <ArchiveIcon size={13} />
+                      Archive
+                    </button>
+                  {/if}
+
+                  {#if !isDefault}
+                    {#if confirmDelete === acct.id}
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-danger"
+                        disabled={accountBusy === acct.id}
+                        onclick={() => handleAccountAction(acct.id, "delete")}
+                        onblur={() => (confirmDelete = "")}
+                      >
+                        Confirm Delete
+                      </button>
+                    {:else}
+                      <button
+                        type="button"
+                        class="btn btn-sm btn-ghost danger-hover"
+                        onclick={() => (confirmDelete = acct.id)}
+                        title="Delete account data"
+                        aria-label="Delete account"
+                      >
+                        <TrashIcon size={13} />
+                      </button>
+                    {/if}
+                  {/if}
+                </div>
+              </div>
+            {/each}
+          </div>
+
+          <!-- Add Account Form -->
+          <div class="add-account-box">
+            <span class="kicker">REGISTER NEW ACCOUNT</span>
+            <div class="add-form-grid">
+              <input
+                type="text"
+                maxlength="12"
+                inputmode="numeric"
+                placeholder="12-digit AWS Account ID (e.g. 112233445566)"
+                class="form-input mono"
+                bind:value={newAccountId}
+                onkeydown={(e) => e.key === "Enter" && handleAddAccount()}
+              />
+              <input
+                type="text"
+                placeholder="Account Alias (e.g. staging, sandbox)"
+                class="form-input"
+                bind:value={newAccountLabel}
+                onkeydown={(e) => e.key === "Enter" && handleAddAccount()}
+              />
+              <button
+                type="button"
+                class="btn btn-primary"
+                onclick={handleAddAccount}
+                disabled={!newAccountId.trim()}
+              >
+                <PlusIcon size={14} weight="bold" />
+                Add Account
+              </button>
+            </div>
+            {#if newAccountError}
+              <span class="field-error">{newAccountError}</span>
+            {/if}
+          </div>
+
+          <!-- Archived Accounts Drawer -->
+          {#if archivedRows.length > 0}
+            <div class="archived-section">
+              <button
+                type="button"
+                class="archived-toggle"
+                onclick={() => (showArchived = !showArchived)}
+              >
+                <CaretRightIcon size={12} class={showArchived ? "rotate-90" : ""} />
+                <span>Archived Accounts ({archivedRows.length})</span>
+              </button>
+
+              {#if showArchived}
+                <div class="archived-list" transition:fly={{ y: -4, duration: 140 }}>
+                  {#each archivedRows as acct (acct.id)}
+                    <div class="account-row archived">
+                      <div class="account-info">
+                        <div class="account-title-line">
+                          <span class="account-label">{acct.label}</span>
+                          <span class="account-id mono">{acct.id}</span>
+                        </div>
+                        <span class="account-sub mono">
+                          {acct.server?.resourceTotal ?? 0} resources · archived {daysSince(acct.server?.archivedAt) ?? 0}d ago
+                        </span>
+                      </div>
+                      <div class="account-actions">
+                        <button
+                          type="button"
+                          class="btn btn-sm btn-ghost"
+                          disabled={accountBusy === acct.id}
+                          onclick={() => handleAccountAction(acct.id, "restore")}
+                        >
+                          <ArrowCounterClockwiseIcon size={12} />
+                          Restore
+                        </button>
+                        {#if confirmDelete === acct.id}
+                          <button
+                            type="button"
+                            class="btn btn-sm btn-danger"
+                            onclick={() => handleAccountAction(acct.id, "delete")}
+                          >
+                            Confirm Delete
+                          </button>
+                        {:else}
+                          <button
+                            type="button"
+                            class="btn btn-sm btn-ghost danger-hover"
+                            onclick={() => (confirmDelete = acct.id)}
+                          >
+                            <TrashIcon size={13} />
+                          </button>
+                        {/if}
+                      </div>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
           {/if}
-        {/if}
-        {#if confirmDelete}
-          <p class="hint">Deleting removes the account's functions, queues, tables, buckets and other data. Traces are shared and stay.</p>
-        {/if}
-        {#if accountsError}
-          <p class="error" role="alert">{accountsError}</p>
-        {/if}
-        <div class="add-row accounts">
-          <input class="field mono" maxlength="12" inputmode="numeric" placeholder="012345678901"
-            aria-label="New AWS account ID"
-            bind:value={newAccountId} onkeydown={(e) => e.key === "Enter" && handleAddAccount()} />
-          <input class="field" placeholder="Label (optional)"
-            aria-label="Account label (optional)"
-            bind:value={newAccountLabel} onkeydown={(e) => e.key === "Enter" && handleAddAccount()} />
-          <button type="button" class="add-btn" onclick={handleAddAccount} aria-label="Add account"><PlusIcon size={12} weight="bold" /></button>
         </div>
-        {#if newAccountError}
-          <p class="error" transition:fly={{ y: -4, duration: 140 }}>{newAccountError}</p>
-        {/if}
-      </section>
+      </div>
+    {/if}
 
-      <!-- Refresh & retention -->
-      <section id="settings-refresh" class="panel">
-        <header>
-          <h2>Refresh &amp; retention</h2>
-          <p>How often the dashboard polls, and how long logs and traces are kept.</p>
-        </header>
-        <div class="setting">
-          <div class="setting-label">
-            <span>Polling interval</span>
-            <small>Live backend state refresh</small>
-          </div>
-          <div class="setting-control">
-            <div class="chips">
-              {#each POLL_PRESETS as p}
-                <button type="button" class="chip" class:on={pollingInterval === p} onclick={() => (pollingInterval = p)}>{p}s</button>
-              {/each}
+    <!-- ══════════════════════ TAB 2: APPEARANCE ══════════════════════ -->
+    {#if activeTab === "appearance"}
+      <div class="panel-section" in:fade={{ duration: 120 }}>
+        <!-- Theme Selection -->
+        <div class="rack-card">
+          <div class="card-header">
+            <div class="header-left">
+              <span class="kicker">COLOR PALETTE</span>
+              <h3 class="card-title">Console Theme</h3>
             </div>
-            <label class="unit-field">
-              <input type="number" min="1" max="120" step="1" bind:value={pollingInterval} aria-label="Polling interval seconds" />
-              <span>sec</span>
-            </label>
           </div>
-        </div>
-        <div class="setting">
-          <div class="setting-label">
-            <span>Log &amp; trace retention</span>
-            <small>Older events are removed. Max 24h.</small>
-          </div>
-          <div class="setting-control">
-            <div class="chips">
-              {#each RETENTION_PRESETS as p}
-                <button type="button" class="chip" class:on={logRetention === p.v} onclick={() => (logRetention = p.v)}>{p.label}</button>
-              {/each}
-            </div>
-            <label class="unit-field">
-              <input type="number" min="1" max="1440" step="1" bind:value={logRetention} aria-label="Retention minutes" />
-              <span>min</span>
-            </label>
-          </div>
-        </div>
-      </section>
+          <p class="card-hint">
+            Changes apply instantly across all active views without requiring a page refresh.
+          </p>
 
-      <!-- Appearance -->
-      <section id="settings-appearance" class="panel">
-        <header>
-          <h2>Appearance</h2>
-          <p>Choose a theme and how the sidebar collapses.</p>
-        </header>
-        <div class="setting">
-          <div class="setting-label"><span>Theme</span></div>
-          <div class="segmented" role="radiogroup" aria-label="Theme">
-            <span class="segmented-pill" style="transform: translateX({themeIndex * 100}%)"></span>
+          <div class="theme-grid">
             {#each THEMES as t (t.id)}
+              {@const isSelected = uiSettings.themeMode === t.id}
               {@const Icon = t.icon}
-              <button type="button" role="radio" aria-checked={themeMode === t.id} class:on={themeMode === t.id} onclick={() => (themeMode = t.id)}>
-                <Icon size={12} weight={themeMode === t.id ? "fill" : "regular"} />{t.label}
+              <button
+                type="button"
+                class="theme-card"
+                class:selected={isSelected}
+                onclick={() => handleSetTheme(t.id)}
+              >
+                <div class="theme-icon-wrap">
+                  <Icon size={20} weight={isSelected ? "fill" : "regular"} />
+                </div>
+                <div class="theme-text">
+                  <span class="theme-name">{t.label}</span>
+                  <span class="theme-sub">{t.subtitle}</span>
+                </div>
+                {#if isSelected}
+                  <span class="theme-check">
+                    <CheckIcon size={14} weight="bold" />
+                  </span>
+                {/if}
               </button>
             {/each}
           </div>
         </div>
-        <div class="setting collapsed-sidebar-setting">
-          <div class="setting-label">
-            <span>Collapsed sidebar</span>
-            <small>Keep navigation icons visible or hide the sidebar completely.</small>
-          </div>
-          <div class="segmented two-options" role="group" aria-label="Collapsed sidebar">
-            <span class="segmented-pill" aria-hidden="true" style="transform: translateX({collapsedSidebarMode === 'hidden' ? 100 : 0}%)"></span>
-            <button type="button" aria-pressed={collapsedSidebarMode === "icons"} class:on={collapsedSidebarMode === "icons"} onclick={() => (collapsedSidebarMode = "icons")}>Icons</button>
-            <button type="button" aria-pressed={collapsedSidebarMode === "hidden"} class:on={collapsedSidebarMode === "hidden"} onclick={() => (collapsedSidebarMode = "hidden")}>Hidden</button>
-          </div>
-        </div>
-      </section>
 
-      <!-- Workspace -->
-      <section id="settings-workspace" class="panel">
-        <header>
-          <h2>Workspace</h2>
-          <p>Local sources used by Chaos Probe.</p>
-        </header>
-        <div class="setting stacked">
-          <div class="setting-label">
-            <span>Schema source</span>
-            <small>Directory scanned for <code>schemas.ts</code> and event samples</small>
+        <!-- Sidebar Collapse Behavior -->
+        <div class="rack-card">
+          <div class="card-header">
+            <div class="header-left">
+              <span class="kicker">WORKSPACE LAYOUT</span>
+              <h3 class="card-title">Collapsed Sidebar Mode</h3>
+            </div>
           </div>
-          <input class="field mono" placeholder="/path/to/lambda-repos" aria-label="Schema source directory" bind:value={schemaSourceDir}
-            onblur={() => (schemaSourceDir = sanitizeSchemaSourceDir(schemaSourceDir))} />
-        </div>
-      </section>
+          <p class="card-hint">
+            Determines whether the sidebar collapses into a slim icon navigation rail or hides completely for maximum canvas space.
+          </p>
 
-      <!-- Infrastructure -->
-      <section id="settings-infra" class="panel">
-        <header>
-          <h2>Infrastructure</h2>
-          <p>Local services probed by the backend and shown in topology and health.</p>
-        </header>
-        <div class="chips wrap">
-          {#each INFRA_KINDS as kind (kind.id)}
-            {@const on = enabledKinds.includes(kind.id)}
-            <button type="button" class="probe" class:on aria-pressed={on} onclick={() => toggleKind(kind.id)}>
-              {kind.label}<span class="mono dim">{kind.detail}</span>
-            </button>
-          {/each}
-        </div>
-
-        <div class="subhead">Additional services</div>
-        <p class="hint">APIs and apps your functions call: a port, host:port, LAN IP or full URL (http, https, tcp). Probed by the Tarn server.</p>
-        {#if services.length > 0}
-          <ul class="rows">
-            {#each services as target, i (i)}
-              <li class="row" transition:fly={{ y: -4, duration: 160 }}>
-                <span class="row-main"><span class="row-title">{target.name || "Unnamed"}</span></span>
-                <span class="pill mono" title={target.url}>{target.url}</span>
-                <button type="button" class="icon-btn danger" onclick={() => (services = services.filter((_, j) => j !== i))} aria-label="Remove {target.name || target.url}">
-                  <TrashIcon size={12} />
-                </button>
-              </li>
+          <div class="mode-grid">
+            {#each SIDEBAR_MODES as mode (mode.id)}
+              {@const isSelected = uiSettings.collapsedSidebarMode === mode.id}
+              <button
+                type="button"
+                class="mode-card"
+                class:selected={isSelected}
+                onclick={() => handleSetSidebarMode(mode.id)}
+              >
+                <div class="mode-header">
+                  <span class="mode-name">{mode.label}</span>
+                  {#if isSelected}
+                    <span class="active-dot"></span>
+                  {/if}
+                </div>
+                <span class="mode-desc">{mode.desc}</span>
+              </button>
             {/each}
-          </ul>
-        {/if}
-        <div class="add-row services">
-          <input class="field" bind:this={newServiceNameInput} placeholder="Service name" aria-label="New service name" bind:value={newTargetName} onkeydown={(e) => e.key === "Enter" && addTarget()} />
-          <input class="field mono" placeholder="8080, 192.168.1.20:3000 or https://api.lan/health" aria-label="New target URL or port" bind:value={newTargetUrl} onkeydown={(e) => e.key === "Enter" && addTarget()} />
-          <button type="button" class="add-btn" onclick={addTarget} aria-label="Add service"><PlusIcon size={12} weight="bold" /></button>
+          </div>
         </div>
-        {#if servicesError}<p class="error">{servicesError}</p>{/if}
-      </section>
+      </div>
+    {/if}
 
-      <!-- Instance -->
-      <section id="settings-instance" class="panel">
-        <header>
-          <h2>Instance</h2>
-          <p>Read-only details of the connected Tarn.</p>
-        </header>
-        <dl class="kv">
-          <dt>Region</dt><dd class="mono">{instanceInfo?.region ?? "--"}</dd>
-          <dt>Account</dt><dd class="mono">{instanceInfo?.accountId ?? "--"}</dd>
-          <dt>API URL</dt><dd class="mono">{instanceInfo?.endpoint ?? "--"}</dd>
-        </dl>
-      </section>
-    </div>
+    <!-- ══════════════════════ TAB 3: ENGINE & POLLING ══════════════════════ -->
+    {#if activeTab === "engine"}
+      <div class="panel-section" in:fade={{ duration: 120 }}>
+        <!-- Polling Frequency -->
+        <div class="rack-card">
+          <div class="card-header">
+            <div class="header-left">
+              <span class="kicker">RUNTIME TELEMETRY</span>
+              <h3 class="card-title">State Polling Frequency</h3>
+            </div>
+            <span class="mono-badge">{uiSettings.pollingIntervalSeconds}s INTERVAL</span>
+          </div>
+          <p class="card-hint">
+            How often the dashboard queries the Tarn backend for updated queue depths, Lambda execution stats, and gateway topologies.
+          </p>
+
+          <div class="presets-grid">
+            {#each POLL_PRESETS as p}
+              {@const isCurrent = uiSettings.pollingIntervalSeconds === p.v}
+              <button
+                type="button"
+                class="preset-card"
+                class:selected={isCurrent}
+                onclick={() => handleSetPolling(p.v)}
+              >
+                <span class="preset-label mono">{p.label}</span>
+                <span class="preset-sub">{p.sub}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <!-- Log & Trace Retention -->
+        <div class="rack-card">
+          <div class="card-header">
+            <div class="header-left">
+              <span class="kicker">STORAGE & MEMORY BUFFER</span>
+              <h3 class="card-title">Log & Trace Retention</h3>
+            </div>
+            <span class="mono-badge">{uiSettings.logRetentionMinutes} MIN RETENTION</span>
+          </div>
+          <p class="card-hint">
+            Time window before in-memory CloudWatch log events and X-Ray execution traces are pruned.
+          </p>
+
+          <div class="presets-grid">
+            {#each RETENTION_PRESETS as r}
+              {@const isCurrent = uiSettings.logRetentionMinutes === r.v}
+              <button
+                type="button"
+                class="preset-card"
+                class:selected={isCurrent}
+                onclick={() => handleSetRetention(r.v)}
+              >
+                <span class="preset-label mono">{r.label}</span>
+                <span class="preset-sub">{r.sub}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <!-- Schema Source Directory -->
+        <div class="rack-card">
+          <div class="card-header">
+            <div class="header-left">
+              <span class="kicker">DEVELOPER WORKSPACE</span>
+              <h3 class="card-title">Schema Source Directory</h3>
+            </div>
+          </div>
+          <p class="card-hint">
+            Local repository path inspected for TypeScript payload schemas (<code>schemas.ts</code>) and event fixtures.
+          </p>
+          <div class="single-input-row">
+            <input
+              type="text"
+              class="form-input mono"
+              placeholder="/Users/username/projects/my-serverless-app"
+              value={uiSettings.schemaSourceDir}
+              onblur={(e) => handleSetSchemaDir(e.currentTarget.value)}
+              onkeydown={(e) => e.key === "Enter" && handleSetSchemaDir(e.currentTarget.value)}
+            />
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    <!-- ══════════════════════ TAB 4: INFRASTRUCTURE & PROBES ══════════════════════ -->
+    {#if activeTab === "infra"}
+      <div class="panel-section" in:fade={{ duration: 120 }}>
+        <!-- Built-in Probes -->
+        <div class="rack-card">
+          <div class="card-header">
+            <div class="header-left">
+              <span class="kicker">AUTO-DISCOVERY PROBERS</span>
+              <h3 class="card-title">Built-in Services</h3>
+            </div>
+          </div>
+          <p class="card-hint">
+            Tarn automatically probes these local runtime ports and maps active connections on the Architecture Topology view.
+          </p>
+
+          <div class="infra-grid">
+            {#each INFRA_KINDS as kind (kind.id)}
+              {@const isEnabled = infraSettings.enabledKinds.includes(kind.id)}
+              <button
+                type="button"
+                class="infra-toggle-card"
+                class:enabled={isEnabled}
+                onclick={() => toggleInfraKind(kind.id)}
+              >
+                <div class="infra-top-line">
+                  <span class="infra-name">{kind.label}</span>
+                  <span class="toggle-pill" class:on={isEnabled}>
+                    {isEnabled ? "PROBING" : "OFF"}
+                  </span>
+                </div>
+                <span class="infra-desc">{kind.desc}</span>
+                <span class="infra-port mono">{kind.detail}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <!-- Custom User Services -->
+        <div class="rack-card">
+          <div class="card-header">
+            <div class="header-left">
+              <span class="kicker">EXTERNAL DEPENDENCIES</span>
+              <h3 class="card-title">Custom Endpoints &amp; Microservices</h3>
+            </div>
+          </div>
+          <p class="card-hint">
+            Register external APIs, microservices, or local web servers called by your Lambda functions. Probed live by the backend.
+          </p>
+
+          {#if infraSettings.userServices.length > 0}
+            <div class="custom-services-list">
+              {#each infraSettings.userServices as svc, i (svc.url + i)}
+                <div class="service-row">
+                  <div class="service-info">
+                    <span class="service-name">{svc.name || "Unnamed Service"}</span>
+                    <span class="service-url mono">{svc.url}</span>
+                  </div>
+                  <button
+                    type="button"
+                    class="btn btn-sm btn-ghost danger-hover"
+                    disabled={servicesSaving}
+                    onclick={() => handleRemoveService(i)}
+                    title="Remove endpoint"
+                  >
+                    <TrashIcon size={13} />
+                  </button>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <div class="empty-services">
+              No additional external services registered yet.
+            </div>
+          {/if}
+
+          <!-- Add Service Form -->
+          <div class="add-service-box">
+            <span class="kicker">REGISTER ENDPOINT</span>
+            <div class="add-form-grid">
+              <input
+                bind:this={newServiceNameInput}
+                type="text"
+                placeholder="Service Name (e.g. Auth Gateway)"
+                class="form-input"
+                bind:value={newServiceName}
+                onkeydown={(e) => e.key === "Enter" && handleAddService()}
+              />
+              <input
+                type="text"
+                placeholder="Port or URL (e.g. 8080, localhost:3000, https://api.lan)"
+                class="form-input mono"
+                bind:value={newServiceUrl}
+                onkeydown={(e) => e.key === "Enter" && handleAddService()}
+              />
+              <button
+                type="button"
+                class="btn btn-primary"
+                disabled={servicesSaving || !newServiceUrl.trim()}
+                onclick={handleAddService}
+              >
+                {#if servicesSaving}
+                  <SpinnerGapIcon size={14} class="spin" />
+                  Saving…
+                {:else}
+                  <PlusIcon size={14} weight="bold" />
+                  Add Service
+                {/if}
+              </button>
+            </div>
+            {#if servicesError}
+              <span class="field-error">{servicesError}</span>
+            {/if}
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    <!-- ══════════════════════ TAB 5: SYSTEM INSTANCE ══════════════════════ -->
+    {#if activeTab === "instance"}
+      <div class="panel-section" in:fade={{ duration: 120 }}>
+        <div class="rack-card">
+          <div class="card-header">
+            <div class="header-left">
+              <span class="kicker">SYSTEM TELEMETRY</span>
+              <h3 class="card-title">Tarn Daemon Status</h3>
+            </div>
+            <span class="mini-pill green">ONLINE</span>
+          </div>
+
+          <div class="system-kv-grid">
+            <div class="kv-item">
+              <span class="kv-key">PRIMARY AWS REGION</span>
+              <span class="kv-val mono">{instanceInfo?.region ?? "us-east-1"}</span>
+            </div>
+            <div class="kv-item">
+              <span class="kv-key">ROOT ACCOUNT ID</span>
+              <span class="kv-val mono">{instanceInfo?.accountId ?? "000000000000"}</span>
+            </div>
+            <div class="kv-item">
+              <span class="kv-key">LOCAL ENDPOINT URL</span>
+              <span class="kv-val mono">{instanceInfo?.endpoint ?? "http://127.0.0.1:4566"}</span>
+            </div>
+            <div class="kv-item">
+              <span class="kv-key">ENCRYPTION VAULT</span>
+              <span class="kv-val mono">AES-GCM (Master Key Protected)</span>
+            </div>
+            <div class="kv-item">
+              <span class="kv-key">DASHBOARD DISTRIBUTION</span>
+              <span class="kv-val mono">Embedded Static FS (v0.1.0-dev)</span>
+            </div>
+            <div class="kv-item">
+              <span class="kv-key">SUPPORTED SERVICES</span>
+              <span class="kv-val mono">API GW, Lambda, SQS, SNS, DynamoDB, S3, Secrets Manager, EventBridge</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    {/if}
   </div>
-
-  {#if ready && (dirty || savedFlash)}
-    <div class="savebar" transition:fly={{ y: 16, duration: 220 }}>
-      {#if dirty}
-        <span class="savebar-dot"></span>
-        <span class="savebar-text">Unsaved changes</span>
-        <button type="button" class="pill pill-btn ghost" onclick={reset}>Discard</button>
-        <button type="button" class="pill pill-btn primary" disabled={saving} onclick={save}>{saving ? "Saving…" : "Save"} <kbd>⌘S</kbd></button>
-      {:else}
-        <CheckIcon size={12} weight="bold" class="text-[var(--accent-green)]" />
-        <span class="savebar-text">Saved</span>
-      {/if}
-    </div>
-  {/if}
 </div>
 
 <style>
-  .settings { position: relative; display: flex; flex-direction: column; min-height: 100%; }
-  .mono { font-family: var(--font-mono, ui-monospace, monospace); }
-  .dim { color: var(--text-tertiary); }
-
-  .settings-grid {
-    display: grid;
-    grid-template-columns: 180px minmax(0, 720px);
-    gap: 32px;
-    padding: 20px 0 96px;
-  }
-  @media (max-width: 900px) {
-    .settings-grid { grid-template-columns: minmax(0, 1fr); }
-    .index { display: none !important; }
+  .settings-view {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+    max-width: 960px;
+    margin: 0 auto;
+    padding-bottom: 64px;
   }
 
-  /* Section index */
-  .index { position: sticky; top: 0; align-self: start; display: flex; flex-direction: column; }
-  .index-pill {
-    position: absolute; left: 0; right: 0; top: 0; height: 28px;
-    border-radius: 5px; background: var(--bg-element); border: 1px solid var(--border-default);
-    transition: transform 260ms var(--ease-snappy);
+  .mono {
+    font-family: var(--font-mono, ui-monospace, monospace);
   }
-  .index-pill::before {
-    content: ""; position: absolute; left: 6px; top: 8px; bottom: 8px; width: 2.5px;
-    border-radius: 2px; background: var(--text-primary); opacity: 0.9;
-  }
-  .index-item {
-    position: relative; height: 28px; margin-bottom: 2px; padding: 0 10px; text-align: left;
-    font-size: 12px; color: var(--text-tertiary); border-radius: 7px;
-    transition: color 120ms ease, padding-left 220ms var(--ease-snappy);
-  }
-  .index-item:hover { color: var(--text-secondary); }
-  .index-item.active { color: var(--text-primary); padding-left: 18px; }
 
-  /* Panels */
-  .panels { display: flex; flex-direction: column; gap: 14px; }
-  .panel {
-    scroll-margin-top: 12px;
-    border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px 18px;
-    background: var(--bg-stage);
-    animation: panelIn 320ms var(--ease-snappy) both;
+  /* ── Header Auto-Save Indicator ── */
+  .header-saved-indicator {
+    display: inline-flex;
+    align-items: center;
+    height: 26px;
   }
-  .panel:nth-child(2) { animation-delay: 30ms; }
-  .panel:nth-child(3) { animation-delay: 60ms; }
-  .panel:nth-child(4) { animation-delay: 90ms; }
-  .panel:nth-child(5) { animation-delay: 120ms; }
-  .panel:nth-child(6) { animation-delay: 150ms; }
-  @keyframes panelIn { from { opacity: 0; transform: translateY(6px); } }
-  .panel header { margin-bottom: 12px; }
-  .panel h2 { font-size: 13px; font-weight: 600; color: var(--text-primary); letter-spacing: -0.01em; }
-  .panel header p { margin-top: 2px; font-size: 11.5px; color: var(--text-secondary); }
-  .subhead { margin: 16px 0 8px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-tertiary); }
+  .saved-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent-green, #34d399);
+    background: color-mix(in srgb, var(--accent-green, #34d399) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-green, #34d399) 35%, transparent);
+  }
+  .live-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+  .live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-green, #34d399);
+  }
 
-  /* Setting rows */
-  .setting {
-    display: flex; align-items: center; justify-content: space-between; gap: 16px;
-    padding: 10px 0; border-top: 1px solid var(--border-subtle);
+  /* ── Module Tab Bar ── */
+  .module-bar {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px;
+    border-radius: 6px;
+    background: var(--bg-inset, #070707);
+    border: 1px solid var(--line-soft, rgba(255, 255, 255, 0.08));
+    overflow-x: auto;
+    scrollbar-width: none;
   }
-  .panel header + .setting { border-top: 0; padding-top: 0; }
-  .setting.stacked { flex-direction: column; align-items: stretch; gap: 8px; }
-  .setting-label { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .setting-label span { font-size: 12.5px; color: var(--text-primary); }
-  .setting-label small { font-size: 11px; color: var(--text-tertiary); }
-  .setting-control { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .module-bar::-webkit-scrollbar {
+    display: none;
+  }
 
-  /* Fields */
-  .field {
-    height: 30px; width: 100%; min-width: 0; padding: 0 10px; border-radius: 8px;
-    border: 1px solid var(--border-subtle); background: var(--bg-app); color: var(--text-primary);
-    font-size: 12px; outline: none; transition: border-color 120ms ease, background 120ms ease;
-  }
-  .field::placeholder { color: var(--text-tertiary); }
-  .field:hover { border-color: var(--border-default); }
-  .field:focus { border-color: var(--border-focus); }
-  .unit-field {
-    display: inline-flex; align-items: center; height: 28px; border-radius: 8px;
-    border: 1px solid var(--border-subtle); background: var(--bg-app); padding: 0 10px 0 4px;
-    transition: border-color 120ms ease;
-  }
-  .unit-field:focus-within { border-color: var(--border-focus); }
-  .unit-field input {
-    width: 48px; background: transparent; border: 0; outline: none; text-align: right;
-    font-size: 12px; color: var(--text-primary); font-variant-numeric: tabular-nums;
-  }
-  .unit-field input::-webkit-inner-spin-button { display: none; }
-  .unit-field span { margin-left: 6px; font-size: 11px; color: var(--text-tertiary); }
-
-  /* Chips / pills */
-  .chips { display: inline-flex; gap: 4px; }
-  .chips.wrap { flex-wrap: wrap; gap: 6px; }
-  .chip, .probe {
-    display: inline-flex; align-items: center; gap: 6px; height: 26px; padding: 0 10px;
-    border-radius: 8px; border: 1px solid var(--border-subtle); font-size: 11.5px;
-    color: var(--text-secondary); background: transparent;
-    transition: color 120ms ease, background 120ms ease, border-color 120ms ease, transform 120ms ease;
-  }
-  .chip:hover, .probe:hover { color: var(--text-primary); border-color: var(--border-default); background: var(--bg-element-hover); }
-  .chip:active, .probe:active, .pill-btn:active, .add-btn:active { transform: scale(0.96); }
-  .chip.on, .probe.on {
-    color: var(--text-primary); border-color: color-mix(in srgb, var(--accent-green) 45%, transparent);
-    background: color-mix(in srgb, var(--accent-green) 10%, transparent);
-  }
-  .probe .mono { font-size: 10.5px; }
-
-  .pill {
-    display: inline-flex; align-items: center; gap: 4px; height: 22px; padding: 0 9px; border-radius: 8px;
-    font-size: 11px; color: var(--text-secondary); border: 1px solid var(--border-subtle); white-space: nowrap;
-  }
-  .pill-accent {
-    color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 35%, transparent);
-    background: color-mix(in srgb, var(--accent-green) 10%, transparent);
-  }
-  .pill-btn { cursor: pointer; transition: color 120ms ease, background 120ms ease, border-color 120ms ease, transform 120ms ease; }
-  .pill-btn:hover { color: var(--text-primary); border-color: var(--border-default); background: var(--bg-element-hover); }
-  .pill-btn.primary {
-    height: 26px; padding: 0 12px; color: var(--bg-stage); background: var(--text-primary); border-color: var(--text-primary);
-  }
-  .pill-btn.primary:hover { opacity: 0.88; background: var(--text-primary); color: var(--bg-stage); }
-  .pill-btn.ghost { height: 26px; padding: 0 12px; }
-  kbd { font: inherit; font-size: 10px; opacity: 0.55; margin-left: 2px; }
-
-
-  /* Rows */
-  .rows { display: flex; flex-direction: column; gap: 2px; }
-  .row {
-    display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 10px; border-radius: 8px;
+  .module-tab {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 4px;
     border: 1px solid transparent;
-    transition: background 120ms ease, border-color 120ms ease, padding-left 220ms var(--ease-snappy);
-  }
-  .row:hover { background: var(--bg-element-hover); }
-  .row { position: relative; }
-  .row.is-active { padding-left: 18px; border-color: var(--border-default); background: var(--bg-element); }
-  .row.is-active::before {
-    content: ""; position: absolute; left: 6px; top: 10px; bottom: 10px; width: 2.5px;
-    border-radius: 2px; background: var(--text-primary); opacity: 0.9;
-  }
-  .row-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
-  .row-title { font-size: 12.5px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .row-sub { font-size: 10.5px; color: var(--text-tertiary); }
-  .icon-btn, .icon-spacer { width: 24px; height: 24px; flex-shrink: 0; }
-  .icon-btn {
-    display: inline-flex; align-items: center; justify-content: center; border-radius: 8px;
-    color: var(--text-tertiary); opacity: 0; transition: opacity 120ms ease, color 120ms ease, background 120ms ease;
-  }
-  .row:hover .icon-btn, .icon-btn:focus-visible { opacity: 1; }
-  .icon-btn.danger:hover { color: var(--accent-red); background: color-mix(in srgb, var(--accent-red) 12%, transparent); }
-
-  .add-row { display: grid; gap: 6px; margin-top: 8px; }
-  .add-row.accounts { grid-template-columns: 9rem minmax(0, 1fr) 30px; }
-  .add-row.services { grid-template-columns: 10rem minmax(0, 1fr) 30px; }
-  .row .pill { max-width: 55%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .hint { margin: -2px 0 8px; font-size: 11px; color: var(--text-tertiary); }
-  .add-btn {
-    display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; border-radius: 8px;
-    border: 1px solid var(--border-subtle); color: var(--text-secondary);
-    transition: color 120ms ease, background 120ms ease, border-color 120ms ease, transform 120ms ease;
-  }
-  .add-btn:hover { color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 45%, transparent); background: color-mix(in srgb, var(--accent-green) 10%, transparent); }
-  .error { margin-top: 6px; font-size: 11px; color: var(--accent-red); }
-  .callout {
-    margin-bottom: 8px; padding: 8px 10px; border-radius: 8px; font-size: 11.5px; line-height: 1.5;
+    background: transparent;
     color: var(--text-secondary);
-    border: 1px solid color-mix(in srgb, var(--accent-amber) 35%, transparent);
-    background: color-mix(in srgb, var(--accent-amber) 8%, transparent);
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11.5px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 120ms ease;
   }
-  .pill-stale {
-    color: var(--accent-amber); border-color: color-mix(in srgb, var(--accent-amber) 35%, transparent);
-    background: color-mix(in srgb, var(--accent-amber) 8%, transparent);
+  .module-tab:hover {
+    color: var(--text-primary);
+    background: var(--bg-element, #141414);
   }
-  .row.is-stale:not(.is-active)::before {
-    content: ""; position: absolute; left: 3px; top: 10px; bottom: 10px; width: 2.5px;
-    border-radius: 2px; background: var(--accent-amber); opacity: 0.8;
+  .module-tab.selected {
+    color: var(--text-primary);
+    background: var(--bg-stage, #0a0a0a);
+    border-color: var(--border-default, rgba(255, 255, 255, 0.16));
+    font-weight: 600;
   }
-  .icon-btn.show { opacity: 1; }
-  .icon-btn:not(.danger):hover { color: var(--text-primary); background: var(--bg-element-hover); }
-  .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .pill-btn.danger { color: var(--accent-red); border-color: color-mix(in srgb, var(--accent-red) 40%, transparent); }
-  .pill-btn.danger:hover { background: color-mix(in srgb, var(--accent-red) 10%, transparent); color: var(--accent-red); }
+  .module-tab.selected::before {
+    content: "";
+    position: absolute;
+    bottom: -1px;
+    left: 8px;
+    right: 8px;
+    height: 2px;
+    background: var(--accent-green, #34d399);
+    border-radius: 2px;
+  }
+  .module-kicker {
+    font-size: 9.5px;
+    opacity: 0.55;
+    letter-spacing: 0.04em;
+  }
+  :global(.module-icon) {
+    flex-shrink: 0;
+  }
+  .tab-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 16px;
+    padding: 0 5px;
+    border-radius: 3px;
+    font-size: 9.5px;
+    font-weight: 700;
+  }
+  .tab-badge.amber {
+    color: var(--accent-amber, #f59e0b);
+    background: color-mix(in srgb, var(--accent-amber, #f59e0b) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-amber, #f59e0b) 35%, transparent);
+  }
+
+  /* ── Content Panels ── */
+  .settings-content {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .panel-section {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  /* ── Rack Cards ── */
+  .rack-card {
+    background: var(--bg-stage, #0a0a0a);
+    border: 1px solid var(--line-soft, rgba(255, 255, 255, 0.08));
+    border-radius: 6px;
+    padding: 16px 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .card-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .header-left {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .kicker {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 9.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+  }
+  .card-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+  }
+  .card-hint {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+  }
+  .card-hint code {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    padding: 1px 4px;
+    background: var(--bg-element, #141414);
+    border: 1px solid var(--border-subtle);
+    border-radius: 3px;
+  }
+
+  /* ── Active Account Card Special ── */
+  .active-account-card {
+    border-color: color-mix(in srgb, var(--accent-green, #34d399) 30%, transparent);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--accent-green, #34d399) 5%, var(--bg-stage, #0a0a0a)) 0%, var(--bg-stage, #0a0a0a) 100%);
+  }
+  .active-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 3px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: var(--accent-green, #34d399);
+    background: color-mix(in srgb, var(--accent-green, #34d399) 14%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-green, #34d399) 40%, transparent);
+  }
+  .pulse-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-green, #34d399);
+    box-shadow: 0 0 6px var(--accent-green, #34d399);
+  }
+
+  .account-meta-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    padding: 12px 14px;
+    background: var(--bg-app, #000000);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+  }
+  .meta-field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  .meta-label {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+  }
+  .meta-val {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+
+  /* ── Accounts List & Rows ── */
+  .accounts-table {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .account-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--line-soft, rgba(255, 255, 255, 0.06));
+    background: var(--bg-app, #000000);
+    transition: all 120ms ease;
+  }
+  .account-row:hover {
+    border-color: var(--border-default, rgba(255, 255, 255, 0.16));
+    background: var(--bg-element, #141414);
+  }
+  .account-row.is-active {
+    border-color: color-mix(in srgb, var(--accent-green, #34d399) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-green, #34d399) 4%, var(--bg-app, #000000));
+  }
+  .account-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
+  .account-title-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .account-label {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+  .account-id {
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+  .account-sub {
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+  }
+  .account-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+
+  .mini-pill {
+    display: inline-flex;
+    align-items: center;
+    height: 16px;
+    padding: 0 5px;
+    border-radius: 3px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .mini-pill.green {
+    color: var(--accent-green, #34d399);
+    background: color-mix(in srgb, var(--accent-green, #34d399) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-green, #34d399) 30%, transparent);
+  }
+  .mini-pill.amber {
+    color: var(--accent-amber, #f59e0b);
+    background: color-mix(in srgb, var(--accent-amber, #f59e0b) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-amber, #f59e0b) 30%, transparent);
+  }
+
+  /* ── Add Form Box ── */
+  .add-account-box,
+  .add-service-box {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-radius: 4px;
+    background: var(--bg-inset, #070707);
+    border: 1px dashed var(--line-soft, rgba(255, 255, 255, 0.12));
+    margin-top: 4px;
+  }
+  .add-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 8px;
+  }
+  @media (max-width: 680px) {
+    .add-form-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+
+  .form-input {
+    height: 28px;
+    padding: 0 9px;
+    border-radius: 4px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-app, #000000);
+    color: var(--text-primary);
+    font-size: 11.5px;
+    outline: none;
+    transition: all 120ms ease;
+  }
+  .form-input:focus {
+    border-color: var(--accent-green, #34d399);
+  }
+  .form-input::placeholder {
+    color: var(--text-tertiary);
+  }
+  .field-error {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    color: var(--accent-red, #fb7185);
+  }
+  .error-banner {
+    padding: 8px 12px;
+    border-radius: 4px;
+    font-size: 11.5px;
+    color: var(--accent-red, #fb7185);
+    background: color-mix(in srgb, var(--accent-red, #fb7185) 10%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent-red, #fb7185) 30%, transparent);
+  }
+
+  /* ── Archived Section ── */
+  .archived-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: 6px;
+    border-top: 1px solid var(--line-soft, rgba(255, 255, 255, 0.08));
+  }
   .archived-toggle {
-    display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 4px 6px; border-radius: 8px;
-    font-size: 11px; color: var(--text-tertiary); transition: color 120ms ease, background 120ms ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: transparent;
+    border: none;
+    color: var(--text-tertiary);
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    cursor: pointer;
+    padding: 4px 0;
+    transition: color 120ms ease;
   }
-  .archived-toggle:hover { color: var(--text-primary); background: var(--bg-element-hover); }
-  .archived-toggle :global(.rotated) { transform: rotate(90deg); }
-  .archived-toggle :global(svg) { transition: transform 200ms var(--ease-snappy); }
-  .rows.archived .row-title { color: var(--text-secondary); }
+  .archived-toggle:hover {
+    color: var(--text-primary);
+  }
+  .archived-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .account-row.archived {
+    opacity: 0.75;
+  }
+  .account-row.archived:hover {
+    opacity: 1;
+  }
 
-  /* Segmented */
-  .segmented {
-    position: relative; display: inline-grid; grid-template-columns: repeat(3, 84px); padding: 2px;
-    border-radius: 8px; border: 1px solid var(--border-subtle); background: var(--bg-app);
+  /* ── Buttons ── */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border-radius: 4px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    white-space: nowrap;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-element, #141414);
+    color: var(--text-secondary);
+    transition: all 120ms ease;
   }
-  .segmented-pill {
-    position: absolute; top: 2px; bottom: 2px; left: 2px; width: 84px; border-radius: 6px;
-    background: var(--bg-stage); border: 1px solid var(--border-default);
-    transition: transform 280ms var(--ease-snappy);
+  .btn:hover:not(:disabled) {
+    color: var(--text-primary);
+    border-color: var(--border-default);
+    background: var(--bg-element-hover, #202020);
   }
-  .segmented.two-options { grid-template-columns: repeat(2, 84px); flex-shrink: 0; }
-  .collapsed-sidebar-setting { flex-wrap: wrap; }
-  .segmented button {
-    position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
-    height: 24px; font-size: 11.5px; color: var(--text-tertiary); transition: color 140ms ease;
+  .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
   }
-  .segmented button:hover { color: var(--text-secondary); }
-  .segmented button.on { color: var(--text-primary); }
+  .btn-sm {
+    height: 24px;
+    padding: 0 8px;
+    font-size: 10.5px;
+  }
+  .btn-primary {
+    color: #000000;
+    background: var(--accent-green, #34d399);
+    border-color: var(--accent-green, #34d399);
+    font-weight: 600;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-green, #34d399) 88%, #ffffff);
+    color: #000000;
+  }
+  .btn-ghost {
+    background: transparent;
+    border-color: transparent;
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background: var(--bg-element, #141414);
+    border-color: var(--border-subtle);
+  }
+  .btn-ghost.danger-hover:hover:not(:disabled) {
+    color: var(--accent-red, #fb7185);
+    background: color-mix(in srgb, var(--accent-red, #fb7185) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent-red, #fb7185) 30%, transparent);
+  }
+  .btn-danger {
+    color: var(--accent-red, #fb7185);
+    background: color-mix(in srgb, var(--accent-red, #fb7185) 12%, transparent);
+    border-color: color-mix(in srgb, var(--accent-red, #fb7185) 40%, transparent);
+  }
+  .btn-danger:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-red, #fb7185) 20%, transparent);
+  }
 
-  /* KV */
-  .kv { display: grid; grid-template-columns: 7rem 1fr; row-gap: 6px; font-size: 12px; }
-  .kv dt { color: var(--text-tertiary); }
-  .kv dd { color: var(--text-primary); word-break: break-all; }
-
-  /* Save bar */
-  .savebar {
-    position: sticky; bottom: 12px; align-self: center; z-index: 5; margin-top: -60px;
-    display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 6px 0 14px;
-    border-radius: 8px; border: 1px solid var(--border-default); background: var(--bg-element);
+  /* ── Appearance Theme Grid ── */
+  .theme-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 10px;
   }
-  .savebar-text { font-size: 12px; color: var(--text-secondary); margin-right: 6px; }
-  .savebar-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-amber); animation: breathe 1.6s ease-in-out infinite; }
-  @keyframes breathe { 50% { opacity: 0.35; } }
+  .theme-card {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-app, #000000);
+    text-align: left;
+    cursor: pointer;
+    transition: all 120ms ease;
+  }
+  .theme-card:hover {
+    border-color: var(--border-default);
+    background: var(--bg-element, #141414);
+  }
+  .theme-card.selected {
+    border-color: var(--accent-green, #34d399);
+    background: color-mix(in srgb, var(--accent-green, #34d399) 6%, var(--bg-app, #000000));
+  }
+  .theme-icon-wrap {
+    color: var(--text-secondary);
+  }
+  .theme-card.selected .theme-icon-wrap {
+    color: var(--accent-green, #34d399);
+  }
+  .theme-text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    flex: 1;
+    min-width: 0;
+  }
+  .theme-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .theme-sub {
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+  }
+  .theme-check {
+    color: var(--accent-green, #34d399);
+    flex-shrink: 0;
+  }
 
-  button:focus-visible { outline: 1px solid var(--border-focus); outline-offset: 2px; }
+  /* ── Mode Grid ── */
+  .mode-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 10px;
+  }
+  .mode-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-app, #000000);
+    text-align: left;
+    cursor: pointer;
+    transition: all 120ms ease;
+  }
+  .mode-card:hover {
+    border-color: var(--border-default);
+    background: var(--bg-element, #141414);
+  }
+  .mode-card.selected {
+    border-color: var(--accent-green, #34d399);
+    background: color-mix(in srgb, var(--accent-green, #34d399) 6%, var(--bg-app, #000000));
+  }
+  .mode-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .mode-name {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .mode-desc {
+    font-size: 11px;
+    color: var(--text-tertiary);
+    line-height: 1.4;
+  }
+  .active-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-green, #34d399);
+  }
+
+  /* ── Presets Grid ── */
+  .presets-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 8px;
+  }
+  .preset-card {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 10px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-app, #000000);
+    text-align: left;
+    cursor: pointer;
+    transition: all 120ms ease;
+  }
+  .preset-card:hover {
+    border-color: var(--border-default);
+    background: var(--bg-element, #141414);
+  }
+  .preset-card.selected {
+    border-color: var(--accent-green, #34d399);
+    background: color-mix(in srgb, var(--accent-green, #34d399) 8%, var(--bg-app, #000000));
+  }
+  .preset-label {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-primary);
+  }
+  .preset-sub {
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+  }
+  .mono-badge {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    color: var(--text-secondary);
+    background: var(--bg-inset, #070707);
+    border: 1px solid var(--line-soft);
+  }
+
+  .single-input-row {
+    display: flex;
+  }
+  .single-input-row .form-input {
+    width: 100%;
+  }
+
+  /* ── Infrastructure Grid ── */
+  .infra-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px;
+  }
+  .infra-toggle-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-app, #000000);
+    text-align: left;
+    cursor: pointer;
+    transition: all 120ms ease;
+  }
+  .infra-toggle-card:hover {
+    border-color: var(--border-default);
+    background: var(--bg-element, #141414);
+  }
+  .infra-toggle-card.enabled {
+    border-color: color-mix(in srgb, var(--accent-green, #34d399) 45%, transparent);
+    background: color-mix(in srgb, var(--accent-green, #34d399) 6%, var(--bg-app, #000000));
+  }
+  .infra-top-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .infra-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+  .toggle-pill {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--text-tertiary);
+    background: var(--bg-element);
+    border: 1px solid var(--border-subtle);
+  }
+  .toggle-pill.on {
+    color: var(--accent-green, #34d399);
+    background: color-mix(in srgb, var(--accent-green, #34d399) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent-green, #34d399) 35%, transparent);
+  }
+  .infra-desc {
+    font-size: 10.5px;
+    color: var(--text-tertiary);
+    line-height: 1.3;
+  }
+  .infra-port {
+    font-size: 10px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
+
+  /* ── Custom Services ── */
+  .custom-services-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .service-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 10px;
+    border-radius: 4px;
+    background: var(--bg-app, #000000);
+    border: 1px solid var(--border-subtle);
+  }
+  .service-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+  }
+  .service-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-primary);
+  }
+  .service-url {
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+  .empty-services {
+    padding: 16px;
+    text-align: center;
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+    background: var(--bg-app, #000000);
+    border: 1px dashed var(--border-subtle);
+    border-radius: 4px;
+  }
+
+  /* ── System KV ── */
+  .system-kv-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+    gap: 10px;
+  }
+  .kv-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 10px 12px;
+    background: var(--bg-app, #000000);
+    border: 1px solid var(--border-subtle);
+    border-radius: 4px;
+  }
+  .kv-key {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    color: var(--text-tertiary);
+  }
+  .kv-val {
+    font-size: 11.5px;
+    color: var(--text-primary);
+    word-break: break-all;
+  }
+
+  :global(.spin) {
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+  }
 
   @media (prefers-reduced-motion: reduce) {
-    .panel, .savebar-dot { animation: none; }
-    .index-pill, .segmented-pill { transition: none; }
+    :global(.spin) { animation: none; }
   }
 </style>

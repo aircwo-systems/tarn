@@ -676,6 +676,104 @@ func (s *Store) PurgeQueue(name string) error {
 	return nil
 }
 
+// DeleteMessageByID removes an active message by MessageId or ReceiptHandle.
+func (s *Store) DeleteMessageByID(name string, messageID string) error {
+	s.mu.RLock()
+	q, exists := s.queues[name]
+	s.mu.RUnlock()
+	if !exists {
+		return fmt.Errorf("queue %s not found", name)
+	}
+
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	for _, m := range q.messages {
+		if (m.MessageId == messageID || m.ReceiptHandle == messageID) && !m.Deleted {
+			m.Deleted = true
+			if q.config.FifoQueue {
+				q.signal()
+			}
+			s.dirty.Store(true)
+			return nil
+		}
+	}
+	return nil
+}
+
+// RedriveMessages moves up to maxMessages (or all when maxMessages <= 0) active messages
+// from fromQueue to toQueue.
+func (s *Store) RedriveMessages(fromQueue, toQueue string, maxMessages int) (int, error) {
+	s.mu.RLock()
+	qFrom, existsFrom := s.queues[fromQueue]
+	qTo, existsTo := s.queues[toQueue]
+	s.mu.RUnlock()
+
+	if !existsFrom {
+		return 0, fmt.Errorf("source queue %s not found", fromQueue)
+	}
+	if !existsTo {
+		return 0, fmt.Errorf("target queue %s not found", toQueue)
+	}
+	if fromQueue == toQueue {
+		return 0, fmt.Errorf("source and target queue must be different")
+	}
+
+	if fromQueue < toQueue {
+		qFrom.mu.Lock()
+		qTo.mu.Lock()
+	} else {
+		qTo.mu.Lock()
+		qFrom.mu.Lock()
+	}
+	defer qFrom.mu.Unlock()
+	defer qTo.mu.Unlock()
+
+	now := nowMs()
+	moved := 0
+
+	for _, m := range qFrom.messages {
+		if m.Deleted || m.ExpiresAt <= now {
+			continue
+		}
+		if maxMessages > 0 && moved >= maxMessages {
+			break
+		}
+
+		attrs := cloneMessageAttributes(m.MessageAttributes)
+		if attrs != nil {
+			delete(attrs, dlqRetryCountAttribute)
+		}
+
+		delay := qTo.config.DelaySeconds
+		newMsg := &types.SQSMessage{
+			MessageId:              uuid.New().String(),
+			Body:                   m.Body,
+			MD5OfBody:              m.MD5OfBody,
+			MessageAttributes:      attrs,
+			SentTimestamp:          now,
+			VisibleAt:              now,
+			DelayUntil:             now + int64(delay)*1000,
+			ExpiresAt:              now + int64(qTo.config.MessageRetentionPeriod)*1000,
+			MessageGroupId:         m.MessageGroupId,
+			MessageDeduplicationId: m.MessageDeduplicationId,
+		}
+
+		qTo.messages = append(qTo.messages, newMsg)
+		m.Deleted = true
+		moved++
+	}
+
+	if moved > 0 {
+		if qFrom.config.FifoQueue {
+			qFrom.signal()
+		}
+		qTo.signal()
+		s.dirty.Store(true)
+	}
+
+	return moved, nil
+}
+
 // TagQueue adds or overwrites tags on a queue.
 func (s *Store) TagQueue(name string, tags map[string]string) error {
 	s.mu.RLock()

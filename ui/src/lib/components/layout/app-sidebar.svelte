@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { GearIcon } from "phosphor-svelte";
+  import { GearIcon, MagnifyingGlassIcon } from "phosphor-svelte";
   import TarnLogo from "$lib/components/common/tarn-logo.svelte";
   import ThemeToggle from "$lib/components/layout/theme-toggle.svelte";
   import type { Component } from "svelte";
@@ -33,6 +33,7 @@
     activeAccountId = "000000000000",
     onSetTab,
     onOpenSettings,
+    onOpenCommandPalette,
   }: {
     navSections: NavSection[];
     activeTab: string;
@@ -42,6 +43,7 @@
     activeAccountId?: string;
     onSetTab: (tab: string) => void;
     onOpenSettings: () => void;
+    onOpenCommandPalette?: () => void;
   } = $props();
 
   const isNonDefaultAccount = $derived(activeAccountId !== "000000000000");
@@ -299,6 +301,23 @@
           </div>
         </div>
       </div>
+
+      {#if onOpenCommandPalette}
+        <button
+          type="button"
+          class="rack-search-trigger"
+          class:collapsed={sidebarCollapsed}
+          onclick={onOpenCommandPalette}
+          title="Search (⌘K)"
+          aria-label="Search"
+        >
+          <MagnifyingGlassIcon size={13} />
+          {#if !sidebarCollapsed}
+            <span class="rack-search-label">Search</span>
+            <kbd class="rack-search-badge">⌘K</kbd>
+          {/if}
+        </button>
+      {/if}
     </div>
 
     <!-- Navigation Scroll List -->
@@ -693,6 +712,50 @@
     align-items: center;
     justify-content: space-between;
     padding: 2px 4px;
+  }
+
+  .rack-search-trigger {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    height: 30px;
+    padding: 0 6px 0 10px;
+    margin: 6px 0 2px;
+    border-radius: 8px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-stage);
+    color: var(--text-tertiary);
+    cursor: pointer;
+    transition: color 120ms ease, border-color 120ms ease, transform 120ms ease;
+  }
+  .rack-search-trigger:hover {
+    color: var(--text-primary);
+    border-color: var(--border-default);
+  }
+  .rack-search-trigger:active { transform: scale(0.985); }
+  .rack-search-trigger:focus-visible { outline: 1px solid var(--border-focus); outline-offset: 2px; }
+  .rack-search-trigger.collapsed {
+    width: 30px;
+    justify-content: center;
+    padding: 0;
+    margin: 6px auto 2px;
+  }
+  .rack-search-label {
+    flex: 1;
+    text-align: left;
+    font-size: 12px;
+  }
+  .rack-search-badge {
+    display: inline-flex;
+    align-items: center;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 5px;
+    border: 1px solid var(--border-subtle);
+    font: inherit;
+    font-size: 10px;
+    color: var(--text-tertiary);
   }
 
   .brand-meta {

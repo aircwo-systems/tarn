@@ -305,6 +305,50 @@ export interface QueueMessagesResponse {
   messages: QueueMessageSummary[];
 }
 
+export interface SendQueueMessageInput {
+  body: string;
+  delaySeconds?: number;
+  messageGroupId?: string;
+  messageDeduplicationId?: string;
+  attributes?: Record<string, { dataType: string; stringValue: string }>;
+}
+
+export interface SendQueueMessageResult {
+  messageId: string;
+  md5OfBody?: string;
+}
+
+export interface RedriveQueueResult {
+  sourceQueue: string;
+  targetQueue: string;
+  moved: number;
+}
+
+export interface InvokeFunctionInput {
+  payload: string;
+  invocationType?: "RequestResponse" | "Event";
+}
+
+export interface InvokeFunctionResult {
+  statusCode: number;
+  payload: string;
+  functionError?: string;
+  logs?: string;
+  requestId?: string;
+  logGroup?: string;
+  logStream?: string;
+  durationMs: number;
+  traceId?: string;
+}
+
+export interface SavedTestEvent {
+  id: string;
+  name: string;
+  payload: string;
+  createdAt: string;
+  source?: string;
+}
+
 export interface SecretSummary {
   name: string;
   arn: string;

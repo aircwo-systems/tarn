@@ -1,9 +1,20 @@
 <script lang="ts">
-  import { DetectiveIcon, ArrowUpRightIcon, FlaskIcon, CaretRightIcon, SidebarSimpleIcon } from "phosphor-svelte";
+  import {
+    DetectiveIcon,
+    ArrowUpRightIcon,
+    FlaskIcon,
+    CaretRightIcon,
+    SidebarSimpleIcon,
+    ArrowsClockwiseIcon,
+    LightningIcon,
+    XIcon,
+  } from "phosphor-svelte";
   import { fade, slide } from "svelte/transition";
-  import { runEventBridgeRace } from "$lib/api";
+  import { runEventBridgeRace, tryOperation, type TryOperationResponse } from "$lib/api";
   import { getDashboard, refresh } from "$lib/state.svelte";
   import type { RequestTrace, TraceSpan } from "$lib/types";
+  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
+  import { formatJSONForViewer } from "$lib/json-format";
   import {
     SUB_SPAN_KINDS,
     spanColor,
@@ -38,9 +49,17 @@
   let selectedTraceId = $state<string | null>(null);
   // Open span in the details list (also highlighted in the timeline).
   let openSpan = $state<number | null>(null);
+
+  // Trace Replay State
+  let replayRunning = $state(false);
+  let replayError = $state<string | null>(null);
+  let replayResult = $state<TryOperationResponse | null>(null);
+
   $effect(() => {
     selectedTraceId;
     openSpan = null;
+    replayResult = null;
+    replayError = null;
   });
 
   function focusSpan(i: number) {
@@ -217,6 +236,55 @@
   const selectedTrace = $derived(
     filteredTraces.find((t) => t.id === effectiveId) ?? null,
   );
+
+  const replayGatewayId = $derived.by(() => {
+    if (!selectedTrace) return null;
+    if (selectedTrace.gatewayId) return selectedTrace.gatewayId;
+    const gws = dashboard.data?.gateways ?? [];
+    if (selectedTrace.gatewayName) {
+      const match = gws.find((g) => g.name === selectedTrace.gatewayName);
+      if (match) return match.apiId;
+    }
+    if (selectedTrace.path) {
+      for (const gw of gws) {
+        if (gw.routeKeys?.some((rk) => rk.includes(selectedTrace.path!))) {
+          return gw.apiId;
+        }
+      }
+    }
+    if (gws.length === 1 && selectedTrace.method && selectedTrace.path) {
+      return gws[0].apiId;
+    }
+    return null;
+  });
+
+  const canReplayTrace = $derived(
+    Boolean(
+      selectedTrace &&
+      selectedTrace.method &&
+      selectedTrace.path &&
+      replayGatewayId,
+    ),
+  );
+
+  async function handleReplayTrace() {
+    if (!selectedTrace || !selectedTrace.method || !selectedTrace.path || !replayGatewayId) return;
+    replayRunning = true;
+    replayError = null;
+    replayResult = null;
+
+    try {
+      const res = await tryOperation(replayGatewayId, {
+        method: selectedTrace.method,
+        path: selectedTrace.path,
+      });
+      replayResult = res;
+    } catch (err) {
+      replayError = err instanceof Error ? err.message : "Replay failed";
+    } finally {
+      replayRunning = false;
+    }
+  }
 
   const errorCount = $derived(traceFlows.filter((t) => t.status >= 500).length);
   const clientErrorCount = $derived(
@@ -824,6 +892,18 @@
               <span class="shrink-0 text-[11px] font-mono tx-tertiary"
                 >{timeAgo(selectedTrace.startedAt)}</span
               >
+              {#if canReplayTrace}
+                <button
+                  type="button"
+                  class="replay-trigger-btn shrink-0"
+                  onclick={handleReplayTrace}
+                  disabled={replayRunning}
+                  title="Replay this HTTP request against API Gateway"
+                >
+                  <ArrowsClockwiseIcon size={11} class={replayRunning ? "animate-spin" : ""} />
+                  <span>{replayRunning ? "Replaying…" : "Replay Request"}</span>
+                </button>
+              {/if}
             </div>
             {#if selectedTrace.spans.length > 0}
               <div
@@ -840,6 +920,52 @@
               </div>
             {/if}
           </div>
+
+          {#if replayResult || replayError}
+            <div class="replay-card" transition:slide={{ duration: 180 }}>
+              <div class="replay-card-head">
+                <div class="replay-card-meta">
+                  <span class="replay-pill {replayResult && replayResult.status < 400 ? 'status-ok' : 'status-err'}">
+                    {replayResult ? `${replayResult.status} ${replayResult.status < 400 ? 'OK' : 'Error'}` : "Error"}
+                  </span>
+                  <span class="replay-url">{replayResult?.url ?? (selectedTrace?.path || "")}</span>
+                  {#if replayResult}
+                    <span class="replay-dur">{replayResult.durationMs}ms</span>
+                  {/if}
+                </div>
+                <div class="replay-card-actions">
+                  <button type="button" class="tool-btn" onclick={handleReplayTrace} disabled={replayRunning}>
+                    <ArrowsClockwiseIcon size={11} class={replayRunning ? "animate-spin" : ""} />
+                    Replay again
+                  </button>
+                  <button type="button" class="close-btn" onclick={() => { replayResult = null; replayError = null; }} aria-label="Close replay results">
+                    <XIcon size={12} />
+                  </button>
+                </div>
+              </div>
+
+              {#if replayError}
+                <p class="replay-err">{replayError}</p>
+              {:else if replayResult}
+                {@const formatted = formatJSONForViewer(replayResult.body || "")}
+                <div class="replay-body">
+                  {#if formatted}
+                    <FormattedMessageViewer
+                      raw={replayResult.body}
+                      formatted={formatted.formatted}
+                      formattedHtml={formatted.formattedHtml}
+                      formattedContentClass="text-[11px] text-muted-foreground"
+                      rawContentClass="text-[11px] text-muted-foreground"
+                      formattedMaxHeightClass="max-h-60"
+                      rawMaxHeightClass="max-h-60"
+                    />
+                  {:else}
+                    <pre class="replay-raw">{replayResult.body || "(empty response body)"}</pre>
+                  {/if}
+                </div>
+              {/if}
+            </div>
+          {/if}
 
           {#if selectedTrace.spans.length > 0}
             {@const n = selectedTrace.spans.length}
@@ -1087,6 +1213,17 @@
                         >
                           <ArrowUpRightIcon size={10} />
                           View in context
+                        </button>
+                      {/if}
+                      {#if span.kind.toLowerCase() === "lambda"}
+                        <button
+                          type="button"
+                          onclick={() => onNavigate(`functions?function=${encodeURIComponent(span.name)}`)}
+                          class="context-link context-link--badge shrink-0"
+                          title="Open test & invoke panel for this Lambda function"
+                        >
+                          <LightningIcon size={10} />
+                          Test in Lambda
                         </button>
                       {/if}
                     </div>
@@ -1626,6 +1763,133 @@
   .meta-k { font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-secondary); }
   .meta-v { font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); word-break: break-all; }
   .context-link--badge { height: 22px; }
+
+  /* ─── Replay Request ─── */
+  .replay-trigger-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    height: 22px;
+    padding: 0 8px;
+    border-radius: 6px;
+    border: 1px solid color-mix(in srgb, var(--accent-green, #10b981) 40%, transparent);
+    background: color-mix(in srgb, var(--accent-green, #10b981) 10%, transparent);
+    color: var(--accent-green, #10b981);
+    font: 11px var(--font-mono, ui-monospace, monospace);
+    cursor: pointer;
+    transition: all 120ms ease;
+  }
+  .replay-trigger-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-green, #10b981) 20%, transparent);
+    border-color: var(--accent-green, #10b981);
+  }
+  .replay-trigger-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .replay-card {
+    border-radius: 10px;
+    border: 1px solid var(--border-default);
+    background: var(--bg-surface, var(--bg-app));
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .replay-card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .replay-card-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .replay-pill {
+    font-size: 11px;
+    font-weight: 600;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
+  .replay-pill.status-ok {
+    background: color-mix(in srgb, var(--accent-green, #10b981) 15%, transparent);
+    color: var(--accent-green, #10b981);
+    border: 1px solid color-mix(in srgb, var(--accent-green, #10b981) 30%, transparent);
+  }
+  .replay-pill.status-err {
+    background: color-mix(in srgb, var(--accent-red, #fb7185) 15%, transparent);
+    color: var(--accent-red, #fb7185);
+    border: 1px solid color-mix(in srgb, var(--accent-red, #fb7185) 30%, transparent);
+  }
+  .replay-url {
+    font-size: 11.5px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    color: var(--text-primary);
+  }
+  .replay-dur {
+    font-size: 11px;
+    font-family: var(--font-mono, ui-monospace, monospace);
+    color: var(--text-tertiary);
+  }
+  .replay-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .replay-card-actions .tool-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 22px;
+    padding: 0 7px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-element);
+    font-size: 11px;
+    color: var(--text-secondary);
+    cursor: pointer;
+  }
+  .replay-card-actions .tool-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-element-hover);
+  }
+  .replay-card-actions .close-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    color: var(--text-tertiary);
+    cursor: pointer;
+  }
+  .replay-card-actions .close-btn:hover {
+    color: var(--text-primary);
+    background: var(--bg-element-hover);
+  }
+  .replay-err {
+    font-size: 11.5px;
+    color: var(--accent-red, #fb7185);
+  }
+  .replay-body {
+    border-top: 1px solid var(--border-subtle);
+    padding-top: 8px;
+  }
+  .replay-raw {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: 11px;
+    color: var(--text-secondary);
+    max-height: 15rem;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+  }
 
   /* ─── Empty state ─── */
   .empty-state {
