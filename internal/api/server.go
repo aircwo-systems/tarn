@@ -347,12 +347,17 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /_s3/{rest...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 	mux.HandleFunc("HEAD /_s3/{rest...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 	mux.HandleFunc("DELETE /_s3/{rest...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
+	mux.HandleFunc("OPTIONS /_s3/{rest...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 	// Root GET is shared between S3 ListBuckets and the optional dashboard UI.
 	mux.HandleFunc("GET /{$}", s.getRootDispatch)
 	// Compatibility surface for AWS SDK clients using path-style S3 URLs.
 	mux.HandleFunc("GET /{bucket}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 	mux.HandleFunc("PUT /{bucket}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 	mux.HandleFunc("DELETE /{bucket}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
+	// CORS preflights for browser uploads and downloads. OPTIONS / covers
+	// virtual-hosted buckets ({bucket}.localhost), whose path has no bucket.
+	mux.HandleFunc("OPTIONS /{$}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
+	mux.HandleFunc("OPTIONS /{bucket}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 	// Lambda 2017-10-31 concurrency endpoints — must be registered before the
 	// generic S3 /{bucket}/{key...} patterns.
 	mux.HandleFunc("PUT /2017-10-31/functions/{name}/concurrency", func(w http.ResponseWriter, r *http.Request) {
@@ -388,6 +393,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /{bucket}/{key...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 	mux.HandleFunc("DELETE /{bucket}/{key...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 	mux.HandleFunc("POST /{bucket}/{key...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
+	mux.HandleFunc("OPTIONS /{bucket}/{key...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 
 	// API Gateway v1 (REST API) — AWS-compatible management endpoints
 	mux.HandleFunc("POST /restapis", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.CreateRestAPI(w, r) })
@@ -441,6 +447,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v2/apis/{apiId}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGateway.GetAPI(w, r) })
 	mux.HandleFunc("PATCH /v2/apis/{apiId}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGateway.UpdateAPI(w, r) })
 	mux.HandleFunc("DELETE /v2/apis/{apiId}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGateway.DeleteAPI(w, r) })
+	mux.HandleFunc("DELETE /v2/apis/{apiId}/cors", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGateway.DeleteCORSConfiguration(w, r) })
 
 	mux.HandleFunc("POST /v2/apis/{apiId}/integrations", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGateway.CreateIntegration(w, r) })
 	mux.HandleFunc("GET /v2/apis/{apiId}/integrations", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGateway.ListIntegrations(w, r) })

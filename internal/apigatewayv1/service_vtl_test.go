@@ -171,6 +171,7 @@ func TestInvokeAWSIntegration_UsesTemplateFallbackAndForwardsFIFOFields(t *testi
 		var gotQueue, gotBody, gotGroup, gotDedup string
 		var gotAttrs map[string]*types.MessageAttribute
 		svc := &Service{
+			store: NewStore(nil),
 			sqsSend: func(queueName, body string, attrs map[string]*types.MessageAttribute, groupId, dedupId string) (string, string, error) {
 				gotQueue, gotBody, gotGroup, gotDedup, gotAttrs = queueName, body, groupId, dedupId, attrs
 				return "m-1", "md5-1", nil
@@ -223,6 +224,7 @@ Action=SendMessage&MessageGroupId=$util.urlEncode($aggregateId)&MessageDeduplica
 		var gotBody string
 		var gotAttrs map[string]*types.MessageAttribute
 		svc := &Service{
+			store: NewStore(nil),
 			sqsSend: func(queueName, body string, attrs map[string]*types.MessageAttribute, groupId, dedupId string) (string, string, error) {
 				gotBody = body
 				gotAttrs = attrs

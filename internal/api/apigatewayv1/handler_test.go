@@ -51,3 +51,56 @@ func TestRestAPIReportsAvailableToTerraform(t *testing.T) {
 		t.Fatalf("GetRestAPI apiStatus = %q, want AVAILABLE", got.APIStatus)
 	}
 }
+
+func TestResponseParametersRoundTrip(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.PersistenceEnabled = false
+	svc := apisvc.NewService(cfg, nil, nil)
+	h := NewHandler(svc)
+
+	api, err := svc.CreateAPI("web", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.PutMethod(api.ID, api.RootResourceID, "OPTIONS", "NONE", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.PutIntegration(api.ID, api.RootResourceID, "OPTIONS", "MOCK", "", "", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	call := func(handler http.HandlerFunc, method, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "/", bytes.NewBufferString(body))
+		req.SetPathValue("restApiId", api.ID)
+		req.SetPathValue("resourceId", api.RootResourceID)
+		req.SetPathValue("httpMethod", "OPTIONS")
+		req.SetPathValue("statusCode", "200")
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		return rec
+	}
+
+	call(h.PutMethodResponse, http.MethodPut, `{"responseParameters":{"method.response.header.Access-Control-Allow-Origin":true}}`)
+	call(h.PutIntegrationResponse, http.MethodPut, `{"responseParameters":{"method.response.header.Access-Control-Allow-Origin":"'*'"}}`)
+
+	var mr struct {
+		ResponseParameters map[string]bool `json:"responseParameters"`
+	}
+	if err := json.Unmarshal(call(h.GetMethodResponse, http.MethodGet, "").Body.Bytes(), &mr); err != nil {
+		t.Fatal(err)
+	}
+	if !mr.ResponseParameters["method.response.header.Access-Control-Allow-Origin"] {
+		t.Errorf("method response parameters = %v", mr.ResponseParameters)
+	}
+
+	var ir struct {
+		ResponseParameters map[string]string `json:"responseParameters"`
+	}
+	if err := json.Unmarshal(call(h.GetIntegrationResponse, http.MethodGet, "").Body.Bytes(), &ir); err != nil {
+		t.Fatal(err)
+	}
+	if got := ir.ResponseParameters["method.response.header.Access-Control-Allow-Origin"]; got != "'*'" {
+		t.Errorf("integration response parameter = %q, want '*' with quotes", got)
+	}
+}

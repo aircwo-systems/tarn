@@ -52,8 +52,9 @@ func (s *Service) SetCollector(c *tracesvc.Collector) { s.collector = c }
 
 // APIUpdateInput contains mutable API fields.
 type APIUpdateInput struct {
-	Name        *string
-	Description *string
+	Name              *string
+	Description       *string
+	CorsConfiguration *types.APIGatewayCORS
 }
 
 // IntegrationCreateInput contains create parameters for integrations.
@@ -126,9 +127,12 @@ func (s *Service) Init() error {
 }
 
 // CreateAPI creates a new HTTP API and an auto-deployed $default stage.
-func (s *Service) CreateAPI(name, description, protocolType, routeSelectionExpression string, tags map[string]string) (*types.APIGatewayAPI, error) {
+func (s *Service) CreateAPI(name, description, protocolType, routeSelectionExpression string, tags map[string]string, corsConfig *types.APIGatewayCORS) (*types.APIGatewayAPI, error) {
 	if name == "" {
 		return nil, errors.New("name is required")
+	}
+	if err := validateCORS(corsConfig); err != nil {
+		return nil, err
 	}
 	if protocolType == "" {
 		protocolType = protocolHTTP
@@ -151,6 +155,7 @@ func (s *Service) CreateAPI(name, description, protocolType, routeSelectionExpre
 		APIEndpoint:              fmt.Sprintf("%s/_apigateway/%s/$default", s.cfg.Endpoint(), apiID),
 		APIArn:                   fmt.Sprintf("arn:aws:apigateway:%s::/apis/%s", s.cfg.Region, apiID),
 		Tags:                     cloneTags(tags),
+		CorsConfiguration:        corsConfig,
 		CreatedDate:              now,
 	}
 
@@ -194,6 +199,12 @@ func (s *Service) UpdateAPI(apiID string, input APIUpdateInput) (*types.APIGatew
 	}
 	if input.Description != nil {
 		api.Description = *input.Description
+	}
+	if input.CorsConfiguration != nil {
+		if err := validateCORS(input.CorsConfiguration); err != nil {
+			return nil, err
+		}
+		api.CorsConfiguration = input.CorsConfiguration
 	}
 	if err := s.store.SaveAPI(api); err != nil {
 		return nil, err

@@ -455,6 +455,26 @@ func (s *Store) GetIntegrationResponse(apiID, resourceID, httpMethod, statusCode
 	return &cp, nil
 }
 
+// ListIntegrationResponses returns a method's integration responses ordered
+// by status code.
+func (s *Store) ListIntegrationResponses(apiID, resourceID, httpMethod string) ([]*types.RestIntegrationResponse, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rec, ok := s.apis[apiID]
+	if !ok {
+		return nil, fmt.Errorf("rest api %s not found", apiID)
+	}
+	var out []*types.RestIntegrationResponse
+	for key, ir := range rec.integrationResponses {
+		if key.resourceID == resourceID && key.httpMethod == httpMethod {
+			cp := *ir
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].StatusCode < out[j].StatusCode })
+	return out, nil
+}
+
 // CreateDeployment stores a new deployment.
 func (s *Store) CreateDeployment(apiID string, dep *types.RestDeployment) error {
 	s.mu.Lock()

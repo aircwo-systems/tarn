@@ -15,7 +15,7 @@ Tarn implements **250+ AWS API actions** across 12 services, with service-specif
 | **EventBridge** | JSON | 14 | `events` |
 | **ECS** | JSON 1.1 | 17 | `ecs` |
 | **Step Functions** | JSON (1.0) | 13 | `stepfunctions` |
-| **API Gateway v2** | REST/JSON | 18 | `apigatewayv2` |
+| **API Gateway v2** | REST/JSON | 19 | `apigatewayv2` |
 | **API Gateway v1** | REST/JSON | 19 | `apigateway` |
 | **IAM** | Query/XML | 17 | default |
 | **Event Source Mapping** | REST/JSON | 5 | `lambda` (shared) |
@@ -95,7 +95,7 @@ Terraform's S3 provider probes many bucket sub-resources during every plan/apply
 |---|---|---|
 | `?versioning` | Full | GET/PUT persisted |
 | `?encryption` | Full | GET/PUT/DELETE persisted |
-| `?cors` | Full | GET/PUT/DELETE persisted |
+| `?cors` | Full | GET/PUT/DELETE persisted; rules applied to browser preflights and responses |
 | `?logging` | Full | GET/PUT persisted |
 | `?acl` | Full | GET/PUT persisted |
 | `?tagging` | Full | GET/PUT/DELETE persisted |

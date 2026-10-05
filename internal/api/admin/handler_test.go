@@ -299,7 +299,7 @@ func TestOverviewReadsEventExamplesOnceForUnchangedCode(t *testing.T) {
 		t.Fatalf("create function: %v", err)
 	}
 
-	api, err := h.apigw.CreateAPI("orders-http-api", "test api", "HTTP", "", nil)
+	api, err := h.apigw.CreateAPI("orders-http-api", "test api", "HTTP", "", nil, nil)
 	if err != nil {
 		t.Fatalf("create api: %v", err)
 	}
@@ -554,7 +554,7 @@ func TestOverviewCacheDoesNotDuplicateConcurrentWork(t *testing.T) {
 func TestOverviewIncludesGateways(t *testing.T) {
 	h := newTestHandler(t)
 
-	api, err := h.apigw.CreateAPI("orders-http-api", "test api", "HTTP", "", nil)
+	api, err := h.apigw.CreateAPI("orders-http-api", "test api", "HTTP", "", nil, nil)
 	if err != nil {
 		t.Fatalf("create api: %v", err)
 	}
@@ -1494,7 +1494,7 @@ func TestScanLogsEndpoint(t *testing.T) {
 
 func TestOpenAPIServesGatewaySpec(t *testing.T) {
 	h := newTestHandler(t)
-	api, err := h.apigw.CreateAPI("orders-http-api", "test api", "HTTP", "", nil)
+	api, err := h.apigw.CreateAPI("orders-http-api", "test api", "HTTP", "", nil, nil)
 	if err != nil {
 		t.Fatalf("create api: %v", err)
 	}
@@ -1554,7 +1554,7 @@ func TestMethodRequestParams(t *testing.T) {
 
 func TestTryOperationValidation(t *testing.T) {
 	h := newTestHandler(t)
-	api, err := h.apigw.CreateAPI("orders-http-api", "", "HTTP", "", nil)
+	api, err := h.apigw.CreateAPI("orders-http-api", "", "HTTP", "", nil, nil)
 	if err != nil {
 		t.Fatalf("create api: %v", err)
 	}

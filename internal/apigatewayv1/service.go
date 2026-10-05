@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -384,16 +385,17 @@ func (s *Service) DeleteIntegration(apiID, resourceID, httpMethod string) error 
 }
 
 // PutMethodResponse creates or replaces a method response.
-func (s *Service) PutMethodResponse(apiID, resourceID, httpMethod, statusCode string, responseModels map[string]string) (*types.RestMethodResponse, error) {
+func (s *Service) PutMethodResponse(apiID, resourceID, httpMethod, statusCode string, responseModels map[string]string, responseParameters map[string]bool) (*types.RestMethodResponse, error) {
 	if _, err := s.store.GetMethod(apiID, resourceID, strings.ToUpper(httpMethod)); err != nil {
 		return nil, fmt.Errorf("method not found: %w", err)
 	}
 	mr := &types.RestMethodResponse{
-		StatusCode:     statusCode,
-		ResourceID:     resourceID,
-		RestAPIID:      apiID,
-		HTTPMethod:     strings.ToUpper(httpMethod),
-		ResponseModels: responseModels,
+		StatusCode:         statusCode,
+		ResourceID:         resourceID,
+		RestAPIID:          apiID,
+		HTTPMethod:         strings.ToUpper(httpMethod),
+		ResponseModels:     responseModels,
+		ResponseParameters: responseParameters,
 	}
 	if err := s.store.PutMethodResponse(apiID, mr); err != nil {
 		return nil, err
@@ -407,17 +409,18 @@ func (s *Service) GetMethodResponse(apiID, resourceID, httpMethod, statusCode st
 }
 
 // PutIntegrationResponse creates or replaces an integration response.
-func (s *Service) PutIntegrationResponse(apiID, resourceID, httpMethod, statusCode, selectionPattern string, responseTemplates map[string]string) (*types.RestIntegrationResponse, error) {
+func (s *Service) PutIntegrationResponse(apiID, resourceID, httpMethod, statusCode, selectionPattern string, responseTemplates, responseParameters map[string]string) (*types.RestIntegrationResponse, error) {
 	if _, err := s.store.GetIntegration(apiID, resourceID, strings.ToUpper(httpMethod)); err != nil {
 		return nil, fmt.Errorf("integration not found: %w", err)
 	}
 	ir := &types.RestIntegrationResponse{
-		StatusCode:        statusCode,
-		SelectionPattern:  selectionPattern,
-		ResourceID:        resourceID,
-		RestAPIID:         apiID,
-		HTTPMethod:        strings.ToUpper(httpMethod),
-		ResponseTemplates: responseTemplates,
+		StatusCode:         statusCode,
+		SelectionPattern:   selectionPattern,
+		ResourceID:         resourceID,
+		RestAPIID:          apiID,
+		HTTPMethod:         strings.ToUpper(httpMethod),
+		ResponseTemplates:  responseTemplates,
+		ResponseParameters: responseParameters,
 	}
 	if err := s.store.PutIntegrationResponse(apiID, ir); err != nil {
 		return nil, err
@@ -563,6 +566,8 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 	case integrationTypeAWSProxy:
 		out, svcErr := s.invokeLambdaProxyIntegration(ctx, api, input, integration, resource, pathParams, traceStart)
 		return out, svcErr
+	case integrationTypeMock:
+		return s.invokeMockIntegration(api, input, integration, pathParams, traceStart)
 	default:
 		return &InvokeOutput{StatusCode: http.StatusNotImplemented, Body: []byte(`{"message":"Integration type not supported"}`)}, nil
 	}
@@ -659,9 +664,13 @@ func (s *Service) invokeAWSIntegration(ctx context.Context, api *types.RestAPI, 
 		"MessageId":        messageID,
 		"MD5OfMessageBody": md5,
 	})
+	headers := map[string]string{"Content-Type": "application/json"}
+	if ir := s.selectIntegrationResponse(integ, http.StatusOK); ir != nil {
+		maps.Copy(headers, integrationResponseHeaders(ir))
+	}
 	return &InvokeOutput{
 		StatusCode: http.StatusOK,
-		Headers:    map[string]string{"Content-Type": "application/json"},
+		Headers:    headers,
 		Body:       respBody,
 	}, nil
 }

@@ -280,13 +280,14 @@ func (h *Handler) PutMethodResponse(w http.ResponseWriter, r *http.Request) {
 	httpMethod := r.PathValue("httpMethod")
 	statusCode := r.PathValue("statusCode")
 	var req struct {
-		ResponseModels map[string]string `json:"responseModels"`
+		ResponseModels     map[string]string `json:"responseModels"`
+		ResponseParameters map[string]bool   `json:"responseParameters"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
 		return
 	}
-	mr, err := h.svc.PutMethodResponse(apiID, resourceID, httpMethod, statusCode, req.ResponseModels)
+	mr, err := h.svc.PutMethodResponse(apiID, resourceID, httpMethod, statusCode, req.ResponseModels, req.ResponseParameters)
 	if err != nil {
 		status, code := errorStatus(err)
 		writeError(w, status, code, err.Error())
@@ -318,14 +319,15 @@ func (h *Handler) PutIntegrationResponse(w http.ResponseWriter, r *http.Request)
 	httpMethod := r.PathValue("httpMethod")
 	statusCode := r.PathValue("statusCode")
 	var req struct {
-		SelectionPattern  string            `json:"selectionPattern"`
-		ResponseTemplates map[string]string `json:"responseTemplates"`
+		SelectionPattern   string            `json:"selectionPattern"`
+		ResponseTemplates  map[string]string `json:"responseTemplates"`
+		ResponseParameters map[string]string `json:"responseParameters"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
 		return
 	}
-	ir, err := h.svc.PutIntegrationResponse(apiID, resourceID, httpMethod, statusCode, req.SelectionPattern, req.ResponseTemplates)
+	ir, err := h.svc.PutIntegrationResponse(apiID, resourceID, httpMethod, statusCode, req.SelectionPattern, req.ResponseTemplates, req.ResponseParameters)
 	if err != nil {
 		status, code := errorStatus(err)
 		writeError(w, status, code, err.Error())

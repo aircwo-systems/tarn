@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	apisvc "github.com/aircwo-systems/tarn/internal/apigateway"
+	"github.com/aircwo-systems/tarn/internal/cors"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // Handler implements API Gateway v2 management and invoke endpoints.
@@ -23,18 +25,19 @@ func NewHandler(svc *apisvc.Service) *Handler {
 // CreateAPI handles POST /v2/apis.
 func (h *Handler) CreateAPI(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name                     string            `json:"name"`
-		Description              string            `json:"description"`
-		ProtocolType             string            `json:"protocolType"`
-		RouteSelectionExpression string            `json:"routeSelectionExpression"`
-		Tags                     map[string]string `json:"tags"`
+		Name                     string                `json:"name"`
+		Description              string                `json:"description"`
+		ProtocolType             string                `json:"protocolType"`
+		RouteSelectionExpression string                `json:"routeSelectionExpression"`
+		Tags                     map[string]string     `json:"tags"`
+		CorsConfiguration        *types.APIGatewayCORS `json:"corsConfiguration"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
 		return
 	}
 
-	api, err := h.svc.CreateAPI(req.Name, req.Description, req.ProtocolType, req.RouteSelectionExpression, req.Tags)
+	api, err := h.svc.CreateAPI(req.Name, req.Description, req.ProtocolType, req.RouteSelectionExpression, req.Tags, req.CorsConfiguration)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
 		return
@@ -62,8 +65,9 @@ func (h *Handler) GetAPI(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) UpdateAPI(w http.ResponseWriter, r *http.Request) {
 	apiID := r.PathValue("apiId")
 	var req struct {
-		Name        *string `json:"name"`
-		Description *string `json:"description"`
+		Name              *string               `json:"name"`
+		Description       *string               `json:"description"`
+		CorsConfiguration *types.APIGatewayCORS `json:"corsConfiguration"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
@@ -71,8 +75,9 @@ func (h *Handler) UpdateAPI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	api, err := h.svc.UpdateAPI(apiID, apisvc.APIUpdateInput{
-		Name:        req.Name,
-		Description: req.Description,
+		Name:              req.Name,
+		Description:       req.Description,
+		CorsConfiguration: req.CorsConfiguration,
 	})
 	if err != nil {
 		status := http.StatusBadRequest
@@ -91,6 +96,15 @@ func (h *Handler) UpdateAPI(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) DeleteAPI(w http.ResponseWriter, r *http.Request) {
 	apiID := r.PathValue("apiId")
 	if err := h.svc.DeleteAPI(apiID); err != nil {
+		writeError(w, http.StatusNotFound, "NotFoundException", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// DeleteCORSConfiguration handles DELETE /v2/apis/{apiId}/cors.
+func (h *Handler) DeleteCORSConfiguration(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.DeleteCORSConfiguration(r.PathValue("apiId")); err != nil {
 		writeError(w, http.StatusNotFound, "NotFoundException", err.Error())
 		return
 	}
@@ -353,6 +367,24 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 		path = "/" + proxy
 	}
 
+	// With a corsConfiguration, API Gateway owns CORS: it answers preflights
+	// without invoking a route and sets the Access-Control-* headers on every
+	// response, including its own errors.
+	policy := h.svc.CORSPolicy(apiID)
+	corsReq, isCrossOrigin := cors.FromHTTP(r.Method, r.Header)
+	if policy != nil && isCrossOrigin {
+		if corsReq.Preflight {
+			if policy.AllowsPreflight(corsReq) {
+				setHeaders(w.Header(), policy.ResponseHeaders(corsReq))
+			}
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if policy.AllowsOrigin(corsReq.Origin) {
+			setHeaders(w.Header(), policy.ResponseHeaders(corsReq))
+		}
+	}
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", "failed to read request body")
@@ -382,11 +414,20 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for key, value := range out.Headers {
+		if policy != nil && cors.IsCORSHeader(key) {
+			continue // integration CORS headers are ignored when the API configures CORS
+		}
 		w.Header().Set(key, value)
 	}
 	w.WriteHeader(out.StatusCode)
 	if len(out.Body) > 0 {
 		_, _ = w.Write(out.Body)
+	}
+}
+
+func setHeaders(dst, src http.Header) {
+	for name, values := range src {
+		dst[name] = values
 	}
 }
 

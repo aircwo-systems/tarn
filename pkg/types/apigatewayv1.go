@@ -93,6 +93,9 @@ type RestMethodResponse struct {
 	RestAPIID      string            `json:"restApiId,omitempty"`
 	HTTPMethod     string            `json:"httpMethod,omitempty"`
 	ResponseModels map[string]string `json:"responseModels,omitempty"`
+	// ResponseParameters declares the headers the method may return, keyed
+	// as "method.response.header.<Name>".
+	ResponseParameters map[string]bool `json:"responseParameters,omitempty"`
 }
 
 // RestIntegrationResponse represents an integration response mapping.
@@ -103,6 +106,9 @@ type RestIntegrationResponse struct {
 	RestAPIID         string            `json:"restApiId,omitempty"`
 	HTTPMethod        string            `json:"httpMethod,omitempty"`
 	ResponseTemplates map[string]string `json:"responseTemplates,omitempty"`
+	// ResponseParameters maps "method.response.header.<Name>" to a value
+	// expression. Static values are single-quoted, e.g. "'*'".
+	ResponseParameters map[string]string `json:"responseParameters,omitempty"`
 }
 
 // RestDeployment represents a deployment of a REST API.

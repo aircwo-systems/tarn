@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aircwo-systems/tarn/internal/cors"
 	s3svc "github.com/aircwo-systems/tarn/internal/s3"
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
@@ -74,6 +75,14 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		key = path
 	} else {
 		bucket, key, _ = strings.Cut(path, "/")
+	}
+
+	if r.Method == http.MethodOptions {
+		h.preflight(w, r, bucket)
+		return
+	}
+	if req, ok := cors.FromHTTP(r.Method, r.Header); ok && bucket != "" {
+		h.applyCORS(w, req, bucket)
 	}
 
 	switch {

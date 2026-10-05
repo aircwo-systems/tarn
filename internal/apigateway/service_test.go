@@ -14,7 +14,7 @@ import (
 func TestCreateAPICreatesDefaultStage(t *testing.T) {
 	svc := newTestService(t)
 
-	api, err := svc.CreateAPI("orders", "orders api", "HTTP", "", map[string]string{"feature": "r10"})
+	api, err := svc.CreateAPI("orders", "orders api", "HTTP", "", map[string]string{"feature": "r10"}, nil)
 	if err != nil {
 		t.Fatalf("CreateAPI: %v", err)
 	}
@@ -45,7 +45,7 @@ func TestCreateAPICreatesDefaultStage(t *testing.T) {
 
 func TestIntegrationLifecycle(t *testing.T) {
 	svc := newTestService(t)
-	api, err := svc.CreateAPI("orders", "", "HTTP", "", nil)
+	api, err := svc.CreateAPI("orders", "", "HTTP", "", nil, nil)
 	if err != nil {
 		t.Fatalf("CreateAPI: %v", err)
 	}
@@ -190,7 +190,7 @@ func TestAPIGatewayStatePersistsToDisk(t *testing.T) {
 		t.Fatalf("init apigateway: %v", err)
 	}
 
-	api, err := svc.CreateAPI("persisted-api", "api", "HTTP", "", nil)
+	api, err := svc.CreateAPI("persisted-api", "api", "HTTP", "", nil, nil)
 	if err != nil {
 		t.Fatalf("create api: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 
@@ -390,6 +391,14 @@ func cloneAPI(in *types.APIGatewayAPI) *types.APIGatewayAPI {
 		for k, v := range in.Tags {
 			out.Tags[k] = v
 		}
+	}
+	if in.CorsConfiguration != nil {
+		c := *in.CorsConfiguration
+		c.AllowHeaders = slices.Clone(c.AllowHeaders)
+		c.AllowMethods = slices.Clone(c.AllowMethods)
+		c.AllowOrigins = slices.Clone(c.AllowOrigins)
+		c.ExposeHeaders = slices.Clone(c.ExposeHeaders)
+		out.CorsConfiguration = &c
 	}
 	return &out
 }

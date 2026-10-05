@@ -68,7 +68,7 @@ func TestAPIManagementLifecycle(t *testing.T) {
 func TestIntegrationRouteAndStageEndpoints(t *testing.T) {
 	h := newTestHandler(t)
 
-	api, err := h.svc.CreateAPI("orders-http-api", "", "HTTP", "", nil)
+	api, err := h.svc.CreateAPI("orders-http-api", "", "HTTP", "", nil, nil)
 	if err != nil {
 		t.Fatalf("create api: %v", err)
 	}
@@ -129,7 +129,7 @@ func TestIntegrationRouteAndStageEndpoints(t *testing.T) {
 func TestInvokePathHandlingWithoutRoute(t *testing.T) {
 	h := newTestHandler(t)
 
-	api, err := h.svc.CreateAPI("orders-http-api", "", "HTTP", "", nil)
+	api, err := h.svc.CreateAPI("orders-http-api", "", "HTTP", "", nil, nil)
 	if err != nil {
 		t.Fatalf("create api: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestRejectUnsupportedProtocolAndIntegrationType(t *testing.T) {
 		t.Fatalf("expected 400 for protocol, got %d", badProtocolRec.Code)
 	}
 
-	api, err := h.svc.CreateAPI("orders", "", "HTTP", "", nil)
+	api, err := h.svc.CreateAPI("orders", "", "HTTP", "", nil, nil)
 	if err != nil {
 		t.Fatalf("create api: %v", err)
 	}
