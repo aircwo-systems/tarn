@@ -1,0 +1,30 @@
+{
+  "name": "dashboard-starter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev --host 0.0.0.0 --port 4174",
+    "build": "svelte-kit sync && vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 4174",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "fmt": "prettier --write .",
+    "fmt:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "^5.2.0",
+    "@fontsource-variable/geist-mono": "^5.2.0",
+    "phosphor-svelte": "^3.1.0"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-static": "^3.0.10",
+    "@sveltejs/kit": "^2.70.3",
+    "@sveltejs/vite-plugin-svelte": "^5.1.1",
+    "prettier": "^3.6.0",
+    "prettier-plugin-svelte": "^3.4.0",
+    "svelte": "^5.57.0",
+    "svelte-check": "^4.7.6",
+    "typescript": "^5.9.3",
+    "vite": "^6.4.3"
+  }
+}

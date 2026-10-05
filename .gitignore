@@ -49,6 +49,8 @@ vendor/
 /examples/**/node_modules/
 /examples/**/bun.lock
 *.html
+!agent-builder-poc.html
+!tarn-builder-poc.html
 
 # Terraform
 **/.terraform/

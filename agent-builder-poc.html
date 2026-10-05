@@ -1,0 +1,1384 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Agent Builder — Product Discovery Prototype</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root, [data-theme="dark"] {
+      color-scheme: dark;
+      --color-page: #0f1013;
+      --color-surface: #17181c;
+      --color-surface-hover: #1f2026;
+      --color-surface-active: #262830;
+      --color-node-surface: #15161a;
+      --color-node-header: #1b1d22;
+      --color-line: #272930;
+      --color-line-soft: #1f2026;
+      --color-line-hover: #3c3f4a;
+      --color-line-focus: #5383ec;
+      --color-ink: #f0f2f5;
+      --color-ink-strong: #ffffff;
+      --color-ink-muted: #9598a3;
+      --color-ink-subtle: #616470;
+      --color-accent: #3b82f6;
+      --color-accent-hover: #2563eb;
+      --color-accent-tint: rgba(59, 130, 246, 0.12);
+      --color-tarn-accent: #00e5a0;
+      --color-tarn-tint: rgba(0, 229, 160, 0.12);
+      --color-connector: #383b45;
+      --color-connector-live: #3b82f6;
+      --color-connector-warn: #eab308;
+      --color-connector-tarn: #00e5a0;
+      --color-card-border: #24262e;
+      --color-badge-bg: #20222a;
+      --color-design-line: #1e3a5f;
+      --color-design-surface: #0e1b2b;
+      --color-design-ink: #60a5fa;
+      --canvas-dots: radial-gradient(circle, #2d303b 1px, transparent 1px);
+      --shadow-chip: 0 1px 3px rgba(0,0,0,0.35);
+      --shadow-card: 0 4px 20px rgba(0,0,0,0.45);
+      --shadow-float: 0 10px 30px rgba(0,0,0,0.6);
+      --ease: cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    [data-theme="light"] {
+      color-scheme: light;
+      --color-page: #f6f7f9;
+      --color-surface: #ffffff;
+      --color-surface-hover: #f1f3f6;
+      --color-surface-active: #e5e8ee;
+      --color-node-surface: #fbfcff;
+      --color-node-header: #f2f4f8;
+      --color-line: #dfe2e8;
+      --color-line-soft: #eaedf2;
+      --color-line-hover: #cbd1dc;
+      --color-line-focus: #3b82f6;
+      --color-ink: #1a1c20;
+      --color-ink-strong: #0a0b0d;
+      --color-ink-muted: #666a78;
+      --color-ink-subtle: #989da8;
+      --color-accent: #2563eb;
+      --color-accent-hover: #1d4ed8;
+      --color-accent-tint: rgba(37, 99, 235, 0.08);
+      --color-tarn-accent: #00875a;
+      --color-tarn-tint: rgba(0, 135, 90, 0.08);
+      --color-connector: #c5cad4;
+      --color-connector-live: #2563eb;
+      --color-connector-warn: #d97706;
+      --color-connector-tarn: #00875a;
+      --color-card-border: #dbe0ea;
+      --color-badge-bg: #eceff5;
+      --color-design-line: #bfdbfe;
+      --color-design-surface: #eff6ff;
+      --color-design-ink: #1d4ed8;
+      --canvas-dots: radial-gradient(circle, #c8cdd7 1.2px, transparent 1.2px);
+      --shadow-chip: 0 1px 3px rgba(0,0,0,0.06);
+      --shadow-card: 0 4px 14px rgba(0,0,0,0.06);
+      --shadow-float: 0 10px 25px rgba(0,0,0,0.12);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; width: 100%; overflow: hidden; font-family: 'Geist', -apple-system, BlinkMacSystemFont, sans-serif; font-size: 13px; background: var(--color-page); color: var(--color-ink); }
+
+    .mono { font-family: 'JetBrains Mono', monospace; font-size: 11px; }
+
+    /* LAYOUT SHELL */
+    .app-shell {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+    }
+
+    /* TOP HEADER */
+    .header {
+      height: 48px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      border-bottom: 1px solid var(--color-line);
+      background: var(--color-surface);
+      z-index: 50;
+      gap: 12px;
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    .header-right {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 28px;
+      padding: 0 10px;
+      border-radius: 6px;
+      border: 1px solid var(--color-line);
+      background: var(--color-surface);
+      color: var(--color-ink);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      user-select: none;
+      transition: all 140ms ease;
+    }
+    .btn:hover {
+      background: var(--color-surface-hover);
+      border-color: var(--color-line-hover);
+    }
+    .btn-icon {
+      width: 28px;
+      padding: 0;
+      justify-content: center;
+    }
+    .btn-primary {
+      background: var(--color-accent);
+      border-color: var(--color-accent-hover);
+      color: #fff;
+    }
+    .btn-primary:hover {
+      background: var(--color-accent-hover);
+    }
+    .btn-tarn {
+      background: var(--color-tarn-tint);
+      border-color: var(--color-tarn-accent);
+      color: var(--color-tarn-accent);
+    }
+    .btn-tarn.active {
+      background: var(--color-tarn-accent);
+      color: #000;
+      font-weight: 600;
+    }
+
+    .breadcrumbs {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+    }
+    .breadcrumb-root { color: var(--color-ink-muted); font-weight: 400; }
+    .breadcrumb-sep { color: var(--color-ink-subtle); }
+    .breadcrumb-current { color: var(--color-ink-strong); font-weight: 600; }
+
+    /* WORKSPACE BODY */
+    .workspace {
+      display: flex;
+      flex: 1;
+      height: calc(100vh - 48px);
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* LEFT RUN & TELEMETRY PANEL */
+    .run-panel {
+      width: 395px;
+      height: 100%;
+      flex-shrink: 0;
+      border-right: 1px solid var(--color-line);
+      background: var(--color-surface);
+      display: flex;
+      flex-direction: column;
+      z-index: 30;
+      transition: width 300ms var(--ease), margin-left 300ms var(--ease), opacity 240ms ease;
+      position: relative;
+    }
+    .run-panel.collapsed {
+      width: 0;
+      margin-left: 0;
+      border-right: none;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .run-header-card {
+      margin: 12px;
+      padding: 10px 12px;
+      background: var(--color-node-surface);
+      border: 1px solid var(--color-card-border);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: var(--shadow-chip);
+    }
+    .run-command {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--color-ink);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .badge-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 500;
+      background: var(--color-design-surface);
+      color: var(--color-design-ink);
+      border: 1px solid var(--color-design-line);
+    }
+    .badge-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 7px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .status-running {
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+    .status-live-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: #3b82f6;
+      animation: pulse 1.4s infinite;
+    }
+    @keyframes pulse {
+      0% { transform: scale(0.9); opacity: 0.6; }
+      50% { transform: scale(1.3); opacity: 1; box-shadow: 0 0 8px #3b82f6; }
+      100% { transform: scale(0.9); opacity: 0.6; }
+    }
+
+    .run-scroll-area {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0 12px 16px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      scrollbar-width: thin;
+    }
+    .run-scroll-area::-webkit-scrollbar { width: 4px; }
+    .run-scroll-area::-webkit-scrollbar-thumb { background: var(--color-line-hover); border-radius: 2px; }
+
+    .narrative-bubble {
+      font-size: 12.5px;
+      line-height: 1.5;
+      color: var(--color-ink-muted);
+      padding: 6px 4px;
+      border-left: 2px solid var(--color-line);
+      margin-left: 4px;
+      padding-left: 10px;
+    }
+    .narrative-bubble.active {
+      color: var(--color-ink);
+      border-left-color: var(--color-accent);
+    }
+
+    /* STEP PIPELINE LIST */
+    .pipeline-section {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .section-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--color-ink-subtle);
+      margin-top: 4px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .step-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 6px 10px;
+      background: var(--color-node-surface);
+      border: 1px solid var(--color-line-soft);
+      border-radius: 6px;
+      font-size: 12px;
+      transition: all 160ms ease;
+    }
+    .step-item:hover {
+      background: var(--color-surface-hover);
+      border-color: var(--color-line);
+    }
+    .step-item.live {
+      border-color: var(--color-accent);
+      background: var(--color-accent-tint);
+    }
+    .step-icon {
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 10px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .icon-zendesk { background: #03363d; color: #fff; }
+    .icon-notion { background: #000000; color: #fff; border: 1px solid #333; }
+    .icon-gong { background: #8039e9; color: #fff; }
+    .icon-clickup { background: #7b68ee; color: #fff; }
+    .icon-metabase { background: #509ee3; color: #fff; }
+    .icon-slack { background: #4a154b; color: #fff; }
+    .step-title { flex: 1; font-weight: 500; color: var(--color-ink); }
+    .step-meta { font-size: 11px; color: var(--color-ink-subtle); }
+
+    /* RESOURCE CONSUMPTION BAR */
+    .budget-card {
+      padding: 10px 12px;
+      background: var(--color-node-surface);
+      border: 1px solid var(--color-card-border);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .budget-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11.5px;
+      color: var(--color-ink-muted);
+    }
+    .budget-bar-track {
+      height: 6px;
+      width: 100%;
+      background: var(--color-line);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .budget-bar-fill {
+      height: 100%;
+      width: 80%;
+      background: linear-gradient(90deg, #3b82f6, #f59e0b);
+      border-radius: 3px;
+      transition: width 400ms ease;
+    }
+
+    /* RIGHT CANVAS AREA */
+    .canvas-viewport {
+      flex: 1;
+      height: 100%;
+      position: relative;
+      overflow: hidden;
+      background-color: var(--color-page);
+      background-image: var(--canvas-dots);
+      background-size: 16px 16px;
+      cursor: grab;
+      user-select: none;
+    }
+    .canvas-viewport.grabbing {
+      cursor: grabbing;
+    }
+
+    /* CANVAS TRANSFORM CONTAINER */
+    .canvas-stage {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 2500px;
+      height: 2000px;
+      transform-origin: 0 0;
+      pointer-events: none;
+    }
+
+    /* SVG WIRES LAYER */
+    .wires-svg {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    .wire-path {
+      fill: none;
+      stroke: var(--color-connector);
+      stroke-width: 1.5;
+      stroke-dasharray: 4 3;
+      transition: stroke 300ms ease, stroke-width 300ms ease;
+    }
+    .wire-path.active {
+      stroke: url(#wire-gradient-live);
+      stroke-width: 2.2;
+      stroke-dasharray: none;
+      filter: drop-shadow(0 0 4px rgba(59, 130, 246, 0.5));
+    }
+    .wire-path.tarn-mapped {
+      stroke: url(#wire-gradient-tarn);
+      stroke-width: 2;
+      stroke-dasharray: none;
+    }
+    .wire-path.warn {
+      stroke: var(--color-connector-warn);
+      stroke-width: 1.5;
+      stroke-dasharray: 3 3;
+    }
+
+    /* FLOATING TOPOLOGY CARDS (NODES) */
+    .node-card {
+      position: absolute;
+      width: 240px;
+      background: var(--color-node-surface);
+      border: 1px solid var(--color-card-border);
+      border-radius: 12px;
+      box-shadow: var(--shadow-card);
+      pointer-events: auto;
+      z-index: 20;
+      display: flex;
+      flex-direction: column;
+      transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+    }
+    .node-card:hover {
+      box-shadow: var(--shadow-float);
+      border-color: var(--color-line-hover);
+    }
+    .node-card.focused {
+      border-color: var(--color-accent);
+      box-shadow: 0 0 0 2px var(--color-accent-tint), var(--shadow-float);
+    }
+    .node-card.agent-core {
+      width: 280px;
+      border: 1.5px solid var(--color-line-hover);
+    }
+    .node-card.new-spec {
+      border-style: dashed;
+      border-color: var(--color-design-line);
+      background: var(--color-design-surface);
+    }
+
+    /* CARD HEADER & BODY */
+    .node-header {
+      padding: 10px 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--color-line-soft);
+      cursor: pointer;
+    }
+    .node-title-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .node-title {
+      font-size: 12.5px;
+      font-weight: 600;
+      color: var(--color-ink-strong);
+    }
+    .node-badge {
+      font-size: 10.5px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-weight: 500;
+    }
+    .badge-warn {
+      background: rgba(234, 179, 8, 0.15);
+      color: var(--color-connector-warn);
+    }
+    .badge-new {
+      background: var(--color-accent-tint);
+      color: var(--color-accent);
+    }
+
+    .node-content {
+      padding: 8px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .node-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 5px 6px;
+      border-radius: 6px;
+      font-size: 12px;
+      color: var(--color-ink-muted);
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .node-row:hover {
+      background: var(--color-surface-hover);
+      color: var(--color-ink);
+    }
+    .node-row-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* CLOUD SERVICE BADGE (TARN MAPPING) */
+    .tarn-badge {
+      font-size: 9.5px;
+      padding: 2px 5px;
+      border-radius: 3px;
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 600;
+      display: none;
+    }
+    .mode-tarn .tarn-badge {
+      display: inline-block;
+    }
+    .tarn-eb { background: rgba(245, 158, 11, 0.2); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .tarn-lambda { background: rgba(234, 88, 12, 0.2); color: #fb923c; border: 1px solid rgba(234, 88, 12, 0.4); }
+    .tarn-ddb { background: rgba(59, 130, 246, 0.2); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.4); }
+    .tarn-sqs { background: rgba(168, 85, 247, 0.2); color: #c084fc; border: 1px solid rgba(168, 85, 247, 0.4); }
+    .tarn-mcp { background: rgba(0, 229, 160, 0.2); color: #00e5a0; border: 1px solid rgba(0, 229, 160, 0.4); }
+
+    /* CONNECTOR PORTS */
+    .port {
+      position: absolute;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--color-connector);
+      border: 2px solid var(--color-surface);
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 25;
+      transition: all 200ms ease;
+    }
+    .port.port-left { left: -6px; }
+    .port.port-right { right: -6px; }
+    .port.live { background: var(--color-accent); box-shadow: 0 0 6px var(--color-accent); }
+    .port.warn { background: var(--color-connector-warn); }
+    .port.tarn { background: var(--color-tarn-accent); box-shadow: 0 0 6px var(--color-tarn-accent); }
+
+    /* FLOATING CANVAS CONTROLS */
+    .canvas-controls {
+      position: absolute;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 8px;
+      background: var(--color-surface);
+      border: 1px solid var(--color-line);
+      border-radius: 24px;
+      box-shadow: var(--shadow-float);
+      z-index: 40;
+    }
+    .panel-toggle-btn {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      z-index: 40;
+      background: var(--color-surface);
+      box-shadow: var(--shadow-chip);
+    }
+
+    /* INSTRUCTIONS ACCORDION */
+    .instructions-drawer {
+      margin-top: 6px;
+      padding: 8px 10px;
+      background: rgba(0,0,0,0.2);
+      border-radius: 6px;
+      border: 1px solid var(--color-line-soft);
+      font-size: 11.5px;
+      line-height: 1.45;
+      color: var(--color-ink-muted);
+      max-height: 140px;
+      overflow-y: auto;
+    }
+    .instructions-drawer h5 {
+      color: var(--color-ink);
+      font-size: 11px;
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    /* MODAL / NOTICE BANNER */
+    .tarn-mode-notice {
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      padding: 6px 12px;
+      border-radius: 8px;
+      background: rgba(0, 229, 160, 0.12);
+      border: 1px solid rgba(0, 229, 160, 0.35);
+      color: #00e5a0;
+      font-size: 12px;
+      font-weight: 500;
+      z-index: 40;
+      display: none;
+      align-items: center;
+      gap: 8px;
+      backdrop-filter: blur(8px);
+    }
+    .mode-tarn .tarn-mode-notice {
+      display: flex;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="app-shell" id="appShell">
+    <!-- TOP GLOBAL HEADER -->
+    <header class="header">
+      <div class="header-left">
+        <button class="btn btn-icon" title="Back to Agents" onclick="alert('Navigating to /#/agents catalog')">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path fill-rule="evenodd" d="M11.354 1.646a.5.5 0 0 1 0 .708L5.707 8l5.647 5.646a.5.5 0 0 1-.708.708l-6-6a.5.5 0 0 1 0-.708l6-6a.5.5 0 0 1 .708 0z"/>
+          </svg>
+        </button>
+        <div class="breadcrumbs">
+          <span class="breadcrumb-root">Agents</span>
+          <span class="breadcrumb-sep">/</span>
+          <span class="breadcrumb-current">Product Discovery</span>
+        </div>
+        <a href="https://agent-builder-ui-one.vercel.app/#/agents/product-discovery" target="_blank" rel="noreferrer" class="btn" style="text-decoration: none; font-size: 11px; padding: 0 8px; color: var(--color-ink-muted);" title="Open original Vercel demo">
+          Original Demo ↗
+        </a>
+        <a href="https://t.co/aVQENXqow8" target="_blank" rel="noreferrer" class="btn" style="text-decoration: none; font-size: 11px; padding: 0 8px; color: var(--color-ink-muted);" title="Watch original video / demo by @arknow91">
+          Original Video ↗
+        </a>
+      </div>
+
+      <div class="header-right">
+        <!-- MODE TOGGLE: OUTGLOW STUDIO vs TARN AWS EMULATION MAPPING -->
+        <button id="toggleTarnMode" class="btn btn-tarn" onclick="toggleTarnBridge()">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 1.5a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11z"/>
+            <path d="M8 4a4 4 0 1 0 0 8 4 4 0 0 0 0-8z"/>
+          </svg>
+          <span id="tarnModeLabel">Tarn Cloud Mapping: OFF</span>
+        </button>
+
+        <!-- RUN TRIGGER BUTTON -->
+        <button id="runBtn" class="btn btn-primary" onclick="triggerRunSimulation()">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+            <path d="m11.596 8.697-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/>
+          </svg>
+          <span>Run Pass</span>
+        </button>
+
+        <button class="btn" onclick="resetCanvas()">Center</button>
+        <button class="btn btn-icon" title="Toggle Light/Dark Theme" onclick="toggleTheme()">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM8 0a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-1 0v-2A.5.5 0 0 1 8 0zm0 13a.5.5 0 0 1 .5.5v2a.5.5 0 0 1-1 0v-2A.5.5 0 0 1 8 13zm8-5a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1 0-1h2a.5.5 0 0 1 .5.5zM3 8a.5.5 0 0 1-.5.5h-2a.5.5 0 0 1 0-1h2A.5.5 0 0 1 3 8z"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- MAIN INTERACTIVE WORKSPACE -->
+    <div class="workspace">
+
+      <!-- LEFT: RUN & TELEMETRY PANEL -->
+      <aside class="run-panel" id="runPanel">
+        <!-- COMMAND BANNER -->
+        <div class="run-header-card">
+          <div class="run-command">
+            <span>Run</span>
+            <span class="badge-chip">
+              <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor"><path d="M2 2h12v12H2z"/></svg>
+              discovery-agent
+            </span>
+            <span style="color: var(--color-ink-muted);">over past 7 days</span>
+          </div>
+          <div class="badge-status status-running" id="runStatusBadge">
+            <span class="status-live-dot" id="runStatusDot"></span>
+            <span id="runStatusText">Running</span>
+          </div>
+        </div>
+
+        <!-- STREAM LOGS & EXECUTION FEED -->
+        <div class="run-scroll-area" id="runScroll">
+
+          <!-- THOUGHT / NARRATIVE STREAM -->
+          <div class="narrative-bubble active" id="narrative1">
+            Starting the weekly pass. Pulling signals from the last 7 days across Zendesk, Gong, ClickUp, Notion, Metabase and #customer-feedback — same sources as last time, so the ranking stays comparable.
+          </div>
+          <div class="narrative-bubble" id="narrative2">
+            Read the two memories first: <strong>product-strategy-h2</strong> for what counts as a fit, <strong>opportunities-archive</strong> so a theme that was already scored is not scored again.
+          </div>
+
+          <!-- READ TOOLS SECTION -->
+          <div class="pipeline-section">
+            <div class="section-label">
+              <span>Read Tools</span>
+              <span class="mono" id="toolProgressCount">6 / 6 completed</span>
+            </div>
+
+            <div class="step-item" id="step-zendesk">
+              <div class="step-icon icon-zendesk">Z</div>
+              <span class="step-title">Zendesk Search</span>
+              <span class="step-meta mono">142 tickets</span>
+            </div>
+
+            <div class="step-item" id="step-notion">
+              <div class="step-icon icon-notion">N</div>
+              <span class="step-title">Notion Sync</span>
+              <span class="step-meta mono">28 docs</span>
+            </div>
+
+            <div class="step-item" id="step-gong">
+              <div class="step-icon icon-gong">G</div>
+              <span class="step-title">Gong List Calls</span>
+              <span class="step-meta mono">19 transcripts</span>
+            </div>
+
+            <div class="step-item" id="step-clickup">
+              <div class="step-icon icon-clickup">C</div>
+              <span class="step-title">ClickUp Filter Task</span>
+              <span class="step-meta mono">45 tasks</span>
+            </div>
+
+            <div class="step-item" id="step-metabase">
+              <div class="step-icon icon-metabase">M</div>
+              <span class="step-title">Metabase Query</span>
+              <span class="step-meta mono">churn cohorts</span>
+            </div>
+
+            <div class="step-item" id="step-slack">
+              <div class="step-icon icon-slack">S</div>
+              <span class="step-title">Slack History #customer-feedback</span>
+              <span class="step-meta mono">83 msgs</span>
+            </div>
+          </div>
+
+          <!-- ORCHESTRATION: SUB-AGENTS & SKILLS -->
+          <div class="pipeline-section">
+            <div class="section-label">
+              <span>Sub-Agents Dispatched</span>
+              <span class="mono">5 active</span>
+            </div>
+            <div style="font-size: 11.5px; color: var(--color-ink-muted); display: flex; flex-wrap: wrap; gap: 4px;">
+              <span class="badge-chip">signal_collector</span>
+              <span class="badge-chip">theme_clusterer</span>
+              <span class="badge-chip">opportunity_score</span>
+              <span class="badge-chip">evidence_linker</span>
+              <span class="badge-chip">digest_writer</span>
+            </div>
+          </div>
+
+          <!-- RESOURCE & BUDGET SUMMARY -->
+          <div class="budget-card">
+            <div class="budget-meta">
+              <span>Thinking: <strong id="thinkingSeconds">60s</strong></span>
+              <span>Tokens: <strong id="tokenCount">2,500</strong></span>
+              <span>Budget: <strong id="budgetPercent">80%</strong></span>
+            </div>
+            <div class="budget-bar-track">
+              <div class="budget-bar-fill" id="budgetBar"></div>
+            </div>
+            <div style="font-size: 11px; color: var(--color-ink-subtle);">
+              Threshold: Cleared 3 primary opportunity clusters.
+            </div>
+          </div>
+
+          <!-- SUMMARY CARD -->
+          <div style="padding: 10px 12px; background: rgba(59, 130, 246, 0.06); border: 1px solid rgba(59, 130, 246, 0.2); border-radius: 8px; font-size: 12px; line-height: 1.45; color: var(--color-ink);">
+            <strong>Run Summary:</strong> Last pass cleared three clusters above threshold (Enterprise SSO self-serve, Bulk CSV export failure, Mobile onboarding drop). Two early clusters preserved in archive.
+          </div>
+
+        </div>
+      </aside>
+
+      <!-- RIGHT: INFINITE PAN/ZOOM TOPOLOGY CANVAS -->
+      <main class="canvas-viewport" id="canvasViewport">
+
+        <!-- TOGGLE RUN PANEL BUTTON -->
+        <button class="btn btn-icon panel-toggle-btn" id="togglePanelBtn" title="Toggle Run Panel" onclick="toggleRunPanel()">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path fill-rule="evenodd" d="M3 2.5a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 .5.5v11a.5.5 0 0 1-.5.5h-9a.5.5 0 0 1-.5-.5v-11zm1 .5v10h8V3H4z"/>
+            <path d="M5.5 5h5v1h-5V5zm0 2h5v1h-5V7zm0 2h3v1h-3V9z"/>
+          </svg>
+        </button>
+
+        <!-- TARN LOCAL CLOUD OVERLAY BADGE -->
+        <div class="tarn-mode-notice">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M4.406 3.342A5.53 5.53 0 0 1 8 2c2.69 0 4.923 2 5.166 4.579C14.758 6.804 16 8.137 16 9.773 16 11.569 14.502 13 12.687 13H3.781C1.708 13 0 11.366 0 9.318c0-1.763 1.266-3.223 2.942-3.593.143-.863.698-1.723 1.464-2.383z"/>
+          </svg>
+          <span>Tarn AWS Emulation Backed (EventBridge · Lambda · DynamoDB · MCP)</span>
+        </div>
+
+        <!-- CANVAS STAGE (SCALED & TRANSLATED) -->
+        <div class="canvas-stage" id="canvasStage">
+
+          <!-- DYNAMIC SVG WIRES -->
+          <svg class="wires-svg" id="wiresSvg">
+            <defs>
+              <linearGradient id="wire-gradient-live" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="#3b82f6" />
+                <stop offset="100%" stop-color="#60a5fa" />
+              </linearGradient>
+              <linearGradient id="wire-gradient-tarn" x1="0%" y1="0%" x2="100%" y2="0%">
+                <stop offset="0%" stop-color="#00e5a0" />
+                <stop offset="100%" stop-color="#38bdf8" />
+              </linearGradient>
+            </defs>
+
+            <!-- Wires will be dynamically computed and rendered via JS -->
+          </svg>
+
+          <!-- ═══ COLUMN 1: INPUTS & TRIGGERS (X = 60px) ═══ -->
+
+          <!-- 1. SCHEDULE NODE -->
+          <div class="node-card" id="node-schedule" style="top: 80px; left: 60px;">
+            <div class="node-header" onclick="focusNode('node-schedule')">
+              <div class="node-title-group">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color: var(--color-ink-muted);">
+                  <path d="M8 3.5a.5.5 0 0 0-1 0V9a.5.5 0 0 0 .252.434l3.5 2a.5.5 0 0 0 .496-.868L8 8.71V3.5z"/>
+                  <path d="M8 16A8 8 0 1 0 8 0a8 8 0 0 0 0 16zm7-8A7 7 0 1 1 1 8a7 7 0 0 1 14 0z"/>
+                </svg>
+                <span class="node-title">Schedule</span>
+              </div>
+              <span class="tarn-badge tarn-eb">EventBridge Rule</span>
+            </div>
+            <div class="node-content">
+              <div class="node-row">
+                <div class="node-row-left">
+                  <span>Mon 08:00 AM</span>
+                </div>
+                <span class="mono">weekly digest</span>
+              </div>
+              <div class="node-row">
+                <div class="node-row-left">
+                  <span class="mono">cron(0 8 ? * 2 *)</span>
+                </div>
+                <span>CEST</span>
+              </div>
+            </div>
+            <div class="port port-right" id="port-schedule"></div>
+          </div>
+
+          <!-- 2. TRIGGERS NODE -->
+          <div class="node-card new-spec" id="node-triggers" style="top: 220px; left: 60px;">
+            <div class="node-header" onclick="focusNode('node-triggers')">
+              <div class="node-title-group">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color: var(--color-accent);">
+                  <path d="M11.251.068a.5.5 0 0 1 .227.58L9.677 6.5H13a.5.5 0 0 1 .364.843l-8 8.5a.5.5 0 0 1-.842-.49L6.323 9.5H3a.5.5 0 0 1-.364-.843l8-8.5a.5.5 0 0 1 .615-.09z"/>
+                </svg>
+                <span class="node-title">Triggers</span>
+              </div>
+              <span class="node-badge badge-new">New</span>
+              <span class="tarn-badge tarn-sqs">SQS / Webhook</span>
+            </div>
+            <div class="node-content">
+              <div class="node-row">
+                <div class="node-row-left">
+                  <div class="step-icon icon-zendesk">Z</div>
+                  <span>Zendesk webhook</span>
+                </div>
+              </div>
+              <div class="node-row">
+                <span class="mono">tag = enterprise</span>
+                <span class="badge-chip">AND urgent</span>
+              </div>
+            </div>
+            <div class="port port-right" id="port-triggers"></div>
+          </div>
+
+          <!-- 3. CHANNELS NODE -->
+          <div class="node-card" id="node-channels" style="top: 360px; left: 60px;">
+            <div class="node-header" onclick="focusNode('node-channels')">
+              <div class="node-title-group">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color: var(--color-connector-warn);">
+                  <path d="M8 15c4.418 0 8-3.134 8-7s-3.582-7-8-7-8 3.134-8 7c0 1.76.743 3.37 1.97 4.6-.097 1.016-.417 2.13-.771 2.966-.079.186.074.394.273.362 2.256-.37 3.597-.938 4.18-1.234A9.06 9.06 0 0 0 8 15z"/>
+                </svg>
+                <span class="node-title">Channels</span>
+              </div>
+              <span class="node-badge badge-warn">Set identity</span>
+              <span class="tarn-badge tarn-sqs">SNS Topic</span>
+            </div>
+            <div class="node-content">
+              <p style="font-size: 11.5px; color: var(--color-ink-subtle); padding: 4px 0;">
+                Set an agent identity to configure dispatch channels (Slack / Email / Webhook).
+              </p>
+            </div>
+            <div class="port port-right warn" id="port-channels"></div>
+          </div>
+
+          <!-- 4. MEMORY NODE -->
+          <div class="node-card new-spec" id="node-memory" style="top: 480px; left: 60px;">
+            <div class="node-header" onclick="focusNode('node-memory')">
+              <div class="node-title-group">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color: var(--color-accent);">
+                  <path d="M1 2.828c.885-.37 2.154-.769 3.388-.893 1.33-.134 2.458.063 3.112.752v9.746c-.935-.53-2.12-.603-3.213-.493-1.18.12-2.37.461-3.287.811V2.828zm7.5-.141c.654-.689 1.782-.886 3.112-.752 1.234.124 2.503.523 3.388.893v9.923c-.918-.35-2.107-.692-3.287-.81-1.094-.111-2.278-.039-3.213.492V2.687z"/>
+                </svg>
+                <span class="node-title">Memory</span>
+              </div>
+              <span class="node-badge badge-new">New</span>
+              <span class="tarn-badge tarn-ddb">DynamoDB / S3</span>
+            </div>
+            <div class="node-content">
+              <div class="node-row">
+                <div class="node-row-left">
+                  <span class="mono">product-strategy-h2</span>
+                </div>
+              </div>
+              <div class="node-row">
+                <div class="node-row-left">
+                  <span class="mono">opportunities-archive</span>
+                </div>
+              </div>
+            </div>
+            <div class="port port-right" id="port-memory"></div>
+          </div>
+
+          <!-- ═══ COLUMN 2: THE REASONING AGENT CORE (X = 420px) ═══ -->
+          <div class="node-card agent-core" id="node-agent" style="top: 180px; left: 420px;">
+            <div class="port port-left" id="port-agent-in"></div>
+            <div class="node-header" onclick="focusNode('node-agent')">
+              <div class="node-title-group">
+                <div class="step-icon" style="background: var(--color-accent); color: #fff;">✦</div>
+                <div>
+                  <div class="node-title">Product Discovery Agent</div>
+                  <div style="font-size: 11px; color: var(--color-ink-muted);">Version 1.1 · Owner: Arek</div>
+                </div>
+              </div>
+              <span class="tarn-badge tarn-lambda">Lambda / Bedrock</span>
+            </div>
+
+            <div class="node-content">
+              <p style="font-size: 12px; color: var(--color-ink-muted); margin-bottom: 6px;">
+                Turns scattered signals from tickets, calls, and chats into scored, deduplicated opportunity solutions.
+              </p>
+
+              <!-- INSTRUCTIONS ACCORDION -->
+              <div style="border-top: 1px solid var(--color-line-soft); padding-top: 8px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; cursor: pointer;" onclick="toggleInstructions()">
+                  <span style="font-weight: 600; font-size: 11.5px;">Instructions & Prompt</span>
+                  <span id="instrToggleText" style="font-size: 11px; color: var(--color-accent);">Hide</span>
+                </div>
+                <div class="instructions-drawer" id="instructionsDrawer">
+                  <h5>System Prompt (v1.1)</h5>
+                  <p>You are the Product Discovery Agent. Once a week you read the last seven days of customer signal — Zendesk tickets, Gong calls, ClickUp tasks, Notion notes, Metabase usage and the #customer-feedback channel — and turn it into a ranked list of opportunities.</p>
+                  <p style="margin-top: 4px;">Cluster mentions by underlying need, not by wording. Score each cluster on reach, severity and recency; weight enterprise accounts 1.5x. Promote a cluster above the threshold only when it appears in at least two sources.</p>
+                  <p style="margin-top: 4px;">Write for a product manager with five minutes: one line per opportunity, the evidence behind it, and what you would do next. Flag anything that contradicts the current H2 strategy memory rather than dropping it.</p>
+                </div>
+              </div>
+
+            </div>
+            <div class="port port-right" id="port-agent-out"></div>
+          </div>
+
+          <!-- ═══ COLUMN 3: EGRESS & CAPABILITIES (X = 810px) ═══ -->
+
+          <!-- 1. TOOLS NODE -->
+          <div class="node-card" id="node-tools" style="top: 80px; left: 810px;">
+            <div class="port port-left" id="port-tools"></div>
+            <div class="node-header" onclick="focusNode('node-tools')">
+              <div class="node-title-group">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color: var(--color-ink-muted);">
+                  <path d="M1 0 0 1l2.2 3.081a1 1 0 0 0 .815.419h.07a1 1 0 0 1 .708.293l2.675 2.675-2.617 2.654A3.003 3.003 0 0 0 0 13a3 3 0 1 0 5.878-.851l2.654-2.617.968.968-.305.914a1 1 0 0 0 .242 1.023l3.27 3.27a.997.997 0 0 0 1.414 0l1.586-1.586a.997.997 0 0 0 0-1.414l-3.27-3.27a1 1 0 0 0-1.023-.242L10.5 9.5l-.969-.969 2.617-2.654A3.003 3.003 0 0 0 16 3a3 3 0 1 0-5.878.851L7.468 6.468 4.793 3.793a1 1 0 0 1-.293-.707v-.071a1 1 0 0 0-.419-.814L1 0z"/>
+                </svg>
+                <span class="node-title">Tools (6)</span>
+              </div>
+              <span class="tarn-badge tarn-mcp">MCP / Lambda Tools</span>
+            </div>
+            <div class="node-content">
+              <div class="node-row">
+                <div class="node-row-left">
+                  <div class="step-icon icon-zendesk">Z</div>
+                  <span>Zendesk Search</span>
+                </div>
+              </div>
+              <div class="node-row">
+                <div class="node-row-left">
+                  <div class="step-icon icon-notion">N</div>
+                  <span>Notion Sync</span>
+                </div>
+              </div>
+              <div class="node-row">
+                <div class="node-row-left">
+                  <div class="step-icon icon-gong">G</div>
+                  <span>Gong List Calls</span>
+                </div>
+              </div>
+              <div class="node-row">
+                <div class="node-row-left">
+                  <div class="step-icon icon-clickup">C</div>
+                  <span>ClickUp Filter Task</span>
+                </div>
+              </div>
+              <div class="node-row">
+                <div class="node-row-left">
+                  <div class="step-icon icon-metabase">M</div>
+                  <span>Metabase Query</span>
+                </div>
+              </div>
+              <div class="node-row">
+                <div class="node-row-left">
+                  <div class="step-icon icon-slack">S</div>
+                  <span>Slack History</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. SUB-AGENTS NODE -->
+          <div class="node-card" id="node-subagents" style="top: 360px; left: 810px;">
+            <div class="port port-left" id="port-subagents"></div>
+            <div class="node-header" onclick="focusNode('node-subagents')">
+              <div class="node-title-group">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color: var(--color-ink-muted);">
+                  <path d="M15 14s1 0 1-1-1-4-5-4-5 3-5 4 1 1 1 1h8Zm-7.978-1A.261.261 0 0 1 7 12.996c.001-.264.167-1.03.76-1.72C8.312 10.629 9.282 10 11 10c1.717 0 2.687.63 3.24 1.276.593.69.758 1.457.76 1.72l-.008.002a.274.274 0 0 1-.014.002H7.022ZM11 7a2 2 0 1 0 0-4 2 2 0 0 0 0 4Zm3-2a3 3 0 1 1-6 0 3 3 0 0 1 6 0ZM6.936 9.28a5.88 5.88 0 0 0-1.23-.247A7.35 7.35 0 0 0 5 9c-4 0-5 3-5 4 1 1 1 1h4.216A2.238 2.238 0 0 1 5 13c0-1.01.377-2.042 1.09-2.904.243-.294.526-.569.846-.816ZM4.92 10A5.493 5.493 0 0 0 4 13H1c0-.26.164-1.03.76-1.724.545-.636 1.492-1.256 3.16-1.275ZM1.5 5.5a3 3 0 1 1 6 0 3 3 0 0 1-6 0Zm3-2a2 2 0 1 0 0 4 2 2 0 0 0 0-4Z"/>
+                </svg>
+                <span class="node-title">Sub-agents (5)</span>
+              </div>
+              <span class="tarn-badge tarn-sqs">Step Functions</span>
+            </div>
+            <div class="node-content">
+              <div class="node-row"><span class="mono">signal_collector</span></div>
+              <div class="node-row"><span class="mono">theme_clusterer</span></div>
+              <div class="node-row"><span class="mono">opportunity_score</span></div>
+              <div class="node-row"><span class="mono">evidence_linker</span></div>
+              <div class="node-row"><span class="mono">digest_writer</span></div>
+            </div>
+          </div>
+
+          <!-- 3. SKILLS NODE -->
+          <div class="node-card" id="node-skills" style="top: 550px; left: 810px;">
+            <div class="port port-left" id="port-skills"></div>
+            <div class="node-header" onclick="focusNode('node-skills')">
+              <div class="node-title-group">
+                <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" style="color: var(--color-ink-muted);">
+                  <path d="M9.669.864 8 0 6.331.864l-1.858.282-.842 1.68-1.337 1.32L2.6 6l-.306 1.854 1.337 1.32.842 1.68 1.858.282L8 12l1.669-.864 1.858-.282.842-1.68 1.337-1.32L13.4 6l.306-1.854-1.337-1.32-.842-1.68L9.669.864zm1.196 1.193.684 1.365 1.086 1.072-.249 1.507.249 1.507-1.086 1.072-.684 1.365-1.51.229L8 10.87l-1.355-.701-1.51-.229-.684-1.365-1.086-1.072.249-1.507-.249-1.507 1.086-1.072.684-1.365 1.51-.229L8 1.13l1.355.701 1.51.229z"/>
+                </svg>
+                <span class="node-title">Skills (3)</span>
+              </div>
+              <span class="tarn-badge tarn-lambda">Methodology Modules</span>
+            </div>
+            <div class="node-content">
+              <div class="node-row"><span class="mono">onboarding-discovery-agent</span></div>
+              <div class="node-row"><span class="mono">opportunity-solution-tree</span></div>
+              <div class="node-row"><span class="mono">rice-scoring</span></div>
+            </div>
+          </div>
+
+        </div> <!-- /canvasStage -->
+
+        <!-- FLOATING BOTTOM CANVAS ZOOM/PAN CONTROLS -->
+        <div class="canvas-controls">
+          <button class="btn btn-icon" title="Zoom Out" onclick="zoomCanvas(-0.15)">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M4 8a.5.5 0 0 1 .5-.5h7a.5.5 0 0 1 0 1h-7A.5.5 0 0 1 4 8z"/></svg>
+          </button>
+          <span class="mono" id="zoomLevelDisplay" style="padding: 0 4px; font-weight: 500; cursor: pointer;" onclick="resetZoom()" title="Reset to 100%">100%</span>
+          <button class="btn btn-icon" title="Zoom In" onclick="zoomCanvas(0.15)">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 4a.5.5 0 0 1 .5.5v3h3a.5.5 0 0 1 0 1h-3v3a.5.5 0 0 1-1 0v-3h-3a.5.5 0 0 1 0-1h3v-3A.5.5 0 0 1 8 4z"/></svg>
+          </button>
+        </div>
+
+      </main>
+    </div>
+  </div>
+
+  <script>
+    // ════ STATE & PAN/ZOOM INTERACTION ════
+    const state = {
+      panX: 40,
+      panY: 30,
+      zoom: 1.0,
+      isPanning: false,
+      startX: 0,
+      startY: 0,
+      tarnMode: false,
+      runActive: false,
+      timer: null
+    };
+
+    const viewport = document.getElementById('canvasViewport');
+    const stage = document.getElementById('canvasStage');
+    const wiresSvg = document.getElementById('wiresSvg');
+    const zoomDisplay = document.getElementById('zoomLevelDisplay');
+    const runPanel = document.getElementById('runPanel');
+
+    // Pan with Pointer Events
+    viewport.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.node-card') || e.target.closest('.canvas-controls') || e.target.closest('.panel-toggle-btn')) {
+        return;
+      }
+      state.isPanning = true;
+      state.startX = e.clientX - state.panX;
+      state.startY = e.clientY - state.panY;
+      viewport.classList.add('grabbing');
+      viewport.setPointerCapture(e.pointerId);
+    });
+
+    viewport.addEventListener('pointermove', (e) => {
+      if (!state.isPanning) return;
+      state.panX = e.clientX - state.startX;
+      state.panY = e.clientY - state.startY;
+      updateTransform();
+    });
+
+    viewport.addEventListener('pointerup', (e) => {
+      if (state.isPanning) {
+        state.isPanning = false;
+        viewport.classList.remove('grabbing');
+      }
+    });
+
+    // Zoom with Wheel
+    viewport.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
+      const rect = viewport.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const newZoom = Math.min(2.0, Math.max(0.4, state.zoom * zoomFactor));
+
+      // Zoom towards mouse pointer
+      state.panX = mouseX - (mouseX - state.panX) * (newZoom / state.zoom);
+      state.panY = mouseY - (mouseY - state.panY) * (newZoom / state.zoom);
+      state.zoom = newZoom;
+
+      updateTransform();
+    }, { passive: false });
+
+    function zoomCanvas(delta) {
+      const newZoom = Math.min(2.0, Math.max(0.4, state.zoom + delta));
+      const rect = viewport.getBoundingClientRect();
+      const centerX = rect.width / 2;
+      const centerY = rect.height / 2;
+      state.panX = centerX - (centerX - state.panX) * (newZoom / state.zoom);
+      state.panY = centerY - (centerY - state.panY) * (newZoom / state.zoom);
+      state.zoom = newZoom;
+      updateTransform();
+    }
+
+    function resetZoom() {
+      state.zoom = 1.0;
+      updateTransform();
+    }
+
+    function resetCanvas() {
+      state.panX = 40;
+      state.panY = 30;
+      state.zoom = 1.0;
+      updateTransform();
+    }
+
+    function updateTransform() {
+      stage.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.zoom})`;
+      zoomDisplay.textContent = Math.round(state.zoom * 100) + '%';
+      renderWires();
+    }
+
+    // ════ DYNAMIC SVG WIRE CALCULATION ════
+    function getPortCoords(portId) {
+      const port = document.getElementById(portId);
+      if (!port) return null;
+      // Get position relative to canvasStage
+      const stageRect = stage.getBoundingClientRect();
+      const portRect = port.getBoundingClientRect();
+      return {
+        x: (portRect.left + portRect.width / 2 - stageRect.left) / state.zoom,
+        y: (portRect.top + portRect.height / 2 - stageRect.top) / state.zoom
+      };
+    }
+
+    function createBezierPath(p1, p2) {
+      const dx = Math.abs(p2.x - p1.x) * 0.5;
+      return `M ${p1.x} ${p1.y} C ${p1.x + dx} ${p1.y}, ${p2.x - dx} ${p2.y}, ${p2.x} ${p2.y}`;
+    }
+
+    const wireConnections = [
+      { from: 'port-schedule', to: 'port-agent-in', id: 'wire-schedule' },
+      { from: 'port-triggers', to: 'port-agent-in', id: 'wire-triggers', active: true },
+      { from: 'port-channels', to: 'port-agent-in', id: 'wire-channels', warn: true },
+      { from: 'port-memory', to: 'port-agent-in', id: 'wire-memory', active: true },
+      { from: 'port-agent-out', to: 'port-tools', id: 'wire-tools', active: true },
+      { from: 'port-agent-out', to: 'port-subagents', id: 'wire-subagents' },
+      { from: 'port-agent-out', to: 'port-skills', id: 'wire-skills' }
+    ];
+
+    function renderWires() {
+      // Clear dynamic paths
+      const existingPaths = wiresSvg.querySelectorAll('.wire-path');
+      existingPaths.forEach(p => p.remove());
+
+      wireConnections.forEach(conn => {
+        const p1 = getPortCoords(conn.from);
+        const p2 = getPortCoords(conn.to);
+        if (!p1 || !p2) return;
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', createBezierPath(p1, p2));
+        path.setAttribute('id', conn.id);
+        path.classList.add('wire-path');
+
+        if (state.tarnMode) {
+          path.classList.add('tarn-mapped');
+        } else if (conn.warn) {
+          path.classList.add('warn');
+        } else if (conn.active || state.runActive) {
+          path.classList.add('active');
+        }
+
+        wiresSvg.appendChild(path);
+      });
+    }
+
+    // Focus node on click
+    function focusNode(nodeId) {
+      const el = document.getElementById(nodeId);
+      if (!el) return;
+      document.querySelectorAll('.node-card').forEach(n => n.classList.remove('focused'));
+      el.classList.add('focused');
+
+      // Center in viewport smoothly
+      const stageRect = stage.getBoundingClientRect();
+      const nodeRect = el.getBoundingClientRect();
+      const vpRect = viewport.getBoundingClientRect();
+
+      const nodeXInStage = (nodeRect.left - stageRect.left) / state.zoom;
+      const nodeYInStage = (nodeRect.top - stageRect.top) / state.zoom;
+
+      state.panX = vpRect.width / 2 - (nodeXInStage + (nodeRect.width / state.zoom) / 2) * state.zoom;
+      state.panY = vpRect.height / 2 - (nodeYInStage + (nodeRect.height / state.zoom) / 2) * state.zoom;
+      updateTransform();
+    }
+
+    // Toggle Run Panel
+    function toggleRunPanel() {
+      runPanel.classList.toggle('collapsed');
+      setTimeout(() => {
+        renderWires();
+      }, 310);
+    }
+
+    // Toggle Instructions in Agent Card
+    function toggleInstructions() {
+      const drawer = document.getElementById('instructionsDrawer');
+      const text = document.getElementById('instrToggleText');
+      if (drawer.style.display === 'none') {
+        drawer.style.display = 'block';
+        text.textContent = 'Hide';
+      } else {
+        drawer.style.display = 'none';
+        text.textContent = 'Show';
+      }
+      setTimeout(renderWires, 100);
+    }
+
+    // Toggle Tarn AWS Emulation Mode
+    function toggleTarnBridge() {
+      state.tarnMode = !state.tarnMode;
+      const appShell = document.getElementById('appShell');
+      const label = document.getElementById('tarnModeLabel');
+      const btn = document.getElementById('toggleTarnMode');
+
+      if (state.tarnMode) {
+        appShell.classList.add('mode-tarn');
+        label.textContent = 'Tarn Cloud Mapping: ON';
+        btn.classList.add('active');
+      } else {
+        appShell.classList.remove('mode-tarn');
+        label.textContent = 'Tarn Cloud Mapping: OFF';
+        btn.classList.remove('active');
+      }
+      renderWires();
+    }
+
+    // Toggle Theme
+    function toggleTheme() {
+      const current = document.documentElement.getAttribute('data-theme');
+      const next = current === 'dark' ? 'light' : 'dark';
+      document.documentElement.setAttribute('data-theme', next);
+      renderWires();
+    }
+
+    // ════ RUN PASS SIMULATION ════
+    function triggerRunSimulation() {
+      if (state.runActive) return;
+      state.runActive = true;
+
+      const runBtn = document.getElementById('runBtn');
+      const statusBadge = document.getElementById('runStatusBadge');
+      const statusText = document.getElementById('runStatusText');
+      const thinkingSeconds = document.getElementById('thinkingSeconds');
+      const tokenCount = document.getElementById('tokenCount');
+      const budgetPercent = document.getElementById('budgetPercent');
+      const budgetBar = document.getElementById('budgetBar');
+
+      runBtn.disabled = true;
+      runBtn.style.opacity = '0.5';
+      statusText.textContent = 'Simulating Pass...';
+
+      // Step items to animate
+      const steps = [
+        document.getElementById('step-zendesk'),
+        document.getElementById('step-notion'),
+        document.getElementById('step-gong'),
+        document.getElementById('step-clickup'),
+        document.getElementById('step-metabase'),
+        document.getElementById('step-slack')
+      ];
+
+      steps.forEach(s => s.classList.remove('live'));
+      let stepIndex = 0;
+      let seconds = 0;
+      let tokens = 1200;
+
+      renderWires();
+
+      const interval = setInterval(() => {
+        seconds += 2;
+        tokens += 260;
+        thinkingSeconds.textContent = seconds + 's';
+        tokenCount.textContent = tokens.toLocaleString();
+        const pct = Math.min(95, Math.round(50 + (stepIndex / steps.length) * 45));
+        budgetPercent.textContent = pct + '%';
+        budgetBar.style.width = pct + '%';
+
+        if (stepIndex < steps.length) {
+          steps[stepIndex].classList.add('live');
+          stepIndex++;
+        } else {
+          clearInterval(interval);
+          state.runActive = false;
+          runBtn.disabled = false;
+          runBtn.style.opacity = '1';
+          statusText.textContent = 'Completed (3 clusters)';
+          statusBadge.className = 'badge-status';
+          statusBadge.style.background = 'rgba(16, 185, 129, 0.15)';
+          statusBadge.style.color = '#10b981';
+          statusBadge.style.border = '1px solid rgba(16, 185, 129, 0.3)';
+          renderWires();
+        }
+      }, 500);
+    }
+
+    // Initial setup on load
+    window.addEventListener('load', () => {
+      updateTransform();
+      window.addEventListener('resize', renderWires);
+    });
+  </script>
+</body>
+</html>

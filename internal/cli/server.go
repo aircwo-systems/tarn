@@ -497,6 +497,7 @@ func startServer(cfg *config.Config) error {
 	logsSvc := defaultBundle.Handlers().Logs
 
 	// Secrets proxy (uses default account's secrets service — single account proxy)
+	conns := api.NewConnections()
 	var secretsProxyServer *http.Server
 	if cfg.ExposeSecretsProxy {
 		// Get the default account's secrets service for the proxy by initializing
@@ -519,6 +520,7 @@ func startServer(cfg *config.Config) error {
 				RequireToken: cfg.SecretsProxyRequireToken,
 				OnRequest: func(event secretsproxy.RequestEvent) {
 					recordSecretsProxyTelemetry(logsSvc, traceStore, event)
+					conns.RecordSecretsProxy(event)
 				},
 			}),
 			ReadTimeout:  15 * time.Second,
@@ -545,6 +547,7 @@ func startServer(cfg *config.Config) error {
 
 	// Create and start API server
 	server := api.NewServer(cfg, registry, logsSvc, collector)
+	server.SetConnections(conns)
 
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)

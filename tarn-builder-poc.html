@@ -1,0 +1,1784 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tarn Studio — Visual Infrastructure Builder</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com">
+  <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /* ════════ TARN DESIGN TOKENS (ZERO SLATE PURE PITCH BLACK) ════════ */
+    :root, html.dark {
+      color-scheme: dark;
+
+      /* Pure Pitch Black Palette (from Tarn app.css & design.html) */
+      --app: #000000;
+      --sidebar: #000000;
+      --stage: #08090b;
+      --stage-raised: #0d0e12;
+      --element: #121418;
+      --element-hover: rgba(255, 255, 255, 0.05);
+      --element-active: rgba(255, 255, 255, 0.08);
+      --inset: #060709;
+
+      --line-soft: rgba(255, 255, 255, 0.08);
+      --line: rgba(255, 255, 255, 0.13);
+      --line-hover: rgba(255, 255, 255, 0.22);
+      --line-focus: #00e5a0;
+
+      --ink: #ffffff;
+      --ink-2: #9ea5b3;
+      --ink-3: #626978;
+      --ink-4: #3c424e;
+
+      /* Tarn Brand Emerald */
+      --color-accent: #00e5a0;
+      --color-accent-muted: rgba(0, 229, 160, 0.12);
+      --color-accent-strong: rgba(0, 229, 160, 0.25);
+      --color-accent-glow: rgba(0, 229, 160, 0.4);
+
+      /* Tarn Stack & Topology Service Tokens */
+      --stack-gateway: #facc15;
+      --stack-gateway-bg: rgba(250, 204, 21, 0.12);
+      --stack-function: #a3e635;
+      --stack-function-bg: rgba(163, 230, 53, 0.12);
+      --stack-queue: #f59e0b;
+      --stack-queue-bg: rgba(245, 158, 11, 0.12);
+      --stack-topic: #c084fc;
+      --stack-topic-bg: rgba(192, 132, 252, 0.12);
+      --stack-dynamodb: #ec4899;
+      --stack-dynamodb-bg: rgba(236, 72, 153, 0.12);
+      --stack-bucket: #94a3b8;
+      --stack-bucket-bg: rgba(148, 163, 184, 0.12);
+      --stack-eventbridge: #60a5fa;
+      --stack-eventbridge-bg: rgba(96, 165, 250, 0.12);
+      --stack-secret: #2dd4bf;
+      --stack-secret-bg: rgba(45, 212, 191, 0.12);
+
+      --green: #34d399;
+      --amber: #fbbf24;
+      --red: #f87171;
+      --green-wash: rgba(52, 211, 153, 0.09);
+      --amber-wash: rgba(251, 191, 36, 0.09);
+      --red-wash: rgba(248, 113, 113, 0.09);
+
+      --ease: cubic-bezier(0.16, 1, 0.3, 1);
+      --sans: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+
+      --canvas-dots: radial-gradient(circle, rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+      --shadow-node: 0 4px 18px rgba(0, 0, 0, 0.6), 0 1px 3px rgba(0,0,0,0.4);
+      --shadow-float: 0 12px 32px rgba(0, 0, 0, 0.75);
+    }
+
+    /* Tarn Light Mode Tokens (from Tarn design.html & app.css) */
+    html.light {
+      color-scheme: light;
+      --app: #eef1f5;
+      --sidebar: #eef1f5;
+      --stage: #f8fafc;
+      --stage-raised: #f1f4f8;
+      --element: #ffffff;
+      --element-hover: rgba(0, 0, 0, 0.04);
+      --element-active: rgba(0, 0, 0, 0.07);
+      --inset: #e5eaef;
+
+      --line-soft: rgba(0, 0, 0, 0.07);
+      --line: rgba(0, 0, 0, 0.14);
+      --line-hover: rgba(0, 0, 0, 0.25);
+      --line-focus: #007a5a;
+
+      --ink: #101418;
+      --ink-2: #535d6e;
+      --ink-3: #8792a4;
+      --ink-4: #b6bfce;
+
+      --color-accent: #007a5a;
+      --color-accent-muted: rgba(0, 122, 90, 0.12);
+      --color-accent-strong: rgba(0, 122, 90, 0.22);
+      --color-accent-glow: rgba(0, 122, 90, 0.3);
+
+      --stack-gateway: #a16207;
+      --stack-gateway-bg: rgba(161, 98, 7, 0.1);
+      --stack-function: #4d7c0f;
+      --stack-function-bg: rgba(77, 124, 15, 0.1);
+      --stack-queue: #b45309;
+      --stack-queue-bg: rgba(180, 83, 9, 0.1);
+      --stack-topic: #7e22ce;
+      --stack-topic-bg: rgba(126, 34, 206, 0.1);
+      --stack-dynamodb: #be185d;
+      --stack-dynamodb-bg: rgba(190, 24, 93, 0.1);
+      --stack-bucket: #475569;
+      --stack-bucket-bg: rgba(71, 85, 105, 0.1);
+      --stack-eventbridge: #1d4ed8;
+      --stack-eventbridge-bg: rgba(29, 78, 216, 0.1);
+      --stack-secret: #0f766e;
+      --stack-secret-bg: rgba(15, 118, 110, 0.1);
+
+      --green: #057a55;
+      --amber: #b45309;
+      --red: #dc2626;
+      --green-wash: rgba(5, 122, 85, 0.08);
+      --amber-wash: rgba(180, 83, 9, 0.08);
+      --red-wash: rgba(220, 38, 38, 0.08);
+
+      --canvas-dots: radial-gradient(circle, rgba(0, 0, 0, 0.12) 1.2px, transparent 1.2px);
+      --shadow-node: 0 2px 10px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0,0,0,0.03);
+      --shadow-float: 0 10px 24px rgba(0, 0, 0, 0.12);
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      height: 100%;
+      width: 100%;
+      overflow: hidden;
+      font-family: var(--sans);
+      font-size: 13px;
+      background: var(--app);
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+    }
+    .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .muted { color: var(--ink-3); }
+
+    /* ════════ TARN RACK BUTTONS (`rc-btn`) ════════ */
+    button, input, select { font: inherit; color: inherit; }
+    button { border: 0; }
+    button, [role="button"] { -webkit-tap-highlight-color: transparent; }
+    button:focus-visible, input:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+      outline: 2px solid var(--line-focus);
+      outline-offset: 2px;
+    }
+
+    .rc-btn {
+      --tone: var(--ink-2);
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      height: 28px;
+      padding: 0 11px;
+      border-radius: 8px;
+      border: 1px solid var(--line-soft);
+      font-size: 11.5px;
+      font-weight: 500;
+      color: var(--tone);
+      text-decoration: none;
+      white-space: nowrap;
+      background: var(--element);
+      cursor: pointer;
+      user-select: none;
+      transition: color 120ms ease, background 120ms ease, border-color 120ms ease, transform 120ms ease, opacity 120ms ease;
+    }
+    .rc-btn:hover:not(:disabled) {
+      color: var(--ink);
+      border-color: var(--line);
+      background: var(--element-hover);
+    }
+    .rc-btn:active:not(:disabled) {
+      transform: scale(0.96);
+    }
+    .rc-btn.small {
+      height: 24px;
+      padding: 0 8px;
+      font-size: 11px;
+    }
+    .rc-btn.icon-only {
+      width: 28px;
+      padding: 0;
+      justify-content: center;
+    }
+    .rc-btn.primary {
+      --tone: var(--color-accent);
+      border-color: color-mix(in srgb, var(--tone) 45%, transparent);
+      background: color-mix(in srgb, var(--tone) 10%, transparent);
+      color: var(--tone);
+      font-weight: 600;
+    }
+    .rc-btn.primary:hover:not(:disabled) {
+      color: var(--tone);
+      border-color: var(--tone);
+      background: color-mix(in srgb, var(--tone) 18%, transparent);
+    }
+    .rc-btn.ghost {
+      background: transparent;
+      border-color: transparent;
+    }
+    .rc-btn.ghost:hover {
+      background: var(--element-hover);
+      border-color: var(--line-soft);
+    }
+
+    /* ════════ TARN TONE PILL (`rc-tone-pill`) ════════ */
+    .rc-tone-pill {
+      --tone: var(--ink-2);
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      height: 22px;
+      padding: 0 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 500;
+      white-space: nowrap;
+      color: var(--tone);
+      border: 1px solid var(--line-soft);
+      background: var(--element);
+    }
+    .rc-tone-pill[data-tone="green"] {
+      --tone: var(--green);
+      border-color: color-mix(in srgb, var(--tone) 40%, transparent);
+      background: color-mix(in srgb, var(--tone) 10%, transparent);
+    }
+    .rc-tone-pill[data-tone="amber"] {
+      --tone: var(--amber);
+      border-color: color-mix(in srgb, var(--tone) 40%, transparent);
+      background: color-mix(in srgb, var(--tone) 10%, transparent);
+    }
+    .rc-tone-pill[data-tone="red"] {
+      --tone: var(--red);
+      border-color: color-mix(in srgb, var(--tone) 40%, transparent);
+      background: color-mix(in srgb, var(--tone) 10%, transparent);
+    }
+    .live-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 0 3px var(--green-wash);
+    }
+
+    /* ════════ APP SHELL ════════ */
+    .shell {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      width: 100vw;
+      overflow: hidden;
+    }
+
+    /* ════════ TOP HEADER BAR ════════ */
+    .topbar {
+      height: 46px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 14px;
+      background: var(--sidebar);
+      border-bottom: 1px solid var(--line-soft);
+      z-index: 50;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    .brand-lockup {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+    .mark {
+      width: 22px;
+      height: 22px;
+      color: var(--color-accent);
+      flex-shrink: 0;
+    }
+    .eyebrow {
+      color: var(--ink-3);
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+      line-height: 1;
+    }
+    .brand-name {
+      margin-top: 2px;
+      font-size: 13px;
+      font-weight: 650;
+      letter-spacing: -.01em;
+      line-height: 1.1;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .topbar-center {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* Tarn Mode Segmented Control */
+    .seg-control {
+      display: flex;
+      background: var(--stage);
+      padding: 2px;
+      border-radius: 8px;
+      border: 1px solid var(--line-soft);
+    }
+    .seg-btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 10px;
+      border-radius: 6px;
+      font-size: 11.5px;
+      font-weight: 500;
+      cursor: pointer;
+      color: var(--ink-3);
+      border: none;
+      background: transparent;
+      transition: all 120ms ease;
+    }
+    .seg-btn:hover { color: var(--ink); }
+    .seg-btn.active {
+      background: var(--element);
+      color: var(--ink);
+      border: 1px solid var(--line);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+      font-weight: 600;
+    }
+
+    /* ════════ WORKSPACE ════════ */
+    .workspace {
+      display: flex;
+      flex: 1;
+      height: calc(100vh - 46px);
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* ════════ LEFT: SERVICE PALETTE SIDEBAR ════════ */
+    .palette-sidebar {
+      width: 248px;
+      height: 100%;
+      background: var(--sidebar);
+      border-right: 1px solid var(--line-soft);
+      display: flex;
+      flex-direction: column;
+      z-index: 30;
+      flex-shrink: 0;
+    }
+    .palette-head {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line-soft);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .search-box {
+      width: 100%;
+      height: 28px;
+      background: var(--inset);
+      border: 1px solid var(--line-soft);
+      border-radius: 6px;
+      padding: 0 8px;
+      color: var(--ink);
+      font-size: 11.5px;
+      outline: none;
+      transition: border-color 120ms ease;
+    }
+    .search-box:focus {
+      border-color: var(--line-focus);
+    }
+
+    .palette-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--line-soft) transparent;
+    }
+    .palette-group {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+    .group-label {
+      padding: 3px 6px;
+      color: var(--ink-3);
+      font-size: 10px;
+      font-weight: 650;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .palette-item {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      padding: 6px 8px;
+      color: var(--ink-2);
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      cursor: grab;
+      user-select: none;
+      transition: all 120ms var(--ease);
+    }
+    .palette-item:hover {
+      color: var(--ink);
+      background: var(--element);
+      border-color: var(--line-soft);
+      transform: translateY(-1px);
+    }
+    .palette-item:active {
+      cursor: grabbing;
+      transform: scale(0.98);
+    }
+    .service-badge {
+      width: 22px;
+      height: 22px;
+      border-radius: 5px;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      font-size: 10.5px;
+      font-family: var(--mono);
+      flex-shrink: 0;
+    }
+    .palette-info {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+    .palette-name {
+      font-size: 12px;
+      font-weight: 550;
+      color: var(--ink);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .palette-desc {
+      font-size: 10.5px;
+      color: var(--ink-3);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .palette-foot {
+      padding: 9px 10px;
+      border-top: 1px solid var(--line-soft);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 10.5px;
+      color: var(--ink-3);
+    }
+    .account-badge {
+      padding: 4px 6px;
+      background: var(--inset);
+      border: 1px solid var(--line-soft);
+      border-radius: 5px;
+      color: var(--ink-2);
+      font: 10px var(--mono);
+    }
+
+    /* ════════ CENTER: CANVAS ════════ */
+    .canvas-viewport {
+      flex: 1;
+      height: 100%;
+      position: relative;
+      background-color: var(--stage);
+      background-image: var(--canvas-dots);
+      background-size: 16px 16px;
+      overflow: hidden;
+      cursor: grab;
+      user-select: none;
+    }
+    .canvas-viewport.panning {
+      cursor: grabbing;
+    }
+    .canvas-stage {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 4000px;
+      height: 3000px;
+      transform-origin: 0 0;
+      pointer-events: none;
+    }
+
+    /* SVG Wires */
+    .wires-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      overflow: visible;
+      z-index: 10;
+    }
+    .wire-line {
+      fill: none;
+      stroke: var(--line);
+      stroke-width: 1.75;
+      stroke-dasharray: 4 3;
+      transition: stroke 160ms ease, stroke-width 160ms ease;
+      cursor: pointer;
+      pointer-events: stroke;
+    }
+    .wire-line:hover {
+      stroke: var(--ink);
+      stroke-width: 2.5;
+    }
+    .wire-line.active {
+      stroke: var(--color-accent);
+      stroke-width: 2;
+      stroke-dasharray: none;
+      filter: drop-shadow(0 0 5px var(--color-accent-glow));
+    }
+    .wire-line.pulsing {
+      stroke-dasharray: 8 6;
+      animation: wirePulse 800ms linear infinite;
+    }
+    @keyframes wirePulse {
+      to { stroke-dashoffset: -28; }
+    }
+
+    /* ════════ RACK-STYLE INFRA NODES (`rc-panel`) ════════ */
+    .infra-node {
+      position: absolute;
+      width: 240px;
+      background: var(--element);
+      border: 1px solid var(--line-soft);
+      border-radius: 10px;
+      box-shadow: var(--shadow-node);
+      pointer-events: auto;
+      z-index: 20;
+      cursor: move;
+      display: flex;
+      flex-direction: column;
+      transition: border-color 140ms ease, box-shadow 140ms ease, transform 120ms ease;
+    }
+    .infra-node:hover {
+      border-color: var(--line);
+      box-shadow: var(--shadow-float);
+    }
+    .infra-node.selected {
+      border-color: var(--color-accent);
+      box-shadow: 0 0 0 2px var(--color-accent-muted), var(--shadow-float);
+    }
+    .infra-node.executing {
+      border-color: var(--color-accent);
+      box-shadow: 0 0 16px var(--color-accent-glow);
+      transform: scale(1.02);
+    }
+
+    .node-head {
+      padding: 8px 10px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--stage-raised);
+      border-radius: 9px 9px 0 0;
+      gap: 6px;
+    }
+    .node-title-group {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+    }
+    .node-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--ink);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .node-del-btn {
+      width: 18px;
+      height: 18px;
+      border-radius: 4px;
+      display: grid;
+      place-items: center;
+      border: none;
+      background: transparent;
+      color: var(--ink-3);
+      cursor: pointer;
+      font-size: 11px;
+    }
+    .node-del-btn:hover {
+      color: var(--red);
+      background: var(--red-wash);
+    }
+
+    .node-body {
+      padding: 8px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      font-size: 11px;
+    }
+    .node-kv-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: var(--ink-3);
+    }
+    .node-kv-val {
+      color: var(--ink);
+      font-family: var(--mono);
+      font-size: 10.5px;
+    }
+
+    /* Port Circles */
+    .port-circle {
+      position: absolute;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--stage-raised);
+      border: 1.5px solid var(--line);
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 25;
+      cursor: crosshair;
+      transition: all 140ms ease;
+    }
+    .port-circle:hover {
+      background: var(--color-accent);
+      border-color: #fff;
+      transform: translateY(-50%) scale(1.35);
+    }
+    .port-left { left: -6px; }
+    .port-right { right: -6px; }
+    .port-circle.connected {
+      background: var(--color-accent);
+      border-color: var(--app);
+    }
+
+    /* ════════ RIGHT: INSPECTOR & TERRAFORM DRAWER ════════ */
+    .inspector-sidebar {
+      width: 380px;
+      height: 100%;
+      background: var(--sidebar);
+      border-left: 1px solid var(--line-soft);
+      display: flex;
+      flex-direction: column;
+      z-index: 30;
+      flex-shrink: 0;
+    }
+    .inspector-tabs {
+      height: 38px;
+      display: flex;
+      border-bottom: 1px solid var(--line-soft);
+      background: var(--sidebar);
+    }
+    .tab-btn {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      font-size: 11.5px;
+      font-weight: 550;
+      color: var(--ink-3);
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      transition: all 120ms ease;
+    }
+    .tab-btn:hover { color: var(--ink); }
+    .tab-btn.active {
+      color: var(--color-accent);
+      border-bottom-color: var(--color-accent);
+      background: var(--element);
+      font-weight: 600;
+    }
+
+    .inspector-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--line-soft) transparent;
+    }
+
+    .form-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .form-label {
+      font-size: 10px;
+      font-weight: 650;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      color: var(--ink-3);
+    }
+    .form-input {
+      height: 28px;
+      background: var(--inset);
+      border: 1px solid var(--line-soft);
+      border-radius: 6px;
+      padding: 0 8px;
+      color: var(--ink);
+      font-size: 11.5px;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 120ms ease;
+    }
+    .form-input:focus {
+      border-color: var(--line-focus);
+    }
+
+    .hcl-box {
+      background: var(--inset);
+      border: 1px solid var(--line-soft);
+      border-radius: 7px;
+      padding: 10px;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      line-height: 1.5;
+      color: #7ee787;
+      overflow-x: auto;
+      white-space: pre;
+    }
+
+    /* ════════ BOTTOM DOCK: TARN LOG FEED ════════ */
+    .console-dock {
+      position: absolute;
+      bottom: 0;
+      left: 248px;
+      right: 380px;
+      height: 160px;
+      background: rgba(7, 8, 10, 0.96);
+      backdrop-filter: blur(12px);
+      border-top: 1px solid var(--line-soft);
+      z-index: 28;
+      display: flex;
+      flex-direction: column;
+      transition: transform 200ms var(--ease);
+    }
+    .console-dock.collapsed {
+      transform: translateY(124px);
+    }
+    .console-head {
+      height: 36px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid var(--line-soft);
+      cursor: pointer;
+      user-select: none;
+    }
+    .console-feed {
+      flex: 1;
+      padding: 8px 12px;
+      overflow-y: auto;
+      font-family: var(--mono);
+      font-size: 10.5px;
+      line-height: 1.6;
+      color: var(--ink-2);
+      scrollbar-width: thin;
+      scrollbar-color: var(--line-soft) transparent;
+    }
+    .log-row {
+      display: flex;
+      gap: 9px;
+    }
+    .log-ts { color: var(--ink-4); }
+    .log-tag { color: var(--color-accent); font-weight: 600; }
+    .log-text { color: var(--ink); }
+
+    /* ════════ FLOATING CANVAS CONTROLS ════════ */
+    .canvas-float-bar {
+      position: absolute;
+      bottom: 180px;
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 6px;
+      background: var(--element);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      box-shadow: var(--shadow-float);
+      z-index: 35;
+    }
+
+    /* Event Particle */
+    .event-packet {
+      position: absolute;
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--color-accent);
+      box-shadow: 0 0 10px var(--color-accent), 0 0 3px #fff;
+      pointer-events: none;
+      z-index: 40;
+      transform: translate(-50%, -50%);
+    }
+  </style>
+</head>
+<body>
+
+  <div class="shell">
+    <!-- TOP HEADER -->
+    <header class="topbar">
+      <div class="brand-lockup">
+        <!-- Authentic Tarn Logo Mark -->
+        <svg viewBox="0 0 256 256" class="mark" role="img" aria-label="Tarn logo">
+          <path fill="currentColor" d="M232,40a8,8,0,0,1-8,8H56a8,8,0,0,1,0-16H224A8,8,0,0,1,232,40ZM184,72a8,8,0,0,0-8-8H32a8,8,0,0,0,0,16H176A8,8,0,0,0,184,72Zm-16,32a8,8,0,0,0-8-8H56a8,8,0,0,0,0,16H160A8,8,0,0,0,168,104Zm16,32a8,8,0,0,0-8-8H88a8,8,0,0,0,0,16h88A8,8,0,0,0,184,136Zm0,24H120a8,8,0,0,0,0,16h64a8,8,0,0,0,0-16Zm-24,32H128a8,8,0,0,0,0,16h32a8,8,0,0,0,0-16Zm-32,32H112a8,8,0,0,0,0,16h16a8,8,0,0,0,0-16Z"/>
+        </svg>
+        <div>
+          <div class="eyebrow">Local Cloud</div>
+          <div class="brand-name">
+            <span>Tarn</span>
+            <span style="color: var(--ink-3); font-weight: 400;">/</span>
+            <span style="font-weight: 500;">Studio</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- CENTER: MODE CONTROLS -->
+      <div class="topbar-center">
+        <div class="seg-control">
+          <button class="seg-btn active" id="btnDesignMode" onclick="setMode('design')">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/></svg>
+            Design & Wire
+          </button>
+          <button class="seg-btn" id="btnLiveMode" onclick="setMode('live')">
+            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M11.251.068a.5.5 0 0 1 .227.58L9.677 6.5H13a.5.5 0 0 1 .364.843l-8 8.5a.5.5 0 0 1-.842-.49L6.323 9.5H3a.5.5 0 0 1-.364-.843l8-8.5a.5.5 0 0 1 .615-.09z"/></svg>
+            Live Execution
+          </button>
+        </div>
+
+        <select class="rc-btn" id="templateSelect" onchange="loadTemplate(this.value)">
+          <option value="order-flow">Template: Event-Driven Orders</option>
+          <option value="fanout-pubsub">Template: SNS Fan-Out Queueing</option>
+          <option value="scheduled-archival">Template: EventBridge S3 Archival</option>
+          <option value="blank">Blank Canvas</option>
+        </select>
+      </div>
+
+      <!-- RIGHT: ACTIONS -->
+      <div style="display: flex; align-items: center; gap: 7px;">
+        <button class="rc-btn primary" id="btnDispatch" onclick="dispatchTestEvent()">
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><path d="m11.596 8.697-6.363 3.692c-.54.313-1.233-.066-1.233-.697V4.308c0-.63.692-1.01 1.233-.696l6.363 3.692a.802.802 0 0 1 0 1.393z"/></svg>
+          Send Test Event
+        </button>
+        <button class="rc-btn" onclick="exportTerraformModal()">Export HCL</button>
+        <button class="rc-btn icon-only" onclick="resetCanvasView()" title="Center Canvas">⌖</button>
+        <button class="rc-btn icon-only" onclick="toggleTheme()" title="Toggle Dark/Light">◐</button>
+      </div>
+    </header>
+
+    <!-- MAIN WORKSPACE -->
+    <div class="workspace">
+
+      <!-- LEFT: AWS SERVICE PALETTE -->
+      <aside class="palette-sidebar">
+        <div class="palette-head">
+          <input type="text" class="search-box" id="paletteSearch" placeholder="Filter AWS services..." oninput="filterPalette(this.value)">
+        </div>
+
+        <div class="palette-scroll" id="paletteList">
+          <!-- Ingress -->
+          <div class="palette-group">
+            <div class="group-label">
+              <span>Ingress</span>
+              <span class="mono count">2</span>
+            </div>
+            <div class="palette-item" draggable="true" ondragstart="handleDragStart(event, 'apigateway')" onclick="addNodeAtCenter('apigateway')">
+              <div class="service-badge" style="background: var(--stack-gateway-bg); color: var(--stack-gateway);">AG</div>
+              <div class="palette-info">
+                <span class="palette-name">API Gateway</span>
+                <span class="palette-desc">HTTP v2 / REST routes</span>
+              </div>
+            </div>
+            <div class="palette-item" draggable="true" ondragstart="handleDragStart(event, 'eventbridge')" onclick="addNodeAtCenter('eventbridge')">
+              <div class="service-badge" style="background: var(--stack-eventbridge-bg); color: var(--stack-eventbridge);">EB</div>
+              <div class="palette-info">
+                <span class="palette-name">EventBridge Rule</span>
+                <span class="palette-desc">Cron schedules & buses</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Compute -->
+          <div class="palette-group">
+            <div class="group-label">
+              <span>Compute</span>
+              <span class="mono count">1</span>
+            </div>
+            <div class="palette-item" draggable="true" ondragstart="handleDragStart(event, 'lambda')" onclick="addNodeAtCenter('lambda')">
+              <div class="service-badge" style="background: var(--stack-function-bg); color: var(--stack-function);">λ</div>
+              <div class="palette-info">
+                <span class="palette-name">Lambda Function</span>
+                <span class="palette-desc">Serverless runtime</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Messaging -->
+          <div class="palette-group">
+            <div class="group-label">
+              <span>Messaging</span>
+              <span class="mono count">2</span>
+            </div>
+            <div class="palette-item" draggable="true" ondragstart="handleDragStart(event, 'sqs')" onclick="addNodeAtCenter('sqs')">
+              <div class="service-badge" style="background: var(--stack-queue-bg); color: var(--stack-queue);">SQS</div>
+              <div class="palette-info">
+                <span class="palette-name">SQS Queue</span>
+                <span class="palette-desc">Standard / FIFO queue</span>
+              </div>
+            </div>
+            <div class="palette-item" draggable="true" ondragstart="handleDragStart(event, 'sns')" onclick="addNodeAtCenter('sns')">
+              <div class="service-badge" style="background: var(--stack-topic-bg); color: var(--stack-topic);">SNS</div>
+              <div class="palette-info">
+                <span class="palette-name">SNS Topic</span>
+                <span class="palette-desc">Pub/sub broadcast</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Storage -->
+          <div class="palette-group">
+            <div class="group-label">
+              <span>Storage</span>
+              <span class="mono count">2</span>
+            </div>
+            <div class="palette-item" draggable="true" ondragstart="handleDragStart(event, 'dynamodb')" onclick="addNodeAtCenter('dynamodb')">
+              <div class="service-badge" style="background: var(--stack-dynamodb-bg); color: var(--stack-dynamodb);">DDB</div>
+              <div class="palette-info">
+                <span class="palette-name">DynamoDB Table</span>
+                <span class="palette-desc">NoSQL key-value store</span>
+              </div>
+            </div>
+            <div class="palette-item" draggable="true" ondragstart="handleDragStart(event, 's3')" onclick="addNodeAtCenter('s3')">
+              <div class="service-badge" style="background: var(--stack-bucket-bg); color: var(--stack-bucket);">S3</div>
+              <div class="palette-info">
+                <span class="palette-name">S3 Bucket</span>
+                <span class="palette-desc">Object storage</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Security -->
+          <div class="palette-group">
+            <div class="group-label">
+              <span>Security</span>
+              <span class="mono count">1</span>
+            </div>
+            <div class="palette-item" draggable="true" ondragstart="handleDragStart(event, 'secrets')" onclick="addNodeAtCenter('secrets')">
+              <div class="service-badge" style="background: var(--stack-secret-bg); color: var(--stack-secret);">SEC</div>
+              <div class="palette-info">
+                <span class="palette-name">Secrets Manager</span>
+                <span class="palette-desc">Encrypted secrets</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="palette-foot">
+          <span class="live-dot" title="Tarn Engine Active"></span>
+          <span class="account-badge">000000000000 · us-east-1</span>
+        </div>
+      </aside>
+
+      <!-- CENTER: CANVAS -->
+      <main class="canvas-viewport" id="canvasContainer"
+            ondragover="handleCanvasDragOver(event)"
+            ondrop="handleCanvasDrop(event)">
+
+        <div class="canvas-stage" id="canvasStage">
+          <!-- DYNAMIC SVG WIRES -->
+          <svg class="wires-layer" id="canvasWiresSvg"></svg>
+
+          <!-- DYNAMIC INFRA NODES -->
+          <div id="nodesContainer"></div>
+        </div>
+
+        <!-- FLOATING BOTTOM CANVAS CONTROLS -->
+        <div class="canvas-float-bar">
+          <button class="rc-btn icon-only small" onclick="zoomCanvas(-0.15)">-</button>
+          <span class="mono" id="zoomLabel" style="padding: 0 4px; font-size: 11px; font-weight: 500;">100%</span>
+          <button class="rc-btn icon-only small" onclick="zoomCanvas(0.15)">+</button>
+          <button class="rc-btn small" onclick="resetCanvasView()">Center</button>
+        </div>
+
+        <!-- BOTTOM CONSOLE: TARN LOG FEED -->
+        <div class="console-dock" id="consoleDock">
+          <div class="console-head" onclick="toggleConsole()">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span class="mono" style="font-weight: 600; color: var(--color-accent);">⚡️ Tarn Engine</span>
+              <span class="rc-tone-pill" data-tone="green">Active on :4566</span>
+            </div>
+            <span style="font-size: 11px; color: var(--ink-3);" id="consoleToggleLabel">▲ Click to Expand Log Feed</span>
+          </div>
+          <div class="console-feed" id="consoleFeed">
+            <div class="log-row">
+              <span class="log-ts mono">17:08:00</span>
+              <span class="log-tag">[tarn-core]</span>
+              <span class="log-text">Ready. Local AWS emulator running at http://127.0.0.1:4566 (Apache 2.0)</span>
+            </div>
+          </div>
+        </div>
+
+      </main>
+
+      <!-- RIGHT: INSPECTOR & TERRAFORM GENERATOR -->
+      <aside class="inspector-sidebar" id="inspectorSidebar">
+        <div class="inspector-tabs">
+          <button class="tab-btn active" id="tabPropsBtn" onclick="switchInspectorTab('props')">Properties</button>
+          <button class="tab-btn" id="tabHclBtn" onclick="switchInspectorTab('hcl')">Terraform (HCL)</button>
+        </div>
+
+        <div class="inspector-content" id="inspectorContent"></div>
+      </aside>
+
+    </div>
+  </div>
+
+  <script>
+    // ════════ STATE & ARCHITECTURES ════════
+    const state = {
+      mode: 'design',
+      panX: 70,
+      panY: 50,
+      zoom: 1.0,
+      isPanning: false,
+      startX: 0,
+      startY: 0,
+      selectedNodeId: null,
+      selectedWireId: null,
+      activeWireDrag: null,
+      nodes: [],
+      wires: []
+    };
+
+    const stage = document.getElementById('canvasStage');
+    const container = document.getElementById('canvasContainer');
+    const wiresSvg = document.getElementById('canvasWiresSvg');
+    const nodesContainer = document.getElementById('nodesContainer');
+    const zoomLabel = document.getElementById('zoomLabel');
+
+    // Preset architectures aligned with Tarn local cloud workflows
+    const templates = {
+      'order-flow': {
+        nodes: [
+          { id: 'n1', type: 'apigateway', name: 'orders_api', route: 'POST /v1/orders', x: 60, y: 120 },
+          { id: 'n2', type: 'lambda', name: 'order_ingest_fn', runtime: 'nodejs20.x', memory: 256, x: 360, y: 120 },
+          { id: 'n3', type: 'sqs', name: 'orders_queue', visibilityTimeout: 30, x: 660, y: 120 },
+          { id: 'n4', type: 'lambda', name: 'order_processor_fn', runtime: 'python3.12', memory: 512, x: 960, y: 120 },
+          { id: 'n5', type: 'dynamodb', name: 'orders_table', pk: 'order_id (S)', x: 1260, y: 120 }
+        ],
+        wires: [
+          { id: 'w1', from: 'n1', to: 'n2', desc: 'POST /v1/orders -> Invoke' },
+          { id: 'w2', from: 'n2', to: 'n3', desc: 'SendMessageBatch' },
+          { id: 'w3', from: 'n3', to: 'n4', desc: 'EventSourceMapping (batch: 10)' },
+          { id: 'w4', from: 'n4', to: 'n5', desc: 'PutItem' }
+        ]
+      },
+      'fanout-pubsub': {
+        nodes: [
+          { id: 'n1', type: 'apigateway', name: 'events_gw', route: 'POST /events', x: 60, y: 160 },
+          { id: 'n2', type: 'lambda', name: 'publish_fn', runtime: 'python3.12', memory: 256, x: 360, y: 160 },
+          { id: 'n3', type: 'sns', name: 'events_topic', x: 660, y: 160 },
+          { id: 'n4', type: 'sqs', name: 'email_queue', visibilityTimeout: 30, x: 960, y: 70 },
+          { id: 'n5', type: 'sqs', name: 'analytics_queue', visibilityTimeout: 30, x: 960, y: 250 }
+        ],
+        wires: [
+          { id: 'w1', from: 'n1', to: 'n2', desc: 'POST /events -> Lambda' },
+          { id: 'w2', from: 'n2', to: 'n3', desc: 'Publish to Topic' },
+          { id: 'w3', from: 'n3', to: 'n4', desc: 'Subscription (email)' },
+          { id: 'w4', from: 'n3', to: 'n5', desc: 'Subscription (analytics)' }
+        ]
+      },
+      'scheduled-archival': {
+        nodes: [
+          { id: 'n1', type: 'eventbridge', name: 'nightly_backup_rule', schedule: 'cron(0 2 * * ? *)', x: 60, y: 140 },
+          { id: 'n2', type: 'lambda', name: 'archive_worker_fn', runtime: 'python3.12', memory: 1024, x: 380, y: 140 },
+          { id: 'n3', type: 's3', name: 'tarn_cold_archive_bucket', x: 700, y: 140 }
+        ],
+        wires: [
+          { id: 'w1', from: 'n1', to: 'n2', desc: 'Schedule Target' },
+          { id: 'w2', from: 'n2', to: 'n3', desc: 'S3 PutObject' }
+        ]
+      },
+      'blank': { nodes: [], wires: [] }
+    };
+
+    function loadTemplate(key) {
+      const t = templates[key] || templates['blank'];
+      state.nodes = JSON.parse(JSON.stringify(t.nodes));
+      state.wires = JSON.parse(JSON.stringify(t.wires));
+      state.selectedNodeId = state.nodes[0]?.id || null;
+      renderAll();
+      logConsole('template', `Loaded template: ${key}`);
+    }
+
+    // ════════ SERVICE DEFINITIONS (TARN STACK COLORS) ════════
+    const serviceMeta = {
+      apigateway: { label: 'API Gateway', color: 'var(--stack-gateway)', icon: 'AG', bg: 'var(--stack-gateway-bg)' },
+      eventbridge: { label: 'EventBridge', color: 'var(--stack-eventbridge)', icon: 'EB', bg: 'var(--stack-eventbridge-bg)' },
+      lambda: { label: 'Lambda', color: 'var(--stack-function)', icon: 'λ', bg: 'var(--stack-function-bg)' },
+      sqs: { label: 'SQS Queue', color: 'var(--stack-queue)', icon: 'SQS', bg: 'var(--stack-queue-bg)' },
+      sns: { label: 'SNS Topic', color: 'var(--stack-topic)', icon: 'SNS', bg: 'var(--stack-topic-bg)' },
+      dynamodb: { label: 'DynamoDB', color: 'var(--stack-dynamodb)', icon: 'DDB', bg: 'var(--stack-dynamodb-bg)' },
+      s3: { label: 'S3 Bucket', color: 'var(--stack-bucket)', icon: 'S3', bg: 'var(--stack-bucket-bg)' },
+      secrets: { label: 'Secrets Manager', color: 'var(--stack-secret)', icon: 'SEC', bg: 'var(--stack-secret-bg)' }
+    };
+
+    // ════════ DRAG & DROP FROM PALETTE ════════
+    function handleDragStart(e, serviceType) {
+      e.dataTransfer.setData('text/plain', serviceType);
+    }
+    function handleCanvasDragOver(e) {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    }
+    function handleCanvasDrop(e) {
+      e.preventDefault();
+      const serviceType = e.dataTransfer.getData('text/plain');
+      if (!serviceType) return;
+      const rect = container.getBoundingClientRect();
+      const dropX = (e.clientX - rect.left - state.panX) / state.zoom;
+      const dropY = (e.clientY - rect.top - state.panY) / state.zoom;
+      createNode(serviceType, dropX - 120, dropY - 35);
+    }
+    function addNodeAtCenter(serviceType) {
+      const rect = container.getBoundingClientRect();
+      const cx = (rect.width / 2 - state.panX) / state.zoom;
+      const cy = (rect.height / 2 - state.panY) / state.zoom;
+      createNode(serviceType, cx - 120, cy - 35);
+    }
+    function createNode(type, x, y) {
+      const id = 'n_' + Date.now();
+      const defaultNames = {
+        apigateway: 'http_api_gateway',
+        eventbridge: 'cron_scheduler',
+        lambda: 'compute_handler',
+        sqs: 'orders_queue',
+        sns: 'events_topic',
+        dynamodb: 'records_store',
+        s3: 'assets_bucket',
+        secrets: 'app_credentials'
+      };
+      const node = {
+        id,
+        type,
+        name: (defaultNames[type] || 'res') + '_' + Math.floor(Math.random() * 900 + 100),
+        x: Math.round(x),
+        y: Math.round(y)
+      };
+      if (type === 'lambda') { node.runtime = 'nodejs20.x'; node.memory = 256; }
+      else if (type === 'apigateway') { node.route = 'POST /api/v1'; }
+      else if (type === 'sqs') { node.visibilityTimeout = 30; }
+      else if (type === 'dynamodb') { node.pk = 'id (S)'; }
+      else if (type === 'eventbridge') { node.schedule = 'rate(5 minutes)'; }
+
+      state.nodes.push(node);
+      state.selectedNodeId = id;
+      renderAll();
+      logConsole('provision', `Added ${type}: ${node.name}`);
+    }
+
+    // ════════ RENDERING NODES & WIRES ════════
+    function renderAll() {
+      renderNodes();
+      renderWires();
+      renderInspector();
+    }
+
+    function renderNodes() {
+      nodesContainer.innerHTML = '';
+      state.nodes.forEach(node => {
+        const meta = serviceMeta[node.type] || serviceMeta.lambda;
+        const el = document.createElement('div');
+        el.className = 'infra-node' + (node.id === state.selectedNodeId ? ' selected' : '');
+        el.id = node.id;
+        el.style.left = node.x + 'px';
+        el.style.top = node.y + 'px';
+
+        const portLeft = `<div class="port-circle port-left ${hasConnection(node.id, 'to') ? 'connected' : ''}" data-port="left" data-node="${node.id}" title="Input Port"></div>`;
+        const portRight = `<div class="port-circle port-right ${hasConnection(node.id, 'from') ? 'connected' : ''}" data-port="right" data-node="${node.id}" title="Drag to connect"></div>`;
+
+        let detailsHtml = '';
+        if (node.type === 'lambda') {
+          detailsHtml = `
+            <div class="node-kv-row"><span>Runtime</span><span class="node-kv-val">${node.runtime}</span></div>
+            <div class="node-kv-row"><span>Memory</span><span class="node-kv-val">${node.memory} MB</span></div>
+          `;
+        } else if (node.type === 'apigateway') {
+          detailsHtml = `<div class="node-kv-row"><span>Route</span><span class="node-kv-val">${node.route}</span></div>`;
+        } else if (node.type === 'sqs') {
+          detailsHtml = `<div class="node-kv-row"><span>Visibility</span><span class="node-kv-val">${node.visibilityTimeout || 30}s</span></div>`;
+        } else if (node.type === 'dynamodb') {
+          detailsHtml = `<div class="node-kv-row"><span>Partition Key</span><span class="node-kv-val">${node.pk || 'id (S)'}</span></div>`;
+        } else if (node.type === 'eventbridge') {
+          detailsHtml = `<div class="node-kv-row"><span>Schedule</span><span class="node-kv-val">${node.schedule}</span></div>`;
+        } else if (node.type === 's3') {
+          detailsHtml = `<div class="node-kv-row"><span>ACL</span><span class="node-kv-val">private</span></div>`;
+        }
+
+        el.innerHTML = `
+          ${portLeft}
+          <div class="node-head">
+            <div class="node-title-group">
+              <div class="service-badge" style="background: ${meta.bg}; color: ${meta.color};">${meta.icon}</div>
+              <span class="node-title">${node.name}</span>
+            </div>
+            <button class="node-del-btn" title="Delete" onclick="deleteNode('${node.id}', event)">✕</button>
+          </div>
+          <div class="node-body">
+            <div class="node-kv-row" style="color: ${meta.color}; font-weight: 600;">
+              <span>${meta.label}</span>
+            </div>
+            ${detailsHtml}
+          </div>
+          ${portRight}
+        `;
+
+        el.addEventListener('pointerdown', (e) => {
+          if (e.target.closest('.port-circle') || e.target.closest('.node-del-btn')) return;
+          state.selectedNodeId = node.id;
+          state.selectedWireId = null;
+          renderNodes();
+          renderInspector();
+          startNodeDrag(e, node);
+        });
+
+        const rightPort = el.querySelector('.port-right');
+        rightPort.addEventListener('pointerdown', (e) => {
+          e.stopPropagation();
+          startWireDrag(node.id, e);
+        });
+
+        const leftPort = el.querySelector('.port-left');
+        leftPort.addEventListener('pointerup', (e) => {
+          if (state.activeWireDrag && state.activeWireDrag.fromNode !== node.id) {
+            connectNodes(state.activeWireDrag.fromNode, node.id);
+            stopWireDrag();
+          }
+        });
+
+        nodesContainer.appendChild(el);
+      });
+    }
+
+    function hasConnection(nodeId, direction) {
+      if (direction === 'from') return state.wires.some(w => w.from === nodeId);
+      return state.wires.some(w => w.to === nodeId);
+    }
+
+    function deleteNode(id, e) {
+      e.stopPropagation();
+      state.nodes = state.nodes.filter(n => n.id !== id);
+      state.wires = state.wires.filter(w => w.from !== id && w.to !== id);
+      if (state.selectedNodeId === id) state.selectedNodeId = state.nodes[0]?.id || null;
+      renderAll();
+      logConsole('delete', `Deleted resource ${id}`);
+    }
+
+    function startNodeDrag(e, node) {
+      const startMouseX = e.clientX;
+      const startMouseY = e.clientY;
+      const startNodeX = node.x;
+      const startNodeY = node.y;
+
+      function onMove(ev) {
+        const dx = (ev.clientX - startMouseX) / state.zoom;
+        const dy = (ev.clientY - startMouseY) / state.zoom;
+        node.x = Math.round(startNodeX + dx);
+        node.y = Math.round(startNodeY + dy);
+        const el = document.getElementById(node.id);
+        if (el) {
+          el.style.left = node.x + 'px';
+          el.style.top = node.y + 'px';
+        }
+        renderWires();
+      }
+
+      function onUp() {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      }
+
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    }
+
+    // ════════ WIRE RENDERING ════════
+    function renderWires() {
+      wiresSvg.innerHTML = '';
+      state.wires.forEach(wire => {
+        const fromNode = state.nodes.find(n => n.id === wire.from);
+        const toNode = state.nodes.find(n => n.id === wire.to);
+        if (!fromNode || !toNode) return;
+
+        const p1 = { x: fromNode.x + 240, y: fromNode.y + 42 };
+        const p2 = { x: toNode.x, y: toNode.y + 42 };
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        const dx = Math.abs(p2.x - p1.x) * 0.5;
+        path.setAttribute('d', `M ${p1.x} ${p1.y} C ${p1.x + dx} ${p1.y}, ${p2.x - dx} ${p2.y}, ${p2.x} ${p2.y}`);
+        path.setAttribute('class', 'wire-line' + (wire.active ? ' active pulsing' : ''));
+        path.setAttribute('id', wire.id);
+
+        path.addEventListener('click', (e) => {
+          e.stopPropagation();
+          state.selectedWireId = wire.id;
+          state.selectedNodeId = null;
+          renderInspector();
+        });
+
+        wiresSvg.appendChild(path);
+      });
+
+      if (state.activeWireDrag) {
+        const fromNode = state.nodes.find(n => n.id === state.activeWireDrag.fromNode);
+        if (fromNode) {
+          const p1 = { x: fromNode.x + 240, y: fromNode.y + 42 };
+          const p2 = { x: state.activeWireDrag.x, y: state.activeWireDrag.y };
+          const dx = Math.abs(p2.x - p1.x) * 0.5;
+          const tempPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          tempPath.setAttribute('d', `M ${p1.x} ${p1.y} C ${p1.x + dx} ${p1.y}, ${p2.x - dx} ${p2.y}, ${p2.x} ${p2.y}`);
+          tempPath.setAttribute('stroke', '#00e5a0');
+          tempPath.setAttribute('stroke-width', '2');
+          tempPath.setAttribute('fill', 'none');
+          tempPath.setAttribute('stroke-dasharray', '4 3');
+          wiresSvg.appendChild(tempPath);
+        }
+      }
+    }
+
+    function startWireDrag(nodeId, e) {
+      const rect = container.getBoundingClientRect();
+      state.activeWireDrag = {
+        fromNode: nodeId,
+        x: (e.clientX - rect.left - state.panX) / state.zoom,
+        y: (e.clientY - rect.top - state.panY) / state.zoom
+      };
+
+      function onMove(ev) {
+        if (!state.activeWireDrag) return;
+        state.activeWireDrag.x = (ev.clientX - rect.left - state.panX) / state.zoom;
+        state.activeWireDrag.y = (ev.clientY - rect.top - state.panY) / state.zoom;
+        renderWires();
+      }
+
+      function onUp() {
+        stopWireDrag();
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      }
+
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    }
+
+    function stopWireDrag() {
+      state.activeWireDrag = null;
+      renderWires();
+    }
+
+    function connectNodes(fromId, toId) {
+      if (fromId === toId) return;
+      const exists = state.wires.some(w => w.from === fromId && w.to === toId);
+      if (exists) return;
+
+      const fromNode = state.nodes.find(n => n.id === fromId);
+      const toNode = state.nodes.find(n => n.id === toId);
+
+      state.wires.push({
+        id: 'w_' + Date.now(),
+        from: fromId,
+        to: toId,
+        desc: `${fromNode?.name} -> ${toNode?.name}`
+      });
+      renderAll();
+      logConsole('wire', `Connected ${fromNode?.name} to ${toNode?.name}`);
+    }
+
+    // ════════ CANVAS PAN & ZOOM ════════
+    container.addEventListener('pointerdown', (e) => {
+      if (e.target.closest('.infra-node') || e.target.closest('.canvas-float-bar') || e.target.closest('.console-dock')) return;
+      state.isPanning = true;
+      state.startX = e.clientX - state.panX;
+      state.startY = e.clientY - state.panY;
+      container.classList.add('panning');
+      container.setPointerCapture(e.pointerId);
+    });
+
+    container.addEventListener('pointermove', (e) => {
+      if (!state.isPanning) return;
+      state.panX = e.clientX - state.startX;
+      state.panY = e.clientY - state.startY;
+      updateCanvasTransform();
+    });
+
+    container.addEventListener('pointerup', (e) => {
+      if (state.isPanning) {
+        state.isPanning = false;
+        container.classList.remove('panning');
+      }
+    });
+
+    container.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
+      const rect = container.getBoundingClientRect();
+      const mouseX = e.clientX - rect.left;
+      const mouseY = e.clientY - rect.top;
+
+      const newZoom = Math.min(2.0, Math.max(0.4, state.zoom * zoomFactor));
+      state.panX = mouseX - (mouseX - state.panX) * (newZoom / state.zoom);
+      state.panY = mouseY - (mouseY - state.panY) * (newZoom / state.zoom);
+      state.zoom = newZoom;
+      updateCanvasTransform();
+    }, { passive: false });
+
+    function zoomCanvas(delta) {
+      const newZoom = Math.min(2.0, Math.max(0.4, state.zoom + delta));
+      const rect = container.getBoundingClientRect();
+      const cx = rect.width / 2;
+      const cy = rect.height / 2;
+      state.panX = cx - (cx - state.panX) * (newZoom / state.zoom);
+      state.panY = cy - (cy - state.panY) * (newZoom / state.zoom);
+      state.zoom = newZoom;
+      updateCanvasTransform();
+    }
+
+    function resetCanvasView() {
+      state.panX = 70;
+      state.panY = 50;
+      state.zoom = 1.0;
+      updateCanvasTransform();
+    }
+
+    function updateCanvasTransform() {
+      stage.style.transform = `translate(${state.panX}px, ${state.panY}px) scale(${state.zoom})`;
+      zoomLabel.textContent = Math.round(state.zoom * 100) + '%';
+    }
+
+    // ════════ RIGHT INSPECTOR & TERRAFORM (HCL) ════════
+    let currentTab = 'props';
+
+    function switchInspectorTab(tab) {
+      currentTab = tab;
+      document.getElementById('tabPropsBtn').className = 'tab-btn' + (tab === 'props' ? ' active' : '');
+      document.getElementById('tabHclBtn').className = 'tab-btn' + (tab === 'hcl' ? ' active' : '');
+      renderInspector();
+    }
+
+    function renderInspector() {
+      const content = document.getElementById('inspectorContent');
+      if (state.selectedWireId) {
+        const wire = state.wires.find(w => w.id === state.selectedWireId);
+        content.innerHTML = `
+          <div style="font-size: 13px; font-weight: 600; color: var(--ink);">Wire Integration</div>
+          <div class="form-field">
+            <label class="form-label">Integration Label</label>
+            <input type="text" class="form-input" value="${wire.desc}" oninput="wire.desc=this.value">
+          </div>
+          <button class="rc-btn" style="color: var(--red); border-color: rgba(248,113,113,0.3); margin-top: 10px;" onclick="deleteSelectedWire()">
+            Disconnect Wire
+          </button>
+        `;
+        return;
+      }
+
+      const node = state.nodes.find(n => n.id === state.selectedNodeId);
+      if (!node) {
+        content.innerHTML = `
+          <div style="color: var(--ink-3); text-align: center; margin-top: 50px; font-size: 12px; line-height: 1.5;">
+            Select any infrastructure resource on the canvas or drag one from the left library to configure its parameters.
+          </div>
+        `;
+        return;
+      }
+
+      if (currentTab === 'hcl') {
+        content.innerHTML = `
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span style="font-weight: 600; font-size: 12px;">Resource HCL Block</span>
+            <button class="rc-btn small" onclick="copySnippet('${node.id}')">Copy</button>
+          </div>
+          <div class="hcl-box">${generateHclForNode(node)}</div>
+          <div style="font-weight: 600; font-size: 12px; margin-top: 10px; display: flex; justify-content: space-between; align-items: center;">
+            <span>Full Topology main.tf</span>
+            <button class="rc-btn small" onclick="copyFullHcl()">Copy All</button>
+          </div>
+          <div class="hcl-box" style="max-height: 250px;">${generateFullTopologyHcl()}</div>
+        `;
+        return;
+      }
+
+      let customInputs = '';
+      if (node.type === 'lambda') {
+        customInputs = `
+          <div class="form-field">
+            <label class="form-label">Runtime</label>
+            <select class="form-input" onchange="updateNodeProp('${node.id}', 'runtime', this.value)">
+              <option ${node.runtime === 'nodejs20.x' ? 'selected' : ''}>nodejs20.x</option>
+              <option ${node.runtime === 'python3.12' ? 'selected' : ''}>python3.12</option>
+              <option ${node.runtime === 'provided.al2023' ? 'selected' : ''}>provided.al2023</option>
+            </select>
+          </div>
+          <div class="form-field">
+            <label class="form-label">Memory Size (MB)</label>
+            <input type="number" class="form-input mono" value="${node.memory}" onchange="updateNodeProp('${node.id}', 'memory', parseInt(this.value))">
+          </div>
+        `;
+      } else if (node.type === 'apigateway') {
+        customInputs = `
+          <div class="form-field">
+            <label class="form-label">Route Key</label>
+            <input type="text" class="form-input mono" value="${node.route}" oninput="updateNodeProp('${node.id}', 'route', this.value)">
+          </div>
+        `;
+      } else if (node.type === 'sqs') {
+        customInputs = `
+          <div class="form-field">
+            <label class="form-label">Visibility Timeout (sec)</label>
+            <input type="number" class="form-input mono" value="${node.visibilityTimeout || 30}" onchange="updateNodeProp('${node.id}', 'visibilityTimeout', parseInt(this.value))">
+          </div>
+        `;
+      } else if (node.type === 'dynamodb') {
+        customInputs = `
+          <div class="form-field">
+            <label class="form-label">Partition Key</label>
+            <input type="text" class="form-input mono" value="${node.pk || 'id (S)'}" oninput="updateNodeProp('${node.id}', 'pk', this.value)">
+          </div>
+        `;
+      } else if (node.type === 'eventbridge') {
+        customInputs = `
+          <div class="form-field">
+            <label class="form-label">Schedule Expression</label>
+            <input type="text" class="form-input mono" value="${node.schedule}" oninput="updateNodeProp('${node.id}', 'schedule', this.value)">
+          </div>
+        `;
+      }
+
+      content.innerHTML = `
+        <div style="font-weight: 600; font-size: 13px; display: flex; align-items: center; justify-content: space-between;">
+          <span>${node.name}</span>
+          <span class="rc-tone-pill">${node.type}</span>
+        </div>
+        <div class="form-field">
+          <label class="form-label">Resource Name</label>
+          <input type="text" class="form-input mono" value="${node.name}" oninput="updateNodeProp('${node.id}', 'name', this.value)">
+        </div>
+        ${customInputs}
+        <div style="margin-top: 10px; border-top: 1px solid var(--line-soft); padding-top: 12px;">
+          <button class="rc-btn" style="width: 100%; justify-content: center; color: var(--red); border-color: rgba(248,113,113,0.3);" onclick="deleteNode('${node.id}', event)">
+            Delete Resource
+          </button>
+        </div>
+      `;
+    }
+
+    function updateNodeProp(id, prop, val) {
+      const node = state.nodes.find(n => n.id === id);
+      if (node) {
+        node[prop] = val;
+        renderNodes();
+      }
+    }
+
+    function deleteSelectedWire() {
+      if (!state.selectedWireId) return;
+      state.wires = state.wires.filter(w => w.id !== state.selectedWireId);
+      state.selectedWireId = null;
+      renderAll();
+    }
+
+    // ════════ TERRAFORM CODE GENERATION (TARN ENDPOINTS) ════════
+    function generateHclForNode(n) {
+      if (n.type === 'lambda') {
+        return `resource "aws_lambda_function" "${n.name}" {
+  function_name = "${n.name}"
+  runtime       = "${n.runtime}"
+  memory_size   = ${n.memory}
+  timeout       = 30
+  handler       = "index.handler"
+}`;
+      } else if (n.type === 'sqs') {
+        return `resource "aws_sqs_queue" "${n.name}" {
+  name                      = "${n.name}"
+  visibility_timeout_seconds = ${n.visibilityTimeout || 30}
+}`;
+      } else if (n.type === 'apigateway') {
+        return `resource "aws_apigatewayv2_api" "${n.name}" {
+  name          = "${n.name}"
+  protocol_type = "HTTP"
+}`;
+      } else if (n.type === 'dynamodb') {
+        return `resource "aws_dynamodb_table" "${n.name}" {
+  name         = "${n.name}"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "id"
+
+  attribute {
+    name = "id"
+    type = "S"
+  }
+}`;
+      } else if (n.type === 'sns') {
+        return `resource "aws_sns_topic" "${n.name}" {
+  name = "${n.name}"
+}`;
+      } else if (n.type === 's3') {
+        return `resource "aws_s3_bucket" "${n.name}" {
+  bucket = "${n.name}"
+}`;
+      } else if (n.type === 'eventbridge') {
+        return `resource "aws_cloudwatch_event_rule" "${n.name}" {
+  name                = "${n.name}"
+  schedule_expression = "${n.schedule}"
+}`;
+      }
+      return `# Resource: ${n.name}`;
+    }
+
+    function generateFullTopologyHcl() {
+      const parts = [
+        `# Tarn Studio Topology Output\n# Local Endpoint: http://127.0.0.1:4566\n\nprovider "aws" {\n  region                      = "us-east-1"\n  access_key                  = "test"\n  secret_key                  = "test"\n  skip_credentials_validation = true\n  skip_requesting_account_id  = true\n  endpoints {\n    apigateway  = "http://127.0.0.1:4566"\n    lambda      = "http://127.0.0.1:4566"\n    sqs         = "http://127.0.0.1:4566"\n    sns         = "http://127.0.0.1:4566"\n    dynamodb    = "http://127.0.0.1:4566"\n    s3          = "http://127.0.0.1:4566"\n    eventbridge = "http://127.0.0.1:4566"\n  }\n}`
+      ];
+
+      state.nodes.forEach(n => parts.push(generateHclForNode(n)));
+
+      state.wires.forEach(w => {
+        const from = state.nodes.find(n => n.id === w.from);
+        const to = state.nodes.find(n => n.id === w.to);
+        if (!from || !to) return;
+
+        if (from.type === 'sqs' && to.type === 'lambda') {
+          parts.push(`resource "aws_lambda_event_source_mapping" "${from.name}_to_${to.name}" {\n  event_source_arn = aws_sqs_queue.${from.name}.arn\n  function_name    = aws_lambda_function.${to.name}.arn\n  batch_size       = 10\n}`);
+        } else if (from.type === 'sns' && to.type === 'sqs') {
+          parts.push(`resource "aws_sns_topic_subscription" "${from.name}_to_${to.name}" {\n  topic_arn = aws_sns_topic.${from.name}.arn\n  protocol  = "sqs"\n  endpoint  = aws_sqs_queue.${to.name}.arn\n}`);
+        }
+      });
+
+      return parts.join('\n\n');
+    }
+
+    function exportTerraformModal() {
+      switchInspectorTab('hcl');
+      logConsole('export', 'Generated main.tf for local Tarn environment.');
+    }
+
+    function copySnippet(id) {
+      const node = state.nodes.find(n => n.id === id);
+      if (!node) return;
+      navigator.clipboard.writeText(generateHclForNode(node)).then(() => {
+        alert("Resource HCL copied to clipboard!");
+      });
+    }
+
+    function copyFullHcl() {
+      navigator.clipboard.writeText(generateFullTopologyHcl()).then(() => {
+        alert("Full main.tf copied to clipboard!");
+      });
+    }
+
+    // ════════ LIVE TEST DISPATCH ════════
+    function setMode(mode) {
+      state.mode = mode;
+      document.getElementById('btnDesignMode').className = 'seg-btn' + (mode === 'design' ? ' active' : '');
+      document.getElementById('btnLiveMode').className = 'seg-btn' + (mode === 'live' ? ' active' : '');
+      logConsole('mode', `Switched mode to ${mode === 'design' ? 'Design & Wire' : 'Live Execution'}`);
+    }
+
+    function dispatchTestEvent() {
+      if (state.nodes.length === 0) return;
+      logConsole('invoke', `Dispatched synthetic test event into entrypoint.`);
+
+      state.wires.forEach(w => w.active = true);
+      renderWires();
+
+      state.nodes.forEach((node, idx) => {
+        setTimeout(() => {
+          const el = document.getElementById(node.id);
+          if (el) {
+            el.classList.add('executing');
+            spawnPacket(node.x + 240, node.y + 42);
+            logConsole(node.type, `[${node.name}] OK 200 · 14ms · request_id=req-${Math.floor(Math.random()*9000+1000)}`);
+            setTimeout(() => el.classList.remove('executing'), 500);
+          }
+        }, idx * 350);
+      });
+
+      setTimeout(() => {
+        state.wires.forEach(w => w.active = false);
+        renderWires();
+        logConsole('complete', `Execution finished across ${state.nodes.length} local resources.`);
+      }, state.nodes.length * 350 + 350);
+    }
+
+    function spawnPacket(x, y) {
+      const p = document.createElement('div');
+      p.className = 'event-packet';
+      p.style.left = x + 'px';
+      p.style.top = y + 'px';
+      stage.appendChild(p);
+      setTimeout(() => p.remove(), 600);
+    }
+
+    // ════════ CONSOLE LOGGING ════════
+    function logConsole(source, msg) {
+      const feed = document.getElementById('consoleFeed');
+      const now = new Date();
+      const ts = now.toTimeString().split(' ')[0];
+      const row = document.createElement('div');
+      row.className = 'log-row';
+      row.innerHTML = `
+        <span class="log-ts mono">${ts}</span>
+        <span class="log-tag">[${source}]</span>
+        <span class="log-text">${msg}</span>
+      `;
+      feed.appendChild(row);
+      feed.scrollTop = feed.scrollHeight;
+    }
+
+    function toggleConsole() {
+      const dock = document.getElementById('consoleDock');
+      const label = document.getElementById('consoleToggleLabel');
+      dock.classList.toggle('collapsed');
+      label.textContent = dock.classList.contains('collapsed') ? '▲ Click to Expand Log Feed' : '▼ Click to Minimize Log Feed';
+    }
+
+    function filterPalette(val) {
+      const q = val.toLowerCase().trim();
+      document.querySelectorAll('.palette-item').forEach(item => {
+        item.style.display = item.textContent.toLowerCase().includes(q) ? 'flex' : 'none';
+      });
+    }
+
+    function toggleTheme() {
+      const isDark = document.documentElement.classList.contains('dark');
+      if (isDark) {
+        document.documentElement.classList.remove('dark');
+        document.documentElement.classList.add('light');
+      } else {
+        document.documentElement.classList.remove('light');
+        document.documentElement.classList.add('dark');
+      }
+      renderWires();
+    }
+
+    window.addEventListener('load', () => {
+      loadTemplate('order-flow');
+      resetCanvasView();
+    });
+  </script>
+</body>
+</html>

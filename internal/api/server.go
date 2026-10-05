@@ -160,6 +160,7 @@ type Server struct {
 	logsSvc    *logssvc.Service
 	collector  *tracesvc.Collector
 	ui         http.Handler
+	conns      *Connections
 }
 
 // NewServer creates a new API server.
@@ -173,6 +174,7 @@ func NewServer(cfg *config.Config, registry *HandlerRegistry, logsSvc *logssvc.S
 		registry:  registry,
 		logsSvc:   logsSvc,
 		collector: collector,
+		conns:     NewConnections(),
 	}
 
 	mux := http.NewServeMux()
@@ -189,6 +191,14 @@ func NewServer(cfg *config.Config, registry *HandlerRegistry, logsSvc *logssvc.S
 	}
 
 	return s
+}
+
+// SetConnections replaces the connection tracker. The secrets proxy starts
+// before the server, so the caller creates the tracker first and hands it over.
+func (s *Server) SetConnections(c *Connections) {
+	if c != nil {
+		s.conns = c
+	}
 }
 
 // hs resolves the per-account HandlerSet for the incoming request.
@@ -217,6 +227,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /_tarn/admin/accounts/{id}/archive", s.accountActionHandler(s.registry.Archive))
 	mux.HandleFunc("POST /_tarn/admin/accounts/{id}/restore", s.accountActionHandler(s.registry.Restore))
 	mux.HandleFunc("DELETE /_tarn/admin/accounts/{id}", s.accountActionHandler(s.registry.Delete))
+
+	// Connections — global: the secrets proxy and MCP servers are per-instance.
+	mux.HandleFunc("GET /_tarn/admin/connections", s.connectionsHandler)
+	mux.HandleFunc("POST /_tarn/admin/mcp/heartbeat", s.mcpHeartbeatHandler)
+	mux.HandleFunc("DELETE /_tarn/admin/mcp/sessions/{id}", s.mcpDisconnectHandler)
 
 	mux.HandleFunc("GET /_tarn/admin/overview", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.Overview(w, r)

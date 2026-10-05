@@ -4,7 +4,8 @@
   import { fly } from "svelte/transition";
 
   import type { UserService } from "$lib/types";
-  import { fetchAccounts, changeAccount, type ServerAccount } from "$lib/api";
+  import { fetchAccounts, changeAccount, fetchConnections, type ServerAccount, type TarnConnections, type MCPSession } from "$lib/api";
+  import { timeAgo } from "$lib/utils";
   import SectionHeader from "$lib/components/sections/section-header.svelte";
   import {
     getUISettings,
@@ -62,6 +63,7 @@
     { id: "appearance", label: "Appearance" },
     { id: "workspace",  label: "Workspace" },
     { id: "infra",      label: "Infrastructure" },
+    { id: "integrations", label: "Integrations" },
     { id: "instance",   label: "Instance" },
   ];
 
@@ -186,6 +188,49 @@
   }
 
   onMount(() => { void loadServerAccounts(); });
+
+  // ── Integrations: MCP sessions and the secrets proxy, polled live ──
+  let connections = $state<TarnConnections | null>(null);
+  let connectionsError = $state("");
+  let connectionsNow = $state(Date.now());
+
+  async function loadConnections(signal: AbortSignal) {
+    try {
+      connections = await fetchConnections(signal);
+      connectionsError = "";
+    } catch (err) {
+      if (signal.aborted) return;
+      connectionsError = err instanceof Error ? err.message : "Could not load connections";
+    }
+    connectionsNow = Date.now();
+  }
+
+  onMount(() => {
+    const controller = new AbortController();
+    void loadConnections(controller.signal);
+    const timer = setInterval(() => void loadConnections(controller.signal), Math.max(2, uiSettings.pollingIntervalSeconds) * 1000);
+    return () => { clearInterval(timer); controller.abort(); };
+  });
+
+  const proxy = $derived(connections?.secretsProxy);
+  const mcpSessions = $derived(connections?.mcp.sessions ?? []);
+  const proxySummary = $derived.by(() => {
+    if (!proxy) return "";
+    const parts = [`${proxy.requests} ${proxy.requests === 1 ? "request" : "requests"}`];
+    if (proxy.denied > 0) parts.push(`${proxy.denied} denied`);
+    parts.push(!proxy.requireToken ? "token not required" : proxy.defaultToken ? "default token" : "custom token");
+    if (proxy.lastRequestAt) {
+      const from = proxy.lastCaller ? ` from ${proxy.lastCaller}` : "";
+      parts.push(`last ${proxy.lastSecretId || "request"}${from} ${timeAgo(proxy.lastRequestAt, connectionsNow)}`);
+    }
+    return parts.join(" · ");
+  });
+
+  function sessionSummary(session: MCPSession): string {
+    const parts = session.pid ? [`pid ${session.pid}`] : [];
+    parts.push(`tarn ${session.serverVersion || "--"}`, `connected ${timeAgo(session.connectedAt, connectionsNow)}`);
+    return parts.join(" · ");
+  }
 
   type AccountRow = { id: string; label: string; known: boolean; server?: ServerAccount; stale: string };
 
@@ -575,6 +620,49 @@
         {#if servicesError}<p class="error">{servicesError}</p>{/if}
       </section>
 
+      <!-- Integrations -->
+      <section id="settings-integrations" class="panel">
+        <header>
+          <h2>Integrations</h2>
+          <p>Editor and Lambda tooling plugged into this Tarn.</p>
+        </header>
+        {#if connectionsError && !connections}
+          <p class="error" role="alert">{connectionsError}</p>
+        {/if}
+
+        <div class="subhead first">MCP</div>
+        {#if mcpSessions.length > 0}
+          <ul class="rows">
+            {#each mcpSessions as session (session.id)}
+              <li class="row" transition:fly={{ y: -4, duration: 160 }}>
+                <span class="row-main">
+                  <span class="row-title">{session.clientName || "MCP client"} <span class="mono dim">{session.clientVersion ?? ""}</span></span>
+                  <span class="row-sub mono">{sessionSummary(session)}</span>
+                </span>
+                <span class="pill pill-accent">Connected</span>
+              </li>
+            {/each}
+          </ul>
+        {:else if connections}
+          <p class="hint">No MCP sessions reporting. Point your editor at <code>tarn mcp</code>, e.g. <code>{`{"servers":{"tarn":{"command":"tarn","args":["mcp"]}}}`}</code> in <code>.mcp.json</code>.</p>
+        {/if}
+
+        <div class="subhead">Secrets proxy</div>
+        {#if proxy?.enabled}
+          <ul class="rows">
+            <li class="row">
+              <span class="row-main">
+                <span class="row-title mono">http://{proxy.address}</span>
+                <span class="row-sub mono">{proxySummary}</span>
+              </span>
+              <span class="pill pill-accent">Listening</span>
+            </li>
+          </ul>
+        {:else if proxy}
+          <p class="hint">Off. Start Tarn with <code>--expose-secrets-proxy</code> to serve the Lambda secrets extension API on <code>{proxy.address}</code>.</p>
+        {/if}
+      </section>
+
       <!-- Instance -->
       <section id="settings-instance" class="panel">
         <header>
@@ -660,6 +748,11 @@
   .panel h2 { font-size: 13px; font-weight: 600; color: var(--text-primary); letter-spacing: -0.01em; }
   .panel header p { margin-top: 2px; font-size: 11.5px; color: var(--text-secondary); }
   .subhead { margin: 16px 0 8px; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-tertiary); }
+  .subhead.first { margin-top: 0; }
+  .hint code {
+    font-family: var(--font-mono, ui-monospace, monospace); font-size: 10.5px; padding: 1px 5px; border-radius: 4px;
+    color: var(--text-secondary); background: var(--code-bg); word-break: break-all;
+  }
 
   /* Setting rows */
   .setting {

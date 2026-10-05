@@ -89,6 +89,47 @@ export async function fetchAccounts(signal?: AbortSignal): Promise<ServerAccount
   return Array.isArray(body.accounts) ? body.accounts : [];
 }
 
+/** An MCP server (`tarn mcp`) currently heartbeating into this instance. */
+export interface MCPSession {
+  id: string;
+  clientName?: string;
+  clientVersion?: string;
+  serverVersion?: string;
+  pid?: number;
+  connectedAt: string;
+  lastSeenAt: string;
+}
+
+/** Instance-wide client links: the local secrets proxy and MCP servers. */
+export interface TarnConnections {
+  secretsProxy: {
+    enabled: boolean;
+    address: string;
+    requireToken: boolean;
+    defaultToken: boolean;
+    requests: number;
+    denied: number;
+    lastRequestAt?: string;
+    lastSecretId?: string;
+    lastCaller?: string;
+    lastStatus?: number;
+  };
+  mcp: { sessions: MCPSession[] };
+}
+
+export async function fetchConnections(signal?: AbortSignal): Promise<TarnConnections> {
+  const response = await fetch(endpoint("/_tarn/admin/connections"), {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `Failed to load connections: HTTP ${response.status}`));
+  }
+  const body = (await response.json()) as TarnConnections;
+  return { ...body, mcp: { sessions: Array.isArray(body.mcp?.sessions) ? body.mcp.sessions : [] } };
+}
+
 /** Archives, restores or deletes an account, returning the updated list. */
 export async function changeAccount(id: string, action: "archive" | "restore" | "delete"): Promise<ServerAccount[]> {
   const base = `/_tarn/admin/accounts/${encodeURIComponent(id)}`;

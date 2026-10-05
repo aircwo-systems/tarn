@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"os"
 
@@ -35,7 +36,22 @@ machine that started Tarn, and it does not hold the instance's data directory.`,
 			// go to stderr or it corrupts the stream.
 			fmt.Fprintf(os.Stderr, "tarn mcp: serving over stdio, endpoint %s\n", endpoint)
 
-			return newServer(endpoint, version).Run(cmd.Context(), &mcp.StdioTransport{})
+			server := newServer(endpoint, version)
+
+			// Report the session to the instance for the dashboard until the
+			// editor disconnects; Run returns when stdin closes.
+			ctx, cancel := context.WithCancel(cmd.Context())
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				newHeartbeat(endpoint, version, server).run(ctx)
+			}()
+			defer func() {
+				cancel()
+				<-done
+			}()
+
+			return server.Run(ctx, &mcp.StdioTransport{})
 		},
 	}
 }
