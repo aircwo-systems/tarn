@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/aircwo-systems/tarn/internal/engine"
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
@@ -2233,14 +2234,5 @@ func (t *accountRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 }
 
 func getCLIEndpoint(cmd *cobra.Command) string {
-	if v := os.Getenv("TARN_ENDPOINT"); v != "" {
-		return v
-	}
-
-	host, _ := cmd.Root().Flags().GetString("host")
-	port, _ := cmd.Root().Flags().GetInt("port")
-	if host == "" || host == "0.0.0.0" || host == "::" {
-		host = "localhost"
-	}
-	return fmt.Sprintf("http://%s:%d", host, port)
+	return common.Endpoint(cmd)
 }

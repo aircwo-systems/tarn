@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/aircwo-systems/tarn/internal/cli/lambda"
 	mcpcli "github.com/aircwo-systems/tarn/internal/cli/mcp"
 	s3cli "github.com/aircwo-systems/tarn/internal/cli/s3"
@@ -170,12 +171,7 @@ func newStatusCmd() *cobra.Command {
 func runStatus(cmd *cobra.Command, args []string) error {
 	cfg := config.Default()
 	cfg.LoadFromEnv()
-	if v, err := cmd.Flags().GetString("host"); err == nil && strings.TrimSpace(v) != "" {
-		cfg.Host = strings.TrimSpace(v)
-	}
-	if v, err := cmd.Flags().GetInt("port"); err == nil && v != 0 {
-		cfg.Port = v
-	}
+	common.ApplyAddressFlags(cmd, cfg)
 	if v, err := cmd.Flags().GetString("data-dir"); err == nil && strings.TrimSpace(v) != "" {
 		cfg.DataDir = strings.TrimSpace(v)
 	}

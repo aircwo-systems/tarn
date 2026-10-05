@@ -33,6 +33,7 @@ import (
 	stepfunctionshandler "github.com/aircwo-systems/tarn/internal/api/stepfunctions"
 	"github.com/aircwo-systems/tarn/internal/apigateway"
 	"github.com/aircwo-systems/tarn/internal/apigatewayv1"
+	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/internal/dynamodb"
 	ecsservice "github.com/aircwo-systems/tarn/internal/ecs"
@@ -59,17 +60,14 @@ func buildConfig(cmd *cobra.Command) (*config.Config, error) {
 	cfg.LoadFromEnv()
 	cfg.Version = version
 
-	if v, _ := cmd.Flags().GetString("host"); v != "" {
-		cfg.Host = v
-	}
-	if v, _ := cmd.Flags().GetInt("port"); v != 0 {
-		cfg.Port = v
-	}
+	common.ApplyAddressFlags(cmd, cfg)
 	if v, _ := cmd.Flags().GetString("data-dir"); v != "" {
 		cfg.DataDir = v
 	}
-	if v, _ := cmd.Flags().GetString("region"); v != "" {
-		cfg.Region = v
+	if cmd.Flags().Changed("region") {
+		if v, _ := cmd.Flags().GetString("region"); v != "" {
+			cfg.Region = v
+		}
 	}
 	if cmd.Flags().Changed("ui") {
 		if v, err := cmd.Flags().GetBool("ui"); err == nil {

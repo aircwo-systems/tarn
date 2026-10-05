@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/cli/common"
@@ -27,18 +26,7 @@ func formatEpoch(v any) string {
 }
 
 func getEndpoint(cmd *cobra.Command) string {
-	if v := os.Getenv("TARN_ENDPOINT"); v != "" {
-		return v
-	}
-
-	host, _ := cmd.Root().Flags().GetString("host")
-	port, _ := cmd.Root().Flags().GetInt("port")
-
-	if host == "0.0.0.0" {
-		host = "localhost"
-	}
-
-	return fmt.Sprintf("http://%s:%d", host, port)
+	return common.Endpoint(cmd)
 }
 
 // stepFunctionsRequest sends a JSON request to the Step Functions API.
