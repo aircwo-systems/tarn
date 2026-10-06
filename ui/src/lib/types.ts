@@ -687,7 +687,12 @@ export interface CognitoGroup {
   created: string;
 }
 
-export type CognitoUserStatus = "UNCONFIRMED" | "CONFIRMED" | "FORCE_CHANGE_PASSWORD" | "RESET_REQUIRED" | string;
+export type CognitoUserStatus =
+  | "UNCONFIRMED"
+  | "CONFIRMED"
+  | "FORCE_CHANGE_PASSWORD"
+  | "RESET_REQUIRED"
+  | string;
 
 export interface CognitoUser {
   username: string;
@@ -752,7 +757,14 @@ export interface CognitoPoolDetail extends CognitoPoolSummary {
   resourceServerScopes?: string[];
 }
 
-export type CognitoUserAction = "confirm" | "enable" | "disable" | "reset-password" | "set-password" | "sign-out" | "delete";
+export type CognitoUserAction =
+  | "confirm"
+  | "enable"
+  | "disable"
+  | "reset-password"
+  | "set-password"
+  | "sign-out"
+  | "delete";
 
 export interface CognitoTokens {
   AccessToken: string;

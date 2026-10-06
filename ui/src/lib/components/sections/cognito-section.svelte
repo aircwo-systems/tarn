@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { MagnifyingGlassIcon } from "phosphor-svelte";
+  import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
   import RcListRow from "$lib/components/rack/rc-list-row.svelte";
   import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
@@ -25,6 +25,14 @@
 
   let selectedId = $state<string | null>(null);
   let query = $state("");
+  let listCollapsed = $state(false);
+
+  function toggleListCollapse() {
+    listCollapsed = !listCollapsed;
+    try {
+      localStorage.setItem("tarn-cognito-list-collapsed", String(listCollapsed));
+    } catch {}
+  }
 
   // Keyed by ID: polling replaces the objects, so holding one would freeze the detail.
   const selected = $derived(pools.find((p) => p.id === selectedId) ?? pools[0] ?? null);
@@ -40,11 +48,12 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
     if (visible.length === 0) return;
     e.preventDefault();
     const idx = visible.findIndex((p) => p.id === selected?.id);
-    const next = e.key === "ArrowDown" ? Math.min(visible.length - 1, idx + 1) : Math.max(0, idx - 1);
+    const forward = e.key === "ArrowDown" || e.key === "ArrowRight";
+    const next = forward ? Math.min(visible.length - 1, idx + 1) : Math.max(0, idx - 1);
     select(visible[next].id);
   }
 
@@ -57,6 +66,10 @@
 
   onMount(() => {
     readHash();
+    try {
+      const saved = localStorage.getItem("tarn-cognito-list-collapsed");
+      if (saved !== null) listCollapsed = saved === "true";
+    } catch {}
     window.addEventListener("hashchange", readHash);
     return () => window.removeEventListener("hashchange", readHash);
   });
@@ -89,35 +102,92 @@
       <pre>aws cognito-idp create-user-pool --pool-name my-app --endpoint-url {dashboard.data?.config.endpoint ?? "http://localhost:4566"}</pre>
     </div>
   {:else}
-    <div class="layout">
-      <RcResizableAside storageKey="tarn-cognito-list-width">
-        <!-- svelte-ignore a11y_no_static_element_interactions -->
-        <div class="pool-list" onkeydown={onKeydown}>
-          {#if pools.length > 6}
-            <label class="search">
-              <MagnifyingGlassIcon size={12} />
-              <input placeholder="Filter pools" bind:value={query} aria-label="Filter user pools" />
-              <span class="count">{visible.length}</span>
-            </label>
-          {/if}
-          <div class="rows">
-            {#each visible as p (p.id)}
-              <RcListRow
-                title={p.name}
-                sub="{p.users} user{p.users === 1 ? '' : 's'} · {p.id}"
-                selected={p.id === selected?.id}
-                onclick={() => select(p.id)}
-              >
-                {#snippet trailing()}
+    <div class="layout" class:list-collapsed={listCollapsed}>
+      {#if listCollapsed}
+        <div class="list-toolbar" role="toolbar" aria-label="User pools overview">
+          <div class="toolbar-leading">
+            <button
+              type="button"
+              class="expand-list-btn"
+              onclick={toggleListCollapse}
+              title="Expand user pool list"
+              aria-label="Expand user pool list"
+              aria-expanded={false}
+            >
+              <SidebarSimpleIcon size={13} weight="fill" aria-hidden="true" />
+              <span class="expand-label">User pool list</span>
+              <span class="count-badge">{pools.length}</span>
+            </button>
+          </div>
+          <div class="toolbar-trailing">
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div class="chips-row" role="tablist" tabindex="0" aria-label="User pool switcher" onkeydown={onKeydown}>
+              {#each visible as p (p.id)}
+                <button
+                  type="button"
+                  role="tab"
+                  class="item-chip"
+                  class:selected={p.id === selected?.id}
+                  aria-selected={p.id === selected?.id}
+                  onclick={() => select(p.id)}
+                  title="{p.name} ({p.users} users · {p.id})"
+                >
+                  <span class="chip-name">{p.name}</span>
+                  <span class="chip-badge">{p.users} user{p.users === 1 ? '' : 's'}</span>
                   {#if p.pendingCodes}<span class="codes" title="Pending codes">{p.pendingCodes}</span>{/if}
-                {/snippet}
-              </RcListRow>
-            {:else}
-              <p class="none">No match for “{query}”</p>
-            {/each}
+                </button>
+              {:else}
+                <span class="chips-none">No match for "{query}"</span>
+              {/each}
+            </div>
           </div>
         </div>
-      </RcResizableAside>
+      {:else}
+        <RcResizableAside
+          storageKey="tarn-cognito-list-width"
+          collapsible={true}
+          onToggleCollapse={toggleListCollapse}
+        >
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div class="pool-list" onkeydown={onKeydown}>
+            <div class="search-row">
+              {#if pools.length > 6}
+                <label class="search">
+                  <MagnifyingGlassIcon size={12} />
+                  <input placeholder="Filter pools" bind:value={query} aria-label="Filter user pools" />
+                  <span class="count">{visible.length}</span>
+                </label>
+              {/if}
+              <button
+                type="button"
+                class="collapse-list-btn"
+                onclick={toggleListCollapse}
+                title="Collapse user pool list"
+                aria-label="Collapse user pool list"
+                aria-expanded={true}
+              >
+                <SidebarSimpleIcon size={13} aria-hidden="true" />
+              </button>
+            </div>
+            <div class="rows">
+              {#each visible as p (p.id)}
+                <RcListRow
+                  title={p.name}
+                  sub="{p.users} user{p.users === 1 ? '' : 's'} · {p.id}"
+                  selected={p.id === selected?.id}
+                  onclick={() => select(p.id)}
+                >
+                  {#snippet trailing()}
+                    {#if p.pendingCodes}<span class="codes" title="Pending codes">{p.pendingCodes}</span>{/if}
+                  {/snippet}
+                </RcListRow>
+              {:else}
+                <p class="none">No match for “{query}”</p>
+              {/each}
+            </div>
+          </div>
+        </RcResizableAside>
+      {/if}
 
       {#if selected}
         {#key selected.id}
@@ -143,6 +213,7 @@
   .filter span { font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-primary); }
 
   .pool-list { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  .search-row { justify-content: flex-end; }
   .search {
     display: flex; align-items: center; gap: 7px; height: 30px; padding: 0 10px; border-radius: 8px;
     border: 1px solid var(--border-subtle); color: var(--text-tertiary); transition: border-color 120ms ease;
