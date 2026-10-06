@@ -225,7 +225,7 @@
     dashboard.error ? "error" : dashboard.loading ? "loading" : dashboard.data ? "ok" : "idle",
   ) as "ok" | "loading" | "error" | "idle";
 
-  // ── Flat sparkline strips (shown when canvas is expanded) ──────
+  // ── Compact activity indicators (shown when canvas is expanded) ──
   const BUCKET_N = 12;
   const BUCKET_MS = 15 * 60 * 1000;
 
@@ -253,12 +253,20 @@
     return values.map((v, i) => ({ h: Math.round((v / max) * 100), current: i === BUCKET_N - 1, label: "" }));
   }
 
-  const flatBars = $derived([
-    { bars: normBars(traceBuckets.map(b => b.traces.length)), color: "var(--color-accent)" },
-    { bars: normBars(traceBuckets.map(b => b.traces.length ? Math.round(b.traces.reduce((s,t)=>s+t.durationMs,0)/b.traces.length) : 0)), color: "var(--color-text-muted)" },
-    { bars: normBars(traceBuckets.map(b => { if (!b.traces.length) return 0; const s=[...b.traces].map(t=>t.durationMs).sort((a,z)=>a-z); return s[Math.min(Math.floor(s.length*0.95),s.length-1)]; })), color: "var(--color-text-muted)" },
-    { bars: normBars(traceBuckets.map(b => b.traces.filter(t=>t.status>=500).length)), color: "var(--color-red)" },
+  const activityMetrics = $derived([
+    { label: "Request volume", bars: normBars(traceBuckets.map(b => b.traces.length)), color: "var(--accent-green)" },
+    { label: "Average latency", bars: normBars(traceBuckets.map(b => b.traces.length ? Math.round(b.traces.reduce((s,t)=>s+t.durationMs,0)/b.traces.length) : 0)), color: "var(--text-secondary)" },
+    { label: "p95 latency", bars: normBars(traceBuckets.map(b => { if (!b.traces.length) return 0; const s=[...b.traces].map(t=>t.durationMs).sort((a,z)=>a-z); return s[Math.min(Math.floor(s.length*0.95),s.length-1)]; })), color: "var(--text-secondary)" },
+    { label: "Request errors", bars: normBars(traceBuckets.map(b => b.traces.filter(t=>t.status>=500).length)), color: "var(--accent-red)" },
   ]);
+
+  const logActivityTitle = $derived(
+    logPulse.status === "loading"
+      ? "Logs · reading recent activity"
+      : logPulse.status === "unavailable"
+        ? "Logs · activity unavailable"
+        : `Logs · ${logPulse.bars.reduce((sum, count) => sum + count, 0)} events in the last minute · ${logPulse.recentErrors} errors · ${logPulse.recentWarnings} warnings in the last 5 minutes`,
+  );
 
   // ── Navigation config ──────────────────────────────────────────
   const navSections = $derived<NavSection[]>([
@@ -398,44 +406,60 @@
           {sidebarCollapsed}
           onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
         >
+          {#snippet toolbar()}
+            <TagFilter />
+          {/snippet}
           {#snippet actions()}
-            <div class="flex shrink-0 items-center gap-1 font-mono text-[11px] text-muted-foreground">
+            {@const peak = Math.max(1, ...logPulse.bars)}
+            <div class="flex shrink-0 items-center gap-1" role="group" aria-label="Overview activity">
+              {#if canvasExpanded}
+                {#each activityMetrics as metric (metric.label)}
+                  <a
+                    href="#xray"
+                    class="overview-activity-cube"
+                    aria-label={`View traces · ${metric.label} trend`}
+                    title={`${metric.label} · last 3 hours${recentTraces.length ? '' : ' · waiting for traces'}`}
+                    onclick={(event) => { event.preventDefault(); setTab("xray"); }}
+                  >
+                    {#each metric.bars as bar, i (i)}
+                      <span
+                        aria-hidden="true"
+                        style:background={metric.color}
+                        style:opacity={bar.h > 0 ? 0.25 + (bar.h / 100) * 0.75 : 0.15}
+                      ></span>
+                    {/each}
+                  </a>
+                {/each}
+              {/if}
+              <a
+                href="#logs"
+                class="overview-activity-cube logs-activity-cube"
+                aria-label={logActivityTitle}
+                title={logActivityTitle}
+                onclick={(event) => { event.preventDefault(); setTab("logs"); }}
+              >
+                {#each logPulse.bars as count, i (i)}
+                  <span
+                    aria-hidden="true"
+                    data-severity={logPulse.severity[i]}
+                    style:opacity={logPulse.status === "ready" && count > 0 ? 0.3 + (count / peak) * 0.7 : 0.15}
+                  ></span>
+                {/each}
+              </a>
+            </div>
+            <div class="ml-1 flex shrink-0 items-center gap-1 font-mono text-[11px] text-muted-foreground">
               <span class="inline-block h-[5px] w-[5px] rounded-full bg-primary/70"></span>
               Poll {uiSettings.pollingIntervalSeconds}s
             </div>
           {/snippet}
         </SectionHeader>
 
-        {#if canvasExpanded}
-          <!-- Filter row — only when the canvas has room for it -->
-          <div class="flex items-center gap-4 pt-3">
-            <TagFilter onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
-
-            <div class="flex flex-1 flex-col gap-[3px]">
-              {#each flatBars as metric}
-                <div class="flex w-1/2 gap-px">
-                  {#each metric.bars as bar, i (i)}
-                    <div
-                      class="h-[2px] flex-1"
-                      style="background:{metric.color};opacity:{bar.current
-                        ? Math.max((bar.h / 100) * 0.5, 0.12)
-                        : bar.h > 0
-                          ? 0.15 + (bar.h / 100) * 0.75
-                          : 0.1}"
-                    ></div>
-                  {/each}
-                </div>
-              {/each}
-            </div>
-          </div>
-        {/if}
-
         {#if !canvasExpanded}
           <OverviewPulse {recentTraces} {traceBuckets} {activeServiceCount} {infraLegend} onNavigate={setTab} />
         {/if}
 
         <!-- Hero grid: topology + feed -->
-        <div class="grid min-h-0 flex-1 gap-4 {canvasExpanded ? 'mt-4 grid-cols-1' : 'mt-2 grid-cols-[1fr_300px]'}">
+        <div class="mt-2 grid min-h-0 flex-1 gap-4 {canvasExpanded ? 'grid-cols-1' : 'grid-cols-[1fr_300px]'}">
           <div class="flex min-h-0 flex-col">
             <div class="flex-1 overflow-hidden rounded-[5px]">
               <TopologyCanvas
@@ -523,6 +547,42 @@
 
 
 <style>
+  .overview-activity-cube {
+    display: grid;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: repeat(3, minmax(0, 1fr));
+    gap: 2px;
+    padding: 4px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 3px;
+    background: var(--bg-element);
+    transition: background 120ms ease;
+  }
+
+  .overview-activity-cube:hover {
+    background: var(--bg-element-hover);
+  }
+
+  .overview-activity-cube:focus-visible {
+    outline: 1px solid var(--border-focus);
+    outline-offset: 2px;
+  }
+
+  .logs-activity-cube {
+    grid-template-rows: repeat(4, minmax(0, 1fr));
+  }
+
+  .logs-activity-cube span { background: var(--accent-green); }
+  .logs-activity-cube span[data-severity="1"] { background: var(--accent-amber); }
+  .logs-activity-cube span[data-severity="2"] { background: var(--accent-red); }
+
+  @media (prefers-reduced-motion: reduce) {
+    .overview-activity-cube { transition: none; }
+  }
+
   :global(.tab-content-view) {
     animation: tabFadeIn 140ms cubic-bezier(0.16, 1, 0.3, 1);
   }

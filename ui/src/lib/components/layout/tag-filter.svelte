@@ -6,12 +6,6 @@
   } from "$lib/state.svelte";
   import { parseFilterTokens, mergeFilterTokens } from "$lib/filter-utils";
 
-  let {
-    onToggleSidebar,
-  }: {
-    onToggleSidebar: () => void;
-  } = $props();
-
   const filters = getDashboardFilters();
 
   let tagDraft = $state("");
@@ -56,7 +50,7 @@
 </script>
 
 <div
-  class="flex min-w-1/2 shrink-0 items-center gap-1.5 rounded-[5px] border border-border bg-background/80 px-2 py-1"
+  class="flex min-w-0 items-center gap-1.5 rounded-[5px] border border-border bg-background/80 px-2 py-1 focus-within:ring-1 focus-within:ring-ring"
   style="min-height:28px"
 >
   <MagnifyingGlassIcon size={12} class="shrink-0 text-muted-foreground" />
@@ -64,13 +58,13 @@
     {#each tagTokens as token (token)}
       <button
         type="button"
-        class="inline-flex min-h-[22px] items-center gap-1 rounded bg-muted px-1.5 text-[10px] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+        class="inline-flex min-h-[22px] max-w-full items-center gap-1 rounded bg-muted px-1.5 text-[10px] text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
         onclick={() => removeToken(token)}
         aria-label={`Remove filter ${token}`}
         title={`Remove filter ${token}`}
       >
-        <span>{token}</span>
-        <span class="text-muted-foreground" aria-hidden="true">×</span>
+        <span class="min-w-0 truncate">{token}</span>
+        <span class="shrink-0 text-muted-foreground" aria-hidden="true">×</span>
       </button>
     {/each}
     <input
@@ -79,7 +73,7 @@
       aria-label="Filter topology by tag or type"
       bind:value={tagDraft}
       onkeydown={handleKeydown}
-      class="min-w-[88px] flex-1 bg-transparent text-[11px] text-foreground outline-none placeholder:text-muted-foreground"
+      class="min-w-0 flex-[1_1_88px] bg-transparent text-[11px] text-foreground outline-none placeholder:text-muted-foreground"
     />
   </div>
   {#if tagDraft.trim()}

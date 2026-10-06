@@ -9,6 +9,7 @@
     onToggleSidebar = () => {},
     lead,
     stats,
+    toolbar,
     actions,
   }: {
     title: string;
@@ -17,6 +18,7 @@
     onToggleSidebar?: () => void;
     lead?: Snippet;
     stats?: Snippet;
+    toolbar?: Snippet;
     actions?: Snippet;
   } = $props();
 </script>
@@ -56,6 +58,12 @@
       </div>
     {/if}
   </div>
+
+  {#if toolbar}
+    <div class="min-w-0 flex-[1_1_220px]">
+      {@render toolbar()}
+    </div>
+  {/if}
 
   {#if actions}
     <div class="flex flex-wrap items-center gap-2 text-[12px]">
