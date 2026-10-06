@@ -20,7 +20,11 @@
     spanColor,
     spanKindLabel,
     formatMs,
+    buildServiceFlow,
     buildWaterfall,
+    formatSpanDuration,
+    orderSpans,
+    worstSpanStatus,
     traceTitle,
   } from "$lib/trace-utils";
   import SectionHeader from "./section-header.svelte";
@@ -236,6 +240,12 @@
   const selectedTrace = $derived(
     filteredTraces.find((t) => t.id === effectiveId) ?? null,
   );
+  // Timeline and span details share indexes, so both use this order.
+  const traceSpans = $derived(selectedTrace ? orderSpans(selectedTrace.spans) : []);
+  const traceFlow = $derived(buildServiceFlow(traceSpans));
+  const traceRows = $derived(
+    selectedTrace ? buildWaterfall(traceSpans, selectedTrace.durationMs, selectedTrace.startedAt) : [],
+  );
 
   const replayGatewayId = $derived.by(() => {
     if (!selectedTrace) return null;
@@ -335,17 +345,11 @@
     return Math.max(a, b);
   }
 
-  function worstSpanStatus(a: TraceSpan["status"], b: TraceSpan["status"]): TraceSpan["status"] {
-    const rank = (status: string) =>
-      status === "error" ? 3 : status === "client_error" ? 2 : status === "ok" ? 1 : 0;
-    return rank(a) >= rank(b) ? a : b;
-  }
-
   function compactTraceSpans(spans: TraceSpan[]): TraceSpan[] {
     const compacted: TraceSpan[] = [];
     for (const span of spans) {
       const previous = compacted[compacted.length - 1];
-      if (previous && previous.kind === span.kind && previous.name === span.name) {
+      if (previous && !span.id && !previous.id && previous.kind === span.kind && previous.name === span.name) {
         previous.durationMs = Math.max(previous.durationMs, span.durationMs);
         previous.status = worstSpanStatus(previous.status, span.status);
         if (span.meta) previous.meta = { ...(previous.meta ?? {}), ...span.meta };
@@ -430,6 +434,7 @@
   }
 
   function shouldChainTrace(flow: TraceFlow, candidate: RequestTrace): boolean {
+    if (flow.accountId || candidate.accountId) return flow.id === candidate.id;
     if (flow.correlationId && candidate.correlationId && flow.correlationId === candidate.correlationId) {
       if (isRepeatedQueueRetry(flow, candidate)) {
         return false;
@@ -533,6 +538,7 @@
   }
 
   function logGroupForSpan(span: TraceSpan): string | null {
+    if (span.meta?.logGroup) return span.meta.logGroup;
     switch (span.kind.toLowerCase()) {
       case "lambda":
         return `/aws/lambda/${span.name}`;
@@ -607,6 +613,11 @@
     return PAD_X + i * (NODE_W + ARROW_LEN) + NODE_W / 2;
   }
   const nodeCY = PAD_Y + NODE_H / 2;
+
+  // Keep both ends: services often share a prefix (api, api-redis).
+  function flowLabel(name: string): string {
+    return name.length > 20 ? `${name.slice(0, 9)}…${name.slice(-10)}` : name;
+  }
 
   // ─── Waterfall ───
 </script>
@@ -905,11 +916,11 @@
                 </button>
               {/if}
             </div>
-            {#if selectedTrace.spans.length > 0}
+            {#if traceSpans.length > 0}
               <div
                 class="mt-2 text-[10px] font-mono tx-tertiary flex items-center gap-1 flex-wrap"
               >
-                {#each selectedTrace.spans as span, i (i)}
+                {#each traceFlow.nodes as { span }, i (i)}
                   {#if i > 0}
                     <span class="opacity-40 select-none" aria-hidden="true">→</span>
                   {/if}
@@ -967,13 +978,8 @@
             </div>
           {/if}
 
-          {#if selectedTrace.spans.length > 0}
-            {@const n = selectedTrace.spans.length}
-            {@const cw = flowCW(n)}
-            {@const rows = buildWaterfall(
-              selectedTrace.spans,
-              selectedTrace.durationMs,
-            )}
+          {#if traceSpans.length > 0}
+            {@const cw = flowCW(traceFlow.nodes.length)}
 
             <!-- ─── Flow diagram ─── -->
             <div class="panel">
@@ -1002,12 +1008,11 @@
                     {/each}
                   {/each}
 
-                  <!-- Arrow connectors between spans -->
-                  {#each selectedTrace.spans as _span, i (i)}
-                    {#if i < n - 1}
-                      {@const fx = nodeX(i) + NODE_W / 2}
-                      {@const tx = nodeX(i + 1) - NODE_W / 2}
-                      <!-- Connector line -->
+                  <!-- Arrow connectors between services -->
+                  {#each traceFlow.edges as [from, to] (`${from}>${to}`)}
+                    {#if to === from + 1}
+                      {@const fx = nodeX(from) + NODE_W / 2}
+                      {@const tx = nodeX(to) - NODE_W / 2}
                       <line
                         x1={fx}
                         y1={nodeCY}
@@ -1020,18 +1025,30 @@
                         opacity="0.5"
                         class="connector-flow"
                       />
-                      <!-- Arrowhead -->
                       <polygon
                         points="{tx},{nodeCY} {tx - 8},{nodeCY - 4.5} {tx -
                           8},{nodeCY + 4.5}"
                         fill="var(--color-text-faint)"
                         opacity="0.5"
                       />
+                    {:else}
+                      {@const parentX = nodeX(from)}
+                      {@const childX = nodeX(to)}
+                      {@const top = nodeCY - NODE_H / 2}
+                      <path
+                        d="M {parentX} {top} C {parentX} 4, {childX} 4, {childX} {top}"
+                        fill="none"
+                        stroke="var(--color-text-faint)"
+                        stroke-width="1.5"
+                        stroke-dasharray="5 3"
+                        opacity="0.6"
+                      />
+                      <polygon points="{childX},{top} {childX - 4},{top - 7} {childX + 4},{top - 7}" fill="var(--color-text-faint)" />
                     {/if}
                   {/each}
 
                   <!-- Span nodes -->
-                  {#each selectedTrace.spans as span, i (i)}
+                  {#each traceFlow.nodes as { span, calls }, i (i)}
                     {@const cx = nodeX(i)}
                     {@const cy = nodeCY}
                     {@const color = spanColor(span.kind)}
@@ -1118,9 +1135,7 @@
                       font-size="8.5"
                       font-family="var(--font-mono)"
                       class="fill-text"
-                      >{span.name.length > 14
-                        ? span.name.slice(0, 13) + "…"
-                        : span.name}</text
+                      ><title>{span.name}</title>{flowLabel(span.name)}</text
                     >
 
                     <!-- Duration -->
@@ -1133,7 +1148,7 @@
                       fill={hasErr
                         ? "var(--color-red)"
                         : "var(--color-text-faint)"}
-                      >{formatMs(span.durationMs)}{hasErr ? " ✕" : ""}</text
+                      >{formatMs(span.durationMs)}{calls > 1 ? ` · ×${calls}` : ""}{hasErr ? " ✕" : ""}</text
                     >
                   {/each}
                 </svg>
@@ -1144,28 +1159,29 @@
             <div class="flat-block">
               <p class="section-label">Timeline</p>
               <div class="tl-rows">
-                {#each rows as { span, offsetPct, widthPct, nested }, i (i)}
+                {#each traceRows as { span, offsetPct, widthPct, depth }, i (i)}
                   {@const hasErr = span.status === "error" || span.status === "client_error"}
+                  {@const nested = depth > 0}
                   <button
                     type="button"
                     class="tl-row"
                     class:selected={openSpan === i}
                     class:nested
-                    style="--accent:{hasErr ? (span.status === 'error' ? 'var(--accent-red)' : 'var(--accent-amber)') : 'var(--text-primary)'}"
+                    style="--accent:{hasErr ? (span.status === 'error' ? 'var(--accent-red)' : 'var(--accent-amber)') : 'var(--text-primary)'};--depth:{depth}"
                     onclick={() => (openSpan === i ? (openSpan = null) : focusSpan(i))}
                   >
                     <span class="tl-step">{nested ? "└" : i + 1}</span>
                     <span class="tl-kind" title={spanKindLabel(span.kind)} style="color:{spanColor(span.kind)}">
                       {spanKindLabel(span.kind)}
                     </span>
-                    <span class="tl-name" class:tx-error={span.status === "error"} title={span.name}>{span.name}</span>
+                    <span class="tl-name" class:tx-error={span.status === "error"} title={[span.service, span.meta?.operation].filter(Boolean).join(" · ") || span.name}>{span.name}</span>
                     <span class="tl-track">
                       <span
                         class="tl-bar"
                         style="left:{offsetPct}%;width:{widthPct}%;background:{spanColor(span.kind)};opacity:{hasErr ? 0.85 : nested ? 0.45 : 0.6}"
                       ></span>
                     </span>
-                    <span class="tl-dur">{formatMs(span.durationMs)}</span>
+                    <span class="tl-dur">{formatSpanDuration(span)}</span>
                   </button>
                 {/each}
               </div>
@@ -1180,7 +1196,7 @@
             <div class="flat-block">
               <p class="section-label">Span Details</p>
               <div class="span-rows">
-                {#each selectedTrace.spans as span, i (i)}
+                {#each traceSpans as span, i (i)}
                   {@const badge = spanBadge(span)}
                   {@const hasErr = span.status === "error" || span.status === "client_error"}
                   {@const hasMeta = !!span.meta && Object.keys(span.meta).length > 0}
@@ -1200,10 +1216,10 @@
                       >
                         <CaretRightIcon size={9} class="span-caret" />
                         <span class="span-step">{i + 1}</span>
-                        <span class="span-name">{span.name}</span>
+                        <span class="span-name" title={span.service ?? span.name}>{span.name}</span>
                         <span class="span-kind" style="color:{spanColor(span.kind)}">{spanKindLabel(span.kind)}</span>
                         <span class="span-badge {badge.colorClass}">{badge.label}</span>
-                        <span class="span-dur">{formatMs(span.durationMs)}</span>
+                        <span class="span-dur">{formatSpanDuration(span)}</span>
                       </button>
                       {#if hasErr && logGroupForSpan(span)}
                         <button
@@ -1229,6 +1245,11 @@
                     </div>
                     {#if openSpan === i}
                       <div class="span-meta" transition:slide={{ duration: 200 }}>
+                        {#if span.id}
+                          <div class="meta-line"><span class="meta-k">span ID</span><span class="meta-v">{span.id}</span></div>
+                          {#if span.parentId}<div class="meta-line"><span class="meta-k">parent ID</span><span class="meta-v">{span.parentId}</span></div>{/if}
+                          <div class="meta-line"><span class="meta-k">started at</span><span class="meta-v">{span.startedAt}</span></div>
+                        {/if}
                         {#if hasMeta}
                           {#each Object.entries(span.meta ?? {}) as [k, v] (k)}
                             <div class="meta-line">
@@ -1698,7 +1719,7 @@
     background: var(--accent);
   }
   .tl-step { width: 16px; flex-shrink: 0; text-align: right; font: 10px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary); }
-  .tl-row.nested .tl-step { padding-left: 4px; }
+  .tl-row.nested .tl-step { width: auto; min-width: 16px; padding-left: calc(4px + (var(--depth, 1) - 1) * 10px); }
   .tl-kind {
     width: 96px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font: 10px var(--font-mono, ui-monospace, monospace);

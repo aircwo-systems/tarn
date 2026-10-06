@@ -671,19 +671,20 @@ export async function clearLogGroup(groupName: string, signal?: AbortSignal): Pr
 }
 
 export async function fetchTraceForLog(
-  functionName: string,
-  timestamp: string,
-  signal?: AbortSignal,
+  params: { signal?: AbortSignal } & (
+    | { traceId: string }
+    | { functionName: string; timestamp: string }
+  ),
 ): Promise<RequestTrace | null> {
-  const qs = new URLSearchParams({ function: functionName, ts: timestamp });
+  const qs = "traceId" in params
+    ? new URLSearchParams({ traceId: params.traceId })
+    : new URLSearchParams({ function: params.functionName, ts: params.timestamp });
   const response = await fetch(endpoint(`/_tarn/admin/traces/for-log?${qs}`), {
     headers: { Accept: "application/json", ...accountHeaders() },
-    signal,
+    signal: params.signal,
   });
   if (!response.ok) return null;
-  const data = await response.json();
-  if (!data) return null;
-  return data as RequestTrace;
+  return response.json();
 }
 
 export interface PutEventBridgeRuleInput {

@@ -45,8 +45,14 @@ export interface OverviewResponse {
 }
 
 export interface TraceSpan {
+  id?: string;
+  parentId?: string;
+  startedAt?: string;
+  durationNs?: number;
   kind: "gateway" | "lambda" | "topic" | "queue" | "dlq" | "eventbridge" | string;
   name: string;
+  /** Emitting service of a distributed span; name says what the span did. */
+  service?: string;
   durationMs: number;
   status: "ok" | "error" | "client_error" | string;
   meta?: Record<string, string>;
@@ -54,6 +60,7 @@ export interface TraceSpan {
 
 export interface RequestTrace {
   id: string;
+  accountId?: string;
   correlationId?: string;
   startedAt: string;
   durationMs: number;
@@ -615,6 +622,7 @@ export interface LogGroupSummary {
 }
 
 export interface LogEvent {
+  traceId?: string;
   timestamp: string;
   message: string;
   level: string;

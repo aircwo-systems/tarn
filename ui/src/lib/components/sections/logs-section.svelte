@@ -53,8 +53,9 @@
     spanKindLabel,
     formatMs,
     buildWaterfall,
+    formatSpanDuration,
+    orderSpans,
     traceTitle,
-    type WaterfallRow,
   } from "$lib/trace-utils";
   import type { LogGroupSummary, LogEvent, RequestTrace } from "$lib/types";
   import { nextPinnedIndex, pinContextRows, pinEventKey, pinEventSnapshot, pinnedLogId, pinnedLogRow, pinsForView, readPinnedLogs, savePinnedLogs, type PinnedLog } from "$lib/pinned-logs";
@@ -314,7 +315,7 @@
     selectedKey = key;
   });
 
-  // Fetch trace for selected lambda log event
+  // Prefer an exact trace ID; Lambda output can still use its invocation window.
   $effect(() => {
     const ev = selectedEvent;
     if (!ev) {
@@ -325,15 +326,17 @@
     const evGroup = isMultiGroup
       ? (selectedGroupList.find((g) => ev.streamName.startsWith(g + "/") || ev.streamName === g) ?? selectedGroup)
       : selectedGroup;
-    if (!evGroup || !evGroup.startsWith("/aws/lambda/")) {
+    const functionName = evGroup?.startsWith("/aws/lambda/") ? evGroup.slice("/aws/lambda/".length) : null;
+    if (!ev.traceId && !functionName) {
       logTrace = null;
       logTraceLoading = false;
       return;
     }
     const ctrl = new AbortController();
-    const functionName = evGroup.slice("/aws/lambda/".length);
     logTraceLoading = true;
-    fetchTraceForLog(functionName, ev.timestamp, ctrl.signal)
+    fetchTraceForLog(ev.traceId
+      ? { traceId: ev.traceId, signal: ctrl.signal }
+      : { functionName: functionName!, timestamp: ev.timestamp, signal: ctrl.signal })
       .then((t) => (logTrace = t))
       .catch(() => (logTrace = null))
       .finally(() => (logTraceLoading = false));
@@ -900,12 +903,14 @@
   );
 
   function groupDisplayName(name: string): string {
+    if (name.startsWith("/services/")) return name.slice("/services/".length);
     if (name.startsWith("/aws/lambda/")) return name.slice("/aws/lambda/".length);
     if (name.startsWith("/tarn/")) return name.slice(1);
     return name;
   }
 
   function groupServiceKey(name: string): string {
+    if (name.startsWith("/services/")) return "services";
     if (name.startsWith("/aws/lambda/")) return "lambda";
     if (name === "/tarn/api") return "api";
     if (name === "/tarn/system") return "system";
@@ -920,6 +925,7 @@
   function serviceLabel(key: string): string {
     switch (key) {
       case "all": return "All";
+      case "services": return "Services";
       case "lambda": return "Lambda";
       case "api": return "API";
       case "system": return "System";
@@ -936,7 +942,7 @@
   }
 
   const logWaterfallRows = $derived(
-    logTrace ? buildWaterfall(logTrace.spans, logTrace.durationMs) : ([] as WaterfallRow[]),
+    logTrace ? buildWaterfall(orderSpans(logTrace.spans), logTrace.durationMs, logTrace.startedAt) : [],
   );
   const selectedGroupIsLambda = $derived(selectedGroup.startsWith("/aws/lambda/"));
   const hasNextPage = $derived(!!nextCursor);
@@ -1013,7 +1019,7 @@
       const key = groupServiceKey(group.name);
       counts.set(key, (counts.get(key) ?? 0) + 1);
     }
-    const orderedKeys = ["lambda", "api", "system", "apigatewayv2", "sns", "sqs", "secretsmanager", "other"];
+    const orderedKeys = ["services", "lambda", "api", "system", "apigatewayv2", "sns", "sqs", "secretsmanager", "other"];
     const options = [{ key: "all", label: serviceLabel("all"), count: groups.length }];
     for (const key of orderedKeys) {
       const count = counts.get(key) ?? 0;
@@ -1421,7 +1427,7 @@
                     </dl>
                   </section>
 
-                  {#if selectedGroupIsLambda}
+                  {#if selectedGroupIsLambda || ev.traceId}
                     <section>
                       <div class="flex items-center justify-between">
                         <p class="rc-label">Trace context</p>
@@ -1449,10 +1455,11 @@
                             <span class="rc-mono ml-auto shrink-0 text-[10px] text-[var(--text-tertiary)]">{formatMs(t.durationMs)}</span>
                           </div>
                           <div class="space-y-1.5 px-3 py-2">
-                            {#each logWaterfallRows as { span, offsetPct, widthPct, nested }, i (i)}
+                            {#each logWaterfallRows as { span, offsetPct, widthPct, depth }, i (i)}
                               {@const color = spanColor(span.kind)}
+                              {@const nested = depth > 0}
                               {@const opacity = span.status === "error" ? 0.85 : nested ? 0.4 : 0.5}
-                              <div class="flex items-center gap-2 {nested ? 'pl-3' : ''}">
+                              <div class="flex items-center gap-2" style="padding-left:{depth * 0.75}rem">
                                 {#if nested}
                                   <span class="rc-mono shrink-0 select-none text-[10px] text-[var(--text-tertiary)]">└</span>
                                 {/if}
@@ -1462,14 +1469,14 @@
                                     style="color:{color};background:{color}18;border:1px solid {color}28"
                                   >{spanKindLabel(span.kind)}</span>
                                 </div>
-                                <span class="rc-mono w-24 shrink-0 truncate text-[10px] text-[var(--text-secondary)]" title={span.name}>{span.name}</span>
+                                <span class="rc-mono w-24 shrink-0 truncate text-[10px] text-[var(--text-secondary)]" title={span.service ?? span.name}>{span.name}</span>
                                 <div class="relative flex-1 overflow-hidden rounded bg-[var(--bg-element)] {nested ? 'h-2' : 'h-2.5'}">
                                   <div
                                     class="absolute top-0 h-full rounded"
                                     style="left:{offsetPct}%;width:{widthPct}%;background:{color};opacity:{opacity};min-width:2px"
                                   ></div>
                                 </div>
-                                <span class="rc-mono w-10 shrink-0 text-right text-[9px] text-[var(--text-tertiary)]">{formatMs(span.durationMs)}</span>
+                                <span class="rc-mono w-10 shrink-0 text-right text-[9px] text-[var(--text-tertiary)]">{formatSpanDuration(span)}</span>
                               </div>
                             {/each}
                           </div>
