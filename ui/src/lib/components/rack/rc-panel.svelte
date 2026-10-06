@@ -6,7 +6,6 @@
     description = "",
     id,
     index = 0,
-    flat = false,
     actions,
     children,
   }: {
@@ -15,14 +14,12 @@
     id?: string;
     /** position in a stack; staggers the entrance */
     index?: number;
-    /** drop the card border for a quieter block */
-    flat?: boolean;
     actions?: Snippet;
     children?: Snippet;
   } = $props();
 </script>
 
-<section {id} class="rc-panel" class:flat style:--i={index}>
+<section {id} class="rc-panel" style:--i={index}>
   {#if title || actions}
     <header>
       <div class="head">
@@ -36,16 +33,13 @@
 </section>
 
 <style>
+  /* Groups have no card chrome: space and the title separate them. */
   .rc-panel {
     scroll-margin-top: 12px;
-    border: 1px solid var(--border-subtle);
-    border-radius: 12px;
-    padding: 16px 18px;
-    background: var(--bg-stage);
+    padding: 6px 2px 22px;
     animation: rcPanelIn 320ms var(--ease-snappy) both;
     animation-delay: calc(var(--i, 0) * 30ms);
   }
-  .rc-panel.flat { border-color: transparent; background: transparent; padding: 4px 2px; }
   header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
   .head { min-width: 0; }
   h2 { font-size: 13px; font-weight: 600; color: var(--text-primary); letter-spacing: -0.01em; }

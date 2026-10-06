@@ -288,14 +288,12 @@
   .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; font-size: 11px; color: var(--text-tertiary); }
   .meta i { width: 3px; height: 3px; border-radius: 1px; background: var(--border-default); }
 
-  .ops { display: flex; flex-direction: column; gap: 8px; }
-  .op { border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-app); overflow: hidden; transition: border-color 120ms ease; }
-  .op.open { border-color: var(--border-default); }
+  .ops { display: flex; flex-direction: column; }
+  .op { overflow: hidden; }
+  .op + .op { border-top: 1px solid var(--border-subtle); }
   .op-head {
-    display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; min-width: 0; text-align: left;
-    transition: background 120ms ease;
+    display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 2px; min-width: 0; text-align: left;
   }
-  .op-head:hover { background: var(--bg-element-hover); }
   .op-head:focus-visible { outline: 1px solid var(--border-focus); outline-offset: -1px; }
   .op-head :global(.caret) { flex-shrink: 0; color: var(--text-tertiary); transition: transform 200ms var(--ease-snappy); }
   .op.open .op-head :global(.caret) { transform: rotate(90deg); }

@@ -1357,10 +1357,7 @@
 
   /* ─── Panels ─── */
   .panel {
-    border: 1px solid var(--border-subtle);
-    border-radius: 12px;
-    background: var(--bg-stage);
-    padding: 14px 16px;
+    padding: 6px 2px 22px;
     animation: panelIn 320ms var(--ease-snappy) both;
   }
   @keyframes panelIn {

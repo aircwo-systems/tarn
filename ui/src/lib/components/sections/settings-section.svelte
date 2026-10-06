@@ -734,8 +734,7 @@
   .panels { display: flex; flex-direction: column; gap: 14px; }
   .panel {
     scroll-margin-top: 12px;
-    border: 1px solid var(--border-subtle); border-radius: 12px; padding: 16px 18px;
-    background: var(--bg-stage);
+    padding: 6px 2px 22px;
     animation: panelIn 320ms var(--ease-snappy) both;
   }
   .panel:nth-child(2) { animation-delay: 30ms; }

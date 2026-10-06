@@ -536,9 +536,7 @@
 
   /* ─── Groups ─── */
   .ls-panel {
-    border: 1px solid var(--border-subtle);
-    border-radius: 12px;
-    background: var(--bg-stage);
+    padding: 6px 2px 22px;
   }
   .ls-list {
     min-height: 0;

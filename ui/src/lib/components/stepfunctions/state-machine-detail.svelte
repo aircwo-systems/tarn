@@ -146,7 +146,7 @@
     {/if}
   </RcPanel>
 
-  <RcPanel title="Definition" index={1} flat>
+  <RcPanel title="Definition" index={1}>
     {#if machine.definition}
       <FormattedMessageViewer
         raw={machine.definition}

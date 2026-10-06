@@ -298,14 +298,14 @@
   .groups { display: flex; flex-direction: column; gap: 12px; }
 
   .group {
-    border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-stage);
+    padding: 6px 2px 22px;
     overflow: hidden; animation: groupIn 260ms var(--ease-snappy) both; animation-delay: calc(var(--i) * 40ms);
     transition: border-color 200ms ease; scroll-margin-top: 12px;
   }
-  .group.flash { border-color: var(--border-focus); }
+  .group.flash header { border-bottom-color: var(--border-focus); }
   @keyframes groupIn { from { opacity: 0; transform: translateY(4px); } }
 
-  header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; padding: 10px 12px; border-bottom: 1px solid var(--border-subtle); }
+  header { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px 16px; padding: 10px 2px; border-bottom: 1px solid var(--border-subtle); }
   .title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; }
   h2 { font-size: 13px; font-weight: 600; color: var(--text-primary); }
   .kinds, .links { display: flex; flex-wrap: wrap; gap: 4px; }

@@ -250,11 +250,11 @@
   .bcard {
     position: relative; grid-column: span min(var(--span), 3);
     display: flex; flex-direction: column; gap: 10px; padding: 13px 12px 11px; text-align: left; min-width: 0;
-    border: 1px solid var(--border-subtle); border-radius: 10px; background: var(--bg-stage); overflow: hidden;
-    transition: border-color 160ms ease, transform 160ms var(--ease-snappy), opacity 160ms ease;
+    border: 1px solid transparent; border-radius: 10px; overflow: hidden;
+    transition: border-color 160ms ease, background 160ms ease, transform 160ms var(--ease-snappy), opacity 160ms ease;
     animation: cardIn 260ms var(--ease-snappy) both; animation-delay: calc(var(--i) * 28ms);
   }
-  .bcard:hover { border-color: color-mix(in srgb, var(--text-primary) 22%, transparent); transform: translateY(-1px); }
+  .bcard:hover { background: var(--bg-element-hover); transform: translateY(-1px); }
   .bcard:focus-visible { outline: 1px solid var(--border-focus); outline-offset: 2px; }
   .bcard.related { border-color: var(--stack-infra); }
   .faint { opacity: 0.28; }

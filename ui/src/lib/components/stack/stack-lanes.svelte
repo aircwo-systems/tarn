@@ -629,13 +629,12 @@
   }
 
   .lane {
-    position: absolute; left: 0; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-stage);
-    transition: opacity 160ms ease, border-color 160ms ease, height 220ms var(--ease-snappy);
+    position: absolute; left: 0; border: 1px solid transparent; border-radius: 8px;
+    transition: opacity 160ms ease, background 160ms ease, height 220ms var(--ease-snappy);
     animation: laneIn 240ms var(--ease-snappy) both; animation-delay: calc(var(--i) * 30ms);
   }
-  .lane:hover { border-color: color-mix(in srgb, var(--text-primary) 16%, transparent); }
-  .lane.bare { border-color: transparent; background: none; }
-  .lane.collapsed { background: transparent; border-style: dashed; }
+  .lane:hover { background: var(--bg-element-hover); }
+  .lane.bare { background: none; }
   @keyframes laneIn { from { opacity: 0; transform: translateY(3px); } }
 
   .lane-head {

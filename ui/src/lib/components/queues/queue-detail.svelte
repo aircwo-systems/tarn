@@ -282,7 +282,7 @@
     />
   </div>
 
-  <RcPanel title="Messages" description="Live payloads currently on this queue." index={0} flat>
+  <RcPanel title="Messages" description="Live payloads currently on this queue." index={0}>
     {#if error}
       <p class="error">{error}</p>
     {/if}
@@ -588,12 +588,12 @@
   .empty { font-size: 11.5px; color: var(--text-tertiary); }
   .error { margin-bottom: 10px; font-size: 11.5px; color: var(--accent-red); }
 
-  .messages { display: flex; flex-direction: column; gap: 10px; }
+  .messages { display: flex; flex-direction: column; }
   .message {
-    border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--bg-app);
-    padding: 10px 12px;
+    padding: 14px 2px;
     transition: opacity 120ms ease;
   }
+  .message + .message { border-top: 1px solid var(--border-subtle); }
   .message.is-deleting {
     opacity: 0.4;
     pointer-events: none;
@@ -614,8 +614,8 @@
     gap: 8px;
     margin-top: 10px;
     flex-wrap: wrap;
-    border-top: 1px solid var(--border-subtle);
-    padding-top: 8px;
+    /* No rule here: inside a divided row it would read as a row boundary. */
+    padding-top: 2px;
   }
   .message-time { font-size: 11px; color: var(--text-tertiary); }
 
