@@ -170,6 +170,10 @@ var operations = map[string]operation{
 	"RevokeToken":                      op((*service).RevokeToken),
 	"GetUserAttributeVerificationCode": op((*service).GetUserAttributeVerificationCode),
 	"VerifyUserAttribute":              op((*service).VerifyUserAttribute),
+	"SetUserMFAPreference":             op((*service).SetUserMFAPreference),
+
+	// MFA (admin)
+	"AdminSetUserMFAPreference": op((*service).AdminSetUserMFAPreference),
 }
 
 // Dispatch routes a JSON 1.1 request by its X-Amz-Target action.

@@ -204,6 +204,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	if err := cognitoSvc.Init(); err != nil {
 		return nil, fmt.Errorf("cognito store: %w", err)
 	}
+	cognitoSvc.SetTriggerInvoker(cognitoTriggerInvoker(lambdaSvc))
 
 	// DynamoDB
 	dynamoSvc := dynamodb.NewService(acctCfg)
@@ -392,6 +393,35 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	}
 
 	return api.NewAccountBundle(hs, stop), nil
+}
+
+// cognitoTriggerInvoker runs Cognito Lambda triggers on this account's Lambda
+// service. Pools reference triggers by ARN; Invoke takes the function name.
+func cognitoTriggerInvoker(lambdaSvc *lambda.Service) cognito.TriggerInvoker {
+	return func(ctx context.Context, functionArn string, payload []byte) ([]byte, error) {
+		name := functionArn
+		if _, tail, ok := strings.Cut(functionArn, ":function:"); ok {
+			name, _, _ = strings.Cut(tail, ":")
+		}
+		out, err := lambdaSvc.Invoke(ctx, &types.InvokeInput{
+			FunctionName:   name,
+			Payload:        payload,
+			InvocationType: "RequestResponse",
+		})
+		if err != nil {
+			return nil, err
+		}
+		if out.FunctionError != "" {
+			var fnErr struct {
+				ErrorMessage string `json:"errorMessage"`
+			}
+			if json.Unmarshal(out.Payload, &fnErr) == nil && fnErr.ErrorMessage != "" {
+				return nil, errors.New(fnErr.ErrorMessage)
+			}
+			return nil, errors.New(out.FunctionError)
+		}
+		return out.Payload, nil
+	}
 }
 
 func startServer(cfg *config.Config) error {

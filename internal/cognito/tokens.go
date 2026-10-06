@@ -226,9 +226,27 @@ func (p *pool) groupNames(u *user) []string {
 	return names
 }
 
-// mintTokens issues an ID and access token for sess. refreshToken is
-// included in the result when non-empty.
-func (s *Service) mintTokens(p *pool, c *UserPoolClientType, u *user, sess *session, refreshToken string) (*AuthenticationResultType, error) {
+// tokenJob is everything needed to issue tokens for one sign-in or refresh,
+// captured under the service lock. issueTokens finishes it without the lock,
+// because the pre token generation trigger may take seconds to run.
+type tokenJob struct {
+	poolID     string
+	key        *rsa.PrivateKey
+	kid        string
+	clientID   string
+	username   string
+	userAttrs  map[string]string
+	groups     []string
+	lambda     LambdaConfigType
+	source     string // triggerSource suffix, e.g. Authentication
+	id, access map[string]any
+	refresh    string
+	expiresIn  int
+}
+
+// prepareTokens builds the claims for sess. refreshToken is returned in the
+// result when non-empty. Callers hold s.mu.
+func (s *Service) prepareTokens(p *pool, c *UserPoolClientType, u *user, sess *session, refreshToken, source string) *tokenJob {
 	now := s.now()
 	eventID := uuid.NewString()
 	iss := s.Issuer(p.Config.Id)
@@ -280,19 +298,42 @@ func (s *Service) mintTokens(p *pool, c *UserPoolClientType, u *user, sess *sess
 		access["cognito:groups"] = groups
 	}
 
-	idToken, err := signJWT(p.key, p.KeyID, id)
+	return &tokenJob{
+		poolID:    p.Config.Id,
+		key:       p.key,
+		kid:       p.KeyID,
+		clientID:  c.ClientId,
+		username:  u.Username,
+		userAttrs: u.triggerAttributes(),
+		groups:    groups,
+		lambda:    p.lambdaConfig(),
+		source:    source,
+		id:        id,
+		access:    access,
+		refresh:   refreshToken,
+		expiresIn: int(accessTTL / time.Second),
+	}
+}
+
+// issueTokens runs the pre token generation trigger, if any, and signs the
+// tokens. Callers must not hold s.mu.
+func (s *Service) issueTokens(job *tokenJob) (*AuthenticationResultType, error) {
+	if err := s.runPreTokenGeneration(job); err != nil {
+		return nil, err
+	}
+	idToken, err := signJWT(job.key, job.kid, job.id)
 	if err != nil {
 		return nil, err
 	}
-	accessToken, err := signJWT(p.key, p.KeyID, access)
+	accessToken, err := signJWT(job.key, job.kid, job.access)
 	if err != nil {
 		return nil, err
 	}
 	return &AuthenticationResultType{
 		AccessToken:  accessToken,
 		IdToken:      idToken,
-		RefreshToken: refreshToken,
-		ExpiresIn:    int(accessTTL / time.Second),
+		RefreshToken: job.refresh,
+		ExpiresIn:    job.expiresIn,
 		TokenType:    "Bearer",
 	}, nil
 }

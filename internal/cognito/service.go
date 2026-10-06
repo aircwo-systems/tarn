@@ -30,9 +30,10 @@ type Sealer interface {
 
 // Service holds one account's user pools.
 type Service struct {
-	cfg   *config.Config
-	index *Index
-	vault Sealer
+	cfg     *config.Config
+	index   *Index
+	vault   Sealer
+	invoker TriggerInvoker
 
 	mu         sync.RWMutex
 	pools      map[string]*pool
@@ -82,6 +83,7 @@ type user struct {
 	Groups       []string                `json:"groups,omitempty"`
 	Codes        map[string]*pendingCode `json:"codes,omitempty"` // keyed by purpose
 	Sessions     map[string]*session     `json:"sessions,omitempty"`
+	MFA          *mfaPrefs               `json:"mfa,omitempty"`
 }
 
 // session is one sign-in: the refresh token and every access token minted

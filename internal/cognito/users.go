@@ -318,6 +318,7 @@ type AdminGetUserOutput struct {
 	Enabled              bool            `json:"Enabled"`
 	UserStatus           string          `json:"UserStatus"`
 	UserMFASettingList   []string        `json:"UserMFASettingList,omitempty"`
+	PreferredMfaSetting  string          `json:"PreferredMfaSetting,omitempty"`
 }
 
 // adminUser resolves the pool and user for an Admin* call. Callers hold s.mu.
@@ -347,6 +348,8 @@ func (s *Service) AdminGetUser(in *AdminUserInput) (*AdminGetUserOutput, error) 
 		UserLastModifiedDate: EpochTime(u.Modified),
 		Enabled:              u.Enabled,
 		UserStatus:           u.Status,
+		UserMFASettingList:   u.mfaSettingList(),
+		PreferredMfaSetting:  u.mfa().Preferred,
 	}, nil
 }
 
@@ -482,19 +485,24 @@ type AdminConfirmSignUpInput struct {
 
 func (s *Service) AdminConfirmSignUp(in *AdminConfirmSignUpInput) (struct{}, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, u, err := s.adminUser(in.UserPoolId, in.Username)
+	p, u, err := s.adminUser(in.UserPoolId, in.Username)
+	var call *triggerCall
+	if err == nil && u.Status != StatusUnconfirmed {
+		err = notAuthorized("User cannot be confirmed. Current status is %s", u.Status)
+	}
+	if err == nil {
+		u.Status = StatusConfirmed
+		delete(u.Codes, purposeSignUp)
+		u.Modified = s.now()
+		s.markDirty()
+		call = postConfirmationCall(p, u, "PostConfirmation_ConfirmSignUp", "", in.ClientMetadata)
+	}
+	s.mu.Unlock()
 	if err != nil {
 		return struct{}{}, err
 	}
-	if u.Status != StatusUnconfirmed {
-		return struct{}{}, notAuthorized("User cannot be confirmed. Current status is %s", u.Status)
-	}
-	u.Status = StatusConfirmed
-	delete(u.Codes, purposeSignUp)
-	u.Modified = s.now()
-	s.markDirty()
-	return struct{}{}, nil
+	_, err = s.invoke(call)
+	return struct{}{}, err
 }
 
 type AdminResetUserPasswordInput struct {

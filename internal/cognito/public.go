@@ -38,11 +38,16 @@ func (s *Service) SignUp(in *SignUpInput) (*SignUpOutput, error) {
 	if err == nil {
 		err = s.checkSignUp(p, c, in, attrs)
 	}
+	preSignUp := preSignUpCall(p, "PreSignUp_SignUp", username, c.ClientId, attrs, in.ValidationData, in.ClientMetadata)
 	s.mu.RUnlock()
 	if err != nil {
 		return nil, err
 	}
 
+	resp, err := s.invoke(preSignUp)
+	if err != nil {
+		return nil, err
+	}
 	creds, err := newCredentials(p.Config.Id, username, in.Password)
 	if err != nil {
 		return nil, err
@@ -58,11 +63,22 @@ func (s *Service) SignUp(in *SignUpInput) (*SignUpOutput, error) {
 	}
 	u := s.newUser(username, sub, attrs, StatusUnconfirmed)
 	p.applyCredentials(u, creds, false, s.now())
+	// The PreSignUp trigger can confirm the user and verify their email or
+	// phone number, which skips the confirmation code.
+	if resp["autoVerifyEmail"] == true && u.Attributes["email"] != "" {
+		u.Attributes["email_verified"] = "true"
+	}
+	if resp["autoVerifyPhone"] == true && u.Attributes["phone_number"] != "" {
+		u.Attributes["phone_number_verified"] = "true"
+	}
+	if resp["autoConfirmUser"] == true {
+		u.Status = StatusConfirmed
+	}
 	p.Users[p.userKey(username)] = u
 	s.markDirty()
 
-	out := &SignUpOutput{UserSub: sub}
-	if attr := autoVerifyAttribute(p, u); attr != "" {
+	out := &SignUpOutput{UserSub: sub, UserConfirmed: u.Status == StatusConfirmed}
+	if attr := autoVerifyAttribute(p, u); attr != "" && !out.UserConfirmed {
 		s.issueCode(p, u, purposeSignUp, attr)
 		out.CodeDeliveryDetails = deliveryDetails(u, attr)
 	}
@@ -132,31 +148,42 @@ func (s *Service) clientUser(clientID, login, hash string) (*pool, *UserPoolClie
 
 func (s *Service) ConfirmSignUp(in *ConfirmSignUpInput) (struct{}, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	p, _, u, err := s.clientUser(in.ClientId, in.Username, in.SecretHash)
+	call, err := s.confirmSignUpLocked(in)
+	s.mu.Unlock()
 	if err != nil {
 		return struct{}{}, err
 	}
+	// AWS runs PostConfirmation after the user is confirmed; a failure is
+	// reported to the caller but the user stays confirmed.
+	_, err = s.invoke(call)
+	return struct{}{}, err
+}
+
+func (s *Service) confirmSignUpLocked(in *ConfirmSignUpInput) (*triggerCall, error) {
+	p, c, u, err := s.clientUser(in.ClientId, in.Username, in.SecretHash)
+	if err != nil {
+		return nil, err
+	}
 	if u.Status != StatusUnconfirmed {
-		return struct{}{}, notAuthorized("User cannot be confirmed. Current status is %s", u.Status)
+		return nil, notAuthorized("User cannot be confirmed. Current status is %s", u.Status)
 	}
 	attr := ""
 	if pc := u.Codes[purposeSignUp]; pc != nil {
 		attr = pc.Attribute
 	}
 	if err := s.consumeCode(u, purposeSignUp, in.ConfirmationCode); err != nil {
-		return struct{}{}, err
+		return nil, err
 	}
 	if attr != "" {
 		if err := p.claimAlias(u, attr, in.ForceAliasCreation); err != nil {
-			return struct{}{}, err
+			return nil, err
 		}
 		u.Attributes[attr+"_verified"] = "true"
 	}
 	u.Status = StatusConfirmed
 	u.Modified = s.now()
 	s.markDirty()
-	return struct{}{}, nil
+	return postConfirmationCall(p, u, "PostConfirmation_ConfirmSignUp", c.ClientId, in.ClientMetadata), nil
 }
 
 // claimAlias enforces alias uniqueness when u verifies attr: another user
@@ -235,26 +262,35 @@ type ConfirmForgotPasswordInput struct {
 
 func (s *Service) ConfirmForgotPassword(in *ConfirmForgotPasswordInput) (struct{}, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	p, _, u, err := s.clientUser(in.ClientId, in.Username, in.SecretHash)
+	call, err := s.confirmForgotPasswordLocked(in)
+	s.mu.Unlock()
 	if err != nil {
 		return struct{}{}, err
 	}
+	_, err = s.invoke(call)
+	return struct{}{}, err
+}
+
+func (s *Service) confirmForgotPasswordLocked(in *ConfirmForgotPasswordInput) (*triggerCall, error) {
+	p, c, u, err := s.clientUser(in.ClientId, in.Username, in.SecretHash)
+	if err != nil {
+		return nil, err
+	}
 	if err := checkPasswordPolicy(p.passwordPolicy(), in.Password); err != nil {
-		return struct{}{}, err
+		return nil, err
 	}
 	if err := s.consumeCode(u, purposeReset, in.ConfirmationCode); err != nil {
-		return struct{}{}, err
+		return nil, err
 	}
 	if err := p.setPassword(u, in.Password, false, s.now()); err != nil {
-		return struct{}{}, err
+		return nil, err
 	}
 	if u.Status == StatusResetRequired || u.Status == StatusForceChangePassword {
 		u.Status = StatusConfirmed
 	}
 	u.Modified = s.now()
 	s.markDirty()
-	return struct{}{}, nil
+	return postConfirmationCall(p, u, "PostConfirmation_ConfirmForgotPassword", c.ClientId, in.ClientMetadata), nil
 }
 
 // --- Access token operations ---
@@ -264,8 +300,10 @@ type AccessTokenInput struct {
 }
 
 type GetUserOutput struct {
-	Username       string          `json:"Username"`
-	UserAttributes []AttributeType `json:"UserAttributes"`
+	Username            string          `json:"Username"`
+	UserAttributes      []AttributeType `json:"UserAttributes"`
+	UserMFASettingList  []string        `json:"UserMFASettingList,omitempty"`
+	PreferredMfaSetting string          `json:"PreferredMfaSetting,omitempty"`
 }
 
 func (s *Service) GetUser(in *AccessTokenInput) (*GetUserOutput, error) {
@@ -275,7 +313,12 @@ func (s *Service) GetUser(in *AccessTokenInput) (*GetUserOutput, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &GetUserOutput{Username: ac.user.Username, UserAttributes: ac.user.attributeList(nil)}, nil
+	return &GetUserOutput{
+		Username:            ac.user.Username,
+		UserAttributes:      ac.user.attributeList(nil),
+		UserMFASettingList:  ac.user.mfaSettingList(),
+		PreferredMfaSetting: ac.user.mfa().Preferred,
+	}, nil
 }
 
 type UpdateUserAttributesInput struct {
