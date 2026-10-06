@@ -24,7 +24,9 @@ func newCognitoTestServer(t *testing.T) http.Handler {
 	registry := NewHandlerRegistry(func(accountID string) (*AccountBundle, error) {
 		acctCfg := cfg.ForAccount(accountID)
 		b := newTestBundle(t, acctCfg)
-		b.handlers.Cognito = cognitohandler.NewHandler(cognito.NewService(acctCfg, idx))
+		svc := cognito.NewService(acctCfg, idx)
+		b.handlers.Cognito = cognitohandler.NewHandler(svc)
+		b.handlers.Admin.SetCognitoService(svc)
 		return b, nil
 	})
 	s := NewServer(cfg, registry, logs.NewService(cfg), nil)
@@ -209,5 +211,113 @@ func TestCognitoBrowserCORS(t *testing.T) {
 	h.ServeHTTP(rec, s3pre)
 	if rec.Header().Get("Access-Control-Allow-Origin") == "*" {
 		t.Fatalf("S3 preflight answered by Cognito: %v", rec.Header())
+	}
+}
+
+func adminCall(t *testing.T, h http.Handler, method, path string, body any) (int, map[string]any) {
+	t.Helper()
+	var rdr *bytes.Reader
+	if body != nil {
+		b, _ := json.Marshal(body)
+		rdr = bytes.NewReader(b)
+	} else {
+		rdr = bytes.NewReader(nil)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(method, path, rdr))
+	var out map[string]any
+	_ = json.Unmarshal(rec.Body.Bytes(), &out)
+	return rec.Code, out
+}
+
+// seedOtherAccountPool creates, in account 111111111111, a pool with a client
+// that has a secret and a confirmed user, as an SDK would.
+func seedOtherAccountPool(t *testing.T, h http.Handler) (poolID, clientID string) {
+	t.Helper()
+	poolID = mustCognito(t, h, "CreateUserPool", otherAccountAuth, map[string]any{
+		"PoolName": "app", "AutoVerifiedAttributes": []string{"email"},
+	})["UserPool"].(map[string]any)["Id"].(string)
+	clientID = mustCognito(t, h, "CreateUserPoolClient", otherAccountAuth, map[string]any{
+		"UserPoolId": poolID, "ClientName": "web", "GenerateSecret": true,
+	})["UserPoolClient"].(map[string]any)["ClientId"].(string)
+	mustCognito(t, h, "AdminCreateUser", otherAccountAuth, map[string]any{
+		"UserPoolId": poolID, "Username": "ann", "MessageAction": "SUPPRESS",
+		"UserAttributes": []map[string]string{{"Name": "email", "Value": "ann@example.com"}},
+	})
+	mustCognito(t, h, "AdminSetUserPassword", otherAccountAuth, map[string]any{
+		"UserPoolId": poolID, "Username": "ann", "Password": "Passw0rd!", "Permanent": true,
+	})
+	return poolID, clientID
+}
+
+func TestCognitoDashboardRoutes(t *testing.T) {
+	h := newCognitoTestServer(t)
+	poolID, clientID := seedOtherAccountPool(t, h)
+	base := "/_tarn/admin/cognito/pools/" + poolID
+
+	// Unsigned dashboard calls reach the pool's account through the index.
+	code, detail := adminCall(t, h, http.MethodGet, base, nil)
+	if code != http.StatusOK || detail["usersTotal"] != float64(1) || len(detail["clientList"].([]any)) != 1 {
+		t.Fatalf("detail %d %v", code, detail)
+	}
+	raw, _ := json.Marshal(detail)
+	for _, leak := range []string{"PRIVATE KEY", "passwordHash", "srpVerifier", "$2a$"} {
+		if strings.Contains(string(raw), leak) {
+			t.Fatalf("detail leaks %q", leak)
+		}
+	}
+	client := detail["clientList"].([]any)[0].(map[string]any)
+	if client["hasSecret"] != true || client["clientSecret"] != nil {
+		t.Fatalf("client view %v", client)
+	}
+	if code, sec := adminCall(t, h, http.MethodGet, base+"/clients/"+clientID+"/secret", nil); code != http.StatusOK || len(sec["clientSecret"].(string)) != 51 {
+		t.Fatalf("secret %d %v", code, sec)
+	}
+
+	code, minted := adminCall(t, h, http.MethodPost, base+"/tokens", map[string]string{"clientId": clientID, "username": "ann"})
+	if code != http.StatusOK || minted["AccessToken"] == nil {
+		t.Fatalf("mint %d %v", code, minted)
+	}
+	// Minted tokens are real: Cognito's own APIs accept them.
+	mustCognito(t, h, "GetUser", "", map[string]any{"AccessToken": minted["AccessToken"]})
+
+	code, decoded := adminCall(t, h, http.MethodPost, "/_tarn/admin/cognito/decode", map[string]string{"token": "Bearer " + minted["IdToken"].(string)})
+	if code != http.StatusOK || decoded["signatureValid"] != true || decoded["expired"] != false || decoded["poolId"] != poolID {
+		t.Fatalf("decode %d %v", code, decoded)
+	}
+	if _, bad := adminCall(t, h, http.MethodPost, "/_tarn/admin/cognito/decode", map[string]string{"token": "nope"}); bad["error"] == nil {
+		t.Fatalf("garbage token decoded: %v", bad)
+	}
+
+	if code, _ := adminCall(t, h, http.MethodPost, base+"/users/ann/disable", nil); code != http.StatusOK {
+		t.Fatalf("disable %d", code)
+	}
+	if code, _ := cognitoCall(t, h, "GetUser", "", map[string]any{"AccessToken": minted["AccessToken"]}); code != http.StatusBadRequest {
+		t.Fatal("disabling should revoke the minted token")
+	}
+	if code, _ := adminCall(t, h, http.MethodPost, base+"/users/ann/set-password", map[string]any{"password": "short"}); code != http.StatusBadRequest {
+		t.Fatalf("weak password accepted: %d", code)
+	}
+	if code, _ := adminCall(t, h, http.MethodPost, base+"/users/ann/delete", nil); code != http.StatusOK {
+		t.Fatalf("delete %d", code)
+	}
+	if code, _ := adminCall(t, h, http.MethodPost, base+"/users/ann/enable", nil); code != http.StatusNotFound {
+		t.Fatalf("action on deleted user %d", code)
+	}
+	if code, _ := adminCall(t, h, http.MethodGet, "/_tarn/admin/cognito/pools/us-east-1_missing", nil); code != http.StatusNotFound {
+		t.Fatalf("missing pool %d", code)
+	}
+}
+
+func TestOverviewIncludesCognitoPools(t *testing.T) {
+	h := newCognitoTestServer(t)
+	mustCognito(t, h, "CreateUserPool", "", map[string]any{"PoolName": "app"})
+	code, out := adminCall(t, h, http.MethodGet, "/_tarn/admin/overview", nil)
+	pools, _ := out["cognitoPools"].([]any)
+	if code != http.StatusOK || len(pools) != 1 || out["counts"].(map[string]any)["cognitoPools"] != float64(1) {
+		t.Fatalf("overview %d pools=%v counts=%v", code, out["cognitoPools"], out["counts"])
+	}
+	if p := pools[0].(map[string]any); p["name"] != "app" || p["mfaMode"] != "OFF" || p["issuer"] == nil {
+		t.Fatalf("summary %v", p)
 	}
 }

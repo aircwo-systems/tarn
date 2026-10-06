@@ -414,19 +414,40 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /_tarn/admin/eventbridge/race", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.RunEventBridgeRace(w, r)
 	})
-	mux.HandleFunc("GET /_tarn/admin/cognito/pools/{poolId}/codes", func(w http.ResponseWriter, r *http.Request) {
-		if hs := s.cognitoAdminHS(r); hs.Cognito != nil {
-			hs.Cognito.PendingCodes(w, r)
+	// Cognito dashboard routes resolve the pool's owner through the index, so
+	// they work whichever account the dashboard has selected.
+	cognitoRoute := func(serve func(*cognitohandler.Handler, http.ResponseWriter, *http.Request)) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if hs := s.cognitoAdminHS(r); hs != nil && hs.Cognito != nil {
+				serve(hs.Cognito, w, r)
+				return
+			}
+			http.NotFound(w, r)
+		}
+	}
+	mux.HandleFunc("GET /_tarn/admin/cognito/pools/{poolId}", cognitoRoute((*cognitohandler.Handler).PoolDetail))
+	mux.HandleFunc("GET /_tarn/admin/cognito/pools/{poolId}/codes", cognitoRoute((*cognitohandler.Handler).PendingCodes))
+	mux.HandleFunc("GET /_tarn/admin/cognito/pools/{poolId}/users/{username}/codes", cognitoRoute((*cognitohandler.Handler).PendingCodes))
+	mux.HandleFunc("POST /_tarn/admin/cognito/pools/{poolId}/users/{username}/{action}", cognitoRoute((*cognitohandler.Handler).UserAction))
+	mux.HandleFunc("GET /_tarn/admin/cognito/pools/{poolId}/clients/{clientId}/secret", cognitoRoute((*cognitohandler.Handler).ClientSecret))
+	mux.HandleFunc("POST /_tarn/admin/cognito/pools/{poolId}/tokens", cognitoRoute((*cognitohandler.Handler).MintTokens))
+	mux.HandleFunc("POST /_tarn/admin/cognito/decode", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		var req struct {
+			Token string `json:"token"`
+		}
+		_ = json.Unmarshal(body, &req)
+		token := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(req.Token), "Bearer "))
+		hs := s.poolHS(cognitosvc.PoolIDFromToken(token))
+		if hs == nil {
+			hs = s.hs(r)
+		}
+		if hs == nil || hs.Cognito == nil {
+			http.NotFound(w, r)
 			return
 		}
-		http.NotFound(w, r)
-	})
-	mux.HandleFunc("GET /_tarn/admin/cognito/pools/{poolId}/users/{username}/codes", func(w http.ResponseWriter, r *http.Request) {
-		if hs := s.cognitoAdminHS(r); hs.Cognito != nil {
-			hs.Cognito.PendingCodes(w, r)
-			return
-		}
-		http.NotFound(w, r)
+		hs.Cognito.DecodeToken(w, r)
 	})
 	// EventBridge JSON protocol endpoint used by dashboard and tooling to avoid
 	// colliding with UI app-server root routes.

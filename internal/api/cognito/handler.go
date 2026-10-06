@@ -230,18 +230,10 @@ func (h *Handler) ServeWellKnown(w http.ResponseWriter, poolID, path string) boo
 func (h *Handler) PendingCodes(w http.ResponseWriter, r *http.Request) {
 	codes, err := h.svc.PendingCodes(r.PathValue("poolId"), r.PathValue("username"))
 	if err != nil {
-		var ce *cognitosvc.Error
-		status := http.StatusInternalServerError
-		if errors.As(err, &ce) {
-			status = http.StatusNotFound
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(status)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		writeAdminError(w, err)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"codes": codes})
+	writeAdminJSON(w, http.StatusOK, map[string]any{"codes": codes})
 }
 
 // Identifiers are the request fields that name the pool a call is for.
@@ -299,4 +291,120 @@ func writeError(w http.ResponseWriter, err error) {
 	w.Header().Set("X-Amzn-ErrorType", ce.Code)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"__type": ce.Code, "message": ce.Message})
+}
+
+// --- Dashboard routes (/_tarn/admin/cognito/...) ---
+
+// PoolDetail serves GET /_tarn/admin/cognito/pools/{poolId}.
+func (h *Handler) PoolDetail(w http.ResponseWriter, r *http.Request) {
+	d, err := h.svc.PoolDetail(r.PathValue("poolId"))
+	if err != nil {
+		writeAdminError(w, err)
+		return
+	}
+	writeAdminJSON(w, http.StatusOK, d)
+}
+
+// ClientSecret serves GET /_tarn/admin/cognito/pools/{poolId}/clients/{clientId}/secret.
+func (h *Handler) ClientSecret(w http.ResponseWriter, r *http.Request) {
+	secret, err := h.svc.ClientSecret(r.PathValue("poolId"), r.PathValue("clientId"))
+	if err != nil {
+		writeAdminError(w, err)
+		return
+	}
+	writeAdminJSON(w, http.StatusOK, map[string]string{"clientSecret": secret})
+}
+
+// UserAction serves POST /_tarn/admin/cognito/pools/{poolId}/users/{username}/{action}.
+// Each action runs the matching Admin* operation.
+func (h *Handler) UserAction(w http.ResponseWriter, r *http.Request) {
+	poolID, username := r.PathValue("poolId"), r.PathValue("username")
+	user := &cognitosvc.AdminUserInput{UserPoolId: poolID, Username: username}
+	var err error
+	switch r.PathValue("action") {
+	case "confirm":
+		_, err = h.svc.AdminConfirmSignUp(&cognitosvc.AdminConfirmSignUpInput{UserPoolId: poolID, Username: username})
+	case "enable":
+		_, err = h.svc.AdminEnableUser(user)
+	case "disable":
+		_, err = h.svc.AdminDisableUser(user)
+	case "sign-out":
+		_, err = h.svc.AdminUserGlobalSignOut(user)
+	case "delete":
+		_, err = h.svc.AdminDeleteUser(user)
+	case "reset-password":
+		_, err = h.svc.AdminResetUserPassword(&cognitosvc.AdminResetUserPasswordInput{UserPoolId: poolID, Username: username})
+	case "set-password":
+		var body struct {
+			Password  string `json:"password"`
+			Permanent bool   `json:"permanent"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeAdminJSON(w, http.StatusBadRequest, map[string]string{"error": "Body must be JSON with a password."})
+			return
+		}
+		_, err = h.svc.AdminSetUserPassword(&cognitosvc.AdminSetUserPasswordInput{
+			UserPoolId: poolID, Username: username, Password: body.Password, Permanent: body.Permanent,
+		})
+	default:
+		writeAdminJSON(w, http.StatusNotFound, map[string]string{"error": "Unknown action " + r.PathValue("action")})
+		return
+	}
+	if err != nil {
+		writeAdminError(w, err)
+		return
+	}
+	writeAdminJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// MintTokens serves POST /_tarn/admin/cognito/pools/{poolId}/tokens, which
+// issues tokens for a user without their password. Tarn-only.
+func (h *Handler) MintTokens(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ClientID string `json:"clientId"`
+		Username string `json:"username"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeAdminJSON(w, http.StatusBadRequest, map[string]string{"error": "Body must be JSON with clientId and username."})
+		return
+	}
+	res, err := h.svc.MintTokens(r.PathValue("poolId"), body.ClientID, body.Username)
+	if err != nil {
+		writeAdminError(w, err)
+		return
+	}
+	writeAdminJSON(w, http.StatusOK, res)
+}
+
+// DecodeToken serves POST /_tarn/admin/cognito/decode.
+func (h *Handler) DecodeToken(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeAdminJSON(w, http.StatusBadRequest, map[string]string{"error": "Body must be JSON with a token."})
+		return
+	}
+	writeAdminJSON(w, http.StatusOK, h.svc.DecodeToken(body.Token))
+}
+
+func writeAdminJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// writeAdminError reports a service error to the dashboard: 404 for missing
+// pools, clients and users, 400 for other Cognito errors.
+func writeAdminError(w http.ResponseWriter, err error) {
+	var ce *cognitosvc.Error
+	if !errors.As(err, &ce) {
+		writeAdminJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	status := http.StatusBadRequest
+	if ce.Code == "ResourceNotFoundException" || ce.Code == "UserNotFoundException" {
+		status = http.StatusNotFound
+	}
+	writeAdminJSON(w, status, map[string]string{"error": ce.Message, "code": ce.Code})
 }

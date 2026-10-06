@@ -22,6 +22,7 @@ import (
 
 	apigatewaysvc "github.com/aircwo-systems/tarn/internal/apigateway"
 	apigatewayv1svc "github.com/aircwo-systems/tarn/internal/apigatewayv1"
+	cognitosvc "github.com/aircwo-systems/tarn/internal/cognito"
 	"github.com/aircwo-systems/tarn/internal/collection"
 	"github.com/aircwo-systems/tarn/internal/config"
 	dynamodbsvc "github.com/aircwo-systems/tarn/internal/dynamodb"
@@ -54,6 +55,7 @@ type Handler struct {
 	sns           *snssvc.Service
 	dynamodb      *dynamodbsvc.Service
 	secrets       *secretssvc.Service
+	cognito       *cognitosvc.Service
 	infra         *infrasvc.Service
 	esm           *eventsourcesvc.Service
 	eventbridge   *eventbridgesvc.Service
@@ -103,6 +105,11 @@ func (h *Handler) SetECSService(svc *ecssvc.Service) {
 	h.ecs = svc
 }
 
+// SetCognitoService adds the account's Cognito user pools to the overview.
+func (h *Handler) SetCognitoService(svc *cognitosvc.Service) {
+	h.cognito = svc
+}
+
 // SetECSTaskRunner wires the account-local ECS task runner used by the
 // dashboard's run-task trigger. Mirrors SetECSService: until called,
 // RunECSTask reports 503 instead of reaching a nil runner.
@@ -128,6 +135,7 @@ type overviewResponse struct {
 	EventSourceMappings []esmSummary             `json:"eventSourceMappings"`
 	EventBridgeRules    []eventBridgeRuleSummary `json:"eventBridgeRules,omitempty"`
 	StateMachines       []stateMachineSummary    `json:"stateMachines,omitempty"`
+	CognitoPools        []cognitosvc.PoolSummary `json:"cognitoPools,omitempty"`
 	ECS                 *ecsOverview             `json:"ecs,omitempty"`
 	Infrastructure      []infrasvc.ProbeResult   `json:"infrastructure"`
 	Connections         []infraConnection        `json:"connections,omitempty"`
@@ -238,6 +246,7 @@ type overviewCounts struct {
 	EventSourceMappings int `json:"eventSourceMappings"`
 	EventBridgeRules    int `json:"eventBridgeRules"`
 	StateMachines       int `json:"stateMachines"`
+	CognitoPools        int `json:"cognitoPools"`
 }
 
 // maxOverviewExecutions bounds how many executions (with full history) are
@@ -589,6 +598,9 @@ func (h *Handler) ResourceCounts() map[string]int {
 	if h.secrets != nil {
 		add("secrets", len(h.secrets.ListSecrets()))
 	}
+	if h.cognito != nil {
+		add("userPools", h.cognito.PoolCount())
+	}
 	if h.stepfunctions != nil {
 		add("stateMachines", len(h.stepfunctions.ListStateMachines()))
 	}
@@ -767,7 +779,11 @@ func (h *Handler) buildOverview() ([]byte, error) {
 		stateMachines = h.stepfunctions.ListStateMachines()
 	}
 	ecsData := h.listECSOverview()
-	services := []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "sns", "dynamodb", "secretsmanager", "eventsource", "eventbridge", "stepfunctions"}
+	var cognitoPools []cognitosvc.PoolSummary
+	if h.cognito != nil {
+		cognitoPools = h.cognito.PoolSummaries()
+	}
+	services := []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "sns", "dynamodb", "secretsmanager", "eventsource", "eventbridge", "stepfunctions", "cognito-idp"}
 	if ecsData != nil {
 		services = append(services, "ecs")
 	}
@@ -798,6 +814,7 @@ func (h *Handler) buildOverview() ([]byte, error) {
 			EventSourceMappings: len(esmMappings),
 			EventBridgeRules:    len(eventBridgeRules),
 			StateMachines:       len(stateMachines),
+			CognitoPools:        len(cognitoPools),
 		},
 		Gateways:            make([]gatewaySummary, 0, len(gateways)),
 		Functions:           make([]functionSummary, 0, len(functions)),
@@ -811,6 +828,7 @@ func (h *Handler) buildOverview() ([]byte, error) {
 		EventSourceMappings: make([]esmSummary, 0, len(esmMappings)),
 		EventBridgeRules:    make([]eventBridgeRuleSummary, 0, len(eventBridgeRules)),
 		StateMachines:       make([]stateMachineSummary, 0, len(stateMachines)),
+		CognitoPools:        cognitoPools,
 		ECS:                 ecsData,
 		Infrastructure:      infraResults,
 		Connections:         inferInfraConnections(functions, infraResults, h.secretValueLookup(secrets)),
