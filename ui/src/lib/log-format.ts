@@ -20,6 +20,93 @@ export function parseSpringBootLog(raw: string): ParsedSpringBootLog | null {
   return { pid: m[1], thread: m[2].trim(), logger: m[3], message: m[4] };
 }
 
+export interface DatadogLog {
+  message: string;
+  /** Application fields as `key=value` pairs; empty when there are none. */
+  extras: string;
+  service?: string;
+  /** Injected trace ID, decimal or 128-bit hex as the tracer wrote it. */
+  traceId?: string;
+  status?: number;
+  durationMs?: number;
+}
+
+// Express/morgan-style access lines: "GET /path 200 12ms".
+const REQUEST_LINE = /^([A-Z]+ \S+) (\d{3})(?: (\d+(?:\.\d+)?) ?ms)?$/;
+
+// Tracer and shipper bookkeeping: the row's time, level and stream already show these.
+const DATADOG_OMIT = new Set([
+  "dd", "dd.trace_id", "dd.span_id", "ddsource", "ddtags", "service", "hostname",
+  "host", "env", "version", "level", "status", "timestamp", "message",
+]);
+const datadogCache = new Map<string, DatadogLog | null>();
+
+/**
+ * Datadog-shaped JSON logs (injected `dd` context, or shipper fields such as
+ * `ddsource`) reduce to their message plus any application fields.
+ */
+export function formatDatadogLog(raw: string): DatadogLog | null {
+  const cached = datadogCache.get(raw);
+  if (cached !== undefined) return cached;
+  const result = parseDatadogLog(raw);
+  // Rows re-render on every tick; bound the cache rather than re-parsing.
+  if (datadogCache.size >= 2000) datadogCache.clear();
+  datadogCache.set(raw, result);
+  return result;
+}
+
+function parseDatadogLog(raw: string): DatadogLog | null {
+  if (!raw.trimStart().startsWith("{")) return null;
+  let doc: unknown;
+  try {
+    doc = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return null;
+  const record = doc as Record<string, unknown>;
+  const isDatadog =
+    (typeof record.dd === "object" && record.dd !== null) ||
+    "ddsource" in record || "ddtags" in record || "dd.trace_id" in record;
+  if (!isDatadog || typeof record.message !== "string") return null;
+  const extras: string[] = [];
+  for (const [key, value] of Object.entries(record)) {
+    if (DATADOG_OMIT.has(key) || value === null || value === "") continue;
+    if (typeof value === "object" && Object.keys(value).length === 0) continue;
+    const text = typeof value === "string" ? value : JSON.stringify(value);
+    extras.push(`${key}=${typeof value === "string" && /\s/.test(text) ? JSON.stringify(text) : text}`);
+  }
+  const result: DatadogLog = { message: record.message, extras: extras.join(" ") };
+  const dd = record.dd as Record<string, unknown> | undefined;
+  const service = typeof dd?.service === "string" ? dd.service : record.service;
+  if (typeof service === "string" && service) result.service = service;
+  const traceId = dd?.trace_id ?? record["dd.trace_id"];
+  if ((typeof traceId === "string" || typeof traceId === "number") && String(traceId)) result.traceId = String(traceId);
+  const request = REQUEST_LINE.exec(record.message);
+  if (request) {
+    result.message = request[1];
+    result.status = Number(request[2]);
+    if (request[3] !== undefined) result.durationMs = Number(request[3]);
+  } else {
+    const http = record.http as Record<string, unknown> | undefined;
+    const code = Number(http?.status_code);
+    if (Number.isInteger(code) && code >= 100 && code < 600) result.status = code;
+  }
+  return result;
+}
+
+/**
+ * Eight hex digits of a trace ID's low 64 bits, which is what Tarn correlates
+ * on, so decimal and 128-bit hex forms of one trace read the same.
+ */
+export function shortTraceId(id: string): string {
+  let low: bigint;
+  if (/^[0-9a-f]{32}$/i.test(id)) low = BigInt(`0x${id.slice(16)}`);
+  else if (/^\d{1,20}$/.test(id)) low = BigInt(id) & 0xffff_ffff_ffff_ffffn;
+  else return "";
+  return low === 0n ? "" : low.toString(16).padStart(16, "0").slice(-8);
+}
+
 export function hasJavaToString(str: string): boolean {
   return /[A-Z][a-zA-Z0-9]*\([a-z]/.test(str);
 }

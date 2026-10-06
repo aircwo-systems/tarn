@@ -19,6 +19,7 @@
     setSchemaSourceDir,
     setThemeMode,
     setCollapsedSidebarMode,
+    setFormatDatadogLogs,
     switchAccount,
     addKnownAccount,
     removeKnownAccount,
@@ -72,6 +73,7 @@
   let pollingInterval = $state(uiSettings.pollingIntervalSeconds);
   let themeMode       = $state<ThemeMode>(uiSettings.themeMode);
   let collapsedSidebarMode = $state<CollapsedSidebarMode>(uiSettings.collapsedSidebarMode);
+  let formatDatadogLogs = $state(uiSettings.formatDatadogLogs);
   let schemaSourceDir = $state(uiSettings.schemaSourceDir);
   let logRetention    = $state(uiSettings.logRetentionMinutes);
   let enabledKinds    = $state<InfraProbeKind[]>([...infraSettings.enabledKinds]);
@@ -81,6 +83,7 @@
     pollingInterval = uiSettings.pollingIntervalSeconds;
     themeMode       = uiSettings.themeMode;
     collapsedSidebarMode = uiSettings.collapsedSidebarMode;
+    formatDatadogLogs = uiSettings.formatDatadogLogs;
     schemaSourceDir = uiSettings.schemaSourceDir;
     logRetention    = uiSettings.logRetentionMinutes;
     enabledKinds    = [...infraSettings.enabledKinds];
@@ -89,11 +92,11 @@
   }
 
   const draftKey = () => JSON.stringify([
-    pollingInterval, themeMode, collapsedSidebarMode, sanitizeSchemaSourceDir(schemaSourceDir), logRetention,
+    pollingInterval, themeMode, collapsedSidebarMode, formatDatadogLogs, sanitizeSchemaSourceDir(schemaSourceDir), logRetention,
     [...enabledKinds].sort(), services,
   ]);
   const storedKey = () => JSON.stringify([
-    uiSettings.pollingIntervalSeconds, uiSettings.themeMode, uiSettings.collapsedSidebarMode,
+    uiSettings.pollingIntervalSeconds, uiSettings.themeMode, uiSettings.collapsedSidebarMode, uiSettings.formatDatadogLogs,
     uiSettings.schemaSourceDir, uiSettings.logRetentionMinutes,
     [...infraSettings.enabledKinds].sort(), infraSettings.userServices,
   ]);
@@ -133,6 +136,7 @@
     setPollingIntervalSeconds(pollingInterval);
     setThemeMode(themeMode);
     setCollapsedSidebarMode(collapsedSidebarMode);
+    setFormatDatadogLogs(formatDatadogLogs);
     setSchemaSourceDir(schemaSourceDir);
     setLogRetentionMinutes(logRetention);
     setInfraEnabledKinds(enabledKinds);
@@ -552,7 +556,7 @@
       <section id="settings-appearance" class="panel">
         <header>
           <h2>Appearance</h2>
-          <p>Choose a theme and how the sidebar collapses.</p>
+          <p>Choose a theme, how the sidebar collapses and how logs read.</p>
         </header>
         <div class="setting">
           <div class="setting-label"><span>Theme</span></div>
@@ -566,7 +570,7 @@
             {/each}
           </div>
         </div>
-        <div class="setting collapsed-sidebar-setting">
+        <div class="setting wrapping-setting">
           <div class="setting-label">
             <span>Collapsed sidebar</span>
             <small>Keep navigation icons visible or hide the sidebar completely.</small>
@@ -575,6 +579,17 @@
             <span class="segmented-pill" aria-hidden="true" style="transform: translateX({collapsedSidebarMode === 'hidden' ? 100 : 0}%)"></span>
             <button type="button" aria-pressed={collapsedSidebarMode === "icons"} class:on={collapsedSidebarMode === "icons"} onclick={() => (collapsedSidebarMode = "icons")}>Icons</button>
             <button type="button" aria-pressed={collapsedSidebarMode === "hidden"} class:on={collapsedSidebarMode === "hidden"} onclick={() => (collapsedSidebarMode = "hidden")}>Hidden</button>
+          </div>
+        </div>
+        <div class="setting wrapping-setting">
+          <div class="setting-label">
+            <span>Datadog logs</span>
+            <small>Show the message and application fields of Datadog JSON logs, without tracer bookkeeping.</small>
+          </div>
+          <div class="segmented two-options" role="group" aria-label="Datadog logs">
+            <span class="segmented-pill" aria-hidden="true" style="transform: translateX({formatDatadogLogs ? 0 : 100}%)"></span>
+            <button type="button" aria-pressed={formatDatadogLogs} class:on={formatDatadogLogs} onclick={() => (formatDatadogLogs = true)}>Formatted</button>
+            <button type="button" aria-pressed={!formatDatadogLogs} class:on={!formatDatadogLogs} onclick={() => (formatDatadogLogs = false)}>Raw</button>
           </div>
         </div>
       </section>
@@ -910,7 +925,7 @@
     transition: transform 280ms var(--ease-snappy);
   }
   .segmented.two-options { grid-template-columns: repeat(2, 84px); flex-shrink: 0; }
-  .collapsed-sidebar-setting { flex-wrap: wrap; }
+  .wrapping-setting { flex-wrap: wrap; }
   .segmented button {
     position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 5px;
     height: 24px; font-size: 11.5px; color: var(--text-tertiary); transition: color 140ms ease;

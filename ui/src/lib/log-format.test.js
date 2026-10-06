@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { computeFormattedMessage, highlightFormatted } from "./log-format";
+import { computeFormattedMessage, formatDatadogLog, highlightFormatted, shortTraceId } from "./log-format";
 
 describe("Invoke Error logs", () => {
   const error = {
@@ -57,5 +57,66 @@ describe("JSON embedded in log messages", () => {
     expect(computeFormattedMessage(JSON.stringify(ordinary))).toBe(
       JSON.stringify(ordinary, null, 2),
     );
+  });
+});
+
+describe("Datadog logs", () => {
+  const record = (fields) =>
+    JSON.stringify({
+      dd: { env: "nhs-jobs-local", service: "employer-frontend", span_id: "6116946858867865602", trace_id: "6ac5554a000000004d7759caae6feb73" },
+      http: {},
+      level: "info",
+      timestamp: "2026-10-06T20:08:42.534Z",
+      service: "employer-frontend",
+      hostname: "2d1b49c5e757",
+      ddsource: "docker",
+      ddtags: "tarn.account_id:123123123123",
+      ...fields,
+    });
+
+  test("splits request lines into request, status and duration", () => {
+    expect(formatDatadogLog(record({ message: "GET /employer/home 200 108ms" }))).toEqual({
+      message: "GET /employer/home",
+      extras: "",
+      service: "employer-frontend",
+      traceId: "6ac5554a000000004d7759caae6feb73",
+      status: 200,
+      durationMs: 108,
+    });
+  });
+
+  test("keeps other messages whole and reads status from http fields", () => {
+    expect(formatDatadogLog(record({ message: "Redis session storage in use" }))).toEqual({
+      message: "Redis session storage in use",
+      extras: "",
+      service: "employer-frontend",
+      traceId: "6ac5554a000000004d7759caae6feb73",
+    });
+    expect(formatDatadogLog(record({ message: "upstream failed", http: { status_code: 502 } }))?.status).toBe(502);
+  });
+
+  test("keeps application fields as compact key=value pairs", () => {
+    expect(
+      formatDatadogLog(record({ message: "request failed", userId: 42, http: { status_code: 500 }, note: "two words" })),
+    ).toMatchObject({ message: "request failed", extras: 'http={"status_code":500} userId=42 note="two words"', status: 500 });
+  });
+
+  test("recognises records that carry only dotted trace IDs", () => {
+    expect(formatDatadogLog(JSON.stringify({ message: "ok", "dd.trace_id": "1", ddsource: "nodejs" }))?.message).toBe("ok");
+  });
+
+  test("leaves other JSON and plain text alone", () => {
+    expect(formatDatadogLog(JSON.stringify({ level: "info", message: "plain winston" }))).toBeNull();
+    expect(formatDatadogLog("App running on port 80")).toBeNull();
+    expect(formatDatadogLog(record({}))).toBeNull();
+  });
+});
+
+describe("shortTraceId", () => {
+  test("shows the low 64 bits as eight hex digits for decimal and 128-bit IDs", () => {
+    expect(shortTraceId("6ac5554a000000004d7759caae6feb73")).toBe("ae6feb73");
+    expect(shortTraceId("5582934475893058419")).toBe(BigInt("5582934475893058419").toString(16).slice(-8));
+    expect(shortTraceId("0")).toBe("");
+    expect(shortTraceId("not-an-id")).toBe("");
   });
 });

@@ -47,6 +47,7 @@
     computeFormattedMessage,
     tryFormatInlineJSON,
     highlightFormatted,
+    formatDatadogLog,
   } from "$lib/log-format";
   import {
     spanColor,
@@ -59,7 +60,7 @@
   } from "$lib/trace-utils";
   import type { LogGroupSummary, LogEvent, RequestTrace } from "$lib/types";
   import { nextPinnedIndex, pinContextRows, pinEventKey, pinEventSnapshot, pinnedLogId, pinnedLogRow, pinsForView, readPinnedLogs, savePinnedLogs, type PinnedLog } from "$lib/pinned-logs";
-  import { getAccountSettings } from "$lib/state.svelte";
+  import { getAccountSettings, getUISettings } from "$lib/state.svelte";
   import {
     logLocationWithFilters,
     type LogNavigationFilters,
@@ -90,6 +91,7 @@
   const LIVE_BUFFER = 5000;
   // The page remounts this section when the account changes.
   const accountId = getAccountSettings().activeAccountId;
+  const uiSettings = getUISettings();
   const LEVELS = ["ERROR", "WARN", "INFO", "DEBUG"] as const;
 
   // ── State ────────────────────────────────────────────────────────────
@@ -1334,6 +1336,7 @@
               {selectedKey}
               highlightKey={pinsOnly ? null : highlightKey}
               highlightPattern={pinsOnly ? "" : filterPattern}
+              formatDatadog={uiSettings.formatDatadogLogs}
               order={sortOrder}
               showGroup={isAllGroup || isMultiGroup}
               showStream={!selectedEvent}
@@ -1534,7 +1537,7 @@
               <button type="button" class="rc-pin-open" onclick={() => openPin(pin)} title="Open pinned log in {pin.group}">
                 <span class="rc-pin-time">{formatDetailTimestamp(pin.event.timestamp)}</span>
                 <span class="rc-pin-group">{groupDisplayName(pin.group)}</span>
-                <span class="rc-pin-message">{pin.event.message}</span>
+                <span class="rc-pin-message">{(uiSettings.formatDatadogLogs && formatDatadogLog(pin.event.message)?.message) || pin.event.message}</span>
               </button>
               <button type="button" class="rc-pin-remove" onclick={() => unpin(pin)} aria-label="Unpin log from {pin.group}" title="Unpin log"><XIcon size={12} /></button>
             </div>

@@ -55,6 +55,7 @@ export type CollapsedSidebarMode = "icons" | "hidden";
 let pollingIntervalSeconds = $state(DEFAULT_POLLING_INTERVAL_SECONDS);
 let themeMode = $state<ThemeMode>("system");
 let collapsedSidebarMode = $state<CollapsedSidebarMode>("icons");
+let formatDatadogLogs = $state(true);
 let resolvedTheme = $state<"light" | "dark">("dark");
 let persistenceEnabled = $state(DEFAULT_PERSISTENCE_ENABLED);
 let dashboardTagFilter = $state("");
@@ -106,6 +107,9 @@ export function getUISettings() {
     },
     get collapsedSidebarMode() {
       return collapsedSidebarMode;
+    },
+    get formatDatadogLogs() {
+      return formatDatadogLogs;
     },
     get resolvedTheme() {
       return resolvedTheme;
@@ -197,6 +201,7 @@ export function initUISettings() {
   pollingIntervalSeconds = normalizePollingInterval(settings.pollingIntervalSeconds);
   themeMode = normalizeThemeMode(settings.themeMode);
   collapsedSidebarMode = normalizeCollapsedSidebarMode(settings.collapsedSidebarMode);
+  formatDatadogLogs = settings.formatDatadogLogs !== false;
   persistenceEnabled = normalizePersistenceEnabled(settings.persistenceEnabled);
   logRetentionMinutes = normalizeLogRetention(settings.logRetentionMinutes);
   applyTheme(themeMode);
@@ -310,6 +315,12 @@ export function setCollapsedSidebarMode(next: CollapsedSidebarMode) {
   persistSettingsToCookie();
 }
 
+export function setFormatDatadogLogs(next: boolean) {
+  if (next === formatDatadogLogs) return;
+  formatDatadogLogs = next;
+  persistSettingsToCookie();
+}
+
 export function setPersistenceEnabled(next: boolean) {
   const normalized = normalizePersistenceEnabled(next);
   if (normalized === persistenceEnabled) return;
@@ -418,6 +429,7 @@ function persistSettingsToCookie() {
       pollingIntervalSeconds,
       themeMode,
       collapsedSidebarMode,
+      formatDatadogLogs,
       persistenceEnabled,
       logRetentionMinutes,
     }),
@@ -429,6 +441,7 @@ function readSettingsFromCookie(): {
   pollingIntervalSeconds?: number;
   themeMode?: ThemeMode;
   collapsedSidebarMode?: CollapsedSidebarMode;
+  formatDatadogLogs?: boolean;
   persistenceEnabled?: boolean;
   logRetentionMinutes?: number;
 } {
@@ -444,6 +457,7 @@ function readSettingsFromCookie(): {
       pollingIntervalSeconds?: number;
       themeMode?: ThemeMode;
       collapsedSidebarMode?: CollapsedSidebarMode;
+      formatDatadogLogs?: boolean;
       persistenceEnabled?: boolean;
       logRetentionMinutes?: number;
     };

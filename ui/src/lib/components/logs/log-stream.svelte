@@ -18,9 +18,20 @@
   }
 </script>
 
+{#snippet highlighted(value: string)}
+  {#if highlightPattern && highlightPattern.trim()}
+    {#each splitMatches(clip(value), highlightPattern) as seg}
+      {#if seg.match}<mark class="log-search-match">{seg.text}</mark>{:else}{seg.text}{/if}
+    {/each}
+  {:else}
+    {clip(value)}
+  {/if}
+{/snippet}
+
 <script lang="ts">
   import { ArrowUpIcon, ArrowDownIcon, PushPinIcon } from "phosphor-svelte";
   import { buildFlexiblePatternRegex } from "$lib/json-format";
+  import { formatDatadogLog, shortTraceId } from "$lib/log-format";
   import { onDestroy } from "svelte";
 
   const OVERSCAN = 12;
@@ -35,6 +46,7 @@
     showGroup = false,
     showStream = true,
     highlightPattern = "",
+    formatDatadog = false,
     pinnedKeys = new Set<string>(),
     onTogglePin,
     onSelect,
@@ -47,10 +59,16 @@
     showGroup?: boolean;
     showStream?: boolean;
     highlightPattern?: string;
+    /** Show Datadog JSON records as their message plus application fields. */
+    formatDatadog?: boolean;
     pinnedKeys?: Set<string>;
     onTogglePin?: (event: LogEvent, key: string) => void;
     onSelect: (event: LogEvent, key: string) => void;
   } = $props();
+
+  function clip(value: string): string {
+    return value.length > 400 ? value.slice(0, 400) : value;
+  }
 
   function splitMatches(text: string, pattern?: string): { text: string; match: boolean }[] {
     if (!pattern || !pattern.trim()) return [{ text, match: false }];
@@ -276,6 +294,10 @@
     return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
   }
 
+  function statusClass(status: number): string {
+    return status >= 500 ? "5xx" : status >= 400 ? "4xx" : "ok";
+  }
+
   function groupTag(stream: string): string {
     return stream.split("/").slice(1, -1).join("/");
   }
@@ -318,6 +340,10 @@
         {@const key = keys[i]}
         {@const arrived = arrivals.get(key)}
         {@const age = arrived ? clock - arrived : FRESH_MS}
+        {@const dd = formatDatadog ? formatDatadogLog(ev.message) : null}
+        {@const text = dd ? dd.message : ev.message}
+        {@const traceId = dd ? (dd.traceId ?? ev.traceId ?? "") : ""}
+        {@const traceTag = traceId ? shortTraceId(traceId) : ""}
         <div
           id="log-row-{i}"
           class="log-row"
@@ -343,17 +369,22 @@
           <span class="log-time">{compactTime(ev.timestamp)}</span>
           <span class="log-level">{levelTag(ev.level)}</span>
           {#if showGroup}
-            <span class="log-group" title={ev.streamName}>{groupTag(ev.streamName)}</span>
+            <span class="log-group" class:service={!!dd?.service} title={ev.streamName}>{dd?.service ?? groupTag(ev.streamName)}</span>
           {/if}
-          <span class="log-msg" title={ev.message.length > 120 ? undefined : ev.message}>
-            {#if highlightPattern && highlightPattern.trim()}
-              {#each splitMatches(ev.message.length > 400 ? ev.message.slice(0, 400) : ev.message, highlightPattern) as seg}
-                {#if seg.match}<mark class="log-search-match">{seg.text}</mark>{:else}{seg.text}{/if}
-              {/each}
-            {:else}
-              {ev.message.length > 400 ? ev.message.slice(0, 400) : ev.message}
-            {/if}
+          {#if dd}
+            <!-- Empty cells keep messages aligned on rows without a trace. -->
+            <span class="log-group trace" class:empty={!traceTag} title={traceTag ? `Trace ${traceId}` : undefined}>{traceTag}</span>
+          {/if}
+          <span class="log-msg" title={text.length > 120 ? undefined : text}>
+            {@render highlighted(text)}
+            {#if dd?.extras}<span class="log-extras">{@render highlighted(dd.extras)}</span>{/if}
           </span>
+          {#if dd?.status}
+            <span class="log-status" data-class={statusClass(dd.status)}>{dd.status}</span>
+          {/if}
+          {#if dd}
+            <span class="log-ms">{dd.durationMs ?? ""}</span>
+          {/if}
           {#if onTogglePin}
             <button
               type="button"
@@ -540,9 +571,11 @@
   .log-row[data-level="WARN"] .log-level { color: var(--accent-amber); }
   .log-row[data-level="ERROR"] .log-level { color: var(--accent-red); }
 
+  /* A fixed column keeps messages aligned when several streams mix. */
   .log-group {
     flex-shrink: 0;
-    max-width: 140px;
+    box-sizing: border-box;
+    width: 140px;
     overflow: hidden;
     text-overflow: ellipsis;
     font-size: 10.5px;
@@ -564,6 +597,45 @@
   }
 
   .log-row[data-level="ERROR"] .log-msg { color: var(--accent-red); opacity: 0.9; }
+  .log-extras { margin-left: 12px; color: var(--text-tertiary); }
+
+  /* Datadog rows name their emitting service. */
+  .log-group.service { color: var(--text-secondary); border-color: var(--border-default); }
+  /* Trace IDs tint toward the accent: the row links to its request in Traces. */
+  .log-group.trace {
+    width: calc(8ch + 12px); /* exactly the eight-digit ID: no trailing gap */
+    font-variant-numeric: tabular-nums;
+    color: color-mix(in srgb, var(--accent-green) 45%, var(--text-tertiary));
+    border-color: color-mix(in srgb, var(--accent-green) 16%, var(--border-subtle));
+  }
+  .log-group.trace.empty { border-color: transparent; }
+  .log-status {
+    flex-shrink: 0;
+    height: 16px;
+    padding: 0 5px;
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    font-size: 10px;
+    line-height: 14px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+  }
+  .log-status[data-class="4xx"] {
+    color: var(--accent-amber);
+    border-color: color-mix(in srgb, var(--accent-amber) 45%, transparent);
+  }
+  .log-status[data-class="5xx"] {
+    color: var(--accent-red);
+    border-color: color-mix(in srgb, var(--accent-red) 45%, transparent);
+  }
+  .log-ms {
+    flex-shrink: 0;
+    width: 40px;
+    text-align: right;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-tertiary);
+  }
   .log-row[data-level="DEBUG"] .log-msg { opacity: 0.55; }
 
   .log-row:hover .log-msg,
