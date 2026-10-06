@@ -545,6 +545,7 @@ func startServer(cfg *config.Config) error {
 
 	// Create and start API server
 	server := api.NewServer(cfg, registry, logsSvc, collector)
+	server.SetTraceStore(shared.traceStore)
 	server.SetConnections(conns)
 
 	// Graceful shutdown
@@ -632,13 +633,7 @@ func recordSecretsProxyTelemetry(logsSvc *logs.Service, traceStore *trace.Store,
 	if statusCode == 0 {
 		statusCode = http.StatusOK
 	}
-	spanStatus := "ok"
-	switch {
-	case statusCode >= 500:
-		spanStatus = "error"
-	case statusCode >= 400:
-		spanStatus = "client_error"
-	}
+	spanStatus := trace.StatusForHTTP(statusCode)
 
 	secretID := event.SecretID
 	if secretID == "" {

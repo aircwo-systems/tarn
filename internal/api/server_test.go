@@ -36,11 +36,16 @@ import (
 	"github.com/aircwo-systems/tarn/internal/secrets"
 	"github.com/aircwo-systems/tarn/internal/sns"
 	"github.com/aircwo-systems/tarn/internal/sqs"
+	"github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // newTestBundle builds a single-account AccountBundle from scratch for testing.
 func newTestBundle(t *testing.T, cfg *config.Config) *AccountBundle {
+	return newTestBundleWithTraces(t, cfg, nil)
+}
+
+func newTestBundleWithTraces(t *testing.T, cfg *config.Config, traceStore *trace.Store) *AccountBundle {
 	t.Helper()
 
 	store := lambda.NewStore(cfg)
@@ -69,19 +74,19 @@ func newTestBundle(t *testing.T, cfg *config.Config) *AccountBundle {
 	sh := secretshandler.NewHandler(cfg, secretsSvc)
 
 	hs := &HandlerSet{
-		APIGateway:  apigatewayhandler.NewHandler(gatewaySvc),
+		APIGateway:   apigatewayhandler.NewHandler(gatewaySvc),
 		APIGatewayV1: apigatewayv1handler.NewHandler(gatewayV1Svc),
-		Lambda:      lh,
-		S3:          s3handler.NewHandler(s3Svc),
-		SQS:         sqshandler.NewHandler(sqsSvc),
-		SNS:         snshandler.NewHandler(snsSvc),
-		DynamoDB:    dynamodbhandler.NewHandler(dynamoSvc),
-		Secrets:     sh,
-		EventSource: eventsourcehandler.NewHandler(esmSvc),
-		EventBridge: eventbridgehandler.NewHandler(ebSvc),
-		IAM:         iamhandler.NewHandler(cfg.AccountID),
-		Admin:       adminhandler.NewHandler(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, nil),
-		Logs:        logsSvc,
+		Lambda:       lh,
+		S3:           s3handler.NewHandler(s3Svc),
+		SQS:          sqshandler.NewHandler(sqsSvc),
+		SNS:          snshandler.NewHandler(snsSvc),
+		DynamoDB:     dynamodbhandler.NewHandler(dynamoSvc),
+		Secrets:      sh,
+		EventSource:  eventsourcehandler.NewHandler(esmSvc),
+		EventBridge:  eventbridgehandler.NewHandler(ebSvc),
+		IAM:          iamhandler.NewHandler(cfg.AccountID),
+		Admin:        adminhandler.NewHandler(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, traceStore),
+		Logs:         logsSvc,
 	}
 	return NewAccountBundle(hs, nil)
 }

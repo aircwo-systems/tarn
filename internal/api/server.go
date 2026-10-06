@@ -159,6 +159,8 @@ type Server struct {
 	registry   *HandlerRegistry
 	logsSvc    *logssvc.Service
 	collector  *tracesvc.Collector
+	traceStore *tracesvc.Store
+	datadog    *http.ServeMux
 	ui         http.Handler
 	conns      *Connections
 }
@@ -179,6 +181,7 @@ func NewServer(cfg *config.Config, registry *HandlerRegistry, logsSvc *logssvc.S
 
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
+	s.datadog = s.newDatadogMux()
 
 	s.httpServer = &http.Server{
 		Addr:    fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
@@ -212,6 +215,9 @@ func (s *Server) hs(r *http.Request) *HandlerSet {
 	}
 	return hs
 }
+
+// SetTraceStore enables ingestion of traces from externally running services.
+func (s *Server) SetTraceStore(store *tracesvc.Store) { s.traceStore = store }
 
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Health check (global)
@@ -667,6 +673,11 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 			return
 		}
 		wrapped := &statusWriter{ResponseWriter: w, status: 200}
+		if h, pattern := s.datadog.Handler(r); pattern != "" {
+			h.ServeHTTP(wrapped, r)
+			log.Printf("%s %s %d %s", r.Method, r.URL.Path, wrapped.status, time.Since(start))
+			return
+		}
 		// AWS JSON/query protocol clients may send service requests on non-root
 		// paths when custom endpoints include path components. Route these early
 		// by protocol headers/params so EventBridge (and peers) still work.
