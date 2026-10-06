@@ -82,3 +82,31 @@ Coverage depends on instrumentation in each process. A traced frontend can
 record its outgoing API call without the API being instrumented, but spans
 inside that API require its own tracer. Browser interactions and rendering
 also need browser instrumentation.
+
+## Joining requests to SNS, SQS, and Lambda
+
+When a traced application publishes to Tarn's SNS or sends to its SQS,
+Tarn reads the SDK's `_datadog` message attribute and joins its own messaging
+spans to that request. This works for external Node services, including ECS
+applications, as well as server-side frontends. Other tracers can use the same
+Datadog or W3C text-map carrier, but their SDK instrumentation must propagate
+it and their trace exporter must use the supported v0.4 intake.
+
+SNS binary attributes and SQS string or binary attributes are supported.
+Tarn preserves the carrier through raw SNS delivery, SNS notification
+envelopes, and Lambda event source payloads. It retains the full 128-bit
+trace ID and attaches native spans to the publishing span in the same Tarn
+account. Configure the application's `tarn.account_id` tag to match the
+account selected by its AWS SDK credentials.
+
+The resulting trace can show the instrumented request, SNS publish, SQS
+send and receive, and Lambda consumer together. Native spans merge even
+when the application's trace arrives later. Redeliveries add separate
+consumer attempts. A Lambda batch containing messages from several requests
+appears in each participating trace, with a shared invocation ID and that
+request's message IDs in its span details. Messages without valid context
+keep their existing standalone traces.
+
+This joins spans in Tarn's trace store; it does not export Tarn spans to a
+Datadog agent. Browser clicks require browser instrumentation and context
+propagation to the server. Java SDK integration has not been verified yet.

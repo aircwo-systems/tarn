@@ -3,10 +3,13 @@ package api
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"math"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,6 +20,58 @@ import (
 	"github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/vmihailenco/msgpack/v5"
 )
+
+func TestDatadogSDKPublishJoinsNativeSpans(t *testing.T) {
+	s, store := datadogHarness(t)
+	accountHeaders := map[string]string{"Authorization": "AWS4-HMAC-SHA256 Credential=" + otherAccount + "/date/region/service/aws4_request"}
+	formRequest := func(values url.Values) *httptest.ResponseRecorder {
+		t.Helper()
+		res := datadogRequest(t, s, "POST", "/", "application/x-www-form-urlencoded", []byte(values.Encode()), accountHeaders)
+		if res.Code != 200 {
+			t.Fatalf("SNS %s = %d %s", values.Get("Action"), res.Code, res.Body.String())
+		}
+		return res
+	}
+	res := formRequest(url.Values{"Action": {"CreateTopic"}, "Version": {"2010-03-31"}, "Name": {"orders"}})
+	var created struct {
+		Result struct {
+			ARN string `xml:"TopicArn"`
+		} `xml:"CreateTopicResult"`
+	}
+	if err := xml.Unmarshal(res.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	carrier := `{"x-datadog-trace-id":"18446744073709551615","x-datadog-parent-id":"18446744073709551613","x-datadog-tags":"_dd.p.tid=abcdef1234567890"}`
+	formRequest(url.Values{
+		"Action": {"Publish"}, "Version": {"2010-03-31"}, "TopicArn": {created.Result.ARN}, "Message": {"order"},
+		"MessageAttributes.entry.1.Name": {"_datadog"}, "MessageAttributes.entry.1.Value.DataType": {"Binary"}, "MessageAttributes.entry.1.Value.BinaryValue": {base64.StdEncoding.EncodeToString([]byte(carrier))},
+	})
+	body, _ := json.Marshal([][]datadogSpan{datadogFixture(otherAccount)})
+	if res := datadogRequest(t, s, "PUT", "/v0.4/traces", "application/json", body, nil); res.Code != 200 {
+		t.Fatal(res.Body.String())
+	}
+	got := store.Recent(10)
+	if len(got) != 1 || len(got[0].Spans) != 3 || got[0].AccountID != otherAccount {
+		t.Fatalf("joined = %+v", got)
+	}
+	for _, span := range got[0].Spans {
+		if span.Kind == "topic" && span.ParentID != "18446744073709551613" {
+			t.Fatalf("SNS parent = %+v", span)
+		}
+	}
+	// Same low bits in another account must not extend the first request.
+	defaultFixture := datadogFixture(s.cfg.AccountID)
+	body, _ = json.Marshal([][]datadogSpan{defaultFixture})
+	if res := datadogRequest(t, s, "PUT", "/v0.4/traces", "application/json", body, nil); res.Code != 200 {
+		t.Fatal(res.Body.String())
+	}
+	if store.Count() != 2 {
+		t.Fatalf("cross-account merge: %d", store.Count())
+	}
+	if tr := store.FindByCorrelation(s.cfg.AccountID, "18446744073709551615"); tr == nil || len(tr.Spans) != 2 {
+		t.Fatalf("default account = %+v", tr)
+	}
+}
 
 func datadogHarness(t *testing.T) (*Server, *trace.Store) {
 	t.Helper()

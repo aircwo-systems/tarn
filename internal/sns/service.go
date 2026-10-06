@@ -2,6 +2,7 @@ package sns
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -153,10 +154,13 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 	}
 
 	messageID := uuid.NewString()
+	traceContext := tracesvc.ContextFromSNSAttributes(input.MessageAttributes)
 	correlationID := correlationIDFromSNSAttributes(input.MessageAttributes)
 	if correlationID == "" {
 		correlationID = messageID
 	}
+	// Existing application correlation IDs still travel with the message;
+	// the distributed identity is used separately when recording spans.
 	messageAttrs := withCorrelationSNSAttributes(input.MessageAttributes, correlationID)
 	spans := make([]tracesvc.Span, 0, len(subs)+1)
 	topicStart := time.Now()
@@ -178,6 +182,7 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 		}
 
 		targetStart := time.Now()
+		spanID := ""
 		status := "ok"
 		switch strings.ToLower(sub.Protocol) {
 		case "sqs":
@@ -204,8 +209,10 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 			if strings.HasSuffix(queueName, ".fifo") {
 				groupID, dedupID = input.MessageGroupID, input.MessageDeduplicationID
 			}
-			if _, sendErr := s.sqs.SendMessage(queueName, body, 0, snsToSQSMessageAttributes(messageAttrs), groupID, dedupID); sendErr != nil {
+			if sent, sendErr := s.sqs.SendMessage(queueName, body, 0, snsToSQSMessageAttributes(messageAttrs), groupID, dedupID); sendErr != nil {
 				status = "error"
+			} else if sent != nil {
+				spanID = tracesvc.QueueSpanID(sent.MessageId)
 			}
 
 		case "lambda":
@@ -238,6 +245,9 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 			name = lambdaNameFromEndpoint(sub.Endpoint)
 		}
 		spans = append(spans, tracesvc.Span{
+			ID:         spanID,
+			StartedAt:  &targetStart,
+			DurationNs: time.Since(targetStart).Nanoseconds(),
 			Kind:       kind,
 			Name:       name,
 			DurationMs: time.Since(targetStart).Milliseconds(),
@@ -246,6 +256,9 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 	}
 
 	spans = append([]tracesvc.Span{{
+		ID:         "tarn:sns:" + messageID,
+		StartedAt:  &topicStart,
+		DurationNs: time.Since(topicStart).Nanoseconds(),
 		Kind:       "topic",
 		Name:       topic.Name,
 		DurationMs: time.Since(topicStart).Milliseconds(),
@@ -256,6 +269,13 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 		if s.traceStore == nil {
 			return
 		}
+		if traceContext == nil {
+			// Uninstrumented publishes retain the existing invocation-chain view.
+			for i := range spans {
+				spans[i].ID, spans[i].ParentID = "", ""
+				spans[i].StartedAt, spans[i].DurationNs = nil, 0
+			}
+		}
 		overallStatus := 200
 		for _, span := range spans {
 			if span.Status == "error" {
@@ -263,7 +283,7 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 				break
 			}
 		}
-		s.traceStore.Add(&tracesvc.Trace{
+		s.traceStore.RecordJoined(traceContext, s.cfg.AccountID, &tracesvc.Trace{
 			ID:            messageID[:8],
 			CorrelationID: correlationID,
 			StartedAt:     topicStart,
@@ -290,11 +310,11 @@ func (s *Service) Publish(ctx context.Context, input PublishInput) (*PublishOutp
 			if err != nil || (out != nil && out.FunctionError != "") {
 				status = "error"
 			}
-			pt.done(span, time.Since(start).Milliseconds(), status)
+			pt.done(span, start, time.Since(start), status)
 		})
 		if err != nil {
 			log.Printf("[sns] message %s not delivered to %s: %v", messageID, leg.fnName, err)
-			pt.done(span, 0, "error")
+			pt.done(span, time.Now(), 0, "error")
 		}
 	}
 
@@ -310,9 +330,11 @@ type publishTrace struct {
 	record    func(spans []tracesvc.Span)
 }
 
-func (t *publishTrace) done(span int, durationMs int64, status string) {
+func (t *publishTrace) done(span int, start time.Time, duration time.Duration, status string) {
 	t.mu.Lock()
-	t.spans[span].DurationMs = durationMs
+	t.spans[span].StartedAt = &start
+	t.spans[span].DurationMs = duration.Milliseconds()
+	t.spans[span].DurationNs = duration.Nanoseconds()
 	t.spans[span].Status = status
 	t.remaining--
 	last := t.remaining == 0
@@ -444,10 +466,16 @@ func snsToSQSMessageAttributes(
 	}
 	out := make(map[string]*types.MessageAttribute, len(attrs))
 	for key, value := range attrs {
+		binaryValue := []byte(value.BinaryValue)
+		if strings.Split(value.DataType, ".")[0] == "Binary" {
+			if decoded, err := base64.StdEncoding.DecodeString(value.BinaryValue); err == nil {
+				binaryValue = decoded
+			}
+		}
 		out[key] = &types.MessageAttribute{
 			DataType:    value.DataType,
 			StringValue: value.StringValue,
-			BinaryValue: []byte(value.BinaryValue),
+			BinaryValue: binaryValue,
 		}
 	}
 	return out

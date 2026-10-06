@@ -105,11 +105,12 @@ func mergeSpans(t, existing *Trace) {
 	t.Status, _ = strconv.Atoi(root.Meta["http.status_code"])
 	if t.Status == 0 {
 		t.Status = 200
-		for _, span := range t.Spans {
-			if span.Status == "error" {
-				t.Status = 500
-				break
-			}
+	}
+	// An asynchronous consumer can fail after the HTTP request succeeded.
+	for _, span := range t.Spans {
+		if span.Status == "error" {
+			t.Status = 500
+			break
 		}
 	}
 }

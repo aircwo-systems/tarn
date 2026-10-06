@@ -218,6 +218,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 		return nil, fmt.Errorf("sns store: %w", err)
 	}
 	snsSvc.SetTraceStore(shared.traceStore)
+	sqsSvc.SetTraceStore(shared.traceStore)
 
 	// S3
 	s3Svc := s3store.NewService(acctCfg)

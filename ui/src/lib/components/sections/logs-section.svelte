@@ -1351,6 +1351,7 @@
       <div class="rc-panel min-h-0 flex-1">
         {#if selectedEvent}
           {@const ev = selectedEvent}
+          {@const dd = uiSettings.formatDatadogLogs ? formatDatadogLog(ev.message) : null}
           <PaneGroup direction="horizontal" class="h-full min-h-0">
             <Pane defaultSize={62} minSize={35} class="flex min-h-0 flex-col overflow-hidden">
               {@render streamPanel()}
@@ -1402,6 +1403,9 @@
                     <p class="rc-label">Details</p>
                     <dl class="rc-kv">
                       <div><dt>Time</dt><dd>{formatDetailTimestamp(ev.timestamp)}</dd></div>
+                      {#if dd?.durationMs !== undefined}
+                        <div><dt>Duration</dt><dd>{dd.durationMs} ms</dd></div>
+                      {/if}
                       {#if parsedSpringBootLog}
                         <div><dt>Thread</dt><dd>{parsedSpringBootLog.thread}</dd></div>
                         <div><dt>Logger</dt><dd>{parsedSpringBootLog.logger}</dd></div>

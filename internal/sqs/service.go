@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
+	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
@@ -14,11 +15,15 @@ const dlqRetryCountAttribute = "TarnRetryCount"
 
 // Service implements SQS business logic.
 type Service struct {
-	cfg       *config.Config
-	store     *Store
-	disruptor *Disruptor
-	done      chan struct{}
+	cfg        *config.Config
+	store      *Store
+	disruptor  *Disruptor
+	done       chan struct{}
+	traceStore *tracesvc.Store
 }
+
+// SetTraceStore records sends carrying distributed context.
+func (s *Service) SetTraceStore(store *tracesvc.Store) { s.traceStore = store }
 
 // NewService creates a new SQS service.
 func NewService(cfg *config.Config) *Service {
@@ -102,10 +107,25 @@ func (s *Service) GetQueueAttributes(name string, attrNames []string) (map[strin
 // the queue it may fail with a *DisruptError instead, without persisting
 // anything — this is how partial publish failures are simulated.
 func (s *Service) SendMessage(queueName, body string, delaySec int, attrs map[string]*types.MessageAttribute, groupId, dedupId string) (*types.SQSMessage, error) {
+	start := time.Now()
 	if derr := s.disruptor.shouldFail(queueName); derr != nil {
 		return nil, derr
 	}
-	return s.store.SendMessage(queueName, body, delaySec, attrs, groupId, dedupId)
+	msg, err := s.store.SendMessage(queueName, body, delaySec, attrs, groupId, dedupId)
+	duration := time.Since(start)
+	if err == nil && s.traceStore != nil {
+		if ctx := tracesvc.ContextFromSQSMessage(msg); ctx != nil {
+			s.traceStore.RecordJoined(ctx, s.cfg.AccountID, &tracesvc.Trace{
+				StartedAt: start,
+				Spans: []tracesvc.Span{{
+					ID: tracesvc.QueueSpanID(msg.MessageId), Kind: "queue", Name: queueName,
+					StartedAt: &start, DurationNs: duration.Nanoseconds(), DurationMs: duration.Milliseconds(), Status: "ok",
+					Meta: map[string]string{"operation": "SendMessage", "messageId": msg.MessageId},
+				}},
+			})
+		}
+	}
+	return msg, err
 }
 
 // SetDisruptorRule stores (or replaces) the send-failure rule for a queue.

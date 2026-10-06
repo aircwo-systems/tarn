@@ -104,6 +104,20 @@
   let unseen = $state(0);
 
   const total = $derived(events.length);
+  const columns = $derived.by(() => {
+    let groupLabel = "";
+    let hasTraceColumn = false;
+    if (!showGroup && !formatDatadog) return { groupLabel, hasTraceColumn };
+    for (const ev of events) {
+      const dd = formatDatadog ? formatDatadogLog(ev.message) : null;
+      if (dd) hasTraceColumn = true;
+      if (showGroup) {
+        const label = dd?.service ?? groupTag(ev.streamName);
+        if (label.length > groupLabel.length) groupLabel = label;
+      }
+    }
+    return { groupLabel, hasTraceColumn };
+  });
   const start = $derived(Math.max(0, Math.floor(scrollTop / ROW_H) - OVERSCAN));
   const end = $derived(Math.min(total, Math.ceil((scrollTop + viewportH) / ROW_H) + OVERSCAN));
   const indexByKey = $derived.by(() => {
@@ -369,11 +383,14 @@
           <span class="log-time">{compactTime(ev.timestamp)}</span>
           <span class="log-level">{levelTag(ev.level)}</span>
           {#if showGroup}
-            <span class="log-group" class:service={!!dd?.service} title={ev.streamName}>{dd?.service ?? groupTag(ev.streamName)}</span>
+            <span class="log-group-column">
+              <span class="log-group column-size" aria-hidden="true">{columns.groupLabel}</span>
+              <span class="log-group" class:service={!!dd?.service} title={dd?.service ?? ev.streamName}>{dd?.service ?? groupTag(ev.streamName)}</span>
+            </span>
           {/if}
-          {#if dd}
+          {#if columns.hasTraceColumn}
             <!-- Empty cells keep messages aligned on rows without a trace. -->
-            <span class="log-group trace" class:empty={!traceTag} title={traceTag ? `Trace ${traceId}` : undefined}>{traceTag}</span>
+            <span class="log-group trace" class:empty={!traceTag} aria-hidden={!traceTag} title={traceTag ? `Trace ${traceId}` : undefined}>{traceTag || "00000000"}</span>
           {/if}
           <span class="log-msg" title={text.length > 120 ? undefined : text}>
             {@render highlighted(text)}
@@ -382,8 +399,16 @@
           {#if dd?.status}
             <span class="log-status" data-class={statusClass(dd.status)}>{dd.status}</span>
           {/if}
-          {#if dd}
-            <span class="log-ms">{dd.durationMs ?? ""}</span>
+          {#if dd?.durationMs !== undefined}
+            <span
+              class="log-duration"
+              role="img"
+              aria-label={`Request duration ${dd.durationMs} milliseconds`}
+              title={`${dd.durationMs} ms`}
+              style:--duration-fill={`${Math.min(100, Math.max(0, dd.durationMs / 10))}%`}
+            ><span class="log-duration-fill" class:nonzero={dd.durationMs > 0}></span></span>
+          {:else if dd}
+            <span class="log-duration-slot" aria-hidden="true"></span>
           {/if}
           {#if onTogglePin}
             <button
@@ -509,8 +534,7 @@
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 0 6px 0 8px;
-    transition: padding-left 200ms var(--ease-snappy);
+    padding: 0 6px 0 16px;
     cursor: pointer;
     color: var(--text-secondary);
     white-space: nowrap;
@@ -531,7 +555,6 @@
   .log-row[data-level="ERROR"] .log-tick { background: var(--accent-red); }
   .log-row[data-level="WARN"] .log-tick { background: var(--accent-amber); }
   .log-row.selected .log-tick { opacity: 0; }
-  .log-row.selected { padding-left: 16px; }
 
   .log-pin-tick {
     position: absolute;
@@ -543,10 +566,8 @@
     background: var(--accent-amber);
   }
 
-  .log-row.pinned:is([data-level="ERROR"], [data-level="WARN"]) { padding-left: 14px; }
   .log-row.pinned:is([data-level="ERROR"], [data-level="WARN"]) .log-pin-tick { left: 8px; }
-  .log-row.selected.pinned { padding-left: 22px; }
-  .log-row.selected.pinned .log-pin-tick { left: 14px; }
+  .log-row.selected.pinned .log-pin-tick { left: 8px; }
 
   .log-time {
     color: var(--text-tertiary);
@@ -571,13 +592,25 @@
   .log-row[data-level="WARN"] .log-level { color: var(--accent-amber); }
   .log-row[data-level="ERROR"] .log-level { color: var(--accent-red); }
 
-  /* A fixed column keeps messages aligned when several streams mix. */
+  /* Share the widest label's natural size and align badge ends. */
+  .log-group-column {
+    display: grid;
+    flex-shrink: 0;
+  }
+  .log-group-column > .log-group {
+    grid-area: 1 / 1;
+    justify-self: end;
+  }
+  .log-group.column-size { visibility: hidden; pointer-events: none; }
+
+  /* Size badges from their text, including the current font and letter spacing. */
   .log-group {
+    display: inline-flex;
+    align-items: center;
     flex-shrink: 0;
     box-sizing: border-box;
-    width: 140px;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    width: max-content;
+    white-space: nowrap;
     font-size: 10.5px;
     color: var(--text-tertiary);
     padding: 0 5px;
@@ -603,12 +636,11 @@
   .log-group.service { color: var(--text-secondary); border-color: var(--border-default); }
   /* Trace IDs tint toward the accent: the row links to its request in Traces. */
   .log-group.trace {
-    width: calc(8ch + 12px); /* exactly the eight-digit ID: no trailing gap */
     font-variant-numeric: tabular-nums;
     color: color-mix(in srgb, var(--accent-green) 45%, var(--text-tertiary));
     border-color: color-mix(in srgb, var(--accent-green) 16%, var(--border-subtle));
   }
-  .log-group.trace.empty { border-color: transparent; }
+  .log-group.trace.empty { visibility: hidden; }
   .log-status {
     flex-shrink: 0;
     height: 16px;
@@ -628,14 +660,29 @@
     color: var(--accent-red);
     border-color: color-mix(in srgb, var(--accent-red) 45%, transparent);
   }
-  .log-ms {
+  .log-duration,
+  .log-duration-slot {
     flex-shrink: 0;
-    width: 40px;
-    text-align: right;
-    font-size: 11px;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-tertiary);
+    width: 24px;
+    height: 16px;
   }
+  .log-duration {
+    display: block;
+    border-radius: 2px;
+    overflow: hidden;
+    background: color-mix(in srgb, var(--text-tertiary) 12%, transparent);
+  }
+  .log-duration-fill {
+    display: block;
+    width: var(--duration-fill, 0%);
+    height: 100%;
+    background: linear-gradient(90deg,
+      color-mix(in srgb, var(--text-secondary) 25%, transparent),
+      color-mix(in srgb, var(--text-secondary) 85%, transparent));
+    opacity: 0.8;
+  }
+  .log-duration-fill.nonzero { min-width: 2px; }
+  .log-row:is(:hover, .selected) .log-duration-fill { opacity: 1; }
   .log-row[data-level="DEBUG"] .log-msg { opacity: 0.55; }
 
   .log-row:hover .log-msg,

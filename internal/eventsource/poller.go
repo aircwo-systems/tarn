@@ -551,6 +551,9 @@ func (p *poller) recordTrace(start time.Time, functionName string, msgs []*types
 	}
 	durationMs := time.Since(start).Milliseconds()
 	inv.Finish(func(subSpans []tracesvc.Span) {
+		if p.recordDistributedBatch(start, functionName, msgs, sqsDurationMs, lambdaDurationMs, status, lambdaStatus, subSpans) {
+			return
+		}
 		p.traceStore.Add(&tracesvc.Trace{
 			ID:            uuid.NewString()[:8],
 			CorrelationID: correlationID,
@@ -560,6 +563,73 @@ func (p *poller) recordTrace(start time.Time, functionName string, msgs []*types
 			Spans:         append(spans, subSpans...),
 		})
 	})
+}
+
+// One Lambda invocation may consume messages from several requests. Record
+// its participation in each exact trace, with a shared invocation ID, rather
+// than assigning the whole batch to the first message's request.
+func (p *poller) recordDistributedBatch(start time.Time, functionName string, msgs []*types.SQSMessage, sqsDurationMs, lambdaDurationMs int64, status int, lambdaStatus string, subSpans []tracesvc.Span) bool {
+	type group struct {
+		ctx  *tracesvc.Context
+		msgs []*types.SQSMessage
+	}
+	groups := map[string]*group{}
+	var untraced []*types.SQSMessage
+	for _, msg := range msgs {
+		ctx := tracesvc.ContextFromSQSMessage(msg)
+		if ctx == nil {
+			untraced = append(untraced, msg)
+			continue
+		}
+		g := groups[ctx.TraceID]
+		if g == nil {
+			g = &group{ctx: ctx}
+			groups[ctx.TraceID] = g
+		}
+		g.msgs = append(g.msgs, msg)
+	}
+	if len(groups) == 0 {
+		return false
+	}
+	invocationID := "tarn:lambda:" + uuid.NewString()
+	accountID := p.store.cfg.AccountID
+	lambdaStart := start.Add(time.Duration(sqsDurationMs) * time.Millisecond)
+	for _, g := range groups {
+		spans := make([]tracesvc.Span, 0, len(g.msgs)+1+len(subSpans))
+		messageIDs := make([]string, 0, len(g.msgs))
+		for _, msg := range g.msgs {
+			messageIDs = append(messageIDs, msg.MessageId)
+			spans = append(spans, tracesvc.Span{
+				ID:        invocationID + ":receive:" + msg.MessageId,
+				ParentID:  tracesvc.QueueSpanID(msg.MessageId),
+				StartedAt: &start, DurationMs: sqsDurationMs,
+				Kind: "queue", Name: p.mapping.QueueName, Status: "ok",
+				Meta: map[string]string{"operation": "ReceiveMessage", "messageId": msg.MessageId, "receiveCount": fmt.Sprint(msg.ApproximateReceiveCount)},
+			})
+		}
+		spans = append(spans, tracesvc.Span{
+			ID: invocationID, ParentID: spans[0].ID, StartedAt: &lambdaStart,
+			Kind: "lambda", Name: functionName, DurationMs: lambdaDurationMs, Status: lambdaStatus,
+			Meta: map[string]string{"batchMessageIds": strings.Join(messageIDs, ","), "batchSize": fmt.Sprint(len(msgs)), "invocationId": invocationID},
+		})
+		for _, sub := range subSpans {
+			sub.ParentID = invocationID
+			sub.StartedAt = &lambdaStart
+			spans = append(spans, sub)
+		}
+		p.traceStore.RecordJoined(g.ctx, accountID, &tracesvc.Trace{StartedAt: start, Status: status, Spans: spans})
+	}
+	if len(untraced) > 0 {
+		p.traceStore.Add(&tracesvc.Trace{
+			ID: uuid.NewString()[:8], CorrelationID: correlationIDFromSQSMessageAttributes(untraced),
+			StartedAt: start, DurationMs: time.Since(start).Milliseconds(), Status: status,
+			Spans: append([]tracesvc.Span{
+				{Kind: "queue", Name: p.mapping.QueueName, DurationMs: sqsDurationMs, Status: "ok", Meta: map[string]string{"msgCount": fmt.Sprint(len(untraced)), "receiveCount": fmt.Sprint(maxApproximateReceiveCount(untraced))}},
+				{Kind: "lambda", Name: functionName, DurationMs: lambdaDurationMs, Status: lambdaStatus},
+			}, subSpans...),
+		})
+	}
+	return true
 }
 
 func maxApproximateReceiveCount(msgs []*types.SQSMessage) int {

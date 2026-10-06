@@ -58,6 +58,8 @@ func newTestBundleWithTraces(t *testing.T, cfg *config.Config, traceStore *trace
 	logsSvc := logs.NewService(cfg)
 	sqsSvc := sqs.NewService(cfg)
 	snsSvc := sns.NewService(cfg, sqsSvc, lambdaSvc)
+	snsSvc.SetTraceStore(traceStore)
+	sqsSvc.SetTraceStore(traceStore)
 	dynamoSvc := dynamodb.NewService(cfg)
 	secretsSvc := secrets.NewService(cfg)
 	s3Svc := s3store.NewService(cfg)
