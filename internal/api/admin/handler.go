@@ -1464,7 +1464,7 @@ func (h *Handler) recentTraces() []*tracesvc.Trace {
 	if h.traceStore == nil {
 		return nil
 	}
-	t := h.traceStore.Recent(50)
+	t := h.traceStore.RecentFor(h.cfg.AccountID, 50)
 	if len(t) == 0 {
 		return nil
 	}
@@ -2627,9 +2627,18 @@ func (h *Handler) ScanLogs(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(res)
 }
 
-// TracesForLog returns the best-matching trace for a log event from a lambda function.
-// Query params: function (lambda name, not the full group path), ts (RFC3339 timestamp).
+// TracesForLog resolves an exact structured trace ID, or falls back to a
+// Lambda invocation window. Query params: traceId, or function and ts.
 func (h *Handler) TracesForLog(w http.ResponseWriter, r *http.Request) {
+	if traceID := strings.TrimSpace(r.URL.Query().Get("traceId")); traceID != "" {
+		w.Header().Set("Content-Type", "application/json")
+		var trace *tracesvc.Trace
+		if h.traceStore != nil {
+			trace = h.traceStore.FindByCorrelation(h.cfg.AccountID, traceID)
+		}
+		_ = json.NewEncoder(w).Encode(trace)
+		return
+	}
 	functionName := r.URL.Query().Get("function")
 	tsStr := r.URL.Query().Get("ts")
 	if functionName == "" || tsStr == "" {
@@ -2678,10 +2687,8 @@ const (
 
 // Traces returns recent request traces, optionally filtered by correlation
 // ID, a span resource name (substring match against any span's Name), or a
-// span kind (exact match). Traces are instance-wide, not account-scoped: a
-// single ECS task, SQS poll, or EventBridge fire can cross accounts in ways
-// the admin overview's per-account resources cannot, so trace lookup does not
-// try to bucket by the caller's AKID.
+// span kind (exact match). Imported service traces are account-scoped.
+// Legacy AWS invocation traces remain shared across accounts.
 //
 // Query params: correlationId, resource, kind, limit (default 50, max 500).
 func (h *Handler) Traces(w http.ResponseWriter, r *http.Request) {
@@ -2707,7 +2714,7 @@ func (h *Handler) Traces(w http.ResponseWriter, r *http.Request) {
 		limit = maxTracesLimit
 	}
 
-	all := h.traceStore.Recent(maxTracesQueryScan)
+	all := h.traceStore.RecentFor(h.cfg.AccountID, maxTracesQueryScan)
 	filtered := make([]*tracesvc.Trace, 0, len(all))
 	for _, t := range all {
 		if correlationID != "" && t.CorrelationID != correlationID {

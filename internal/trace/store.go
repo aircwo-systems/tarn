@@ -23,6 +23,21 @@ const (
 	defaultRetention = 24 * time.Hour
 )
 
+// traceColumns is the column order scanTrace reads.
+const traceColumns = `id, correlation_id, started_at, duration_ms, status, method, path, gateway_id, gateway_name, spans_json, account_id`
+
+// StatusForHTTP maps an HTTP status code to a span status.
+func StatusForHTTP(code int) string {
+	switch {
+	case code >= 500:
+		return "error"
+	case code >= 400:
+		return "client_error"
+	default:
+		return "ok"
+	}
+}
+
 // Store is a thread-safe, SQLite-backed trace store.
 type Store struct {
 	mu        sync.RWMutex
@@ -37,24 +52,30 @@ const pruneEvery = 200
 
 // Trace records the full request lifecycle for one invocation.
 type Trace struct {
-	ID          string    `json:"id"`
-	CorrelationID string  `json:"correlationId,omitempty"`
-	StartedAt   time.Time `json:"startedAt"`
-	DurationMs  int64     `json:"durationMs"`
-	Status      int       `json:"status"`
-	Method      string    `json:"method,omitempty"`
-	Path        string    `json:"path,omitempty"`
-	GatewayID   string    `json:"gatewayId,omitempty"`
-	GatewayName string    `json:"gatewayName,omitempty"`
-	Spans       []Span    `json:"spans"`
+	ID            string    `json:"id"`
+	AccountID     string    `json:"accountId,omitempty"`
+	CorrelationID string    `json:"correlationId,omitempty"`
+	StartedAt     time.Time `json:"startedAt"`
+	DurationMs    int64     `json:"durationMs"`
+	Status        int       `json:"status"`
+	Method        string    `json:"method,omitempty"`
+	Path          string    `json:"path,omitempty"`
+	GatewayID     string    `json:"gatewayId,omitempty"`
+	GatewayName   string    `json:"gatewayName,omitempty"`
+	Spans         []Span    `json:"spans"`
 }
 
 // Span is one hop in the trace path.
 type Span struct {
-	Kind       string            `json:"kind"`       // "gateway", "lambda", "queue"
-	Name       string            `json:"name"`       // resource name
-	DurationMs int64             `json:"durationMs"` // wall time for this span
-	Status     string            `json:"status"`     // "ok", "error", "client_error"
+	ID         string            `json:"id,omitempty"`
+	ParentID   string            `json:"parentId,omitempty"`
+	StartedAt  *time.Time        `json:"startedAt,omitempty"`
+	DurationNs int64             `json:"durationNs,omitempty"`
+	Kind       string            `json:"kind"`              // "gateway", "lambda", "queue"
+	Name       string            `json:"name"`              // resource name
+	Service    string            `json:"service,omitempty"` // emitting service, for distributed spans
+	DurationMs int64             `json:"durationMs"`        // wall time for this span
+	Status     string            `json:"status"`            // "ok", "error", "client_error"
 	Meta       map[string]string `json:"meta,omitempty"`
 }
 
@@ -123,16 +144,43 @@ func (s *Store) initDB() {
 		!strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 		log.Printf("[trace] failed to ensure correlation_id column: %v", err)
 	}
+	if _, err := s.db.Exec(`ALTER TABLE traces ADD COLUMN account_id TEXT NOT NULL DEFAULT ''`); err != nil &&
+		!strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
+		log.Printf("[trace] failed to ensure account_id column: %v", err)
+	}
+	// Structured logs look traces up by correlation ID within an account.
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_traces_correlation ON traces(correlation_id, account_id)`); err != nil {
+		log.Printf("[trace] failed to index correlation_id: %v", err)
+	}
 }
 
 // Add records a trace, evicting old entries beyond the retention window.
 func (s *Store) Add(t *Trace) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
 	if s.db == nil || t == nil {
 		return
 	}
+	if err := insertTrace(s.db, t); err != nil {
+		log.Printf("[trace] failed to insert trace %s: %v", t.ID, err)
+		return
+	}
+	s.countAdded(1)
+}
+
+// countAdded prunes once every pruneEvery inserts. Callers hold mu.
+func (s *Store) countAdded(n int) {
+	if s.added += n; s.added >= pruneEvery {
+		s.added = 0
+		s.prune()
+	}
+}
+
+type execer interface {
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+func insertTrace(db execer, t *Trace) error {
 	if t.CorrelationID == "" {
 		t.CorrelationID = t.ID
 	}
@@ -142,9 +190,8 @@ func (s *Store) Add(t *Trace) {
 		spansJSON = []byte("[]")
 	}
 
-	_, err = s.db.Exec(`
-		INSERT OR REPLACE INTO traces (id, correlation_id, started_at, duration_ms, status, method, path, gateway_id, gateway_name, spans_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+	_, err = db.Exec(`INSERT OR REPLACE INTO traces (`+traceColumns+`)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		t.ID,
 		t.CorrelationID,
 		t.StartedAt.Format(time.RFC3339Nano),
@@ -155,14 +202,9 @@ func (s *Store) Add(t *Trace) {
 		t.GatewayID,
 		t.GatewayName,
 		string(spansJSON),
+		t.AccountID,
 	)
-	if err != nil {
-		log.Printf("[trace] failed to insert trace %s: %v", t.ID, err)
-	}
-	if s.added++; s.added >= pruneEvery {
-		s.added = 0
-		s.prune()
-	}
+	return err
 }
 
 // PruneOlderThan removes traces older than the provided cutoff.
@@ -192,7 +234,7 @@ func scanTrace(rows *sql.Rows) *Trace {
 		startedAt     string
 		spansJSON     string
 	)
-	if err := rows.Scan(&t.ID, &correlationID, &startedAt, &t.DurationMs, &t.Status, &t.Method, &t.Path, &t.GatewayID, &t.GatewayName, &spansJSON); err != nil {
+	if err := rows.Scan(&t.ID, &correlationID, &startedAt, &t.DurationMs, &t.Status, &t.Method, &t.Path, &t.GatewayID, &t.GatewayName, &spansJSON, &t.AccountID); err != nil {
 		log.Printf("[trace] failed to scan trace row: %v", err)
 		return nil
 	}
@@ -212,6 +254,17 @@ func scanTrace(rows *sql.Rows) *Trace {
 
 // Recent returns up to n of the most recent traces, newest first.
 func (s *Store) Recent(n int) []*Trace {
+	return s.recent(`SELECT `+traceColumns+` FROM traces ORDER BY started_at DESC LIMIT ?`, n)
+}
+
+// RecentFor returns up to n recent traces visible to an account: its own
+// imported traces plus the shared AWS invocation traces.
+func (s *Store) RecentFor(accountID string, n int) []*Trace {
+	return s.recent(`SELECT `+traceColumns+` FROM traces WHERE account_id IN ('', ?)
+		ORDER BY started_at DESC LIMIT ?`, accountID, n)
+}
+
+func (s *Store) recent(query string, args ...any) []*Trace {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -219,11 +272,7 @@ func (s *Store) Recent(n int) []*Trace {
 		return nil
 	}
 
-	rows, err := s.db.Query(`
-		SELECT id, correlation_id, started_at, duration_ms, status, method, path, gateway_id, gateway_name, spans_json
-		FROM traces
-		ORDER BY started_at DESC
-		LIMIT ?`, n)
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		log.Printf("[trace] failed to query recent traces: %v", err)
 		return nil
@@ -257,7 +306,7 @@ func (s *Store) FindNear(functionName string, around time.Time, windowMs int64) 
 	// Pre-filter on spans_json containing "lambda" to reduce Go-side JSON unmarshaling.
 	// LIMIT is applied after this filter so all matching candidates in the window are found.
 	rows, err := s.db.Query(`
-		SELECT id, correlation_id, started_at, duration_ms, status, method, path, gateway_id, gateway_name, spans_json
+		SELECT `+traceColumns+`
 		FROM traces
 		WHERE started_at BETWEEN ? AND ?
 		  AND spans_json LIKE '%"kind":"lambda"%'

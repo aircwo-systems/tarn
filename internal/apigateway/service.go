@@ -597,12 +597,7 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 		return nil, mapErr
 	}
 
-	spanStatus := "ok"
-	if out.StatusCode >= 500 {
-		spanStatus = "error"
-	} else if out.StatusCode >= 400 {
-		spanStatus = "client_error"
-	}
+	spanStatus := tracesvc.StatusForHTTP(out.StatusCode)
 	s.recordLambdaTrace(inv, input, traceStart, correlationID, out.StatusCode, []tracesvc.Span{
 		{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: lambdaDurationMs, Status: spanStatus},
 	})

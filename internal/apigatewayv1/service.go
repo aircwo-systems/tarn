@@ -727,12 +727,7 @@ func (s *Service) invokeLambdaProxyIntegration(ctx context.Context, api *types.R
 		return nil, mapErr
 	}
 
-	spanStatus := "ok"
-	if out.StatusCode >= 500 {
-		spanStatus = "error"
-	} else if out.StatusCode >= 400 {
-		spanStatus = "client_error"
-	}
+	spanStatus := tracesvc.StatusForHTTP(out.StatusCode)
 	s.recordLambdaTrace(inv, input, api, traceStart, correlationID, out.StatusCode, []tracesvc.Span{
 		{Kind: "gateway", Name: gwName, DurationMs: gatewayDurationMs, Status: spanStatus},
 		{Kind: "lambda", Name: fnName, DurationMs: lambdaDurationMs, Status: spanStatus},

@@ -32,6 +32,8 @@ const (
 
 // LogEvent is a single log entry.
 type LogEvent struct {
+	TraceID    string    `json:"traceId,omitempty"`
+	SpanID     string    `json:"spanId,omitempty"`
 	Timestamp  time.Time `json:"timestamp"`
 	Message    string    `json:"message"`
 	Level      LogLevel  `json:"level"`
@@ -57,17 +59,17 @@ type LogGroupSummary struct {
 
 // LogFilter specifies criteria for querying log events.
 type LogFilter struct {
-	StartTime     *time.Time
-	EndTime       *time.Time
-	Level         LogLevel
-	Pattern       string
+	StartTime      *time.Time
+	EndTime        *time.Time
+	Level          LogLevel
+	Pattern        string
 	patternMatcher *PatternMatcher
-	StreamName    string
-	Order      string
-	Limit      int
-	Offset     int        // Deprecated: use Cursor for pagination
-	Cursor     *time.Time // Asc: after this timestamp. Desc: before this timestamp.
-	Groups     []string   // Optional: filter to specific log group names
+	StreamName     string
+	Order          string
+	Limit          int
+	Offset         int        // Deprecated: use Cursor for pagination
+	Cursor         *time.Time // Asc: after this timestamp. Desc: before this timestamp.
+	Groups         []string   // Optional: filter to specific log group names
 }
 
 // LogScanFilter specifies criteria for scanning log events across groups.

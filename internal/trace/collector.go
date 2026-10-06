@@ -98,7 +98,7 @@ func (c *Collector) RecordAnon(kind, name string, durationMs int64, status strin
 func SubSpansToSpans(subs []SubSpan) []Span {
 	out := make([]Span, len(subs))
 	for i, s := range subs {
-		out[i] = Span(s)
+		out[i] = Span{Kind: s.Kind, Name: s.Name, DurationMs: s.DurationMs, Status: s.Status, Meta: s.Meta}
 	}
 	return out
 }
