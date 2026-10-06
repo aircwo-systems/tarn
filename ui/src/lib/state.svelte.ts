@@ -579,8 +579,9 @@ function initAccountSettings() {
     }
     if (
       typeof parsed.activeAccountId === "string" &&
-      knownAccounts.some((a) => a.id === parsed.activeAccountId)
+      /^\d{12}$/.test(parsed.activeAccountId)
     ) {
+      // Server-discovered accounts can be selected without being saved locally.
       activeAccountId = parsed.activeAccountId;
       setApiAccount(activeAccountId);
     }

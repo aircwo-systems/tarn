@@ -6,9 +6,11 @@ import { compileModule } from "svelte/compiler";
 plugin({
   name: "svelte-state-tests",
   setup(build) {
-    build.onLoad({ filter: /\.svelte\.ts$/ }, async ({ path }) => ({
+    build.onLoad({ filter: /\.svelte\.ts(?:\?.*)?$/ }, async ({ path }) => ({
       contents: compileModule(
-        new Bun.Transpiler({ loader: "ts" }).transformSync(await Bun.file(path).text()),
+        new Bun.Transpiler({ loader: "ts" }).transformSync(
+          await Bun.file(path.split("?")[0]).text(),
+        ),
         { filename: path, generate: "client" },
       ).js.code,
       loader: "js",
@@ -17,6 +19,7 @@ plugin({
 });
 
 const state = await import("./state.svelte.ts");
+const { setApiAccount } = await import("./api.ts");
 const DEFAULT = "000000000000";
 const A = "111111111111";
 const B = "222222222222";
@@ -75,6 +78,70 @@ beforeEach(async () => {
           reject,
         });
       }),
+  );
+});
+
+describe("account selection persistence", () => {
+  let reload = 0;
+  const freshState = () => import(`./state.svelte.ts?account-reload=${reload++}`);
+
+  async function withStorage(check) {
+    const original = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    const values = new Map();
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key) => values.get(key) ?? null,
+        setItem: (key, value) => values.set(key, String(value)),
+      },
+    });
+    fetchSpy.mockImplementation((_url, init) => {
+      const authorization = new Headers(init?.headers).get("Authorization") ?? "";
+      const accountId = authorization.match(/Credential=(\d+)\//)?.[1] ?? DEFAULT;
+      return Promise.resolve(Response.json(overview(accountId)));
+    });
+    try {
+      await check(values);
+    } finally {
+      setApiAccount(DEFAULT);
+      if (original) Object.defineProperty(globalThis, "localStorage", original);
+      else delete globalThis.localStorage;
+    }
+  }
+
+  test.each([false, true])(
+    "restores selection after reload, locally saved account: %p",
+    async (known) => {
+      await withStorage(async (values) => {
+        const initial = await freshState();
+        initial.initUISettings();
+        if (known) initial.addKnownAccount(B, "Development");
+        initial.switchAccount(B);
+        await initial.refresh();
+        expect(JSON.parse(values.get("tarn-accounts")).activeAccountId).toBe(B);
+
+        const reloaded = await freshState();
+        expect(reloaded.getAccountSettings().activeAccountId).toBe(DEFAULT);
+        reloaded.initUISettings();
+        expect(reloaded.getAccountSettings().activeAccountId).toBe(B);
+        await reloaded.refresh();
+        expect(reloaded.getDashboard().data.config.accountId).toBe(B);
+      });
+    },
+  );
+
+  test.each(["", "123", "abcdefghijkl", null])(
+    "ignores invalid saved account ID: %p",
+    async (id) => {
+      await withStorage(async (values) => {
+        values.set("tarn-accounts", JSON.stringify({ activeAccountId: id }));
+        const reloaded = await freshState();
+        reloaded.initUISettings();
+        expect(reloaded.getAccountSettings().activeAccountId).toBe(DEFAULT);
+        await reloaded.refresh();
+        expect(reloaded.getDashboard().data.config.accountId).toBe(DEFAULT);
+      });
+    },
   );
 });
 
