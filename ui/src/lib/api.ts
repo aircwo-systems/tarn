@@ -19,6 +19,10 @@ import type {
   SendQueueMessageInput,
   SendQueueMessageResult,
   RedriveQueueResult,
+  CognitoPoolDetail,
+  CognitoUserAction,
+  CognitoTokens,
+  CognitoDecodedToken,
 } from "$lib/types";
 
 let _activeAccountId = "000000000000";
@@ -1136,4 +1140,48 @@ export async function saveUserServices(services: UserService[]): Promise<UserSer
   }
   const payload = (await response.json()) as { services?: UserService[] };
   return Array.isArray(payload?.services) ? payload.services : [];
+}
+
+// ── Cognito ──────────────────────────────────────────────────────
+
+async function cognitoAdmin<T>(path: string, init: RequestInit, fallback: string): Promise<T> {
+  const response = await fetch(endpoint(`/_tarn/admin/cognito${path}`), {
+    ...init,
+    headers: { Accept: "application/json", "Content-Type": "application/json", ...accountHeaders(), ...(init.headers ?? {}) },
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `${fallback}: HTTP ${response.status}`));
+  }
+  return (await response.json()) as T;
+}
+
+const poolPath = (poolId: string) => `/pools/${encodeURIComponent(poolId)}`;
+
+export function fetchCognitoPool(poolId: string, signal?: AbortSignal): Promise<CognitoPoolDetail> {
+  return cognitoAdmin(poolPath(poolId), { method: "GET", signal }, "Failed to load user pool");
+}
+
+export function fetchCognitoClientSecret(poolId: string, clientId: string): Promise<{ clientSecret: string }> {
+  return cognitoAdmin(`${poolPath(poolId)}/clients/${encodeURIComponent(clientId)}/secret`, { method: "GET" }, "Failed to load client secret");
+}
+
+export function cognitoUserAction(
+  poolId: string,
+  username: string,
+  action: CognitoUserAction,
+  body?: { password: string; permanent: boolean },
+): Promise<{ ok: boolean }> {
+  return cognitoAdmin(
+    `${poolPath(poolId)}/users/${encodeURIComponent(username)}/${action}`,
+    { method: "POST", body: body ? JSON.stringify(body) : undefined },
+    "User action failed",
+  );
+}
+
+export function mintCognitoTokens(poolId: string, clientId: string, username: string): Promise<CognitoTokens> {
+  return cognitoAdmin(`${poolPath(poolId)}/tokens`, { method: "POST", body: JSON.stringify({ clientId, username }) }, "Failed to mint tokens");
+}
+
+export function decodeCognitoToken(token: string): Promise<CognitoDecodedToken> {
+  return cognitoAdmin("/decode", { method: "POST", body: JSON.stringify({ token }) }, "Failed to decode token");
 }

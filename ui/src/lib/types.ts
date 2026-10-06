@@ -24,6 +24,7 @@ export interface OverviewResponse {
     eventSourceMappings: number;
     eventBridgeRules: number;
     stateMachines?: number;
+    cognitoPools?: number;
   };
   gateways: GatewaySummary[];
   functions: FunctionSummary[];
@@ -37,6 +38,7 @@ export interface OverviewResponse {
   eventSourceMappings: EventSourceMappingSummary[];
   eventBridgeRules?: EventBridgeRuleSummary[];
   stateMachines?: StateMachineSummary[];
+  cognitoPools?: CognitoPoolSummary[];
   ecs?: ECSOverview;
   infrastructure: InfraProbe[];
   connections?: InfraConnection[];
@@ -638,4 +640,135 @@ export interface LogEventsResponse {
   events: LogEvent[];
   total: number;
   nextCursor?: string;
+}
+
+// ── Cognito ──────────────────────────────────────────────────────
+
+export interface CognitoPoolSummary {
+  id: string;
+  name: string;
+  arn: string;
+  issuer: string;
+  jwksUrl: string;
+  users: number;
+  clients: number;
+  groups: number;
+  pendingCodes: number;
+  mfaMode: "OFF" | "OPTIONAL" | "ON" | string;
+  triggers?: string[];
+  domain?: string;
+  tags?: Record<string, string>;
+  created: string;
+}
+
+export interface CognitoClient {
+  clientId: string;
+  name: string;
+  hasSecret: boolean;
+  authFlows: string[];
+  accessTokenValidity: string;
+  idTokenValidity: string;
+  refreshTokenValidity: string;
+  readAttributes?: string[];
+  writeAttributes?: string[];
+  oauthFlows?: string[];
+  oauthScopes?: string[];
+  preventUserExistenceErrors: string;
+  tokenRevocation: boolean;
+  created: string;
+}
+
+export interface CognitoGroup {
+  name: string;
+  description?: string;
+  precedence?: number;
+  roleArn?: string;
+  members: number;
+  created: string;
+}
+
+export type CognitoUserStatus = "UNCONFIRMED" | "CONFIRMED" | "FORCE_CHANGE_PASSWORD" | "RESET_REQUIRED" | string;
+
+export interface CognitoUser {
+  username: string;
+  sub: string;
+  status: CognitoUserStatus;
+  enabled: boolean;
+  email?: string;
+  emailVerified: boolean;
+  phone?: string;
+  phoneVerified: boolean;
+  groups: string[] | null;
+  mfa?: string[];
+  preferredMfa?: string;
+  sessions: number;
+  attributes: Record<string, string>;
+  created: string;
+  modified: string;
+}
+
+export interface CognitoPendingCode {
+  poolId: string;
+  username: string;
+  purpose: string;
+  code: string;
+  attribute?: string;
+  created: string;
+  expires: string;
+}
+
+export interface CognitoPoolDetail extends CognitoPoolSummary {
+  settings: {
+    usernameAttributes?: string[];
+    aliasAttributes?: string[];
+    autoVerifiedAttributes?: string[];
+    caseSensitive: boolean;
+    passwordPolicy?: {
+      MinimumLength?: number;
+      RequireUppercase: boolean;
+      RequireLowercase: boolean;
+      RequireNumbers: boolean;
+      RequireSymbols: boolean;
+      TemporaryPasswordValidityDays: number;
+    };
+    mfaMode: string;
+    smsMfa: boolean;
+    emailMfa: boolean;
+    adminCreateOnly: boolean;
+    deletionProtection: string;
+    customAttributes?: string[];
+    requiredAttributes?: string[];
+    tags?: Record<string, string>;
+  };
+  tarn: { issuerMode: string; fixedCode: boolean; tokenTtl?: string; triggers: boolean };
+  lambdaConfig: Record<string, string>;
+  preTokenGenerationVersion?: string;
+  clientList: CognitoClient[] | null;
+  groupList: CognitoGroup[] | null;
+  userList: CognitoUser[] | null;
+  usersTotal: number;
+  usersOmitted: number;
+  codes: CognitoPendingCode[];
+  resourceServerScopes?: string[];
+}
+
+export type CognitoUserAction = "confirm" | "enable" | "disable" | "reset-password" | "set-password" | "sign-out" | "delete";
+
+export interface CognitoTokens {
+  AccessToken: string;
+  IdToken: string;
+  RefreshToken?: string;
+  ExpiresIn: number;
+  TokenType: string;
+}
+
+export interface CognitoDecodedToken {
+  header?: Record<string, unknown>;
+  claims?: Record<string, unknown>;
+  poolId?: string;
+  knownPool: boolean;
+  signatureValid: boolean;
+  expired: boolean;
+  expiresAt?: string;
+  error?: string;
 }

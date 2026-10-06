@@ -7,6 +7,7 @@ export type DirectPrototypeFilter = {
     | "dynamodb"
     | "function"
     | "secret"
+    | "userpool"
     | "bucket"
     | "extension"
     | "infra";
@@ -70,6 +71,12 @@ export function resolveDirectPrototypeFilter(query: string): DirectPrototypeFilt
       case "secret":
       case "secrets":
         return { kind: "secret" };
+      case "cognito":
+      case "userpool":
+      case "userpools":
+      case "user-pool":
+      case "auth":
+        return { kind: "userpool" };
       case "bucket":
       case "buckets":
       case "s3":

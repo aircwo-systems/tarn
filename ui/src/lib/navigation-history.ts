@@ -8,6 +8,7 @@ export const DASHBOARD_TABS = [
   "dynamodb",
   "sns",
   "secrets",
+  "cognito",
   "triggers",
   "eventbridge",
   "stepfunctions",

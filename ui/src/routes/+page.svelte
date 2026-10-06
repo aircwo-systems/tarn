@@ -17,6 +17,7 @@
     FlowArrowIcon,
     CubeIcon,
     PlugsConnectedIcon,
+    IdentificationBadgeIcon,
   } from "phosphor-svelte";
   import { onMount } from "svelte";
 
@@ -37,6 +38,7 @@
   import QueuesSection from "$lib/components/sections/queues-section.svelte";
   import SNSSection from "$lib/components/sections/sns-section.svelte";
   import SecretsSection from "$lib/components/sections/secrets-section.svelte";
+  import CognitoSection from "$lib/components/sections/cognito-section.svelte";
   import TriggersSection from "$lib/components/sections/triggers-section.svelte";
   import EventBridgeSection from "$lib/components/sections/eventbridge-section.svelte";
   import StepFunctionsSection from "$lib/components/sections/stepfunctions-section.svelte";
@@ -176,6 +178,8 @@
   const countTopics      = $derived((dashboard.data?.topics ?? []).filter(t => matchesResourceFilter("topic", filters.tagFilter, t.tags)).length);
   const countDynamoTables = $derived((dashboard.data?.dynamodbTables ?? []).filter(() => matchesResourceFilter("dynamodb", filters.tagFilter)).length);
   const countSecrets     = $derived((dashboard.data?.secrets ?? []).filter(s => matchesResourceFilter("secret", filters.tagFilter, s.tags)).length);
+  const visiblePools     = $derived((dashboard.data?.cognitoPools ?? []).filter(p => matchesResourceFilter("userpool", filters.tagFilter, p.tags)));
+  const countPools       = $derived(visiblePools.length);
   const countBuckets     = $derived((dashboard.data?.buckets ?? []).filter(() => matchesResourceFilter("bucket", filters.tagFilter)).length);
   const countEventBridge = $derived((dashboard.data?.eventBridgeRules ?? []).filter(() => matchesResourceFilter("eventbridge", filters.tagFilter)).length);
   const countStateMachines = $derived(!matchesResourceType("stepfunctions", filters.tagFilter) ? 0 : (dashboard.data?.stateMachines ?? []).length);
@@ -278,7 +282,7 @@
         widget: {
           kind: "summary",
           rows: [
-            { label: "AWS resources", value: countGateways + countFunctions + countECS + countQueues + countTopics + countDynamoTables + countSecrets + countBuckets + countEventBridge + countStateMachines + countTriggers },
+            { label: "AWS resources", value: countGateways + countFunctions + countECS + countQueues + countTopics + countDynamoTables + countSecrets + countPools + countBuckets + countEventBridge + countStateMachines + countTriggers },
             { label: "Last sync", value: dashboard.lastRefresh || "Waiting" },
           ],
           note: dashboard.error ? "Refresh failed · showing last known data" : undefined,
@@ -335,6 +339,7 @@
         { id: "dynamodb",     label: "DynamoDB",       icon: DatabaseIcon,             count: countDynamoTables  },
         { id: "sns",          label: "SNS",            icon: BellIcon,                 count: countTopics        },
         { id: "secrets",      label: "Secrets",        icon: KeyIcon,                  count: countSecrets       },
+        { id: "cognito",      label: "Cognito",        icon: IdentificationBadgeIcon,  count: countPools         },
         { id: "triggers",     label: "Triggers",       icon: ArrowsClockwiseIcon,      count: countTriggers      },
         { id: "eventbridge",  label: "EventBridge",    icon: BridgeIcon,               count: countEventBridge   },
         { id: "stepfunctions", label: "Step Functions", icon: FlowArrowIcon,           count: countStateMachines },
@@ -492,6 +497,8 @@
         <SNSSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "secrets"}
         <SecretsSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "cognito"}
+        <CognitoSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "triggers"}
         <TriggersSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "eventbridge"}

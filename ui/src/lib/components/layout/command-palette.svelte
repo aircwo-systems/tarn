@@ -21,12 +21,13 @@
     ShieldWarningIcon,
     StackIcon,
     ArrowsClockwiseIcon,
+    IdentificationBadgeIcon,
   } from "phosphor-svelte";
   import { getDashboard, refresh } from "$lib/state.svelte";
   import { timeAgo } from "$lib/utils";
   import type { Component } from "svelte";
 
-  type FilterId = "pages" | "actions" | "functions" | "queues" | "apis" | "tables" | "buckets" | "secrets" | "rules" | "machines";
+  type FilterId = "pages" | "actions" | "functions" | "queues" | "apis" | "tables" | "buckets" | "secrets" | "pools" | "rules" | "machines";
 
   export interface PaletteItem {
     id: string;
@@ -59,6 +60,7 @@
     { id: "tables",    label: "Tables" },
     { id: "buckets",   label: "Buckets" },
     { id: "secrets",   label: "Secrets" },
+    { id: "pools",     label: "User pools" },
     { id: "rules",     label: "Rules" },
     { id: "machines",  label: "State machines" },
     { id: "actions",   label: "Actions" },
@@ -95,6 +97,7 @@
     page("dynamodb",      "DynamoDB",        count(data?.dynamodbTables?.length, "table"), DatabaseIcon, "ddb tables");
     page("storage",       "Storage",         count(data?.buckets?.length, "bucket"),      HardDriveIcon, "s3 buckets");
     page("secrets",       "Secrets",         count(data?.secrets?.length, "secret"),      KeyIcon, "secrets manager");
+    page("cognito",       "Cognito",         count(data?.cognitoPools?.length, "user pool"), IdentificationBadgeIcon, "cognito user pools auth users codes jwt tokens");
     page("eventbridge",   "EventBridge",     count(data?.eventBridgeRules?.length, "rule"), BridgeIcon, "events rules schedule cron");
     page("stepfunctions", "Step Functions",  count(data?.stateMachines?.length, "state machine"), FlowArrowIcon, "sfn states");
     page("ecs",           "ECS",             "Clusters, services and tasks",              CubeIcon, "containers docker");
@@ -197,6 +200,19 @@
         mono: true,
         icon: KeyIcon,
         action: () => onNavigate(`secrets?secret=${encodeURIComponent(s.name)}`),
+      });
+    }
+
+    for (const p of data?.cognitoPools ?? []) {
+      items.push({
+        id: `pool-${p.id}`,
+        title: p.name,
+        subtitle: `${p.id} · ${count(p.users, "user")}${p.pendingCodes ? ` · ${count(p.pendingCodes, "code")} waiting` : ""}`,
+        group: "User pools",
+        filter: "pools",
+        keywords: `cognito user pool ${p.id}`,
+        icon: IdentificationBadgeIcon,
+        action: () => onNavigate(`cognito?pool=${encodeURIComponent(p.id)}`),
       });
     }
 

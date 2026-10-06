@@ -16,19 +16,20 @@ import (
 
 // PoolSummary is one pool in the dashboard overview.
 type PoolSummary struct {
-	ID           string    `json:"id"`
-	Name         string    `json:"name"`
-	Arn          string    `json:"arn"`
-	Issuer       string    `json:"issuer"`
-	JwksURL      string    `json:"jwksUrl"`
-	Users        int       `json:"users"`
-	Clients      int       `json:"clients"`
-	Groups       int       `json:"groups"`
-	PendingCodes int       `json:"pendingCodes"`
-	MfaMode      string    `json:"mfaMode"`
-	Triggers     []string  `json:"triggers,omitempty"`
-	Domain       string    `json:"domain,omitempty"`
-	Created      time.Time `json:"created"`
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Arn          string            `json:"arn"`
+	Issuer       string            `json:"issuer"`
+	JwksURL      string            `json:"jwksUrl"`
+	Users        int               `json:"users"`
+	Clients      int               `json:"clients"`
+	Groups       int               `json:"groups"`
+	PendingCodes int               `json:"pendingCodes"`
+	MfaMode      string            `json:"mfaMode"`
+	Triggers     []string          `json:"triggers,omitempty"`
+	Domain       string            `json:"domain,omitempty"`
+	Tags         map[string]string `json:"tags,omitempty"`
+	Created      time.Time         `json:"created"`
 }
 
 // lambdaTriggers lists the configured triggers by LambdaConfig member name.
@@ -88,6 +89,7 @@ func (s *Service) summary(p *pool) PoolSummary {
 		MfaMode:      p.mfaMode(),
 		Triggers:     triggers,
 		Domain:       domain,
+		Tags:         cloneJSON(p.Config.UserPoolTags),
 		Created:      p.Config.CreationDate.Time(),
 	}
 }
@@ -185,16 +187,19 @@ type TarnSettingsView struct {
 // PoolDetail is everything the dashboard's pool view needs in one call.
 type PoolDetail struct {
 	PoolSummary
-	Settings      PoolSettingsView  `json:"settings"`
-	Tarn          TarnSettingsView  `json:"tarn"`
-	LambdaConfig  map[string]string `json:"lambdaConfig"`
-	Clients       []ClientView      `json:"clientList"`
-	GroupList     []GroupView       `json:"groupList"`
-	UserList      []UserView        `json:"userList"`
-	UsersTotal    int               `json:"usersTotal"`
-	UsersOmitted  int               `json:"usersOmitted"`
-	Codes         []PendingCode     `json:"codes"`
-	ResourceScope []string          `json:"resourceServerScopes,omitempty"`
+	Settings     PoolSettingsView  `json:"settings"`
+	Tarn         TarnSettingsView  `json:"tarn"`
+	LambdaConfig map[string]string `json:"lambdaConfig"`
+	// PreTokenVersion is the pre token generation event version: V1_0 events
+	// can only change the ID token.
+	PreTokenVersion string        `json:"preTokenGenerationVersion,omitempty"`
+	Clients         []ClientView  `json:"clientList"`
+	GroupList       []GroupView   `json:"groupList"`
+	UserList        []UserView    `json:"userList"`
+	UsersTotal      int           `json:"usersTotal"`
+	UsersOmitted    int           `json:"usersOmitted"`
+	Codes           []PendingCode `json:"codes"`
+	ResourceScope   []string      `json:"resourceServerScopes,omitempty"`
 }
 
 // maxDetailUsers caps the users returned in one pool detail.
@@ -216,6 +221,12 @@ func (s *Service) PoolDetail(poolID string) (*PoolDetail, error) {
 		return nil, err
 	}
 	d := &PoolDetail{PoolSummary: s.summary(p), LambdaConfig: p.lambdaTriggers()}
+	if _, ok := d.LambdaConfig["PreTokenGeneration"]; ok {
+		d.PreTokenVersion = "V1_0"
+		if cfg := p.lambdaConfig().PreTokenGenerationConfig; cfg != nil && cfg.LambdaVersion != "" {
+			d.PreTokenVersion = cfg.LambdaVersion
+		}
+	}
 
 	st := PoolSettingsView{
 		UsernameAttributes:     p.Config.UsernameAttributes,
