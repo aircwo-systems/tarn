@@ -13,7 +13,7 @@ describe("shared resource filters", () => {
     ["queue", ["queue", "queues", "sqs"]],
     ["topic", ["topic", "topics", "sns"]],
     ["secret", ["secret", "secrets"]],
-    ["userpool", ["cognito", "userpool", "userpools", "user-pool", "auth"]],
+    ["userpool", ["cognito", "userpool", "userpools", "user-pool"]],
     ["bucket", ["bucket", "buckets", "s3", "storage"]],
     ["dynamodb", ["dynamodb", "dynamo", "ddb", "table", "tables", "stream", "streams"]],
     ["eventbridge", ["eventbridge", "event-bridge", "schedule", "schedules", "rule", "rules"]],

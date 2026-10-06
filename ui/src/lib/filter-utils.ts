@@ -75,7 +75,6 @@ export function resolveDirectPrototypeFilter(query: string): DirectPrototypeFilt
       case "userpool":
       case "userpools":
       case "user-pool":
-      case "auth":
         return { kind: "userpool" };
       case "bucket":
       case "buckets":

@@ -48,8 +48,17 @@
     select(visible[next].id);
   }
 
+  // The command palette links to #cognito?pool=…, which may arrive while this
+  // section is already open.
+  function readHash() {
+    const pool = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("pool");
+    if (pool) selectedId = pool;
+  }
+
   onMount(() => {
-    selectedId = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("pool");
+    readHash();
+    window.addEventListener("hashchange", readHash);
+    return () => window.removeEventListener("hashchange", readHash);
   });
 </script>
 
