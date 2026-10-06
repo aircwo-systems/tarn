@@ -17,7 +17,7 @@
     FlowArrowIcon,
     CubeIcon,
     PlugsConnectedIcon,
-    IdentificationBadgeIcon,
+    FingerprintIcon,
   } from "phosphor-svelte";
   import { onMount } from "svelte";
 
@@ -339,7 +339,7 @@
         { id: "dynamodb",     label: "DynamoDB",       icon: DatabaseIcon,             count: countDynamoTables  },
         { id: "sns",          label: "SNS",            icon: BellIcon,                 count: countTopics        },
         { id: "secrets",      label: "Secrets",        icon: KeyIcon,                  count: countSecrets       },
-        { id: "cognito",      label: "Cognito",        icon: IdentificationBadgeIcon,  count: countPools         },
+        { id: "cognito",      label: "Cognito",        icon: FingerprintIcon,  count: countPools         },
         { id: "triggers",     label: "Triggers",       icon: ArrowsClockwiseIcon,      count: countTriggers      },
         { id: "eventbridge",  label: "EventBridge",    icon: BridgeIcon,               count: countEventBridge   },
         { id: "stepfunctions", label: "Step Functions", icon: FlowArrowIcon,           count: countStateMachines },

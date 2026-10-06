@@ -21,7 +21,7 @@
     ShieldWarningIcon,
     StackIcon,
     ArrowsClockwiseIcon,
-    IdentificationBadgeIcon,
+    FingerprintIcon,
   } from "phosphor-svelte";
   import { getDashboard, refresh } from "$lib/state.svelte";
   import { timeAgo } from "$lib/utils";
@@ -97,7 +97,7 @@
     page("dynamodb",      "DynamoDB",        count(data?.dynamodbTables?.length, "table"), DatabaseIcon, "ddb tables");
     page("storage",       "Storage",         count(data?.buckets?.length, "bucket"),      HardDriveIcon, "s3 buckets");
     page("secrets",       "Secrets",         count(data?.secrets?.length, "secret"),      KeyIcon, "secrets manager");
-    page("cognito",       "Cognito",         count(data?.cognitoPools?.length, "user pool"), IdentificationBadgeIcon, "cognito user pools auth users codes jwt tokens");
+    page("cognito",       "Cognito",         count(data?.cognitoPools?.length, "user pool"), FingerprintIcon, "cognito user pools auth users codes jwt tokens");
     page("eventbridge",   "EventBridge",     count(data?.eventBridgeRules?.length, "rule"), BridgeIcon, "events rules schedule cron");
     page("stepfunctions", "Step Functions",  count(data?.stateMachines?.length, "state machine"), FlowArrowIcon, "sfn states");
     page("ecs",           "ECS",             "Clusters, services and tasks",              CubeIcon, "containers docker");
@@ -211,7 +211,7 @@
         group: "User pools",
         filter: "pools",
         keywords: `cognito user pool ${p.id}`,
-        icon: IdentificationBadgeIcon,
+        icon: FingerprintIcon,
         action: () => onNavigate(`cognito?pool=${encodeURIComponent(p.id)}`),
       });
     }
