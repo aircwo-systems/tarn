@@ -41,11 +41,23 @@ func (s *Service) InitiateAuth(in *InitiateAuthInput) (*AuthOutput, error) {
 	}
 	s.mu.RLock()
 	p, c, err := s.lookupClient(in.ClientId)
+	c = snapshot(c)
 	s.mu.RUnlock()
 	if err != nil {
 		return nil, err
 	}
 	return s.initiateAuth(p, c, in)
+}
+
+// snapshot copies a client while the caller holds s.mu, so an auth flow can
+// keep reading it after unlocking. UpdateUserPoolClient replaces fields rather
+// than mutating them, so a shallow copy is enough.
+func snapshot(c *UserPoolClientType) *UserPoolClientType {
+	if c == nil {
+		return nil
+	}
+	cc := *c
+	return &cc
 }
 
 func (s *Service) AdminInitiateAuth(in *InitiateAuthInput) (*AuthOutput, error) {
@@ -56,6 +68,7 @@ func (s *Service) AdminInitiateAuth(in *InitiateAuthInput) (*AuthOutput, error) 
 	}
 	s.mu.RLock()
 	p, c, err := s.poolClient(in.UserPoolId, in.ClientId)
+	c = snapshot(c)
 	s.mu.RUnlock()
 	if err != nil {
 		return nil, err
@@ -262,6 +275,7 @@ type RespondToAuthChallengeInput struct {
 func (s *Service) RespondToAuthChallenge(in *RespondToAuthChallengeInput) (*AuthOutput, error) {
 	s.mu.RLock()
 	p, c, err := s.lookupClient(in.ClientId)
+	c = snapshot(c)
 	s.mu.RUnlock()
 	if err != nil {
 		return nil, err
@@ -272,6 +286,7 @@ func (s *Service) RespondToAuthChallenge(in *RespondToAuthChallengeInput) (*Auth
 func (s *Service) AdminRespondToAuthChallenge(in *RespondToAuthChallengeInput) (*AuthOutput, error) {
 	s.mu.RLock()
 	p, c, err := s.poolClient(in.UserPoolId, in.ClientId)
+	c = snapshot(c)
 	s.mu.RUnlock()
 	if err != nil {
 		return nil, err
@@ -292,11 +307,12 @@ func (s *Service) respond(p *pool, c *UserPoolClientType, in *RespondToAuthChall
 				username = u.Username
 			}
 		}
+		policy := *p.passwordPolicy()
 		s.mu.RUnlock()
 		if username == "" {
 			return nil, errInvalidSession
 		}
-		if err := checkPasswordPolicy(p.passwordPolicy(), newPassword); err != nil {
+		if err := checkPasswordPolicy(&policy, newPassword); err != nil {
 			return nil, err
 		}
 		var err error

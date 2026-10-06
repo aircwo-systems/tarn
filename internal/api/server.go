@@ -449,7 +449,16 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /{bucket}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 	// CORS preflights for browser uploads and downloads. OPTIONS / covers
 	// virtual-hosted buckets ({bucket}.localhost), whose path has no bucket.
-	mux.HandleFunc("OPTIONS /{$}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
+	// Browser calls to JSON-protocol APIs such as Cognito post to the root, so
+	// their preflights land here too; they ask to send X-Amz-Target, which S3
+	// preflights never do.
+	mux.HandleFunc("OPTIONS /{$}", func(w http.ResponseWriter, r *http.Request) {
+		if cognitohandler.IsPreflight(r) {
+			cognitohandler.Preflight(w, r)
+			return
+		}
+		s.hs(r).S3.Dispatch(w, r)
+	})
 	mux.HandleFunc("OPTIONS /{bucket}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 	// Lambda 2017-10-31 concurrency endpoints — must be registered before the
 	// generic S3 /{bucket}/{key...} patterns.

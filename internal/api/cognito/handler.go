@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	cognitosvc "github.com/aircwo-systems/tarn/internal/cognito"
+	"github.com/aircwo-systems/tarn/internal/cors"
+	"github.com/google/uuid"
 )
 
 const targetPrefix = "AWSCognitoIdentityProviderService."
@@ -19,6 +21,49 @@ const targetPrefix = "AWSCognitoIdentityProviderService."
 // IsCognitoRequest reports whether r targets the Cognito User Pools API.
 func IsCognitoRequest(r *http.Request) bool {
 	return strings.HasPrefix(r.Header.Get("X-Amz-Target"), targetPrefix)
+}
+
+// corsPolicy lets browser apps (Amplify, amazon-cognito-identity-js) call the
+// API from any origin, as the real cognito-idp endpoint does. The SDKs read
+// the error type from x-amzn-errortype, so it must be exposed.
+var corsPolicy = cors.Policy{
+	AllowOrigins:  []string{"*"},
+	AllowMethods:  []string{http.MethodPost},
+	AllowHeaders:  []string{"*"},
+	ExposeHeaders: []string{"x-amzn-requestid", "x-amzn-errortype", "x-amzn-errormessage", "date"},
+	MaxAge:        600,
+}
+
+func applyCORS(w http.ResponseWriter, r *http.Request) {
+	req, ok := cors.FromHTTP(r.Method, r.Header)
+	if !ok {
+		return
+	}
+	for k, v := range corsPolicy.ResponseHeaders(req) {
+		w.Header()[k] = v
+	}
+}
+
+// IsPreflight reports whether r is a CORS preflight for an AWS JSON-protocol
+// call, recognised by the X-Amz-Target header it asks to send. A preflight
+// does not carry the target's value, so this cannot tell services apart.
+func IsPreflight(r *http.Request) bool {
+	req, ok := cors.FromHTTP(r.Method, r.Header)
+	if !ok || !req.Preflight {
+		return false
+	}
+	for _, h := range req.Headers {
+		if h == "x-amz-target" {
+			return true
+		}
+	}
+	return false
+}
+
+// Preflight answers a JSON-protocol CORS preflight.
+func Preflight(w http.ResponseWriter, r *http.Request) {
+	applyCORS(w, r)
+	w.WriteHeader(http.StatusOK)
 }
 
 // Handler serves one account's Cognito API.
@@ -129,6 +174,8 @@ var operations = map[string]operation{
 
 // Dispatch routes a JSON 1.1 request by its X-Amz-Target action.
 func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
+	applyCORS(w, r)
+	w.Header().Set("X-Amzn-Requestid", uuid.NewString())
 	action := strings.TrimPrefix(r.Header.Get("X-Amz-Target"), targetPrefix)
 	fn, ok := operations[action]
 	if !ok {

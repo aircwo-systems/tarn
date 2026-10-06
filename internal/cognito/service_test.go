@@ -876,3 +876,25 @@ func TestSRPKnownVector(t *testing.T) {
 		t.Fatal("padHex")
 	}
 }
+
+// TestConcurrentAuthAndClientUpdate is for -race: sign-ins read the client
+// after releasing the lock while updates replace its settings.
+func TestConcurrentAuthAndClientUpdate(t *testing.T) {
+	f := newFixture(t, nil)
+	f.signUpConfirmed(t, "uma", "uma@example.com")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 20 {
+			in := &UpdateUserPoolClientInput{UserPoolId: f.poolID, ClientId: f.client.ClientId}
+			in.ExplicitAuthFlows = f.client.ExplicitAuthFlows
+			_, _ = f.svc.UpdateUserPoolClient(in)
+		}
+	}()
+	for range 20 {
+		if _, err := f.passwordAuth(t, "uma", testPassword); err != nil {
+			t.Error(err)
+		}
+	}
+	<-done
+}

@@ -174,3 +174,40 @@ func TestHealthListsCognito(t *testing.T) {
 		t.Fatalf("health %s", rec.Body.String())
 	}
 }
+
+func TestCognitoBrowserCORS(t *testing.T) {
+	h := newCognitoTestServer(t)
+
+	pre := httptest.NewRequest(http.MethodOptions, "/", nil)
+	pre.Header.Set("Origin", "http://localhost:5173")
+	pre.Header.Set("Access-Control-Request-Method", "POST")
+	pre.Header.Set("Access-Control-Request-Headers", "content-type,x-amz-target,x-amz-user-agent")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, pre)
+	if rec.Code != http.StatusOK || rec.Header().Get("Access-Control-Allow-Origin") != "*" ||
+		!strings.Contains(rec.Header().Get("Access-Control-Allow-Headers"), "x-amz-target") {
+		t.Fatalf("preflight status %d headers %v", rec.Code, rec.Header())
+	}
+
+	// Errors must be readable cross-origin so the SDK can name them.
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"ClientId":"nope","AuthFlow":"USER_SRP_AUTH"}`))
+	req.Header.Set("Origin", "http://localhost:5173")
+	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	req.Header.Set("X-Amz-Target", "AWSCognitoIdentityProviderService.InitiateAuth")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || rec.Header().Get("Access-Control-Allow-Origin") != "*" ||
+		!strings.Contains(rec.Header().Get("Access-Control-Expose-Headers"), "x-amzn-errortype") {
+		t.Fatalf("error response status %d headers %v", rec.Code, rec.Header())
+	}
+
+	// An S3 preflight on the root still reaches S3.
+	s3pre := httptest.NewRequest(http.MethodOptions, "/", nil)
+	s3pre.Header.Set("Origin", "http://localhost:5173")
+	s3pre.Header.Set("Access-Control-Request-Method", "PUT")
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, s3pre)
+	if rec.Header().Get("Access-Control-Allow-Origin") == "*" {
+		t.Fatalf("S3 preflight answered by Cognito: %v", rec.Header())
+	}
+}
