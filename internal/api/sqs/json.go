@@ -51,13 +51,13 @@ func (h *Handler) dispatchJSON(w http.ResponseWriter, r *http.Request) {
 	action := jsonAction(r)
 	switch action {
 	case "CreateQueue":
-		h.jsonCreateQueue(w, body)
+		h.jsonCreateQueue(w, r, body)
 	case "DeleteQueue":
 		h.jsonDeleteQueue(w, body)
 	case "ListQueues":
-		h.jsonListQueues(w, body)
+		h.jsonListQueues(w, r, body)
 	case "GetQueueUrl":
-		h.jsonGetQueueUrl(w, body)
+		h.jsonGetQueueUrl(w, r, body)
 	case "GetQueueAttributes":
 		h.jsonGetQueueAttributes(w, body)
 	case "SetQueueAttributes":
@@ -88,7 +88,7 @@ func (h *Handler) dispatchJSON(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) jsonCreateQueue(w http.ResponseWriter, body []byte) {
+func (h *Handler) jsonCreateQueue(w http.ResponseWriter, r *http.Request, body []byte) {
 	var req struct {
 		QueueName  string            `json:"QueueName"`
 		Attributes map[string]string `json:"Attributes"`
@@ -107,7 +107,7 @@ func (h *Handler) jsonCreateQueue(w http.ResponseWriter, body []byte) {
 		writeJSONError(w, 400, "InvalidParameterValue", err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]string{"QueueUrl": q.QueueUrl})
+	writeJSON(w, 200, map[string]string{"QueueUrl": queueURLForRequest(r, q.QueueUrl)})
 }
 
 func (h *Handler) jsonDeleteQueue(w http.ResponseWriter, body []byte) {
@@ -128,7 +128,7 @@ func (h *Handler) jsonDeleteQueue(w http.ResponseWriter, body []byte) {
 	writeJSON(w, 200, map[string]any{})
 }
 
-func (h *Handler) jsonListQueues(w http.ResponseWriter, body []byte) {
+func (h *Handler) jsonListQueues(w http.ResponseWriter, r *http.Request, body []byte) {
 	var req struct {
 		QueueNamePrefix string `json:"QueueNamePrefix"`
 	}
@@ -136,12 +136,12 @@ func (h *Handler) jsonListQueues(w http.ResponseWriter, body []byte) {
 	queues := h.svc.ListQueues(req.QueueNamePrefix)
 	urls := make([]string, 0, len(queues))
 	for _, q := range queues {
-		urls = append(urls, q.QueueUrl)
+		urls = append(urls, queueURLForRequest(r, q.QueueUrl))
 	}
 	writeJSON(w, 200, map[string]any{"QueueUrls": urls})
 }
 
-func (h *Handler) jsonGetQueueUrl(w http.ResponseWriter, body []byte) {
+func (h *Handler) jsonGetQueueUrl(w http.ResponseWriter, r *http.Request, body []byte) {
 	var req struct {
 		QueueName string `json:"QueueName"`
 	}
@@ -158,7 +158,7 @@ func (h *Handler) jsonGetQueueUrl(w http.ResponseWriter, body []byte) {
 		writeJSONError(w, 400, "QueueDoesNotExist", err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]string{"QueueUrl": url})
+	writeJSON(w, 200, map[string]string{"QueueUrl": queueURLForRequest(r, url)})
 }
 
 func (h *Handler) jsonGetQueueAttributes(w http.ResponseWriter, body []byte) {

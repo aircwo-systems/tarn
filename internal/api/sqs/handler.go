@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -26,6 +27,24 @@ type Handler struct {
 // NewHandler creates a new SQS API handler.
 func NewHandler(svc *sqssvc.Service) *Handler {
 	return &Handler{svc: svc}
+}
+
+// queueURLForRequest keeps queue URLs reachable through the endpoint the
+// client used, including Docker's host.docker.internal.
+func queueURLForRequest(r *http.Request, queueURL string) string {
+	if r.Host == "" {
+		return queueURL
+	}
+	u, err := url.Parse(queueURL)
+	if err != nil {
+		return queueURL
+	}
+	u.Host = r.Host
+	u.Scheme = "http"
+	if r.TLS != nil {
+		u.Scheme = "https"
+	}
+	return u.String()
 }
 
 // Dispatch routes SQS requests by protocol. Terraform AWS provider v5+ and
@@ -109,7 +128,7 @@ func (h *Handler) createQueue(w http.ResponseWriter, r *http.Request) {
   <ResponseMetadata>
     <RequestId>%s</RequestId>
   </ResponseMetadata>
-</CreateQueueResponse>`, xmlNS, q.QueueUrl, uuid.New().String())
+</CreateQueueResponse>`, xmlNS, xmlEscape(queueURLForRequest(r, q.QueueUrl)), uuid.New().String())
 
 	writeXML(w, 200, body)
 }
@@ -133,7 +152,7 @@ func (h *Handler) listQueues(w http.ResponseWriter, r *http.Request) {
 
 	var urls string
 	for _, q := range queues {
-		urls += fmt.Sprintf("    <QueueUrl>%s</QueueUrl>\n", q.QueueUrl)
+		urls += fmt.Sprintf("    <QueueUrl>%s</QueueUrl>\n", xmlEscape(queueURLForRequest(r, q.QueueUrl)))
 	}
 
 	body := fmt.Sprintf(`<ListQueuesResponse xmlns="%s">
@@ -167,7 +186,7 @@ func (h *Handler) getQueueUrl(w http.ResponseWriter, r *http.Request) {
   <ResponseMetadata>
     <RequestId>%s</RequestId>
   </ResponseMetadata>
-</GetQueueUrlResponse>`, xmlNS, url, uuid.New().String())
+</GetQueueUrlResponse>`, xmlNS, xmlEscape(queueURLForRequest(r, url)), uuid.New().String())
 
 	writeXML(w, 200, body)
 }

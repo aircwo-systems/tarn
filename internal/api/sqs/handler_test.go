@@ -2,6 +2,7 @@ package sqs
 
 import (
 	"encoding/json"
+	"encoding/xml"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,6 +19,72 @@ func newTestHandler(t *testing.T) *Handler {
 	cfg.DataDir = t.TempDir()
 	svc := sqssvc.NewService(cfg)
 	return NewHandler(svc)
+}
+
+func TestQueueURLsUseClientEndpoint(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.AccountID = "123123123123"
+	h := NewHandler(sqssvc.NewService(cfg))
+	queue, err := h.svc.CreateQueue("jobs", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedURL := queue.QueueUrl
+	for _, endpoint := range []string{"http://host.docker.internal:4571", "http://127.0.0.1:8899", "https://[::1]:9453"} {
+		for _, protocol := range []string{"json", "query"} {
+			for _, action := range []string{"CreateQueue", "GetQueueUrl", "ListQueues"} {
+				t.Run(endpoint+"/"+protocol+"/"+action, func(t *testing.T) {
+					var req *http.Request
+					if protocol == "json" {
+						req = httptest.NewRequest(http.MethodPost, endpoint+"/", strings.NewReader(`{"QueueName":"jobs"}`))
+						req.Header.Set("Content-Type", "application/x-amz-json-1.0")
+						req.Header.Set("X-Amz-Target", "AmazonSQS."+action)
+					} else {
+						form := url.Values{"Action": {action}, "QueueName": {"jobs"}}
+						req = httptest.NewRequest(http.MethodPost, endpoint+"/", strings.NewReader(form.Encode()))
+						req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+					}
+					rec := httptest.NewRecorder()
+					h.Dispatch(rec, req)
+					if rec.Code != http.StatusOK {
+						t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+					}
+					var got string
+					if protocol == "json" {
+						var result struct {
+							QueueURL string   `json:"QueueUrl"`
+							URLs     []string `json:"QueueUrls"`
+						}
+						if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+							t.Fatal(err)
+						}
+						got = result.QueueURL
+						if action == "ListQueues" && len(result.URLs) == 1 {
+							got = result.URLs[0]
+						}
+					} else {
+						var result struct {
+							Create string `xml:"CreateQueueResult>QueueUrl"`
+							Get    string `xml:"GetQueueUrlResult>QueueUrl"`
+							List   string `xml:"ListQueuesResult>QueueUrl"`
+						}
+						if err := xml.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+							t.Fatal(err)
+						}
+						got = result.Create + result.Get + result.List
+					}
+					want := endpoint + "/123123123123/jobs"
+					if got != want {
+						t.Fatalf("QueueUrl=%q, want %q", got, want)
+					}
+				})
+			}
+		}
+	}
+	if queue.QueueUrl != storedURL {
+		t.Fatalf("request endpoint changed the stored queue URL: %q", queue.QueueUrl)
+	}
 }
 
 func TestXmlEscape_PreservesQuotesInElementText(t *testing.T) {
