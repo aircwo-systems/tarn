@@ -1,12 +1,13 @@
 <script lang="ts">
   import { PlusIcon, TrashIcon, CheckIcon, MonitorIcon, SunIcon, MoonIcon, ArchiveIcon, ArrowCounterClockwiseIcon, CaretRightIcon } from "phosphor-svelte";
-  import { onMount, untrack } from "svelte";
+  import { onMount, tick, untrack } from "svelte";
   import { fly } from "svelte/transition";
 
   import type { UserService } from "$lib/types";
   import { fetchAccounts, changeAccount, fetchConnections, type ServerAccount, type TarnConnections, type MCPSession } from "$lib/api";
   import { timeAgo } from "$lib/utils";
   import SectionHeader from "$lib/components/sections/section-header.svelte";
+  import AccountDeleteConfirmation from "$lib/components/sections/account-delete-confirmation.svelte";
   import {
     getUISettings,
     getInfraSettings,
@@ -275,7 +276,16 @@
   const archivedRows = $derived(accountRows.filter((r) => r.server?.archived));
   const staleCount = $derived(activeRows.filter((r) => r.stale).length);
 
+  async function cancelDelete() {
+    const id = confirmDelete;
+    confirmDelete = "";
+    await tick();
+    root.querySelector<HTMLButtonElement>(`#delete-account-${id}`)?.focus();
+  }
+
   async function accountAction(id: string, action: "archive" | "restore" | "delete") {
+    if (accountBusy) return;
+    if (action !== "delete") confirmDelete = "";
     accountBusy = id;
     accountsError = "";
     try {
@@ -363,6 +373,20 @@
 
 <svelte:window onkeydown={onKeydown} />
 
+{#snippet deleteConfirmation(acct: AccountRow)}
+  {#if confirmDelete === acct.id}
+    <div class="row-confirmation">
+      <AccountDeleteConfirmation
+        accountId={acct.id}
+        label={acct.label}
+        busy={accountBusy === acct.id}
+        onconfirm={() => accountAction(acct.id, "delete")}
+        oncancel={cancelDelete}
+      />
+    </div>
+  {/if}
+{/snippet}
+
 <div class="settings" bind:this={root}>
   <SectionHeader
     title="Settings"
@@ -412,7 +436,7 @@
                 <button type="button" class="pill pill-btn" onclick={() => switchAccount(acct.id)}>Switch</button>
               {/if}
               {#if !isDefault && acct.server}
-                <button type="button" class="icon-btn" class:show={!!acct.stale} disabled={accountBusy === acct.id}
+                <button type="button" class="icon-btn" class:show={!!acct.stale} disabled={!!accountBusy}
                   onclick={() => accountAction(acct.id, "archive")} title="Archive: stop its services and containers, keep its data"
                   aria-label="Archive account {acct.id}">
                   <ArchiveIcon size={12} />
@@ -421,23 +445,19 @@
               {#if isDefault}
                 <span class="icon-spacer"></span>
               {:else if acct.server}
-                {#if confirmDelete === acct.id}
-                  <button type="button" class="pill pill-btn danger" disabled={accountBusy === acct.id}
-                    onclick={() => accountAction(acct.id, "delete")} onblur={() => (confirmDelete = "")}>
-                    Delete data
-                  </button>
-                {:else}
-                  <button type="button" class="icon-btn danger" onclick={() => (confirmDelete = acct.id)}
-                    title="Delete this account and all of its data" aria-label="Delete account {acct.id}">
-                    <TrashIcon size={12} />
-                  </button>
-                {/if}
+                <button type="button" id="delete-account-{acct.id}" class="icon-btn danger" class:show={confirmDelete === acct.id}
+                  disabled={!!accountBusy} onclick={() => (confirmDelete = acct.id)}
+                  aria-expanded={confirmDelete === acct.id} aria-controls="delete-confirmation-{acct.id}"
+                  title="Delete this account and all of its data" aria-label="Delete account {acct.id}">
+                  <TrashIcon size={12} />
+                </button>
               {:else}
                 <button type="button" class="icon-btn danger" onclick={() => removeKnownAccount(acct.id)}
                   title="Forget this account on this dashboard" aria-label="Forget account {acct.id}">
                   <TrashIcon size={12} />
                 </button>
               {/if}
+              {@render deleteConfirmation(acct)}
             </li>
           {/each}
         </ul>
@@ -454,27 +474,20 @@
                     <span class="row-title">{acct.label}</span>
                     <span class="row-sub mono">{acct.id} · {acct.server?.resourceTotal ?? 0} resources · archived {daysSince(acct.server?.archivedAt) ?? 0}d ago</span>
                   </span>
-                  <button type="button" class="pill pill-btn" disabled={accountBusy === acct.id} onclick={() => accountAction(acct.id, "restore")}>
+                  <button type="button" class="pill pill-btn" disabled={!!accountBusy} onclick={() => accountAction(acct.id, "restore")}>
                     <ArrowCounterClockwiseIcon size={10} />Restore
                   </button>
-                  {#if confirmDelete === acct.id}
-                    <button type="button" class="pill pill-btn danger" disabled={accountBusy === acct.id}
-                      onclick={() => accountAction(acct.id, "delete")} onblur={() => (confirmDelete = "")}>
-                      Delete data
-                    </button>
-                  {:else}
-                    <button type="button" class="icon-btn danger" onclick={() => (confirmDelete = acct.id)}
-                      title="Delete this account and all of its data" aria-label="Delete account {acct.id}">
-                      <TrashIcon size={12} />
-                    </button>
-                  {/if}
+                  <button type="button" id="delete-account-{acct.id}" class="icon-btn danger" class:show={confirmDelete === acct.id}
+                    disabled={!!accountBusy} onclick={() => (confirmDelete = acct.id)}
+                    aria-expanded={confirmDelete === acct.id} aria-controls="delete-confirmation-{acct.id}"
+                    title="Delete this account and all of its data" aria-label="Delete account {acct.id}">
+                    <TrashIcon size={12} />
+                  </button>
+                  {@render deleteConfirmation(acct)}
                 </li>
               {/each}
             </ul>
           {/if}
-        {/if}
-        {#if confirmDelete}
-          <p class="hint">Deleting removes the account's functions, queues, tables, buckets and other data. Traces are shared and stay.</p>
         {/if}
         {#if accountsError}
           <p class="error" role="alert">{accountsError}</p>
@@ -825,7 +838,7 @@
   /* Rows */
   .rows { display: flex; flex-direction: column; gap: 2px; }
   .row {
-    display: flex; align-items: center; gap: 10px; padding: 7px 8px 7px 10px; border-radius: 8px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 7px 8px 7px 10px; border-radius: 8px;
     border: 1px solid transparent;
     transition: background 120ms ease, border-color 120ms ease, padding-left 220ms var(--ease-snappy);
   }
@@ -837,6 +850,7 @@
     border-radius: 2px; background: var(--text-primary); opacity: 0.9;
   }
   .row-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+  .row-confirmation { flex-basis: 100%; min-width: 0; }
   .row-title { font-size: 12.5px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row-sub { font-size: 10.5px; color: var(--text-tertiary); }
   .icon-btn, .icon-spacer { width: 24px; height: 24px; flex-shrink: 0; }
@@ -876,8 +890,6 @@
   .icon-btn.show { opacity: 1; }
   .icon-btn:not(.danger):hover { color: var(--text-primary); background: var(--bg-element-hover); }
   .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-  .pill-btn.danger { color: var(--accent-red); border-color: color-mix(in srgb, var(--accent-red) 40%, transparent); }
-  .pill-btn.danger:hover { background: color-mix(in srgb, var(--accent-red) 10%, transparent); color: var(--accent-red); }
   .archived-toggle {
     display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 4px 6px; border-radius: 8px;
     font-size: 11px; color: var(--text-tertiary); transition: color 120ms ease, background 120ms ease;
