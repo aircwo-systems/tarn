@@ -2,9 +2,11 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -16,6 +18,7 @@ import (
 	adminhandler "github.com/aircwo-systems/tarn/internal/api/admin"
 	apigatewayhandler "github.com/aircwo-systems/tarn/internal/api/apigateway"
 	apigatewayv1handler "github.com/aircwo-systems/tarn/internal/api/apigatewayv1"
+	cognitohandler "github.com/aircwo-systems/tarn/internal/api/cognito"
 	dynamodbhandler "github.com/aircwo-systems/tarn/internal/api/dynamodb"
 	ecshandler "github.com/aircwo-systems/tarn/internal/api/ecs"
 	eventbridgehandler "github.com/aircwo-systems/tarn/internal/api/eventbridge"
@@ -27,6 +30,7 @@ import (
 	snshandler "github.com/aircwo-systems/tarn/internal/api/sns"
 	sqshandler "github.com/aircwo-systems/tarn/internal/api/sqs"
 	stepfunctionshandler "github.com/aircwo-systems/tarn/internal/api/stepfunctions"
+	cognitosvc "github.com/aircwo-systems/tarn/internal/cognito"
 	"github.com/aircwo-systems/tarn/internal/config"
 	logssvc "github.com/aircwo-systems/tarn/internal/logs"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
@@ -47,6 +51,7 @@ type HandlerSet struct {
 	ECS           *ecshandler.Handler
 	StepFunctions *stepfunctionshandler.Handler
 	IAM           *iamhandler.Handler
+	Cognito       *cognitohandler.Handler
 	Admin         *adminhandler.Handler
 	// Logs is this account's CloudWatch-style logs service. It is per-account so
 	// log groups (e.g. /aws/lambda/<fn>) and the account's API request log do not
@@ -163,6 +168,9 @@ type Server struct {
 	datadog    *http.ServeMux
 	ui         http.Handler
 	conns      *Connections
+	// cognitoIndex maps user pool and client IDs to accounts, for Cognito
+	// calls that carry no SigV4 credentials.
+	cognitoIndex *cognitosvc.Index
 }
 
 // NewServer creates a new API server.
@@ -202,6 +210,71 @@ func (s *Server) SetConnections(c *Connections) {
 	if c != nil {
 		s.conns = c
 	}
+}
+
+// SetCognitoIndex attaches the pool and client index shared by every
+// account's Cognito service.
+func (s *Server) SetCognitoIndex(idx *cognitosvc.Index) { s.cognitoIndex = idx }
+
+// cognitoHS resolves the HandlerSet for a Cognito API request. Public Cognito
+// operations are unsigned, so the account comes from the ClientId, access
+// token or pool ID in the body when the index knows it.
+func (s *Server) cognitoHS(r *http.Request) *HandlerSet {
+	body, err := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	if err == nil {
+		signed := account.FromRequest(r, "") != ""
+		if acct, ok := cognitohandler.ResolveAccount(s.cognitoIndex, body, signed); ok {
+			if hs := s.registry.get(acct); hs != nil {
+				return hs
+			}
+		}
+	}
+	return s.hs(r)
+}
+
+func (s *Server) dispatchCognito(w http.ResponseWriter, r *http.Request) {
+	hs := s.cognitoHS(r)
+	if hs == nil || hs.Cognito == nil {
+		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"__type":  "InternalErrorException",
+			"message": "Cognito is not configured for this account",
+		})
+		return
+	}
+	hs.Cognito.Dispatch(w, r)
+}
+
+// poolHS resolves the HandlerSet that owns a user pool, for unsigned routes
+// such as JWKS that name the pool in the path.
+func (s *Server) poolHS(poolID string) *HandlerSet {
+	if acct, ok := s.cognitoIndex.AccountForPool(poolID); ok {
+		return s.registry.get(acct)
+	}
+	return nil
+}
+
+// getObjectDispatch serves GET /{bucket}/{key...}: the JWKS and discovery
+// documents when the first segment is a known user pool ID (pool IDs contain
+// an underscore, which bucket names cannot), otherwise S3.
+func (s *Server) getObjectDispatch(w http.ResponseWriter, r *http.Request) {
+	if poolID := r.PathValue("bucket"); cognitosvc.IsPoolID(poolID) {
+		if hs := s.poolHS(poolID); hs != nil && hs.Cognito != nil && hs.Cognito.ServeWellKnown(w, poolID, r.PathValue("key")) {
+			return
+		}
+	}
+	s.hs(r).S3.Dispatch(w, r)
+}
+
+// cognitoAdminHS resolves the account for a dashboard Cognito route: the pool
+// owner when the index knows the pool, otherwise the request's account.
+func (s *Server) cognitoAdminHS(r *http.Request) *HandlerSet {
+	if hs := s.poolHS(r.PathValue("poolId")); hs != nil {
+		return hs
+	}
+	return s.hs(r)
 }
 
 // hs resolves the per-account HandlerSet for the incoming request.
@@ -341,6 +414,20 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /_tarn/admin/eventbridge/race", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.RunEventBridgeRace(w, r)
 	})
+	mux.HandleFunc("GET /_tarn/admin/cognito/pools/{poolId}/codes", func(w http.ResponseWriter, r *http.Request) {
+		if hs := s.cognitoAdminHS(r); hs.Cognito != nil {
+			hs.Cognito.PendingCodes(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	})
+	mux.HandleFunc("GET /_tarn/admin/cognito/pools/{poolId}/users/{username}/codes", func(w http.ResponseWriter, r *http.Request) {
+		if hs := s.cognitoAdminHS(r); hs.Cognito != nil {
+			hs.Cognito.PendingCodes(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	})
 	// EventBridge JSON protocol endpoint used by dashboard and tooling to avoid
 	// colliding with UI app-server root routes.
 	mux.HandleFunc("POST /_tarn/events", func(w http.ResponseWriter, r *http.Request) {
@@ -395,7 +482,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	}
 
 	// Object-level S3 operations: /{bucket}/{key...}
-	mux.HandleFunc("GET /{bucket}/{key...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
+	mux.HandleFunc("GET /{bucket}/{key...}", s.getObjectDispatch)
 	mux.HandleFunc("PUT /{bucket}/{key...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 	mux.HandleFunc("DELETE /{bucket}/{key...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 	mux.HandleFunc("POST /{bucket}/{key...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
@@ -592,8 +679,12 @@ func (s *Server) getRootDispatch(w http.ResponseWriter, r *http.Request) {
 	s.hs(r).S3.Dispatch(w, r)
 }
 
-// postRootDispatch routes POST / between Secrets Manager, IAM, SNS, SQS, DynamoDB, EventBridge, and ECS.
+// postRootDispatch routes POST / between Cognito, Secrets Manager, IAM, SNS, SQS, DynamoDB, EventBridge, and ECS.
 func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
+	if cognitohandler.IsCognitoRequest(r) {
+		s.dispatchCognito(w, r)
+		return
+	}
 	hs := s.hs(r)
 	if secretshandler.IsSecretsManagerRequest(r) {
 		hs.Secrets.Dispatch(w, r)
@@ -660,7 +751,7 @@ func (s *Server) telemetryDBHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","sns","dynamodb","secretsmanager","eventsource","eventbridge","ecs","stepfunctions"]}`)
+	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","sns","dynamodb","secretsmanager","eventsource","eventbridge","ecs","stepfunctions","cognito-idp"]}`)
 }
 
 func (s *Server) withLogging(next http.Handler) http.Handler {
@@ -745,6 +836,11 @@ func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request)
 		// backend, and a proxied request that happens to carry AWS protocol
 		// headers/params must not get hijacked into SNS/DynamoDB/etc.
 		return false
+	}
+
+	if cognitohandler.IsCognitoRequest(r) {
+		s.dispatchCognito(w, r)
+		return true
 	}
 
 	hs := s.hs(r)

@@ -22,7 +22,17 @@ Tarn can be configured via command-line flags or environment variables.
 | `--secrets-proxy-port` | `TARN_SECRETS_PROXY_PORT` | `2773` | Port for the local secrets proxy |
 | `--secrets-proxy-token` | `TARN_SECRETS_PROXY_TOKEN` | `local-dev-token` | Expected extension token value |
 | `--secrets-proxy-require-token` | `TARN_SECRETS_PROXY_REQUIRE_TOKEN` | `true` | Require token validation on the secrets proxy |
-| `--vault-key` | `TARN_VAULT_KEY` | `~/.tarn/vault.key` | AES-256 key file used to encrypt secrets at rest |
+| `--vault-key` | `TARN_VAULT_KEY` | `~/.tarn/vault.key` | AES-256 key file used to encrypt secrets and Cognito signing keys at rest |
+
+### Cognito
+
+These settings have no flags.
+
+| Env Variable | Default | Description |
+|---|---|---|
+| `TARN_COGNITO_ISSUER` | `local` | `iss` claim in Cognito tokens. `local` gives `http://localhost:<port>/<poolId>`; `aws` gives `https://cognito-idp.<region>.amazonaws.com/<poolId>`; any other value is used as the base URL. |
+| `TARN_COGNITO_TOKEN_TTL` | unset | Overrides access and ID token validity for every app client, as a duration (`5m`) or seconds (`300`), so expiry can be tested quickly |
+| `TARN_COGNITO_FIXED_CODE` | unset | Use this value for every confirmation, verification and password reset code |
 
 ## Examples
 

@@ -7,6 +7,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 	github.com/spf13/cobra v1.10.2
 	github.com/vmihailenco/msgpack/v5 v5.4.1
+	golang.org/x/crypto v0.57.0
 	modernc.org/sqlite v1.58.0
 )
 

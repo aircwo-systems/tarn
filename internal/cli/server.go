@@ -20,6 +20,7 @@ import (
 	adminhandler "github.com/aircwo-systems/tarn/internal/api/admin"
 	apigatewayhandler "github.com/aircwo-systems/tarn/internal/api/apigateway"
 	apigatewayv1handler "github.com/aircwo-systems/tarn/internal/api/apigatewayv1"
+	cognitohandler "github.com/aircwo-systems/tarn/internal/api/cognito"
 	dynamodbhandler "github.com/aircwo-systems/tarn/internal/api/dynamodb"
 	ecshandler "github.com/aircwo-systems/tarn/internal/api/ecs"
 	eventbridgehandler "github.com/aircwo-systems/tarn/internal/api/eventbridge"
@@ -34,6 +35,7 @@ import (
 	"github.com/aircwo-systems/tarn/internal/apigateway"
 	"github.com/aircwo-systems/tarn/internal/apigatewayv1"
 	"github.com/aircwo-systems/tarn/internal/cli/common"
+	"github.com/aircwo-systems/tarn/internal/cognito"
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/internal/dynamodb"
 	ecsservice "github.com/aircwo-systems/tarn/internal/ecs"
@@ -135,6 +137,9 @@ type sharedDeps struct {
 	collector  *trace.Collector
 	infraSvc   *infrastructure.Service
 	vault      *secrets.Vault
+	// cognitoIndex maps user pool and client IDs to accounts. Each account's
+	// Cognito service registers its pools as it loads.
+	cognitoIndex *cognito.Index
 }
 
 // initAccountBundle creates all per-account services and handlers.
@@ -190,6 +195,15 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	// internal/ecs/secretref.go). Wired here, after secretsSvc exists, rather
 	// than up where ecsRunner is constructed.
 	ecsRunner.SetSecretsResolver(secretsSvc)
+
+	// Cognito User Pools
+	cognitoSvc := cognito.NewService(acctCfg, shared.cognitoIndex)
+	if shared.vault != nil {
+		cognitoSvc.SetVault(shared.vault)
+	}
+	if err := cognitoSvc.Init(); err != nil {
+		return nil, fmt.Errorf("cognito store: %w", err)
+	}
 
 	// DynamoDB
 	dynamoSvc := dynamodb.NewService(acctCfg)
@@ -349,6 +363,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 		ECS:           ecsHandler,
 		StepFunctions: stepfunctionshandler.NewHandler(stepFunctionsSvc),
 		IAM:           iamhandler.NewHandler(acctCfg.AccountID),
+		Cognito:       cognitohandler.NewHandler(cognitoSvc),
 		Admin:         adminHandler,
 		Logs:          logsSvc,
 	}
@@ -370,7 +385,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 		// flushers have not written yet.
 		for _, c := range []interface{ Close() }{
 			sqsSvc, snsSvc, dynamoSvc, secretsSvc, gatewaySvc, gatewayV1Svc,
-			esmSvc, eventbridgeSvc, stepFunctionsSvc, ecsSvc,
+			esmSvc, eventbridgeSvc, stepFunctionsSvc, ecsSvc, cognitoSvc,
 		} {
 			c.Close()
 		}
@@ -458,12 +473,13 @@ func startServer(cfg *config.Config) error {
 	}
 
 	shared := &sharedDeps{
-		eng:        eng,
-		pool:       pool,
-		traceStore: traceStore,
-		collector:  collector,
-		infraSvc:   infraSvc,
-		vault:      vault,
+		eng:          eng,
+		pool:         pool,
+		traceStore:   traceStore,
+		collector:    collector,
+		infraSvc:     infraSvc,
+		vault:        vault,
+		cognitoIndex: cognito.NewIndex(),
 	}
 
 	// Build the per-account factory closure. It captures all shared deps.
@@ -547,6 +563,7 @@ func startServer(cfg *config.Config) error {
 	server := api.NewServer(cfg, registry, logsSvc, collector)
 	server.SetTraceStore(shared.traceStore)
 	server.SetConnections(conns)
+	server.SetCognitoIndex(shared.cognitoIndex)
 
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)

@@ -17,6 +17,7 @@ provider "aws" {
   endpoints {
     apigateway     = "http://localhost:4566"
     apigatewayv2   = "http://localhost:4566"
+    cognitoidp     = "http://localhost:4566"
     dynamodb       = "http://localhost:4566"
     events         = "http://localhost:4566"
     lambda         = "http://localhost:4566"

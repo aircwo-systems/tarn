@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 )
 
 // Config holds all Tarn configuration.
@@ -68,6 +69,16 @@ type Config struct {
 	// VaultKeyPath is the path to the AES-256 key used to encrypt secret values at rest.
 	// Defaults to ~/.tarn/vault.key. Set to empty string to disable encryption.
 	VaultKeyPath string
+	// CognitoIssuer selects the `iss` claim in Cognito tokens: "local" (the
+	// Tarn endpoint), "aws" (the cognito-idp.<region>.amazonaws.com form) or
+	// an explicit base URL. The pool ID is appended in every mode.
+	CognitoIssuer string
+	// CognitoTokenTTL, when non-zero, overrides the access and ID token
+	// validity of every app client so expiry can be tested quickly.
+	CognitoTokenTTL time.Duration
+	// CognitoFixedCode, when set, replaces every generated confirmation,
+	// verification and password reset code.
+	CognitoFixedCode string
 }
 
 // Default returns a Config with sensible defaults.
@@ -98,6 +109,7 @@ func Default() *Config {
 		SecretsProxySessionToken:  "local-dev-token",
 		SecretsProxyRequireToken:  true,
 		VaultKeyPath:              filepath.Join(home, ".tarn", "vault.key"),
+		CognitoIssuer:             "local",
 	}
 }
 
@@ -192,6 +204,20 @@ func (c *Config) LoadFromEnv() {
 	}
 	if v := os.Getenv("TARN_VAULT_KEY"); v != "" {
 		c.VaultKeyPath = v
+	}
+	if v := os.Getenv("TARN_COGNITO_ISSUER"); v != "" {
+		c.CognitoIssuer = v
+	}
+	if v := os.Getenv("TARN_COGNITO_TOKEN_TTL"); v != "" {
+		// Accept a Go duration ("5m") or a bare number of seconds ("300").
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			c.CognitoTokenTTL = d
+		} else if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.CognitoTokenTTL = time.Duration(n) * time.Second
+		}
+	}
+	if v := os.Getenv("TARN_COGNITO_FIXED_CODE"); v != "" {
+		c.CognitoFixedCode = v
 	}
 }
 
@@ -308,6 +334,16 @@ func (c *Config) DynamoDBDir() string {
 // DynamoDBStatePath returns the state snapshot path for DynamoDB resources.
 func (c *Config) DynamoDBStatePath() string {
 	return filepath.Join(c.DynamoDBDir(), "state.json")
+}
+
+// CognitoDir returns the path to Cognito state storage.
+func (c *Config) CognitoDir() string {
+	return filepath.Join(c.DataDir, "cognito")
+}
+
+// CognitoStatePath returns the path to the Cognito state snapshot.
+func (c *Config) CognitoStatePath() string {
+	return filepath.Join(c.CognitoDir(), "state.json")
 }
 
 // PIDFilePath returns the path of the tarn server PID file.
