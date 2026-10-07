@@ -14,6 +14,7 @@ Tarn emulates the following AWS services for local development and testing.
 | **SNS** | <span class="status-badge status-full">Full</span> | Topics, subscriptions, fanout to SQS/Lambda |
 | **DynamoDB** | <span class="status-badge status-partial">Partial</span> | Core table APIs, Query/Scan, secondary indexes, Streams |
 | **Secrets Manager** | <span class="status-badge status-full">Full</span> | CRUD, tagging, compatibility policy reads, Lambda extension |
+| **Cognito User Pools** | <span class="status-badge status-partial">Partial</span> | Pools, app clients, users, groups, sign-up and sign-in flows, RS256 tokens with JWKS, Lambda triggers |
 | **EventBridge** | <span class="status-badge status-partial">Partial</span> | Scheduled rules, event-pattern rules, and `PutEvents` with Lambda targets |
 
 ## Service Guides
@@ -69,6 +70,12 @@ Pick a service below to get started:
   <h3>Secrets Manager</h3>
   <p>Secrets storage. Tagging, compatibility policy reads, Lambda extension.</p>
   <small>Fully Supported</small>
+</a>
+
+<a href="/services/cognito" class="service-card">
+  <h3>Cognito</h3>
+  <p>User pools. Sign-up, sign-in, signed JWTs, groups, and Lambda triggers.</p>
+  <small>Partial Support</small>
 </a>
 
 <a href="/services/eventbridge" class="service-card">

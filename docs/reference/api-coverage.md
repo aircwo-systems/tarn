@@ -1,6 +1,6 @@
 # API coverage
 
-Tarn implements **250+ AWS API actions** across 12 services, with service-specific compatibility fallbacks to keep Terraform and SDK workflows moving when optional APIs are probed.
+Tarn implements **250+ AWS API actions** across 13 services, with service-specific compatibility fallbacks to keep Terraform and SDK workflows moving when optional APIs are probed.
 
 ## Coverage matrix
 
@@ -18,6 +18,7 @@ Tarn implements **250+ AWS API actions** across 12 services, with service-specif
 | **API Gateway v2** | REST/JSON | 19 | `apigatewayv2` |
 | **API Gateway v1** | REST/JSON | 19 | `apigateway` |
 | **IAM** | Query/XML | 17 | default |
+| **Cognito User Pools** | JSON 1.1 | 66 | `cognitoidp` |
 | **Event Source Mapping** | REST/JSON | 5 | `lambda` (shared) |
 
 ## ECS
@@ -112,7 +113,7 @@ Terraform's S3 provider probes many bucket sub-resources during every plan/apply
 
 All services share a single endpoint (`localhost:4566`). Requests are routed by:
 
-1. **`X-Amz-Target` header:** EventBridge (`AWSEvents.*`), Step Functions (`AWSStepFunctions.*`), SQS JSON (`AmazonSQS.*`), Secrets Manager (`secretsmanager.*`), DynamoDB (`DynamoDB_20120810.*`), DynamoDB Streams (`DynamoDBStreams_20120810.*`), and ECS (`AmazonEC2ContainerServiceV20141113.*`)
+1. **`X-Amz-Target` header:** EventBridge (`AWSEvents.*`), Step Functions (`AWSStepFunctions.*`), SQS JSON (`AmazonSQS.*`), Secrets Manager (`secretsmanager.*`), DynamoDB (`DynamoDB_20120810.*`), DynamoDB Streams (`DynamoDBStreams_20120810.*`), ECS (`AmazonEC2ContainerServiceV20141113.*`), and Cognito User Pools (`AWSCognitoIdentityProviderService.*`)
 2. **`Version` form parameter:** IAM (`2010-05-08`) and SNS (`2010-03-31`)
-3. **URL path:** Lambda (`/2015-03-31/functions/`), S3 (`/_s3/`), and API Gateway (`/v2/apis/`, `/restapis/`)
+3. **URL path:** Lambda (`/2015-03-31/functions/`), S3 (`/_s3/`), API Gateway (`/v2/apis/`, `/restapis/`), Cognito JWKS and discovery (`/<poolId>/.well-known/`), and Datadog trace and log intake (`/info`, `/v0.4/traces`, `/api/v2/logs`, `/v1/input`). See [Datadog](/guide/datadog)
 4. **Fallback:** SQS query protocol, the default for `POST /`

@@ -73,6 +73,7 @@ export default defineConfig({
             { text: 'Configuration', link: '/guide/configuration' },
             { text: 'Terraform', link: '/guide/terraform' },
             { text: 'MCP', link: '/guide/mcp' },
+            { text: 'Datadog Traces', link: '/guide/datadog' },
           ]
         },
         {
@@ -94,6 +95,7 @@ export default defineConfig({
             { text: 'SQS', link: '/services/sqs' },
             { text: 'SNS', link: '/services/sns' },
             { text: 'Secrets Manager', link: '/services/secrets-manager' },
+            { text: 'Cognito', link: '/services/cognito' },
             { text: 'EventBridge', link: '/services/eventbridge' },
             { text: 'IAM', link: '/services/iam' },
           ]

@@ -78,6 +78,18 @@ Traces. The Traces view uses actual span timing and parent relationships for
 imported requests, and links back to the service's log group. Ambiguous low
 64-bit IDs are not linked to an arbitrary 128-bit trace.
 
+### Reading Datadog logs in the dashboard
+
+Datadog-shaped JSON logs, meaning those with an injected `dd` object or fields
+such as `ddsource` and `ddtags`, are formatted in the Logs view. A row shows the
+message and any application fields as `key=value` pairs, without the tracer and
+shipper bookkeeping that the row's time, level and stream already show. Request
+lines such as `GET /path 200 12ms` are split into the request, status and
+duration, and rows with a trace ID link to the matching trace.
+
+Open **Settings → Appearance → Datadog logs** and choose **Raw** to see the
+original JSON instead.
+
 Coverage depends on instrumentation in each process. A traced frontend can
 record its outgoing API call without the API being instrumented, but spans
 inside that API require its own tracer. Browser interactions and rendering
