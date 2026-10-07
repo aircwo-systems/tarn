@@ -3,7 +3,7 @@
 Status: Proposed  
 Target: Operator tooling (UI Topology Canvas, EventBridge, Lambda, DynamoDB, MCP)  
 Primary area: `ui/src/lib/components/topology`, `internal/api/admin`, `internal/cli/mcp`  
-Prototype: [`agent-builder-poc.html`](../agent-builder-poc.html)  
+Prototype: `agent-builder-poc.html` (repo root)  
 Reference Demo: [Outglow Studio — Product Discovery](https://agent-builder-ui-one.vercel.app/#/agents/product-discovery)  
 Reference Video: [Original Demo Video by @arknow91](https://t.co/aVQENXqow8)
 
@@ -25,7 +25,7 @@ This feature introduces a unified **dual-pane operator canvas** for Tarn:
 
 - **Original Video**: [https://t.co/aVQENXqow8](https://t.co/aVQENXqow8) (demo shared by Arek / [@arknow91](https://x.com/arknow91))
 - **Live Vercel Application**: [https://agent-builder-ui-one.vercel.app/#/agents/product-discovery](https://agent-builder-ui-one.vercel.app/#/agents/product-discovery)
-- **Local Interactive Prototype**: [`agent-builder-poc.html`](../agent-builder-poc.html)
+- **Local Interactive Prototype**: `agent-builder-poc.html` (repo root)
 
 ---
 
