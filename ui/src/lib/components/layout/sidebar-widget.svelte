@@ -26,6 +26,7 @@
           label: string;
           value: string | number;
           tone?: "warning" | "error";
+          minWidth?: number;
           blocks?: WidgetBlock[];
         }[];
         note?: string;
@@ -35,7 +36,7 @@
 <script lang="ts">
   import { timeAgo } from "$lib/utils";
   import { infraKindCssVar } from "$lib/components/topology/topology-canvas-theme";
-  let { data }: { data: SidebarWidgetData } = $props();
+  let { data, width = 0 }: { data: SidebarWidgetData; width?: number } = $props();
 </script>
 
 <span
@@ -146,7 +147,7 @@
       >
     {/if}
   {:else}
-    {#each data.rows as row (row.label)}
+    {#each data.rows.filter((row) => !row.minWidth || width >= row.minWidth) as row (row.label)}
       <span class="widget-row">
         <span>{row.label}</span>
         <span class="metric-value">

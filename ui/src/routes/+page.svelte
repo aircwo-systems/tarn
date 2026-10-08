@@ -24,13 +24,6 @@
   import AppSidebar, { type NavSection } from "$lib/components/layout/app-sidebar.svelte";
   import CommandPalette from "$lib/components/layout/command-palette.svelte";
   import { getLogPulse, startLogPulse } from "$lib/log-pulse.svelte";
-  import TagFilter from "$lib/components/layout/tag-filter.svelte";
-  import OverviewPulse from "$lib/components/layout/overview-pulse.svelte";
-  import ActivityFeed from "$lib/components/layout/activity-feed.svelte";
-  import SectionHeader from "$lib/components/sections/section-header.svelte";
-  import type { SparkBar as SparkBarData } from "$lib/components/common/spark-bar.svelte";
-  import type { RequestTrace } from "$lib/types";
-  import TopologyCanvas from "$lib/components/topology/topology-canvas.svelte";
   import SettingsSection from "$lib/components/sections/settings-section.svelte";
   import APIGatewaysSection from "$lib/components/sections/api-gateways-section.svelte";
   import FunctionsSection from "$lib/components/sections/functions-section.svelte";
@@ -49,8 +42,8 @@
   import StackSection from "$lib/components/sections/stack-section.svelte";
   import ServicesSection from "$lib/components/sections/services-section.svelte";
   import ChaosSection from "$lib/components/sections/chaos-section.svelte";
+  import HomeView from "$lib/components/home/home-view.svelte";
   import {
-    infraKindCssVar,
     normalizeTopologyInfraKind,
   } from "$lib/components/topology/topology-canvas-theme";
 
@@ -58,7 +51,6 @@
     getDashboard,
     getDashboardFilters,
     getUISettings,
-    getInfraSettings,
     getAccountSettings,
     getVisibleInfra,
   } from "$lib/state.svelte";
@@ -79,12 +71,11 @@
   const dashboard = getDashboard();
   const filters = getDashboardFilters();
   const uiSettings = getUISettings();
-  const infraSettings = getInfraSettings();
   const accountSettings = getAccountSettings();
 
   // ── Routing ─────────────────────────────────────────────────────
   const tabHistory = new TabNavigationHistory();
-  let activeTab = $state<DashboardTab>("overview");
+  let activeTab = $state<DashboardTab>("home");
   let logsInitialGroup = $state("");
   let logsInitialTimestamp = $state("");
   let logsInitialLevels = $state<string[]>([]);
@@ -93,10 +84,15 @@
   let logsInitialOrder = $state<LogSortOrder>("desc");
   let xrayInitialTraceId = $state("");
   let commandPaletteOpen = $state(false);
+  let homeSection = $state("");
 
   function readHash() {
+    if (window.location.hash.split("?", 1)[0] === "#overview") {
+      window.history.replaceState(null, "", "#home?section=topology");
+    }
     const raw = window.location.hash.replace("#", "");
     const [tab, qs] = raw.split("?");
+    homeSection = new URLSearchParams(qs ?? "").get("section") ?? "";
     const nextTab = tabFromHash(window.location.hash);
     if (nextTab) activeTab = nextTab;
     tabHistory.remember(window.location.hash);
@@ -162,10 +158,8 @@
     };
   });
 
-  let canvasExpanded = $state(false);
   let sidebarCollapsed = $state(false);
 
-  $effect(() => { sidebarCollapsed = canvasExpanded; });
 
   // ── Filter-derived counts ──────────────────────────────────────
 
@@ -204,90 +198,25 @@
     };
   }));
 
-  const infraLegend = $derived(
-    (() => {
-      const counts = new Map<string, number>();
-      for (const probe of visibleInfra) {
-        const key = normalizeTopologyInfraKind(probe.kind);
-        counts.set(key, (counts.get(key) ?? 0) + 1);
-      }
-      return [
-        { kind: "postgresql", label: "PostgreSQL" },
-        { kind: "mysql",      label: "MySQL"      },
-        { kind: "redis",      label: "Redis"      },
-        { kind: "http",       label: "HTTP"       },
-        { kind: "mongodb",    label: "MongoDB"    },
-        { kind: "docker",     label: "Docker"     },
-        { kind: "default",    label: "Other"      },
-      ]
-        .map(e => ({ ...e, count: counts.get(e.kind) ?? 0, color: infraKindCssVar(e.kind) }))
-        .filter(e => e.count > 0);
-    })(),
-  );
-
-  const connectionStatus = $derived(
-    dashboard.error ? "error" : dashboard.loading ? "loading" : dashboard.data ? "ok" : "idle",
-  ) as "ok" | "loading" | "error" | "idle";
-
-  // ── Compact activity indicators (shown when canvas is expanded) ──
-  const BUCKET_N = 12;
-  const BUCKET_MS = 15 * 60 * 1000;
-
-  const traceBuckets = $derived(
-    (() => {
-      const now = Date.now();
-      const windowStart = now - BUCKET_N * BUCKET_MS;
-      const buckets: { traces: RequestTrace[]; startMs: number; endMs: number }[] = Array.from({ length: BUCKET_N }, (_, i) => ({
-        traces: [],
-        startMs: windowStart + i * BUCKET_MS,
-        endMs: windowStart + (i + 1) * BUCKET_MS,
-      }));
-      for (const t of recentTraces) {
-        const ms = new Date(t.startedAt).getTime();
-        if (isNaN(ms) || ms < windowStart) continue;
-        const idx = Math.min(Math.floor((ms - windowStart) / BUCKET_MS), BUCKET_N - 1);
-        buckets[idx].traces.push(t);
-      }
-      return buckets;
-    })(),
-  );
-
-  function normBars(values: number[]): SparkBarData[] {
-    const max = Math.max(...values, 1);
-    return values.map((v, i) => ({ h: Math.round((v / max) * 100), current: i === BUCKET_N - 1, label: "" }));
-  }
-
-  const activityMetrics = $derived([
-    { label: "Request volume", bars: normBars(traceBuckets.map(b => b.traces.length)), color: "var(--accent-green)" },
-    { label: "Average latency", bars: normBars(traceBuckets.map(b => b.traces.length ? Math.round(b.traces.reduce((s,t)=>s+t.durationMs,0)/b.traces.length) : 0)), color: "var(--text-secondary)" },
-    { label: "p95 latency", bars: normBars(traceBuckets.map(b => { if (!b.traces.length) return 0; const s=[...b.traces].map(t=>t.durationMs).sort((a,z)=>a-z); return s[Math.min(Math.floor(s.length*0.95),s.length-1)]; })), color: "var(--text-secondary)" },
-    { label: "Request errors", bars: normBars(traceBuckets.map(b => b.traces.filter(t=>t.status>=500).length)), color: "var(--accent-red)" },
-  ]);
-
-  const logActivityTitle = $derived(
-    logPulse.status === "loading"
-      ? "Logs · reading recent activity"
-      : logPulse.status === "unavailable"
-        ? "Logs · activity unavailable"
-        : `Logs · ${logPulse.bars.reduce((sum, count) => sum + count, 0)} events in the last minute · ${logPulse.recentErrors} errors · ${logPulse.recentWarnings} warnings in the last 5 minutes`,
-  );
-
   // ── Navigation config ──────────────────────────────────────────
   const navSections = $derived<NavSection[]>([
     {
-      id: "overview",
-      label: "Overview",
-      items: [{
-        id: "overview", label: "Overview", icon: SquaresFourIcon, count: null,
-        widget: {
-          kind: "summary",
-          rows: [
-            { label: "AWS resources", value: countGateways + countFunctions + countECS + countQueues + countTopics + countDynamoTables + countSecrets + countPools + countBuckets + countEventBridge + countStateMachines + countTriggers },
-            { label: "Last sync", value: dashboard.lastRefresh || "Waiting" },
-          ],
-          note: dashboard.error ? "Refresh failed · showing last known data" : undefined,
+      id: "home",
+      label: "Home",
+      items: [
+        {
+          id: "home", label: "Home", icon: SquaresFourIcon, count: null,
+          widget: {
+            kind: "summary",
+            rows: [
+              { label: "AWS resources", value: countGateways + countFunctions + countECS + countQueues + countTopics + countDynamoTables + countSecrets + countPools + countBuckets + countEventBridge + countStateMachines + countTriggers },
+              { label: "Last sync", value: dashboard.lastRefresh || "Waiting" },
+              { label: "Services", value: `${visibleInfra.filter((probe) => probe.status === "connected").length} / ${activeServiceCount} reachable`, minWidth: 340 },
+            ],
+            note: dashboard.error ? "Refresh failed · showing last known data" : undefined,
+          },
         },
-      }],
+      ],
     },
     {
       id: "infra",
@@ -398,88 +327,21 @@
     onSetTab={setTab}
     onOpenSettings={() => setTab("settings")}
     onOpenCommandPalette={() => (commandPaletteOpen = true)}
+    hideSearch={activeTab === "home"}
   />
 
   <!-- ═══════════════════════════════════════════════════ MAIN ══ -->
   {#key `${accountSettings.activeAccountId}:${activeTab}`}
-    {#if activeTab === "overview"}
-    <main id="main-stage-content" tabindex="-1" class="tab-content-view main-stage flex min-w-0 flex-1 flex-col overflow-hidden outline-none" class:sidebar-collapsed={sidebarCollapsed && uiSettings.collapsedSidebarMode === "hidden"}>
-      <div class="flex flex-1 flex-col overflow-hidden {canvasExpanded ? 'px-6 py-5' : 'px-4 py-4'}">
-        <SectionHeader
-          title="Overview"
-          description="{activeServiceCount} services · {recentTraces.length} recent traces"
-          {sidebarCollapsed}
-          onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
-        >
-          {#snippet toolbar()}
-            <TagFilter />
-          {/snippet}
-          {#snippet actions()}
-            {@const peak = Math.max(1, ...logPulse.bars)}
-            <div class="flex shrink-0 items-center gap-1" role="group" aria-label="Overview activity">
-              {#if canvasExpanded}
-                {#each activityMetrics as metric (metric.label)}
-                  <a
-                    href="#xray"
-                    class="overview-activity-cube"
-                    aria-label={`View traces · ${metric.label} trend`}
-                    title={`${metric.label} · last 3 hours${recentTraces.length ? '' : ' · waiting for traces'}`}
-                    onclick={(event) => { event.preventDefault(); setTab("xray"); }}
-                  >
-                    {#each metric.bars as bar, i (i)}
-                      <span
-                        aria-hidden="true"
-                        style:background={metric.color}
-                        style:opacity={bar.h > 0 ? 0.25 + (bar.h / 100) * 0.75 : 0.15}
-                      ></span>
-                    {/each}
-                  </a>
-                {/each}
-              {/if}
-              <a
-                href="#logs"
-                class="overview-activity-cube logs-activity-cube"
-                aria-label={logActivityTitle}
-                title={logActivityTitle}
-                onclick={(event) => { event.preventDefault(); setTab("logs"); }}
-              >
-                {#each logPulse.bars as count, i (i)}
-                  <span
-                    aria-hidden="true"
-                    data-severity={logPulse.severity[i]}
-                    style:opacity={logPulse.status === "ready" && count > 0 ? 0.3 + (count / peak) * 0.7 : 0.15}
-                  ></span>
-                {/each}
-              </a>
-            </div>
-            <div class="ml-1 flex shrink-0 items-center gap-1 font-mono text-[11px] text-muted-foreground">
-              <span class="inline-block h-[5px] w-[5px] rounded-full bg-primary/70"></span>
-              Poll {uiSettings.pollingIntervalSeconds}s
-            </div>
-          {/snippet}
-        </SectionHeader>
-
-        {#if !canvasExpanded}
-          <OverviewPulse {recentTraces} {traceBuckets} {activeServiceCount} {infraLegend} onNavigate={setTab} />
-        {/if}
-
-        <!-- Hero grid: topology + feed -->
-        <div class="mt-2 grid min-h-0 flex-1 gap-4 {canvasExpanded ? 'grid-cols-1' : 'grid-cols-[1fr_300px]'}">
-          <div class="flex min-h-0 flex-col">
-            <div class="flex-1 overflow-hidden rounded-[5px]">
-              <TopologyCanvas
-                {canvasExpanded}
-                onNavigate={setTab}
-                onExpandedChange={(expanded) => (canvasExpanded = expanded)}
-              />
-            </div>
-          </div>
-
-          {#if !canvasExpanded}
-            <ActivityFeed traces={recentTraces} onOpenTrace={openTrace} onViewAll={() => setTab("xray")} />
-          {/if}
-        </div>
-      </div>
+    {#if activeTab === "home"}
+    <main id="main-stage-content" tabindex="-1" class="tab-content-view main-stage min-w-0 flex-1 overflow-y-auto outline-none" class:sidebar-collapsed={sidebarCollapsed && uiSettings.collapsedSidebarMode === "hidden"}>
+      <HomeView
+        topologyRequested={homeSection === "topology"}
+        {sidebarCollapsed}
+        onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
+        onNavigate={setTab}
+        onOpenTrace={openTrace}
+        onOpenPalette={() => (commandPaletteOpen = true)}
+      />
     </main>
     {:else}
     <main id="main-stage-content" tabindex="-1" class="tab-content-view main-stage min-w-0 flex-1 px-6 py-5 outline-none {activeTab === 'logs' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}" class:sidebar-collapsed={sidebarCollapsed && uiSettings.collapsedSidebarMode === "hidden"}>
@@ -489,6 +351,17 @@
         <FunctionsSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "ecs"}
         <ECSSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "logs"}
+        <LogsSection
+          initialGroup={logsInitialGroup}
+          initialTimestamp={logsInitialTimestamp}
+          initialLevels={logsInitialLevels}
+          initialPattern={logsInitialPattern}
+          initialStream={logsInitialStream}
+          initialOrder={logsInitialOrder}
+          {sidebarCollapsed}
+          onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
+        />
       {:else if activeTab === "queues"}
         <QueuesSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "dynamodb"}
@@ -509,17 +382,6 @@
         <StorageSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "services"}
         <ServicesSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} onNavigate={setTab} />
-      {:else if activeTab === "logs"}
-        <LogsSection
-          initialGroup={logsInitialGroup}
-          initialTimestamp={logsInitialTimestamp}
-          initialLevels={logsInitialLevels}
-          initialPattern={logsInitialPattern}
-          initialStream={logsInitialStream}
-          initialOrder={logsInitialOrder}
-          {sidebarCollapsed}
-          onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
-        />
       {:else if activeTab === "xray"}
         <XraySection
           initialTraceId={xrayInitialTraceId}
@@ -532,6 +394,7 @@
       {:else if activeTab === "settings"}
         <SettingsSection
           instanceInfo={dashboard.data?.config ?? null}
+          onNavigate={setTab}
           {sidebarCollapsed}
           onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
         />
@@ -554,42 +417,6 @@
 
 
 <style>
-  .overview-activity-cube {
-    display: grid;
-    width: 28px;
-    height: 28px;
-    flex-shrink: 0;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    grid-template-rows: repeat(3, minmax(0, 1fr));
-    gap: 2px;
-    padding: 4px;
-    border: 1px solid var(--border-subtle);
-    border-radius: 3px;
-    background: var(--bg-element);
-    transition: background 120ms ease;
-  }
-
-  .overview-activity-cube:hover {
-    background: var(--bg-element-hover);
-  }
-
-  .overview-activity-cube:focus-visible {
-    outline: 1px solid var(--border-focus);
-    outline-offset: 2px;
-  }
-
-  .logs-activity-cube {
-    grid-template-rows: repeat(4, minmax(0, 1fr));
-  }
-
-  .logs-activity-cube span { background: var(--accent-green); }
-  .logs-activity-cube span[data-severity="1"] { background: var(--accent-amber); }
-  .logs-activity-cube span[data-severity="2"] { background: var(--accent-red); }
-
-  @media (prefers-reduced-motion: reduce) {
-    .overview-activity-cube { transition: none; }
-  }
-
   :global(.tab-content-view) {
     animation: tabFadeIn 140ms cubic-bezier(0.16, 1, 0.3, 1);
   }

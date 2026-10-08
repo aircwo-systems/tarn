@@ -1,5 +1,5 @@
 export const DASHBOARD_TABS = [
-  "overview",
+  "home",
   "gateways",
   "chaos",
   "functions",
@@ -47,6 +47,7 @@ const EMPTY_LOG_STATE: LogNavigationState = {
 
 export function tabFromHash(hash: string): DashboardTab | null {
   const tab = hash.replace(/^#/, "").split("?", 1)[0];
+  if (tab === "overview") return "home";
   return DASHBOARD_TABS.find((candidate) => candidate === tab) ?? null;
 }
 
@@ -94,7 +95,8 @@ export class TabNavigationHistory {
   remember(hash: string): void {
     const tab = tabFromHash(hash);
     if (!tab) return;
-    this.locations.set(tab, hash.startsWith("#") ? hash : `#${hash}`);
+    const normalized = hash.startsWith("#") ? hash : `#${hash}`;
+    this.locations.set(tab, normalized.split("?", 1)[0] === "#overview" ? "#home?section=topology" : normalized);
   }
 
   destination(tab: DashboardTab): string {

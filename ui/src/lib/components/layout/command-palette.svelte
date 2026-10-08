@@ -89,7 +89,7 @@
       items.push({ id: `nav-${id}`, title, subtitle, group: "Pages", filter: "pages", keywords, icon, action: () => onNavigate(id) });
     const count = (n: number | undefined, one: string, many = `${one}s`) => `${n ?? 0} ${n === 1 ? one : many}`;
 
-    page("overview",      "Overview",        "Health and resource topology",              StackIcon, "topology home");
+    page("home",          "Home",        "Health and resource topology",              StackIcon, "topology overview health");
     page("functions",     "Functions",       count(data?.functions?.length, "function"),  LightningIcon, "lambda fn");
     page("gateways",      "API Gateway",     count(data?.gateways?.length, "API"),        GlobeHemisphereWestIcon, "apigw gw http");
     page("queues",        "Queues",          count(data?.queues?.length, "queue"),        ChatCircleIcon, "sqs");

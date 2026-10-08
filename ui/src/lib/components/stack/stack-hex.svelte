@@ -6,9 +6,12 @@
   let {
     groups,
     onOpen,
+    compact = false,
   }: {
     groups: StackGroup[];
     onOpen: (id: string) => void;
+    /** tight panel embedding: no search toolbar, quieter caption */
+    compact?: boolean;
   } = $props();
 
   /**
@@ -254,6 +257,7 @@
 <svelte:window onkeydown={onKey} />
 
 <div class="hex-view">
+  {#if !compact}
   <div class="toolbar">
     <label class="search" class:active={query}>
       <MagnifyingGlassIcon size={12} />
@@ -271,6 +275,7 @@
       {/each}
     </span>
   </div>
+  {/if}
 
   <div class="board" bind:clientWidth={width}>
     {#if width}

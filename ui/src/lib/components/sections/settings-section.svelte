@@ -33,10 +33,12 @@
     instanceInfo = null,
     sidebarCollapsed = false,
     onToggleSidebar = () => {},
+    onNavigate = (_tab: string) => {},
   }: {
     instanceInfo?: { region?: string; accountId?: string; endpoint?: string; version?: string } | null;
     sidebarCollapsed?: boolean;
     onToggleSidebar?: () => void;
+    onNavigate?: (tab: string) => void;
   } = $props();
 
   const uiSettings = getUISettings();

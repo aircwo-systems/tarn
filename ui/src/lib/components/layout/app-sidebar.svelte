@@ -34,6 +34,7 @@
     onSetTab,
     onOpenSettings,
     onOpenCommandPalette,
+    hideSearch = false,
   }: {
     navSections: NavSection[];
     activeTab: string;
@@ -44,6 +45,8 @@
     onSetTab: (tab: string) => void;
     onOpenSettings: () => void;
     onOpenCommandPalette?: () => void;
+    /** home has its own search in the seam */
+    hideSearch?: boolean;
   } = $props();
 
   const isNonDefaultAccount = $derived(activeAccountId !== "000000000000");
@@ -302,7 +305,7 @@
         </div>
       </div>
 
-      {#if onOpenCommandPalette}
+      {#if onOpenCommandPalette && !hideSearch}
         <button
           type="button"
           class="rack-search-trigger"
@@ -356,7 +359,7 @@
           {#each section.items as item (item.id)}
             {@const Icon = item.icon}
             {@const active = item.id === activeTab}
-            {@const hasWidget = !!item.widget && !sidebarCollapsed && (item.id === "overview" ? width >= 240 : width >= 340)}
+            {@const hasWidget = !!item.widget && !sidebarCollapsed && (item.id === "home" ? width >= 240 : width >= 340)}
             <button
               type="button"
               use:registerItem={item.id}
@@ -413,7 +416,7 @@
               {#if hasWidget}
                 <span class="nav-widget" id="nav-{item.id}-widget">
                   <span class="nav-widget-inner">
-                    <SidebarWidget data={item.widget!} />
+                    <SidebarWidget data={item.widget!} {width} />
                   </span>
                 </span>
               {/if}

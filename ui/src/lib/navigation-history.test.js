@@ -1,11 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import {
   TabNavigationHistory,
+  tabFromHash,
   logStateFromLocation,
   logLocationWithFilters,
 } from "./navigation-history";
 
 describe("tab navigation history", () => {
+  test("old overview bookmarks return to Home topology", () => {
+    const history = new TabNavigationHistory();
+    expect(tabFromHash("#overview")).toBe("home");
+    history.remember("#overview");
+    history.remember("#logs");
+    expect(history.destination("home")).toBe("#home?section=topology");
+  });
+
   test("restores the selected ECS row after visiting another section", () => {
     const history = new TabNavigationHistory();
     const selectedService =
