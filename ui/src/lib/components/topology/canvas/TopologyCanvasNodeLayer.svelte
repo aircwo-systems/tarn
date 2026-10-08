@@ -8,8 +8,13 @@
   } from "$lib/types";
   import { formatBytes } from "$lib/utils";
   import {
+    CONNECTION_CANVAS,
+    DETAIL_ROW,
     nodeBounds,
+    nodeHeaderY,
+    nodeOpen,
     portPos,
+    TOGGLE_INSET,
     selectedTraceNodes,
     traceStatusTone,
     type HoverFocusState,
@@ -19,11 +24,36 @@
   import {
     infraKindColor,
     kindColor,
+    normalizeTopologyExternalKind,
     type TopologyCanvasPalette,
   } from "../topology-canvas-theme";
   import type { ConnectionNode } from "../types";
 
   const MONO_FONT = '"JetBrains Mono Variable", "SF Mono", ui-monospace, monospace';
+  const SANS_FONT = '"Inter Variable", Inter, ui-sans-serif, system-ui, sans-serif';
+
+  // A short tag for each kind, so a node's kind reads as text and not
+  // only as its colour.
+  const KIND_TAG: Record<string, string> = {
+    gateway: "API",
+    eventbridge: "EB",
+    topic: "SNS",
+    queue: "SQS",
+    function: "λ",
+    dynamodb: "DDB",
+    bucket: "S3",
+    secret: "KEY",
+    extension: "EXT",
+  };
+  const INFRA_TAG: Record<string, string> = {
+    postgresql: "PG",
+    mysql: "SQL",
+    redis: "RDS",
+    mongodb: "MDB",
+    docker: "DKR",
+    http: "HTTP",
+    https: "HTTP",
+  };
 
   let {
     model,
@@ -52,8 +82,14 @@
     } | null;
   } = $props();
 
+  // Links from the secrets cache are drawn as one bracket, so they give a
+  // secret no connector of its own; only a direct link does.
   const inputNodeIds = $derived(
-    new Set(model.allEdges.map((edge) => `${edge.to.kind}:${edge.to.id}`)),
+    new Set(
+      model.allEdges
+        .filter((edge) => !(edge.from.kind === "extension" && edge.to.kind === "secret"))
+        .map((edge) => `${edge.to.kind}:${edge.to.id}`),
+    ),
   );
   const outputNodeIds = $derived(
     new Set(model.allEdges.map((edge) => `${edge.from.kind}:${edge.from.id}`)),
@@ -70,7 +106,16 @@
     context.translate(viewportTransform.offsetX, viewportTransform.offsetY);
     context.scale(viewportTransform.scale, viewportTransform.scale);
 
+    // Only cards in view (with a margin for ports and focus scaling).
+    const { scale, offsetX, offsetY } = viewportTransform;
+    const viewLeft = -offsetX / scale - 40;
+    const viewTop = -offsetY / scale - 40;
+    const viewRight = (width - offsetX) / scale + 40;
+    const viewBottom = (height - offsetY) / scale + 40;
+
     for (const node of model.allNodes) {
+      const b = nodeBounds(node);
+      if (b.right < viewLeft || b.left > viewRight || b.bottom < viewTop || b.top > viewBottom) continue;
       const stroke =
         node.kind === "infra"
           ? node.status === "connected"
@@ -163,6 +208,11 @@
     return focused ? boostedBase : dimmed;
   }
 
+  /** Canvas units that never draw thinner than `screen` pixels. */
+  function screenPx(units: number, screen: number): number {
+    return Math.max(units, screen / Math.max(0.05, viewportTransform.scale));
+  }
+
   function drawNodePorts(
     context: CanvasRenderingContext2D,
     node: ConnectionNode,
@@ -173,21 +223,20 @@
   ) {
     if (!showInput && !showOutput) return;
 
-    const r = 3.5;
+    // Stations, as on a metro map: an open ring in the line's colour.
+    const r = screenPx(3.5, 3.75);
     context.save();
-    context.fillStyle = color;
-    context.globalAlpha = focusOpacity(palette.isDark ? 0.75 : 0.9, focused, palette);
-    if (showInput) {
-      const inp = portPos(node, "input");
+    context.fillStyle = palette.background;
+    context.strokeStyle = color;
+    context.lineWidth = screenPx(1.8, 2);
+    context.globalAlpha = focusOpacity(1, focused, palette);
+    for (const role of [showInput && "input", showOutput && "output"] as const) {
+      if (!role) continue;
+      const at = portPos(node, role);
       context.beginPath();
-      context.arc(inp.x, inp.y, r, 0, Math.PI * 2);
+      context.arc(at.x, at.y, r, 0, Math.PI * 2);
       context.fill();
-    }
-    if (showOutput) {
-      const out = portPos(node, "output");
-      context.beginPath();
-      context.arc(out.x, out.y, r, 0, Math.PI * 2);
-      context.fill();
+      context.stroke();
     }
     context.restore();
   }
@@ -230,16 +279,25 @@
         ? 1
         : 0.97;
     context.globalAlpha = focusOpacity(baseAlpha, style.focused, palette);
-    context.lineWidth = style.hovered ? 2.2 : palette.isDark ? 1.35 : 1.5;
     roundRect(
       context,
       bounds.left,
       bounds.top,
       bounds.right - bounds.left,
       bounds.bottom - bounds.top,
-      node.kind === "extension" ? 9 : 8,
+      10,
     );
     context.fill();
+    // Kind-colour frame so each card reads at a glance; trouble
+    // (an unreachable service) keeps its red one, hover brings it fully up.
+    const trouble = node.kind === "infra" && node.status !== "connected";
+    context.strokeStyle = style.stroke;
+    context.globalAlpha = focusOpacity(
+      trouble || style.hovered ? 1 : palette.isDark ? 0.8 : 0.85,
+      style.focused,
+      palette,
+    );
+    context.lineWidth = style.hovered ? screenPx(2.5, 2.75) : screenPx(1.75, 1.75);
     context.stroke();
 
     if (node.kind === "bucket" && node.bucket && node.size && node.size !== "small") {
@@ -295,30 +353,162 @@
         model.infraById.get(node.id)!,
       );
     } else {
-      context.fillStyle = style.titleColor;
-      context.globalAlpha = focusOpacity(
-        palette.isDark ? 1 : 0.95,
-        style.focused,
-        palette,
-      );
-      context.font = `11px ${MONO_FONT}`;
-      context.textAlign = "center";
-      context.textBaseline = "middle";
-      context.fillText(node.label, node.x + (node.kind === "infra" ? 6 : 0), node.y - 3);
-
-      if (node.sub) {
-        context.fillStyle = style.subColor;
-        context.globalAlpha = focusOpacity(
-          palette.isDark ? 0.92 : 0.86,
-          style.focused,
-          palette,
-        );
-        context.font = `9px ${MONO_FONT}`;
-        context.fillText(node.sub, node.x + (node.kind === "infra" ? 6 : 0), node.y + 11);
-      }
+      drawCompactNodeContent(context, node, bounds, style);
     }
 
     context.restore();
+  }
+
+  // The everyday node: a kind tag on the left, the name beside it in the
+  // UI's sans at full contrast, and one muted line of detail beneath.
+  function drawCompactNodeContent(
+    context: CanvasRenderingContext2D,
+    node: ConnectionNode,
+    bounds: { left: number; right: number; top: number; bottom: number },
+    style: { palette: TopologyCanvasPalette; stroke: string; titleColor: string; subColor: string; focused: boolean },
+  ) {
+    const { palette } = style;
+    const probe = node.kind === "infra" ? model.infraById.get(node.id) : undefined;
+    const tag = probe ? (INFRA_TAG[normalizeTopologyExternalKind(probe.kind)] ?? "SVC") : (KIND_TAG[node.kind] ?? "•");
+    const trouble = !!probe && probe.status !== "connected";
+    // An open card keeps its header at the top, details below.
+    const hy = nodeHeaderY(node);
+    const canOpen = !!node.details?.length;
+
+    context.font = `700 11px ${MONO_FONT}`;
+    const chipW = Math.max(30, textWidth(context, tag) + 14);
+    const chipH = 24;
+    const chipX = bounds.left + 12;
+    const chipY = hy - chipH / 2;
+    context.fillStyle = style.stroke;
+    context.globalAlpha = focusOpacity(palette.isDark ? 0.18 : 0.14, style.focused, palette);
+    roundRect(context, chipX, chipY, chipW, chipH, 6);
+    context.fill();
+    context.strokeStyle = style.stroke;
+    context.lineWidth = 1;
+    context.globalAlpha = focusOpacity(0.7, style.focused, palette);
+    context.stroke();
+    context.fillStyle = style.titleColor;
+    context.globalAlpha = focusOpacity(0.92, style.focused, palette);
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.fillText(tag, chipX + chipW / 2, hy + 0.5);
+
+    const textX = chipX + chipW + 12;
+    const textW = bounds.right - (canOpen ? 38 : 14) - textX;
+    const name = node.fullLabel ?? node.label;
+    context.textAlign = "left";
+    context.fillStyle = style.titleColor;
+    context.globalAlpha = focusOpacity(1, style.focused, palette);
+    context.font = `600 15px ${SANS_FONT}`;
+    context.fillText(fitCanvasText(context, name, textW), textX, node.sub || trouble ? hy - 8 : hy);
+
+    const detail = trouble ? probe!.status : node.sub;
+    if (detail) {
+      context.fillStyle = trouble ? palette.destructive : style.subColor;
+      context.globalAlpha = focusOpacity(1, style.focused, palette);
+      context.font = `12px ${MONO_FONT}`;
+      context.fillText(fitCanvasText(context, detail, textW), textX, hy + 11);
+    }
+
+    if (!canOpen) return;
+    // The toggle: a caret pointing right when shut, down when open.
+    const open = nodeOpen(node);
+    const cx = bounds.right - TOGGLE_INSET;
+    context.strokeStyle = style.subColor;
+    context.globalAlpha = focusOpacity(0.9, style.focused, palette);
+    context.lineWidth = 1.75;
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    context.beginPath();
+    if (open) {
+      context.moveTo(cx - 5, hy - 2.5);
+      context.lineTo(cx, hy + 2.5);
+      context.lineTo(cx + 5, hy - 2.5);
+    } else {
+      context.moveTo(cx - 2.5, hy - 5);
+      context.lineTo(cx + 2.5, hy);
+      context.lineTo(cx - 2.5, hy + 5);
+    }
+    context.stroke();
+    if (!open) return;
+
+    const rowsTop = hy + CONNECTION_CANVAS.nodeHalfHeight;
+    context.strokeStyle = style.stroke;
+    context.globalAlpha = focusOpacity(0.25, style.focused, palette);
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(bounds.left + 12, rowsTop);
+    context.lineTo(bounds.right - 12, rowsTop);
+    context.stroke();
+    node.details!.forEach(([label, value], i) => {
+      const y = rowsTop + 8 + DETAIL_ROW * (i + 0.5);
+      context.textAlign = "left";
+      context.font = `12px ${MONO_FONT}`;
+      context.fillStyle = style.subColor;
+      context.globalAlpha = focusOpacity(1, style.focused, palette);
+      context.fillText(label, bounds.left + 14, y);
+      const labelW = textWidth(context, label);
+      context.textAlign = "right";
+      context.font = `500 13px ${SANS_FONT}`;
+      context.fillStyle = style.titleColor;
+      context.fillText(
+        fitCanvasText(context, value, bounds.right - bounds.left - 42 - labelW),
+        bounds.right - 14,
+        y,
+      );
+    });
+  }
+
+  // Cut text by font, width and string: measuring is the dearest part of a
+  // frame, and labels hardly ever change between frames.
+  // Keyed font, then width, then text: nested so a hit allocates nothing.
+  const fittedText = new Map<string, Map<number, Map<string, string>>>();
+  const widths = new Map<string, Map<string, number>>();
+  let cached = 0;
+
+  /** The text, cut with an ellipsis to fit a width in the current font. */
+  function fitCanvasText(context: CanvasRenderingContext2D, text: string, width: number): string {
+    const w = Math.round(width);
+    let byWidth = fittedText.get(context.font);
+    if (!byWidth) fittedText.set(context.font, (byWidth = new Map()));
+    let byText = byWidth.get(w);
+    if (!byText) byWidth.set(w, (byText = new Map()));
+    let fitted = byText.get(text);
+    if (fitted === undefined) {
+      if (++cached > 8000) {
+        fittedText.clear();
+        widths.clear();
+        cached = 0;
+      }
+      fitted = measureFit(context, text, width);
+      byText.set(text, fitted);
+    }
+    return fitted;
+  }
+
+  function textWidth(context: CanvasRenderingContext2D, text: string): number {
+    let byText = widths.get(context.font);
+    if (!byText) widths.set(context.font, (byText = new Map()));
+    let width = byText.get(text);
+    if (width === undefined) {
+      cached += 1;
+      width = context.measureText(text).width;
+      byText.set(text, width);
+    }
+    return width;
+  }
+
+  function measureFit(context: CanvasRenderingContext2D, text: string, width: number): string {
+    if (context.measureText(text).width <= width) return text;
+    let lo = 0;
+    let hi = text.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (context.measureText(`${text.slice(0, mid)}…`).width <= width) lo = mid;
+      else hi = mid - 1;
+    }
+    return `${text.slice(0, Math.max(1, lo))}…`;
   }
 
   function drawBucketNodeContent(

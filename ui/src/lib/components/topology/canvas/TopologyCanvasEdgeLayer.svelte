@@ -17,6 +17,17 @@
 
   const MONO_FONT = '"JetBrains Mono Variable", "SF Mono", ui-monospace, monospace';
   const pathCache = new Map<string, Path2D>();
+  const gradients = new Map<string, CanvasGradient>();
+  // Line colours for function-to-service routes, [light, dark]: picked to
+  // stand apart from each other and from the kind colours on the cards.
+  const TUBE_LINES: Array<[string, string]> = [
+    ["#0b72d9", "#4ea3ff"],
+    ["#c2410c", "#fb923c"],
+    ["#7c3aed", "#a78bfa"],
+    ["#0f766e", "#2dd4bf"],
+    ["#be185d", "#f472b6"],
+    ["#4d7c0f", "#a3e635"],
+  ];
   const PATH_CACHE_LIMIT = 4096;
 
   let {
@@ -40,35 +51,31 @@
     context.translate(viewportTransform.offsetX, viewportTransform.offsetY);
     context.scale(viewportTransform.scale, viewportTransform.scale);
 
+    // Out to services, each function's lines are a tube line of their own
+    // colour; whether a service is up shows at its card, so a line to one
+    // that's down is fainter rather than a different colour.
     for (const edge of model.edges.functionToInfra) {
-      const probe = edge.probe;
       const isConnected = edge.isConnected;
-      const infraColor = isConnected
-        ? infraKindColor(probe?.kind ?? "", palette)
-        : palette.chart5;
       const isActive = !!edge.activity && isConnected;
       const isFocused = isEdgeFocused(edge.id);
-
-      const grad = isActive && edge.activity?.hasError
-        ? null
-        : makeEdgeGradient(context, edge.from, edge.to, kindColor("function", palette), infraColor);
+      const line = TUBE_LINES[(edge.lane ?? 0) % TUBE_LINES.length][palette.isDark ? 1 : 0];
 
       drawPath(context, edge.path, {
-        stroke: isActive && edge.activity?.hasError ? palette.destructive : (grad ?? infraColor),
-        width: activityWidth(isActive ? edge.activity : undefined, 1.0),
+        stroke: isActive && edge.activity?.hasError ? palette.destructive : line,
+        width: activityWidth(isActive ? edge.activity : undefined, px(2.4, 4)),
         opacity: focusOpacity(
-          activityOpacity(isActive ? edge.activity : undefined, isConnected ? 0.6 : 0.3),
+          activityOpacity(isActive ? edge.activity : undefined, isConnected ? 0.85 : 0.4),
           isFocused,
           palette,
         ),
-        dash: isActive ? [6, 3] : isConnected ? [] : [5, 4],
+        dash: isActive ? [6, 3] : [],
         animateDash: activityAnimationsEnabled && isActive,
         time,
       });
 
       if (isActive && edge.activity) {
         context.save();
-        context.fillStyle = infraColor;
+        context.fillStyle = line;
         context.globalAlpha = focusOpacity(0.76, isFocused, palette);
         context.font = `6.5px ${MONO_FONT}`;
         context.textAlign = "center";
@@ -87,7 +94,7 @@
         stroke: isErr
           ? palette.destructive
           : makeEdgeGradient(context, edge.from, edge.to, kindColor("gateway", palette), kindColor("queue", palette)),
-        width: activityWidth(edge.activity, edge.active ? 1.45 : 1.2),
+        width: activityWidth(edge.activity, px(1.8, 2.75)),
         opacity: focusOpacity(activityOpacity(edge.activity, edge.active ? 0.74 : 0.5), isFocused, palette),
         dash: edge.activity ? [6, 3] : edge.active ? [] : [5, 3],
         animateDash: activityAnimationsEnabled && !!edge.activity,
@@ -102,7 +109,7 @@
         stroke: isErr
           ? palette.destructive
           : makeEdgeGradient(context, edge.from, edge.to, kindColor("gateway", palette), kindColor("function", palette)),
-        width: activityWidth(edge.activity, edge.active ? 1.45 : 1.2),
+        width: activityWidth(edge.activity, px(1.8, 2.75)),
         opacity: focusOpacity(activityOpacity(edge.activity, edge.active ? 0.82 : 0.58), isFocused, palette),
         dash: edge.activity ? [6, 3] : [],
         animateDash: activityAnimationsEnabled && !!edge.activity,
@@ -133,9 +140,9 @@
         stroke: isErr
           ? palette.destructive
           : makeEdgeGradient(context, edge.from, edge.to, kindColor("eventbridge", palette), kindColor("function", palette)),
-        width: activityWidth(edge.activity, 1.25),
+        width: activityWidth(edge.activity, px(1.8, 2.75)),
         opacity: focusOpacity(activityOpacity(edge.activity, 0.7), isFocused, palette),
-        dash: edge.activity ? [6, 3] : [5, 4],
+        dash: edge.activity ? [6, 3] : [],
         animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
@@ -148,9 +155,9 @@
         stroke: isErr
           ? palette.destructive
           : makeEdgeGradient(context, edge.from, edge.to, kindColor("topic", palette), kindColor("queue", palette)),
-        width: activityWidth(edge.activity, 1.3),
+        width: activityWidth(edge.activity, px(1.8, 2.75)),
         opacity: focusOpacity(activityOpacity(edge.activity, 0.7), isFocused, palette),
-        dash: edge.activity ? [6, 3] : [5, 4],
+        dash: edge.activity ? [6, 3] : [],
         animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
@@ -163,9 +170,9 @@
         stroke: isErr
           ? palette.destructive
           : makeEdgeGradient(context, edge.from, edge.to, kindColor("topic", palette), kindColor("function", palette)),
-        width: activityWidth(edge.activity, 1.3),
+        width: activityWidth(edge.activity, px(1.8, 2.75)),
         opacity: focusOpacity(activityOpacity(edge.activity, 0.76), isFocused, palette),
-        dash: edge.activity ? [6, 3] : [5, 4],
+        dash: edge.activity ? [6, 3] : [],
         animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
@@ -178,7 +185,7 @@
         stroke: isErr
           ? palette.destructive
           : makeEdgeGradient(context, edge.from, edge.to, kindColor("queue", palette), kindColor("function", palette)),
-        width: activityWidth(edge.activity, 1.35),
+        width: activityWidth(edge.activity, px(1.8, 2.75)),
         opacity: focusOpacity(activityOpacity(edge.activity, 0.72), isFocused, palette),
         dash: edge.activity ? [6, 3] : [],
         animateDash: activityAnimationsEnabled && !!edge.activity,
@@ -218,9 +225,9 @@
         stroke: isErr
           ? palette.destructive
           : makeEdgeGradient(context, edge.from, edge.to, kindColor("dynamodb", palette), kindColor("function", palette)),
-        width: activityWidth(edge.activity, 1.35),
+        width: activityWidth(edge.activity, px(1.8, 2.75)),
         opacity: focusOpacity(activityOpacity(edge.activity, 0.72), isFocused, palette),
-        dash: edge.activity ? [6, 3] : [5, 4],
+        dash: edge.activity ? [6, 3] : [],
         animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
@@ -242,7 +249,7 @@
       const isFocused = isEdgeFocused(edge.id);
       drawPath(context, edge.path, {
         stroke: palette.destructive,
-        width: activityWidth(edge.activity, 1.2),
+        width: activityWidth(edge.activity, px(1.4, 2)),
         opacity: focusOpacity(activityOpacity(edge.activity, 0.45), isFocused, palette),
         dash: edge.activity ? [5, 2] : [3, 3],
         animateDash: activityAnimationsEnabled && !!edge.activity,
@@ -268,9 +275,9 @@
     for (const edge of model.edges.bucketToFunction) {
       drawPath(context, edge.path, {
         stroke: makeEdgeGradient(context, edge.from, edge.to, kindColor("bucket", palette), kindColor("function", palette)),
-        width: 1.35,
+        width: px(1.8, 2.75),
         opacity: focusOpacity(0.68, isEdgeFocused(edge.id), palette),
-        dash: [4, 3],
+        dash: [],
       });
     }
 
@@ -280,24 +287,33 @@
         stroke: isErr
           ? palette.destructive
           : makeEdgeGradient(context, edge.from, edge.to, kindColor("function", palette), kindColor("dynamodb", palette)),
-        width: activityWidth(edge.activity, 1.1),
-        opacity: focusOpacity(activityOpacity(edge.activity, 0.5), isEdgeFocused(edge.id), palette),
-        dash: edge.activity ? [6, 3] : [4, 4],
+        width: activityWidth(edge.activity, px(2.4, 4)),
+        opacity: focusOpacity(activityOpacity(edge.activity, 0.7), isEdgeFocused(edge.id), palette),
+        dash: edge.activity ? [6, 3] : [],
         animateDash: activityAnimationsEnabled && !!edge.activity,
         time,
       });
     }
 
-    for (const edge of model.edges.functionToCache) {
-      const isErr = !!edge.activity?.hasError;
-      drawPath(context, edge.path, {
-        stroke: isErr
-          ? palette.destructive
-          : makeEdgeGradient(context, edge.from, edge.to, kindColor("function", palette), kindColor("extension", palette)),
-        width: activityWidth(edge.activity, 1.1),
-        opacity: focusOpacity(activityOpacity(edge.activity, 0.48), isEdgeFocused(edge.id), palette),
-        dash: edge.activity ? [6, 3] : [5, 4],
-        animateDash: activityAnimationsEnabled && !!edge.activity,
+    // Any function may read any secret through the cache: a bracket in from
+    // the functions, one out to the secrets, not a line for every pair.
+    if (model.cacheBus?.in) {
+      drawPath(context, model.cacheBus.in, {
+        stroke: kindColor("extension", palette),
+        width: px(2.4, 4),
+        opacity: focusOpacity(0.65, model.edges.functionToCache.some((edge) => isEdgeFocused(edge.id)), palette),
+        dash: [],
+        animateDash: false,
+        time,
+      });
+    }
+    if (model.cacheBus?.out) {
+      drawPath(context, model.cacheBus.out, {
+        stroke: kindColor("secret", palette),
+        width: px(2, 3),
+        opacity: focusOpacity(0.7, model.edges.cacheToSecret.some((edge) => isEdgeFocused(edge.id)), palette),
+        dash: [],
+        animateDash: false,
         time,
       });
     }
@@ -319,26 +335,17 @@
       context.restore();
     }
 
-    for (const edge of model.edges.cacheToSecret) {
-      const isErr = !!edge.activity?.hasError;
-      drawPath(context, edge.path, {
-        stroke: isErr
-          ? palette.destructive
-          : makeEdgeGradient(context, edge.from, edge.to, kindColor("extension", palette), kindColor("secret", palette)),
-        width: activityWidth(edge.activity, 1.2),
-        opacity: focusOpacity(
-          activityOpacity(edge.activity, 0.58),
-          isEdgeFocused(edge.id),
-          palette,
-        ),
-        dash: edge.activity ? [6, 3] : [],
-        animateDash: activityAnimationsEnabled && !!edge.activity,
-        time,
-      });
-    }
 
     context.restore();
   };
+
+  /**
+   * A width in canvas units that never draws thinner than `screen` pixels,
+   * so lines keep their weight in the zoomed-out, whole-graph view.
+   */
+  function px(units: number, screen: number): number {
+    return Math.max(units, screen / Math.max(0.05, viewportTransform.scale));
+  }
 
   function makeEdgeGradient(
     context: CanvasRenderingContext2D,
@@ -349,9 +356,16 @@
   ): CanvasGradient {
     const start = portPos(from, "output");
     const end   = portPos(to,   "input");
+    // Reused while nothing moves: animating frames would otherwise make a
+    // new gradient for every line, every frame.
+    const key = `${start.x},${start.y},${end.x},${end.y},${fromColor},${toColor}`;
+    const known = gradients.get(key);
+    if (known) return known;
+    if (gradients.size > 2000) gradients.clear();
     const grad = context.createLinearGradient(start.x, start.y, end.x, end.y);
     grad.addColorStop(0, fromColor);
     grad.addColorStop(1, toColor);
+    gradients.set(key, grad);
     return grad;
   }
 
@@ -383,15 +397,24 @@
       time?: number;
     },
   ) {
+    const shape = getPath(path);
+    // Dashes grow with the line, so thick lines keep visible gaps.
+    const grow = Math.max(1, options.width / 2);
     context.save();
+    context.lineCap = "round";
+    context.lineJoin = "round";
+    // A casing in the background colour first, like a metro map, so
+    // where lines cross each one reads clearly over the other.
+    context.strokeStyle = palette.background;
+    context.lineWidth = options.width + px(2, 3);
+    context.globalAlpha = Math.min(1, options.opacity * 1.4);
+    context.stroke(shape);
     context.strokeStyle = options.stroke as string;
     context.lineWidth = options.width;
     context.globalAlpha = options.opacity;
-    context.lineCap = "round";
-    context.lineJoin = "round";
-    context.setLineDash(options.dash ?? []);
-    context.lineDashOffset = options.animateDash ? -((options.time ?? 0) / 90) : 0;
-    context.stroke(getPath(path));
+    context.setLineDash((options.dash ?? []).map((d) => d * grow));
+    context.lineDashOffset = options.animateDash ? -((options.time ?? 0) / 90) * grow : 0;
+    context.stroke(shape);
     context.restore();
   }
 

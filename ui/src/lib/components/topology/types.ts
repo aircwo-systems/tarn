@@ -44,4 +44,8 @@ export type ConnectionNode = {
   view?: NodeView;
   /** Aggregate bucket preview data for bucket-specific views. */
   bucket?: BucketSummary;
+  /** Label and value pairs shown when the card is opened. */
+  details?: Array<[string, string]>;
+  /** Opened to show its details. */
+  expanded?: boolean;
 };

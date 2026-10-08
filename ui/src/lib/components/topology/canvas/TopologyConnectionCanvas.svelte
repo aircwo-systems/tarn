@@ -20,6 +20,9 @@
     CONNECTION_CANVAS,
     computeViewportTransform,
     findNodeAt,
+    findSectionHeaderAt,
+    framesCollide,
+    onNodeToggle,
     hoverFocusState,
     nodeBounds,
     resolveSnappedNodePosition,
@@ -27,6 +30,7 @@
     type InfraNodePosition,
     type NodeOverride,
     type TopologyGraphModel,
+    type TopologySection,
     type ViewportTransform,
   } from "../topology-connection-model";
   // Alias — all node kinds use the same position shape
@@ -51,6 +55,7 @@
     selectedTrace = null,
     canvasExpanded = false,
     panEnabled = false,
+    bare = false,
     viewportResetToken = 0,
     onGatewayClick = (_id: string) => {},
     onNodeHover = (_payload: TopologyNodeHoverPayload) => {},
@@ -61,12 +66,16 @@
       _position: NodePosition,
     ) => {},
     onNodeOverrideChange = (_id: string, _override: NodeOverride) => {},
+    onSectionOrderChange = (_sectionId: string, _keys: string[]) => {},
+    onSectionMove = (_sectionId: string, _offset: NodePosition) => {},
     onNavigate = (_tab: string) => {},
   }: {
     model: TopologyGraphModel;
     selectedTrace?: RequestTrace | null;
     canvasExpanded?: boolean;
     panEnabled?: boolean;
+    /** drawn edge to edge, without its own border */
+    bare?: boolean;
     viewportResetToken?: number;
     onGatewayClick?: (id: string) => void;
     onNodeHover?: (payload: TopologyNodeHoverPayload) => void;
@@ -77,6 +86,10 @@
       position: NodePosition,
     ) => void;
     onNodeOverrideChange?: (id: string, override: NodeOverride) => void;
+    /** A card dropped into a new place in its section: the section's new order. */
+    onSectionOrderChange?: (sectionId: string, keys: string[]) => void;
+    /** A section dragged by its header: how far it now sits from its layout spot. */
+    onSectionMove?: (sectionId: string, offset: NodePosition) => void;
     onNavigate?: (tab: string) => void;
   } = $props();
 
@@ -93,6 +106,12 @@
         originPositions: Record<string, NodePosition>;
         latestPositions: Record<string, NodePosition>;
         dragging: boolean;
+        /** Moving a whole section by its header. */
+        section?: TopologySection;
+        /** Sections already overlapped when the drag began, so it isn't held back. */
+        tangled?: boolean;
+        /** Moving a card within its section: the section, its order and slots. */
+        reorder?: { section: TopologySection; order: string[]; slots: NodePosition[] };
       }
     | {
         kind: "press";
@@ -101,6 +120,9 @@
         targetNodeKind: ConnectionNode["kind"] | null;
         startClientX: number;
         startClientY: number;
+        /** where the pointer was last seen, to pan by how far it moved since */
+        lastClientX: number;
+        lastClientY: number;
         moved: boolean;
       };
 
@@ -125,6 +147,8 @@
     }),
   );
   let canvasContainer = $state<HTMLDivElement | null>(null);
+  let canvasVisible = $state(false);
+  let pageVisible = $state(true);
   let pointerInteraction = $state<PointerInteraction>({ kind: "idle" });
   let appliedViewportResetToken = $state(0);
   let placementConfirmation = $state<{
@@ -182,7 +206,9 @@
   const hoverFocus = $derived(hoverFocusState(model, hoveredNodeId));
   const activeDragKeys = $derived(
     pointerInteraction.kind === "infra" && pointerInteraction.dragging
-      ? pointerInteraction.dragKeys
+      ? pointerInteraction.reorder
+        ? [nodeKey(pointerInteraction.anchorNodeKind, pointerInteraction.anchorNodeId)]
+        : pointerInteraction.dragKeys
       : [],
   );
   const activityAnimationsEnabled = $derived(
@@ -204,8 +230,20 @@
   const canZoomOut = $derived(viewportTransform.scale > minZoomScale + 0.001);
   const canZoomIn = $derived(viewportTransform.scale < maxZoomScale - 0.001);
   const hoveredNode = $derived(findNodeById(model, hoveredNodeId));
+  const panning = $derived(
+    pointerInteraction.kind === "press" && pointerInteraction.moved && !pointerInteraction.targetNodeId,
+  );
+  let hoveredHeader = $state(false);
+  let menuOpen = $state(false);
+  let hoveredToggle = $state(false);
   const overlayCursor = $derived(
-    canvasExpanded && hoveredNode ? "grab" : "default",
+    hoveredToggle
+      ? "pointer"
+      : canvasExpanded && panning
+      ? "grabbing"
+      : canvasExpanded && (hoveredNode || hoveredHeader)
+        ? "grab"
+        : "default",
   );
   const selectedNodeCount = $derived(selectedNodeKeys.size);
 
@@ -237,6 +275,17 @@
       attributes: true,
       attributeFilter: ["class", "style", "data-theme"],
     });
+    // Home keeps its map below the fold. Polls and trace animations must not
+    // paint it until it is actually visible, including inside a scroll pane.
+    const visibilityObserver = new IntersectionObserver(([entry]) => {
+      canvasVisible = entry?.isIntersecting ?? false;
+    });
+    if (canvasContainer) visibilityObserver.observe(canvasContainer);
+    const handleVisibilityChange = () => {
+      pageVisible = !document.hidden;
+    };
+    handleVisibilityChange();
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("keydown", handleWindowKeyDown);
 
     return () => {
@@ -244,6 +293,8 @@
       clearPlacementConfirmation();
       clearPendingHoverFrame();
       observer.disconnect();
+      visibilityObserver.disconnect();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("keydown", handleWindowKeyDown);
     };
   });
@@ -267,17 +318,38 @@
     const point = canvasPointFromPointer(event);
     const matched = point ? findNodeAt(model, point.x, point.y) : null;
 
+    // The caret on a card opens or shuts its details.
+    if (matched && point && onNodeToggle(matched, point.x, point.y)) {
+      onNodeOverrideChange(`${matched.kind}:${matched.id}`, { expanded: !matched.expanded });
+      event.preventDefault();
+      return;
+    }
+
     if (canvasExpanded && matched && !event.shiftKey) {
       const matchedKey = nodeKey(matched.kind, matched.id);
-      const dragKeys =
-        selectedNodeKeys.has(matchedKey) && selectedNodeKeys.size > 0
+      // A card in a section is carried alone and drops into a slot there;
+      // its neighbours make room as it goes.
+      const home = model.sections.find((section) => section.nodeKeys.includes(matchedKey));
+      const reorder = home
+        ? {
+            section: home,
+            order: [...home.nodeKeys],
+            slots: home.nodeKeys.map((key) => {
+              const node = model.nodeByGraphKey.get(key);
+              return { x: node?.x ?? 0, y: node?.y ?? 0 };
+            }),
+          }
+        : undefined;
+      const dragKeys = reorder
+        ? reorder.order
+        : selectedNodeKeys.has(matchedKey) && selectedNodeKeys.size > 0
           ? [...selectedNodeKeys]
           : [matchedKey];
       const originPositions = collectNodePositions(dragKeys, matched);
       if (!selectedNodeKeys.has(matchedKey) || selectedNodeKeys.size === 0) {
         selectedNodeKeys = new Set([matchedKey]);
       }
-      canvasContainer.setPointerCapture?.(event.pointerId);
+      capture(event);
       handleCanvasNodeLeave();
       pointerInteraction = {
         kind: "infra",
@@ -290,6 +362,37 @@
         originPositions,
         latestPositions: originPositions,
         dragging: false,
+        reorder,
+        tangled: !reorder && framesCollide(model, originPositions),
+      };
+      event.preventDefault();
+      return;
+    }
+
+    // A section's header picks up the whole section.
+    const header =
+      canvasExpanded && !matched && !event.shiftKey && point
+        ? findSectionHeaderAt(model, point.x, point.y)
+        : null;
+    const anchor = header ? parseNodeKey(header.nodeKeys[0] ?? "") : null;
+    if (header && anchor) {
+      const originPositions = collectNodePositions(header.nodeKeys);
+      selectedNodeKeys = new Set();
+      capture(event);
+      handleCanvasNodeLeave();
+      pointerInteraction = {
+        kind: "infra",
+        pointerId: event.pointerId,
+        anchorNodeId: anchor.id,
+        anchorNodeKind: anchor.kind,
+        dragKeys: header.nodeKeys,
+        startClientX: event.clientX,
+        startClientY: event.clientY,
+        originPositions,
+        latestPositions: originPositions,
+        dragging: false,
+        section: header,
+        tangled: framesCollide(model, originPositions),
       };
       event.preventDefault();
       return;
@@ -302,6 +405,8 @@
       targetNodeKind: matched?.kind ?? null,
       startClientX: event.clientX,
       startClientY: event.clientY,
+      lastClientX: event.clientX,
+      lastClientY: event.clientY,
       moved: false,
     };
 
@@ -354,7 +459,17 @@
       if (!pointerInteraction.moved) {
         scheduleHoverUpdate(event.clientX, event.clientY);
       } else {
+        // Dragging empty canvas while exploring moves the view.
+        if (panEnabled && !pointerInteraction.targetNodeId) {
+          panViewportBy(
+            event.clientX - pointerInteraction.lastClientX,
+            event.clientY - pointerInteraction.lastClientY,
+          );
+        }
         handleCanvasNodeLeave();
+      }
+      if (pointerInteraction.moved) {
+        pointerInteraction = { ...pointerInteraction, lastClientX: event.clientX, lastClientY: event.clientY };
       }
       return;
     }
@@ -440,6 +555,10 @@
     }
     contextMenuNodeId = matched.id;
     contextMenuNodeKind = matched.kind;
+    // The menu replaces the tooltip; its node stays lit while it's open.
+    clearPendingHoverFrame();
+    onNodeLeave();
+    hoveredNodeId = matched.id;
   }
 
   function handleKeyDown(event: KeyboardEvent) {
@@ -585,6 +704,7 @@
   }
 
   function updateHover(clientX: number, clientY: number) {
+    if (menuOpen) return;
     const point = canvasPointFromClient(clientX, clientY);
     if (
       !point ||
@@ -599,6 +719,8 @@
 
     const matched = findNodeAt(model, point.x, point.y);
     hoveredNodeId = matched?.id ?? null;
+    hoveredHeader = canvasExpanded && !matched && !!findSectionHeaderAt(model, point.x, point.y);
+    hoveredToggle = !!matched && onNodeToggle(matched, point.x, point.y);
 
     if (!matched) {
       onNodeLeave();
@@ -635,9 +757,18 @@
     );
   }
 
+  // The pointer stays with the surface it went down on (the one with the
+  // move and up handlers), so a drag keeps going past the card's edge.
+  let captor: Element | null = null;
+  function capture(event: PointerEvent) {
+    captor = event.currentTarget as Element;
+    captor.setPointerCapture?.(event.pointerId);
+  }
+
   function releasePointer(pointerId: number) {
-    if (!canvasContainer?.hasPointerCapture?.(pointerId)) return;
-    canvasContainer.releasePointerCapture(pointerId);
+    if (!captor?.hasPointerCapture?.(pointerId)) return;
+    captor.releasePointerCapture(pointerId);
+    captor = null;
   }
 
   function scheduleDragSettle() {
@@ -664,11 +795,35 @@
     releasePointer(interaction.pointerId);
     pointerInteraction = { kind: "idle" };
     const anchorKey = nodeKey(interaction.anchorNodeKind, interaction.anchorNodeId);
-    selectedNodeKeys =
-      interaction.dragging && interaction.dragKeys.length > 1
+    selectedNodeKeys = interaction.section
+      ? new Set()
+      : interaction.reorder
         ? new Set([anchorKey])
-        : new Set(interaction.dragKeys);
-    if (interaction.dragging) {
+        : interaction.dragging && interaction.dragKeys.length > 1
+          ? new Set([anchorKey])
+          : new Set(interaction.dragKeys);
+    if (interaction.dragging && interaction.reorder) {
+      const { section, order, slots } = interaction.reorder;
+      const anchor = interaction.latestPositions[anchorKey];
+      const next = anchor ? reorderTo(order, anchorKey, slots, anchor) : order;
+      // Settle the carried card into its slot.
+      applyPreviewNodePositions(
+        model,
+        Object.fromEntries(next.map((key, i) => [key, slots[i]])),
+      );
+      if (next.some((key, i) => key !== order[i])) onSectionOrderChange(section.id, next);
+      triggerPlacementConfirmation([anchorKey]);
+    } else if (interaction.dragging && interaction.section) {
+      const origin = interaction.originPositions[anchorKey];
+      const latest = interaction.latestPositions[anchorKey];
+      applyPreviewNodePositions(model, interaction.latestPositions);
+      if (origin && latest) {
+        onSectionMove(interaction.section.id, {
+          x: interaction.section.offset.x + latest.x - origin.x,
+          y: interaction.section.offset.y + latest.y - origin.y,
+        });
+      }
+    } else if (interaction.dragging) {
       applyPreviewNodePositions(model, interaction.latestPositions);
       for (const key of interaction.dragKeys) {
         const parsed = parseNodeKey(key);
@@ -679,7 +834,7 @@
       triggerPlacementConfirmation(interaction.dragKeys);
     } else {
       if (
-        interaction.dragKeys.length === 1 &&
+        (interaction.reorder || interaction.dragKeys.length === 1) &&
         interaction.anchorNodeKind === "gateway"
       ) {
         onGatewayClick(interaction.anchorNodeId);
@@ -777,7 +932,64 @@
     return positions;
   }
 
+  /**
+   * Where a drag puts things, held short of pushing one section's frame
+   * into another: it slides along whichever axis is still free.
+   */
   function resolveDraggedPositions(
+    interaction: Extract<PointerInteraction, { kind: "infra" }>,
+    deltaX: number,
+    deltaY: number,
+  ): Record<string, NodePosition> {
+    const anchorKey = nodeKey(interaction.anchorNodeKind, interaction.anchorNodeId);
+    if (interaction.reorder) {
+      const { order, slots } = interaction.reorder;
+      const start = interaction.originPositions[anchorKey];
+      if (!start) return interaction.latestPositions;
+      const carried = { x: start.x + deltaX, y: start.y + deltaY };
+      const next = reorderTo(order, anchorKey, slots, carried);
+      const positions = Object.fromEntries(next.map((key, i) => [key, slots[i]]));
+      positions[anchorKey] = carried;
+      return positions;
+    }
+    const origin = interaction.originPositions[anchorKey];
+    const latest = interaction.latestPositions[anchorKey];
+    const lastX = origin && latest ? latest.x - origin.x : 0;
+    const lastY = origin && latest ? latest.y - origin.y : 0;
+    // Already tangled (say, from an older saved layout): don't trap it.
+    if (interaction.tangled) {
+      return moveDragged(interaction, deltaX, deltaY);
+    }
+    for (const [x, y] of [
+      [deltaX, deltaY],
+      [deltaX, lastY],
+      [lastX, deltaY],
+    ]) {
+      const next = moveDragged(interaction, x, y);
+      if (!framesCollide(model, next)) return next;
+    }
+    return interaction.latestPositions;
+  }
+
+  /** The order with `key` moved to whichever slot is nearest `at`. */
+  function reorderTo(
+    order: string[],
+    key: string,
+    slots: NodePosition[],
+    at: NodePosition,
+  ): string[] {
+    let nearest = 0;
+    let best = Infinity;
+    slots.forEach((slot, i) => {
+      const d = (slot.x - at.x) ** 2 + (slot.y - at.y) ** 2;
+      if (d < best) [best, nearest] = [d, i];
+    });
+    const rest = order.filter((k) => k !== key);
+    rest.splice(nearest, 0, key);
+    return rest;
+  }
+
+  function moveDragged(
     interaction: Extract<PointerInteraction, { kind: "infra" }>,
     deltaX: number,
     deltaY: number,
@@ -936,8 +1148,8 @@
 
 <div
   bind:this={canvasContainer}
-  class={`relative h-full min-h-0 w-full overflow-hidden border border-border/70 bg-card/30 shadow-inner ${
-    canvasExpanded ? "rounded-xl" : "rounded-lg"
+  class={`relative h-full min-h-0 w-full overflow-hidden bg-card/30 ${
+    bare ? "" : `border border-border/70 shadow-inner ${canvasExpanded ? "rounded-xl" : "rounded-lg"}`
   }`}
   onwheel={handleWheel}
 >
@@ -996,10 +1208,10 @@
     {/if}
   {/if}
 
+  {#if canvasVisible && pageVisible}
   <Canvas
     bind:redraw
     class="h-full"
-    layerEvents={true}
     autoplay={shouldAnimate}
     onresize={handleResize}
   >
@@ -1023,9 +1235,10 @@
       {placementConfirmation}
     />
   </Canvas>
+  {/if}
 
   {#if canvasExpanded}
-    <ContextMenu.Root>
+    <ContextMenu.Root bind:open={menuOpen}>
       <ContextMenu.Trigger
         class="absolute inset-0 z-10 touch-none block"
         role="presentation"

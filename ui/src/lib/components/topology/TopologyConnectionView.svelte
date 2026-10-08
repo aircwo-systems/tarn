@@ -19,10 +19,10 @@
     withTopologyTraceActivity,
     type InfraNodePosition,
     type NodeOverride,
+    type TopologyArrangement,
   } from "./topology-connection-model";
   import { infraKindCssVar } from "./topology-canvas-theme";
   import TopologyConnectionCanvas from "./canvas/TopologyConnectionCanvas.svelte";
-  import TopologyNodeTooltip from "./canvas/TopologyNodeTooltip.svelte";
 
   let {
     gateways = [],
@@ -42,8 +42,12 @@
     recentTraces = [],
     canvasExpanded = false,
     panEnabled = false,
+    bare = false,
     viewportResetToken = 0,
     onGatewayClick = (_id: string) => {},
+    arrangement = {},
+    onSectionOrderChange = (_sectionId: string, _keys: string[]) => {},
+    onSectionMove = (_sectionId: string, _offset: InfraNodePosition) => {},
     onNodePositionChange = (
       _id: string,
       _kind: ConnectionNode["kind"],
@@ -69,8 +73,13 @@
     recentTraces?: RequestTrace[];
     canvasExpanded?: boolean;
     panEnabled?: boolean;
+    bare?: boolean;
     viewportResetToken?: number;
     onGatewayClick?: (id: string) => void;
+    /** The user's card order and section moves; see TopologyArrangement. */
+    arrangement?: TopologyArrangement;
+    onSectionOrderChange?: (sectionId: string, keys: string[]) => void;
+    onSectionMove?: (sectionId: string, offset: InfraNodePosition) => void;
     onNodePositionChange?: (
       id: string,
       kind: ConnectionNode["kind"],
@@ -79,6 +88,17 @@
     onNodeOverrideChange?: (id: string, override: NodeOverride) => void;
     onNavigate?: (tab: string) => void;
   } = $props();
+
+  // The layout fills the shape of the view it sits in. Coarse steps, and
+  // held while exploring, so resizing doesn't keep reshuffling the graph.
+  let frameW = $state(0);
+  let frameH = $state(0);
+  let aspect = $state<number | undefined>(undefined);
+  $effect(() => {
+    if (canvasExpanded || frameW < 200 || frameH < 200) return;
+    const next = Math.round((frameH / frameW) * 10) / 10;
+    if (next !== aspect) aspect = next;
+  });
 
   const staticModel = $derived(
     buildTopologyGraph({
@@ -96,107 +116,32 @@
       infraConnections,
       eventBridgeRules,
       infraOrderIds,
+      aspect,
+      arrangement,
     }),
   );
   const model = $derived(withTopologyTraceActivity(staticModel, recentTraces));
   const selectedTrace: RequestTrace | null = null;
 
-  type TooltipState = {
-    visible: boolean;
-    x: number;
-    y: number;
-    title: string;
-    detail: string;
-    status: string;
-    color: string;
-  };
-
-  let tooltip = $state<TooltipState>({
-    visible: false,
-    x: 0,
-    y: 0,
-    title: "",
-    detail: "",
-    status: "",
-    color: "var(--color-primary)",
-  });
-
-  function handleNodeHover(payload: {
-    node: ConnectionNode;
-    clientX: number;
-    clientY: number;
-  }) {
-    tooltip = {
-      visible: true,
-      x: payload.clientX,
-      y: payload.clientY,
-      title: payload.node.label,
-      detail: payload.node.kind.toUpperCase(),
-      status:
-        payload.node.kind === "infra"
-          ? payload.node.status === "connected"
-            ? "CONNECTED"
-            : "DISCONNECTED"
-          : "ACTIVE",
-      color: nodeColor(payload.node),
-    };
-  }
-
-  function handleNodeLeave() {
-    tooltip.visible = false;
-  }
-
-  function nodeColor(node: ConnectionNode): string {
-    switch (node.kind) {
-      case "gateway":
-        return "var(--topology-gateway)";
-      case "queue":
-        return "var(--color-chart-4)";
-      case "dynamodb":
-        return "var(--topology-dynamodb)";
-      case "eventbridge":
-        return "var(--color-chart-5, var(--color-primary))";
-      case "topic":
-        return "var(--color-chart-1)";
-      case "function":
-        return "var(--color-primary)";
-      case "secret":
-      case "extension":
-        return "var(--color-chart-2)";
-      case "bucket":
-        return "var(--color-chart-5, var(--color-primary))";
-      case "infra": {
-        if (node.status !== "connected") return "var(--color-destructive)";
-        return infraKindCssVar(model.infraById.get(node.id)?.kind ?? "");
-      }
-      default:
-        return "var(--color-primary)";
-    }
-  }
 </script>
 
-<div class="h-full w-full overflow-hidden overscroll-contain">
+<div
+  class="h-full w-full overflow-hidden overscroll-contain"
+  bind:clientWidth={frameW}
+  bind:clientHeight={frameH}
+>
   <TopologyConnectionCanvas
     {model}
     {selectedTrace}
     {canvasExpanded}
     {panEnabled}
+    {bare}
     {viewportResetToken}
     {onGatewayClick}
     {onNodePositionChange}
     {onNodeOverrideChange}
+    {onSectionOrderChange}
+    {onSectionMove}
     {onNavigate}
-    onNodeHover={handleNodeHover}
-    onNodeLeave={handleNodeLeave}
-  />
-
-  <TopologyNodeTooltip
-    visible={tooltip.visible}
-    x={tooltip.x}
-    y={tooltip.y}
-    title={tooltip.title}
-    detail={tooltip.detail}
-    status={tooltip.status}
-    color={tooltip.color}
   />
 </div>

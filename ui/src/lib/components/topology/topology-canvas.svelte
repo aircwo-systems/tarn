@@ -4,6 +4,8 @@
     ArrowsOutSimpleIcon,
     CommandIcon,
   } from "phosphor-svelte";
+
+  const isMac = /mac/i.test(navigator.platform);
   import GatewayDetailsPanel from "$lib/components/topology/gateway-details-panel.svelte";
   import {
     getDashboard,
@@ -15,7 +17,7 @@
     InfraNodePosition,
     NodeOverride,
   } from "./topology-connection-model";
-  import type { NodeSide, NodeSize } from "./topology-connection-model";
+  import type { NodeSide, NodeSize, TopologyArrangement } from "./topology-connection-model";
   import { resolveTopologyNodeSize, resolveTopologyNodeView } from "./registry";
   import { normalizeTopologyExternalKind } from "./topology-canvas-theme";
   import TopologyComponentsView from "./TopologyComponentsView.svelte";
@@ -81,10 +83,13 @@
 
   let {
     canvasExpanded = false,
+    bare = false,
     onNavigate = (_tab: string) => {},
     onExpandedChange = (_expanded: boolean) => {},
   }: {
     canvasExpanded?: boolean;
+    /** no toolbar or frame: the host gives it its edges and controls */
+    bare?: boolean;
     onNavigate?: (tab: string) => void;
     onExpandedChange?: (expanded: boolean) => void;
   } = $props();
@@ -100,7 +105,25 @@
   let allOverridesHydrated = $state(false);
 
   const INFRA_ORDER_STORAGE_KEY = "tarn-ui-topology-infra-order-v1";
-  const ALL_POSITIONS_STORAGE_KEY = "tarn-ui-topology-all-positions-v1";
+  // v4: only cards outside any section (the secrets cache) are placed
+  // freely; the rest live in the arrangement, relative to the layout.
+  const ALL_POSITIONS_STORAGE_KEY = "tarn-ui-topology-all-positions-v4";
+  const ARRANGEMENT_STORAGE_KEY = "tarn-ui-topology-arrangement-v1";
+  let arrangement = $state<TopologyArrangement>(readArrangement());
+
+  function readArrangement(): TopologyArrangement {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(ARRANGEMENT_STORAGE_KEY) ?? "{}");
+      return parsed && typeof parsed === "object" ? parsed : {};
+    } catch {
+      return {};
+    }
+  }
+
+  function saveArrangement(next: TopologyArrangement) {
+    arrangement = next;
+    localStorage.setItem(ARRANGEMENT_STORAGE_KEY, JSON.stringify(next));
+  }
   const ALL_OVERRIDES_STORAGE_KEY = "tarn-ui-topology-node-overrides-v1";
   const TOPOLOGY_NODE_KINDS: NodeKind[] = [
     "gateway",
@@ -261,6 +284,7 @@
                 entry.inputSide = candidate.inputSide as NodeSide;
               if (validSides.has(candidate.outputSide as string))
                 entry.outputSide = candidate.outputSide as NodeSide;
+              if (candidate.expanded === true) entry.expanded = true;
               if (kind && validSizes.has(candidate.size as string)) {
                 entry.size = resolveTopologyNodeSize(
                   kind,
@@ -338,12 +362,24 @@
     viewportResetToken += 1;
   }
 
+  /** Back to the fitted view, for hosts that bring their own controls. */
+  export function recentre() {
+    resetCanvasViewport();
+  }
+
   function handleShortcutKeydown(event: KeyboardEvent) {
-    if (!canvasExpanded || viewMode !== "connections") return;
+    if (!canvasExpanded) return;
     if (!(event.metaKey || event.ctrlKey)) return;
     if (isEditableTarget(event.target)) return;
 
     const key = event.key.toLowerCase();
+    // Done exploring (and not the browser's bookmark).
+    if (key === "d") {
+      event.preventDefault();
+      onExpandedChange(false);
+      return;
+    }
+    if (viewMode !== "connections") return;
     if (key === "c") {
       event.preventDefault();
       resetCanvasViewport();
@@ -370,6 +406,7 @@
 
 <div class="h-full w-full min-w-0 flex flex-col">
   <!-- Toolbar — above the bordered canvas area, outside the card -->
+  {#if !bare}
   <div class="flex shrink-0 items-center gap-2 pb-2">
     <span class="font-mono text-[10px] text-muted-foreground/50">
       {viewMode === "components"
@@ -401,11 +438,11 @@
 
       <button
         type="button"
-        class="relative flex h-6 w-6 items-center justify-center rounded text-muted-foreground/60 hover:bg-muted/60 hover:text-foreground transition-colors {canvasExpanded
-          ? ''
-          : 'group'}"
+        class="relative flex items-center justify-center rounded text-muted-foreground/60 hover:bg-muted/60 hover:text-foreground transition-colors {canvasExpanded
+          ? 'min-w-6 h-6 px-1.5 gap-2'
+          : 'group h-6 w-6'}"
         aria-label={canvasExpanded ? "Collapse canvas" : "Expand canvas"}
-        title={canvasExpanded ? "Collapse canvas" : "Expand canvas"}
+        title={canvasExpanded ? "Done (⌘D)" : "Expand canvas"}
         onclick={() => onExpandedChange(!canvasExpanded)}
       >
         {#if !canvasExpanded}
@@ -415,6 +452,7 @@
         {/if}
         {#if canvasExpanded}
           <ArrowsInSimpleIcon size={13} />
+          <span class="font-mono text-[10px] leading-none rounded px-[5px] py-px border border-[color-mix(in_srgb,currentColor_30%,transparent)] opacity-70 aria-hidden" aria-hidden="true">{isMac ? "⌘D" : "Ctrl D"}</span>
         {:else}
           <ArrowsOutSimpleIcon size={13} class="relative" />
         {/if}
@@ -422,8 +460,10 @@
     </div>
   </div>
 
+  {/if}
+
   <!-- Canvas area -->
-  <div class="flex-1 min-h-0 overflow-hidden rounded-md">
+  <div class="flex-1 min-h-0 overflow-hidden {bare ? '' : 'rounded-md'}">
     <div class="flex flex-col lg:flex-row h-full min-h-0">
       <div
         class={`relative min-w-0 flex-1 ${
@@ -465,10 +505,16 @@
             {recentTraces}
             {canvasExpanded}
             {panEnabled}
+            {bare}
             {viewportResetToken}
             onGatewayClick={openGateway}
+            {arrangement}
             onNodePositionChange={setNodePosition}
             onNodeOverrideChange={setNodeOverride}
+            onSectionOrderChange={(id, keys) =>
+              saveArrangement({ ...arrangement, order: { ...arrangement.order, [id]: keys } })}
+            onSectionMove={(id, offset) =>
+              saveArrangement({ ...arrangement, offsets: { ...arrangement.offsets, [id]: offset } })}
             {onNavigate}
           />
         {/if}
