@@ -35,6 +35,52 @@ let handle: ReturnType<typeof setInterval> | null = null;
 let controller: AbortController | null = null;
 let consumers = 0;
 
+function isHidden(): boolean {
+  try {
+    return typeof document !== "undefined" && !!(document as unknown as { hidden?: boolean }).hidden;
+  } catch {
+    return false;
+  }
+}
+
+function beginPolling() {
+  if (handle) return;
+  poll();
+  handle = setInterval(poll, POLL_MS);
+}
+
+function haltPolling() {
+  if (handle) {
+    clearInterval(handle);
+    handle = null;
+  }
+  controller?.abort();
+}
+
+function handleVisibilityChange() {
+  if (consumers === 0) return;
+  // A hidden tab must not poll: stop the interval and drop the in-flight
+  // request, then refresh once when the tab is visible again.
+  if (isHidden()) haltPolling();
+  else beginPolling();
+}
+
+function listenVisibility() {
+  try {
+    document?.addEventListener?.("visibilitychange", handleVisibilityChange);
+  } catch {
+    /* non-DOM runtime: polling stays unconditional */
+  }
+}
+
+function unlistenVisibility() {
+  try {
+    document?.removeEventListener?.("visibilitychange", handleVisibilityChange);
+  } catch {
+    /* ignore */
+  }
+}
+
 async function poll() {
   // Never stack requests: a slow payload aborts rather than piling up.
   controller?.abort();
@@ -53,19 +99,19 @@ async function poll() {
   }
 }
 
-/** Ref-counted start; returns a stop function. */
+/** Ref-counted start; returns an idempotent stop function. */
 export function startLogPulse(): () => void {
   consumers++;
-  if (!handle) {
-    poll();
-    handle = setInterval(poll, POLL_MS);
-  }
+  if (consumers === 1) listenVisibility();
+  if (!isHidden()) beginPolling();
+  let stopped = false;
   return () => {
+    if (stopped) return;
+    stopped = true;
     consumers = Math.max(0, consumers - 1);
-    if (consumers === 0 && handle) {
-      clearInterval(handle);
-      handle = null;
-      controller?.abort();
+    if (consumers === 0) {
+      haltPolling();
+      unlistenVisibility();
     }
   };
 }
