@@ -8,6 +8,9 @@
   import { timeAgo } from "$lib/utils";
   import SectionHeader from "$lib/components/sections/section-header.svelte";
   import AccountDeleteConfirmation from "$lib/components/sections/account-delete-confirmation.svelte";
+  import DitherBand from "$lib/components/home/dither-band.svelte";
+  import { TARN_ART, TARN_MUTE } from "$lib/components/home/tarn-art";
+  import { BANNER_SCENES, BANNER_STYLES, getBannerPrefs, setBannerScene, setBannerStyle, type BannerScene, type BannerStyle } from "$lib/components/home/banner-prefs.svelte";
   import {
     getUISettings,
     getInfraSettings,
@@ -65,11 +68,14 @@
     { id: "accounts",   label: "Accounts" },
     { id: "refresh",    label: "Refresh & retention" },
     { id: "appearance", label: "Appearance" },
+    { id: "banner",     label: "Home banner" },
     { id: "workspace",  label: "Workspace" },
     { id: "infra",      label: "Infrastructure" },
     { id: "integrations", label: "Integrations" },
     { id: "instance",   label: "Instance" },
   ];
+
+  const banner = getBannerPrefs();
 
   // ── Drafts: edits stay local until saved ─────────────────────────
   let pollingInterval = $state(uiSettings.pollingIntervalSeconds);
@@ -80,6 +86,12 @@
   let logRetention    = $state(uiSettings.logRetentionMinutes);
   let enabledKinds    = $state<InfraProbeKind[]>([...infraSettings.enabledKinds]);
   let services        = $state<UserService[]>(infraSettings.userServices.map((svc) => ({ ...svc })));
+  let bannerScene     = $state<BannerScene>(banner.scene);
+  let bannerStyle     = $state<BannerStyle>(banner.style);
+  const bannerSceneIndex = $derived(Math.max(0, BANNER_SCENES.findIndex((s) => s.id === bannerScene)));
+  // The previews show the drafted scene.
+  const bannerLight = $derived(bannerScene === "auto" ? banner.themeLight : bannerScene);
+  const bannerDirty = $derived(bannerScene !== banner.scene || bannerStyle !== banner.style);
 
   function reset() {
     pollingInterval = uiSettings.pollingIntervalSeconds;
@@ -90,17 +102,19 @@
     logRetention    = uiSettings.logRetentionMinutes;
     enabledKinds    = [...infraSettings.enabledKinds];
     services        = infraSettings.userServices.map((svc) => ({ ...svc }));
+    bannerScene     = banner.scene;
+    bannerStyle     = banner.style;
     servicesError   = "";
   }
 
   const draftKey = () => JSON.stringify([
     pollingInterval, themeMode, collapsedSidebarMode, formatDatadogLogs, sanitizeSchemaSourceDir(schemaSourceDir), logRetention,
-    [...enabledKinds].sort(), services,
+    [...enabledKinds].sort(), services, bannerScene, bannerStyle,
   ]);
   const storedKey = () => JSON.stringify([
     uiSettings.pollingIntervalSeconds, uiSettings.themeMode, uiSettings.collapsedSidebarMode, uiSettings.formatDatadogLogs,
     uiSettings.schemaSourceDir, uiSettings.logRetentionMinutes,
-    [...infraSettings.enabledKinds].sort(), infraSettings.userServices,
+    [...infraSettings.enabledKinds].sort(), infraSettings.userServices, banner.scene, banner.style,
   ]);
 
   const dirty = $derived(draftKey() !== storedKey());
@@ -120,8 +134,9 @@
   let savedFlash = $state(false);
   let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
-  async function save() {
-    if (saving) return;
+  /** true once everything is saved */
+  async function save(): Promise<boolean> {
+    if (saving) return false;
     saving = true;
     try {
       // Validated server-side; bail before touching local settings so the draft stays intact.
@@ -131,7 +146,7 @@
       }
     } catch (err) {
       servicesError = err instanceof Error ? err.message : "Could not save services";
-      return;
+      return false;
     } finally {
       saving = false;
     }
@@ -142,10 +157,18 @@
     setSchemaSourceDir(schemaSourceDir);
     setLogRetentionMinutes(logRetention);
     setInfraEnabledKinds(enabledKinds);
+    setBannerScene(bannerScene);
+    setBannerStyle(bannerStyle);
     reset(); // pick up any clamping/normalisation done by the setters
     savedFlash = true;
     clearTimeout(flashTimer);
     flashTimer = setTimeout(() => (savedFlash = false), 1600);
+    return true;
+  }
+
+  // Saved, then off to Home to see the banner as it now is.
+  async function saveAndGoHome() {
+    if (await save()) onNavigate("home");
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -596,6 +619,54 @@
         </div>
       </section>
 
+      <!-- Home banner -->
+      <section id="settings-banner" class="panel">
+        <header>
+          <h2>Home banner</h2>
+          <p>The mountain lake across the top of Home.</p>
+        </header>
+        <div class="setting wrapping-setting">
+          <div class="setting-label">
+            <span>Scene</span>
+            <small>Follow the theme, or keep it day or night.</small>
+          </div>
+          <div class="segmented" role="radiogroup" aria-label="Banner scene">
+            <span class="segmented-pill" aria-hidden="true" style="transform: translateX({bannerSceneIndex * 100}%)"></span>
+            {#each BANNER_SCENES as sc (sc.id)}
+              <button type="button" role="radio" aria-checked={bannerScene === sc.id} class:on={bannerScene === sc.id} onclick={() => (bannerScene = sc.id)}>{sc.label}</button>
+            {/each}
+          </div>
+        </div>
+        <div class="setting stacked">
+          <div class="setting-label">
+            <span>Style</span>
+            <small>How the painting is drawn.</small>
+          </div>
+          <div class="banner-styles" role="radiogroup" aria-label="Banner style">
+            {#each BANNER_STYLES as st (st.id)}
+              <button type="button" role="radio" class="banner-style" class:on={bannerStyle === st.id} aria-checked={bannerStyle === st.id} onclick={() => (bannerStyle = st.id)}>
+                <span class="banner-preview">
+                  {#if st.render}
+                    <DitherBand
+                      src={TARN_ART[bannerLight]}
+                      position={0.5}
+                      fade={0.2}
+                      mute={st.render.mode === "smooth" ? 0 : TARN_MUTE[bannerLight]}
+                      mode={st.render.mode}
+                      cell={st.render.cell}
+                      levels={st.render.levels}
+                      class="banner-preview-band"
+                    />
+                  {/if}
+                </span>
+                <span class="banner-style-label">{st.label}</span>
+                <small>{st.detail}</small>
+              </button>
+            {/each}
+          </div>
+        </div>
+      </section>
+
       <!-- Workspace -->
       <section id="settings-workspace" class="panel">
         <header>
@@ -715,6 +786,9 @@
         <span class="savebar-dot"></span>
         <span class="savebar-text">Unsaved changes</span>
         <button type="button" class="pill pill-btn ghost" onclick={reset}>Discard</button>
+        {#if bannerDirty}
+          <button type="button" class="pill pill-btn secondary" disabled={saving} onclick={saveAndGoHome}>Save and go home</button>
+        {/if}
         <button type="button" class="pill pill-btn primary" disabled={saving} onclick={save}>{saving ? "Saving…" : "Save"} <kbd>⌘S</kbd></button>
       {:else}
         <CheckIcon size={12} weight="bold" class="text-[var(--accent-green)]" />
@@ -849,6 +923,7 @@
   }
   .pill-btn.primary:hover { opacity: 0.88; background: var(--text-primary); color: var(--bg-stage); }
   .pill-btn.ghost { height: 26px; padding: 0 12px; }
+  .pill-btn.secondary { height: 26px; padding: 0 12px; color: var(--text-primary); border-color: var(--border-default); }
   kbd { font: inherit; font-size: 10px; opacity: 0.55; margin-left: 2px; }
 
 
@@ -934,6 +1009,24 @@
   }
   .segmented button:hover { color: var(--text-secondary); }
   .segmented button.on { color: var(--text-primary); }
+
+  /* Home banner */
+  .banner-styles { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 6px; }
+  .banner-style {
+    display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 6px 6px 8px;
+    border-radius: 8px; border: 1px solid transparent; text-align: left;
+    transition: background 120ms ease, border-color 120ms ease, transform 200ms var(--ease-snappy);
+  }
+  .banner-style:hover { background: var(--bg-element-hover); }
+  .banner-style:active { transform: scale(0.96); }
+  .banner-style.on { background: var(--bg-element); border-color: var(--border-default); }
+  .banner-preview {
+    position: relative; display: block; width: 100%; height: 64px; margin-bottom: 4px; overflow: hidden;
+    border-radius: 6px; border: 1px solid var(--border-subtle); background: var(--bg-stage);
+  }
+  .banner-preview :global(.banner-preview-band) { position: absolute; inset: 0; }
+  .banner-style-label { font-size: 12px; color: var(--text-primary); }
+  .banner-style small { font-size: 10.5px; color: var(--text-tertiary); }
 
   /* KV */
   .kv { display: grid; grid-template-columns: 7rem 1fr; row-gap: 6px; font-size: 12px; }
