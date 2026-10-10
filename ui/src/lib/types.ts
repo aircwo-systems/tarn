@@ -91,11 +91,14 @@ export interface InfraProbe {
 }
 
 /** A service registered from the console: an API, local app or LAN host. */
-export interface UserService {
+export type UserService = {
   name: string;
   /** http(s)://host[:port][/path] or tcp://host:port */
   url: string;
-}
+} & (
+  | { scope: "account"; accountId: string }
+  | { scope: "global"; accountId?: never }
+);
 
 export interface FilterCriteriaFilter {
   Pattern: string;

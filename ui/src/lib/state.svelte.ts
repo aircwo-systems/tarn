@@ -66,6 +66,7 @@ let logRetentionMinutes = $state(DEFAULT_LOG_RETENTION_MINUTES);
 let infraEnabledKinds = $state<InfraProbeKind[]>([...DEFAULT_INFRA_ENABLED_KINDS]);
 let userServices = $state<UserService[]>([]);
 let userServicesLoaded = $state(false);
+let servicesLoadController: AbortController | null = null;
 let legacyFrontendTargets: LegacyFrontendTarget[] = [];
 
 export interface KnownAccount {
@@ -249,6 +250,9 @@ export function switchAccount(id: string) {
   error = "";
   lastRefresh = "";
   loading = true;
+  userServices = [];
+  userServicesLoaded = false;
+  void loadUserServices();
   persistAccountSettings();
   refresh();
 }
@@ -260,6 +264,19 @@ export function addKnownAccount(id: string, label: string): boolean {
   knownAccounts = [...knownAccounts, { id: trimmed, label: label.trim() || trimmed }];
   persistAccountSettings();
   return true;
+}
+
+/** Saves a browser-local label, including for an account discovered by the server. */
+export function setAccountLabel(id: string, label: string) {
+  if (!knownAccounts.some((account) => account.id === id)) {
+    addKnownAccount(id, label);
+    return;
+  }
+  const normalized = label.trim() || (id === DEFAULT_ACCOUNT.id ? DEFAULT_ACCOUNT.label : id);
+  knownAccounts = knownAccounts.map((account) =>
+    account.id === id ? { ...account, label: normalized } : account,
+  );
+  persistAccountSettings();
 }
 
 export function removeKnownAccount(id: string) {
@@ -278,7 +295,11 @@ export function setInfraEnabledKinds(kinds: InfraProbeKind[]) {
 
 /** Replaces the registered services on the backend. Throws with the server's validation message. */
 export async function setUserServices(services: UserService[]): Promise<void> {
-  userServices = await saveUserServices(services);
+  const accountId = activeAccountId;
+  const generation = accountGeneration;
+  const saved = await saveUserServices({ services, accountId });
+  if (generation !== accountGeneration) return;
+  userServices = saved;
   await refresh();
 }
 
@@ -557,22 +578,33 @@ function persistProjectSettings() {
 
 async function loadUserServices() {
   if (typeof window === "undefined") return;
+  servicesLoadController?.abort();
+  const controller = new AbortController();
+  servicesLoadController = controller;
+  const accountId = activeAccountId;
+  const generation = accountGeneration;
   try {
-    userServices = await fetchUserServices();
-    // One-time move of services saved in the browser before the backend owned them.
+    // Browser-era registrations also belong to the default account.
     if (legacyFrontendTargets.length > 0) {
-      const known = new Set(userServices.map((svc) => svc.url));
-      const migrated = legacyFrontendTargets
-        .map((t) => ({ name: t.name, url: `http://${t.host}:${t.port}` }))
-        .filter((svc) => !known.has(svc.url));
+      const existing = await fetchUserServices({ signal: controller.signal, accountId: DEFAULT_ACCOUNT.id });
+      const known = new Set(existing.map((svc) => svc.url));
+      const migrated: UserService[] = legacyFrontendTargets
+        .map((target): UserService => ({ name: target.name, url: `http://${target.host}:${target.port}`, scope: "account", accountId: DEFAULT_ACCOUNT.id }))
+        .filter((service) => !known.has(service.url));
+      if (controller.signal.aborted) return;
+      if (migrated.length > 0) await saveUserServices({ services: [...existing, ...migrated], accountId: DEFAULT_ACCOUNT.id });
       legacyFrontendTargets = [];
-      if (migrated.length > 0) await setUserServices([...userServices, ...migrated]);
       persistInfraSettings();
     }
+    const loaded = await fetchUserServices({ signal: controller.signal, accountId });
+    if (generation === accountGeneration && !controller.signal.aborted) userServices = loaded;
   } catch {
-    // older servers have no services endpoint; keep the list empty
+    // Older servers have no services endpoint; keep the list empty.
   } finally {
-    userServicesLoaded = true;
+    if (generation === accountGeneration && servicesLoadController === controller) {
+      userServicesLoaded = true;
+      servicesLoadController = null;
+    }
   }
 }
 

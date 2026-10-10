@@ -31,6 +31,7 @@
     collapsedSidebarMode = "icons",
     pollingIntervalSeconds: _pollingIntervalSeconds,
     activeAccountId = "000000000000",
+    activeAccountLabel,
     onSetTab,
     onOpenSettings,
     onOpenCommandPalette,
@@ -42,6 +43,7 @@
     collapsedSidebarMode?: CollapsedSidebarMode;
     pollingIntervalSeconds?: number;
     activeAccountId?: string;
+    activeAccountLabel?: string;
     onSetTab: (tab: string) => void;
     onOpenSettings: () => void;
     onOpenCommandPalette?: () => void;
@@ -50,6 +52,8 @@
   } = $props();
 
   const isNonDefaultAccount = $derived(activeAccountId !== "000000000000");
+  const accountDisplayName = $derived(activeAccountLabel?.trim() || activeAccountId);
+  const hasCustomLabel = $derived(accountDisplayName !== activeAccountId && (isNonDefaultAccount || accountDisplayName !== "Default"));
   const sidebarHidden = $derived(sidebarCollapsed && collapsedSidebarMode === "hidden");
 
   let contentEl = $state<HTMLElement | null>(null);
@@ -429,14 +433,14 @@
     <!-- Footer Dock -->
     <div class="sidebar-footer">
       <div class="footer-left">
-        {#if isNonDefaultAccount}
+        {#if isNonDefaultAccount || hasCustomLabel}
           <button
             type="button"
             onclick={onOpenSettings}
-            title="Account: {activeAccountId} (Click to switch)"
+            title="Account: {hasCustomLabel ? `${accountDisplayName} (${activeAccountId})` : activeAccountId} (Click to switch)"
             class="account-pill-btn"
           >
-            <span class="account-label">{activeAccountId}</span>
+            <span class="account-label">{accountDisplayName}</span>
           </button>
         {/if}
       </div>
@@ -1105,19 +1109,18 @@
     padding: 3px 6px;
     border-radius: 5px;
     background: var(--bg-sidebar-subtle);
-    border: 1px solid var(--border-subtle);
+    border: 0;
     color: var(--text-secondary);
     font-size: 11px;
     font-family: var(--font-ui-mono, var(--font-mono, monospace));
     cursor: pointer;
     transition: background 100ms ease, border-color 100ms ease, color 100ms ease;
     min-width: 0;
-    max-width: 90px;
+    max-width: 100%;
   }
 
   .account-pill-btn:hover {
     background: var(--bg-element);
-    border-color: var(--border-default);
     color: var(--text-primary);
   }
 

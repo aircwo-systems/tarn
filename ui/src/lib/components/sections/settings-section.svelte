@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { PlusIcon, TrashIcon, CheckIcon, MonitorIcon, SunIcon, MoonIcon, ArchiveIcon, ArrowCounterClockwiseIcon, CaretRightIcon } from "phosphor-svelte";
+  import { PlusIcon, TrashIcon, CheckIcon, MonitorIcon, SunIcon, MoonIcon, ArchiveIcon, ArrowCounterClockwiseIcon, CaretRightIcon, PencilSimpleIcon } from "phosphor-svelte";
   import { onMount, tick, untrack } from "svelte";
   import { fly } from "svelte/transition";
 
@@ -26,6 +26,7 @@
     switchAccount,
     addKnownAccount,
     removeKnownAccount,
+    setAccountLabel,
     sanitizeSchemaSourceDir,
     type ThemeMode,
     type CollapsedSidebarMode,
@@ -172,6 +173,10 @@
   }
 
   function onKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && editingLabel) {
+      e.preventDefault();
+      void closeLabelEditor();
+    }
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s" && dirty) {
       e.preventDefault();
       save();
@@ -207,6 +212,29 @@
   let accountBusy = $state("");
   let confirmDelete = $state("");
   let showArchived = $state(false);
+  let editingLabel = $state("");
+  let labelDraft = $state("");
+
+  async function editLabel(acct: AccountRow) {
+    editingLabel = acct.id;
+    labelDraft = acct.label === acct.id || (acct.id === DEFAULT_ID && acct.label === "Default") ? "" : acct.label;
+    await tick();
+    const input = root.querySelector<HTMLInputElement>(`#account-label-${acct.id}`);
+    input?.focus();
+    input?.select();
+  }
+
+  async function closeLabelEditor() {
+    const id = editingLabel;
+    editingLabel = "";
+    await tick();
+    root.querySelector<HTMLButtonElement>(`#edit-label-${id}`)?.focus();
+  }
+
+  function saveLabel() {
+    setAccountLabel(editingLabel, labelDraft);
+    void closeLabelEditor();
+  }
 
   async function loadServerAccounts() {
     try {
@@ -332,19 +360,31 @@
   // ── Additional services ──────────────────────────────────────────
   let newTargetName = $state("");
   let newTargetUrl  = $state("");
+  let newTargetScope = $state<UserService["scope"]>("account");
   let servicesError = $state("");
   let saving        = $state(false);
 
   // Bare ports mean a local service; anything else (host, IP, URL) is sent as typed
   // and normalised by the server, which also reports what it could not parse.
   function addTarget() {
+    if (!infraSettings.userServicesLoaded || saving) return;
     let url = newTargetUrl.trim();
     if (!url) return;
     if (/^\d{1,5}$/.test(url)) url = `http://localhost:${url}`;
-    services = [...services, { name: newTargetName.trim(), url }];
+    const target: UserService = newTargetScope === "global"
+      ? { name: newTargetName.trim(), url, scope: "global" }
+      : { name: newTargetName.trim(), url, scope: "account", accountId: accountSettings.activeAccountId };
+    services = [...services, target];
     servicesError = "";
     newTargetName = "";
     newTargetUrl = "";
+  }
+
+  function setTargetScope(index: number, scope: string) {
+    if (scope !== "account" && scope !== "global") return;
+    services = services.map((target, i): UserService => i !== index ? target : scope === "global"
+      ? { name: target.name, url: target.url, scope: "global" }
+      : { name: target.name, url: target.url, scope: "account", accountId: accountSettings.activeAccountId });
   }
 
   // ── Section index: scroll-spy with sliding pill ──────────────────
@@ -416,6 +456,28 @@
   {/if}
 {/snippet}
 
+{#snippet labelButton(acct: AccountRow)}
+  <button type="button" id="edit-label-{acct.id}" class="icon-btn show"
+    disabled={!!accountBusy} onclick={() => editLabel(acct)}
+    aria-label="Edit label for account {acct.id}" title="Edit label"
+    aria-expanded={editingLabel === acct.id} aria-controls="label-editor-{acct.id}">
+    <PencilSimpleIcon size={12} />
+  </button>
+{/snippet}
+
+{#snippet labelEditor(acct: AccountRow)}
+  {#if editingLabel === acct.id}
+    <form id="label-editor-{acct.id}" class="label-editor"
+      onsubmit={(event) => { event.preventDefault(); saveLabel(); }}>
+      <label for="account-label-{acct.id}">Account label</label>
+      <input id="account-label-{acct.id}" class="field" bind:value={labelDraft} placeholder="Label (optional)" />
+      <button type="submit" class="pill pill-btn primary">Save</button>
+      <button type="button" class="pill pill-btn ghost" onclick={closeLabelEditor}>Cancel</button>
+      <small>Saved to this browser. Leave blank to use the default label.</small>
+    </form>
+  {/if}
+{/snippet}
+
 <div class="settings" bind:this={root}>
   <SectionHeader
     title="Settings"
@@ -459,6 +521,7 @@
               {#if acct.stale}
                 <span class="pill pill-stale" title={acct.stale}>{acct.stale}</span>
               {/if}
+              {@render labelButton(acct)}
               {#if isActive}
                 <span class="pill pill-accent"><CheckIcon size={10} weight="bold" />Active</span>
               {:else}
@@ -486,6 +549,7 @@
                   <TrashIcon size={12} />
                 </button>
               {/if}
+              {@render labelEditor(acct)}
               {@render deleteConfirmation(acct)}
             </li>
           {/each}
@@ -503,6 +567,7 @@
                     <span class="row-title">{acct.label}</span>
                     <span class="row-sub mono">{acct.id} · {acct.server?.resourceTotal ?? 0} resources · archived {daysSince(acct.server?.archivedAt) ?? 0}d ago</span>
                   </span>
+                  {@render labelButton(acct)}
                   <button type="button" class="pill pill-btn" disabled={!!accountBusy} onclick={() => accountAction(acct.id, "restore")}>
                     <ArrowCounterClockwiseIcon size={10} />Restore
                   </button>
@@ -512,6 +577,7 @@
                     title="Delete this account and all of its data" aria-label="Delete account {acct.id}">
                     <TrashIcon size={12} />
                   </button>
+                  {@render labelEditor(acct)}
                   {@render deleteConfirmation(acct)}
                 </li>
               {/each}
@@ -699,13 +765,18 @@
         </div>
 
         <div class="subhead">Additional services</div>
-        <p class="hint">APIs and apps your functions call: a port, host:port, LAN IP or full URL (http, https, tcp). Probed by the Tarn server.</p>
+        <p class="hint">APIs and apps your functions call: a port, host:port, LAN IP or full URL (http, https, tcp). Probed by the Tarn server. Services belong to this account unless set to Global. Global services are shared across all accounts.</p>
         {#if services.length > 0}
           <ul class="rows">
             {#each services as target, i (i)}
               <li class="row" transition:fly={{ y: -4, duration: 160 }}>
                 <span class="row-main"><span class="row-title">{target.name || "Unnamed"}</span></span>
                 <span class="pill mono" title={target.url}>{target.url}</span>
+                <select class="field service-scope" aria-label="Visibility for {target.name || target.url}" value={target.scope}
+                  onchange={(event) => setTargetScope(i, event.currentTarget.value)} disabled={saving}>
+                  <option value="account">This account</option>
+                  <option value="global">Global</option>
+                </select>
                 <button type="button" class="icon-btn danger" onclick={() => (services = services.filter((_, j) => j !== i))} aria-label="Remove {target.name || target.url}">
                   <TrashIcon size={12} />
                 </button>
@@ -716,7 +787,13 @@
         <div class="add-row services">
           <input class="field" bind:this={newServiceNameInput} placeholder="Service name" aria-label="New service name" bind:value={newTargetName} onkeydown={(e) => e.key === "Enter" && addTarget()} />
           <input class="field mono" placeholder="8080, 192.168.1.20:3000 or https://api.lan/health" aria-label="New target URL or port" bind:value={newTargetUrl} onkeydown={(e) => e.key === "Enter" && addTarget()} />
-          <button type="button" class="add-btn" onclick={addTarget} aria-label="Add service"><PlusIcon size={12} weight="bold" /></button>
+          <button type="button" class="add-btn" onclick={addTarget} disabled={!infraSettings.userServicesLoaded || saving} aria-label="Add service"><PlusIcon size={12} weight="bold" /></button>
+          <label class="new-service-scope">Visibility
+            <select class="field service-scope" bind:value={newTargetScope} aria-label="New service visibility">
+              <option value="account">This account</option>
+              <option value="global">Global</option>
+            </select>
+          </label>
         </div>
         {#if servicesError}<p class="error">{servicesError}</p>{/if}
       </section>
@@ -943,6 +1020,10 @@
   }
   .row-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
   .row-confirmation { flex-basis: 100%; min-width: 0; }
+  .label-editor { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-basis: 100%; min-width: 0; padding: 8px 0; }
+  .label-editor label { flex-basis: 100%; font-size: 12px; color: var(--text-secondary); }
+  .label-editor .field { flex: 1; min-width: 100px; }
+  .label-editor small { flex-basis: 100%; font-size: 11px; color: var(--text-tertiary); }
   .row-title { font-size: 12.5px; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .row-sub { font-size: 10.5px; color: var(--text-tertiary); }
   .icon-btn, .icon-spacer { width: 24px; height: 24px; flex-shrink: 0; }
@@ -956,6 +1037,8 @@
   .add-row { display: grid; gap: 6px; margin-top: 8px; }
   .add-row.accounts { grid-template-columns: 9rem minmax(0, 1fr) 30px; }
   .add-row.services { grid-template-columns: 10rem minmax(0, 1fr) 30px; }
+  .service-scope { width: auto; flex-shrink: 0; }
+  .new-service-scope { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
   .row .pill { max-width: 55%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .hint { margin: -2px 0 8px; font-size: 11px; color: var(--text-tertiary); }
   .add-btn {

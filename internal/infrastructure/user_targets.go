@@ -16,6 +16,11 @@ import (
 // SourceUser marks probe targets and results registered through the admin API.
 const SourceUser = "user"
 
+const (
+	ScopeAccount = "account"
+	ScopeGlobal  = "global"
+)
+
 // MaxUserTargets caps how many services can be registered.
 const MaxUserTargets = 100
 
@@ -24,7 +29,9 @@ const MaxUserTargets = 100
 type UserTarget struct {
 	Name string `json:"name"`
 	// URL is http(s)://host[:port][/path] or tcp://host:port.
-	URL string `json:"url"`
+	URL       string `json:"url"`
+	Scope     string `json:"scope"`
+	AccountID string `json:"accountId,omitempty"`
 }
 
 // ID matches the id the admin overview and canvas use for infrastructure nodes.
@@ -36,7 +43,7 @@ func (t UserTarget) ID() string {
 func (t UserTarget) probeTarget() ProbeTarget {
 	u, _ := url.Parse(t.URL) // validated on the way in
 	kind := u.Scheme
-	pt := ProbeTarget{Name: t.Name, Kind: kind, Host: u.Hostname(), Port: portForURL(u), Source: SourceUser}
+	pt := ProbeTarget{Name: t.Name, Kind: kind, Host: u.Hostname(), Port: portForURL(u), Source: SourceUser, AccountID: t.AccountID}
 	if kind == "http" || kind == "https" {
 		pt.URL = t.URL
 	}
@@ -96,12 +103,22 @@ func NormalizeUserTarget(t UserTarget) (UserTarget, error) {
 	if name == "" {
 		name = u.Hostname()
 	}
-	return UserTarget{Name: name, URL: u.String()}, nil
+	switch t.Scope {
+	case "", ScopeGlobal:
+		t.Scope, t.AccountID = ScopeGlobal, ""
+	case ScopeAccount:
+		if len(t.AccountID) != 12 || strings.IndexFunc(t.AccountID, func(r rune) bool { return r < '0' || r > '9' }) >= 0 {
+			return t, errors.New("account ID must be exactly 12 digits")
+		}
+	default:
+		return t, errors.New("service scope must be account or global")
+	}
+	return UserTarget{Name: name, URL: u.String(), Scope: t.Scope, AccountID: t.AccountID}, nil
 }
 
 // LoadUserTargets reads registered services from path and remembers the path
 // for later saves. A missing file is not an error.
-func (s *Service) LoadUserTargets(path string) error {
+func (s *Service) LoadUserTargets(path, defaultAccountID string) error {
 	s.mu.Lock()
 	s.userTargetsPath = path
 	s.mu.Unlock()
@@ -118,9 +135,19 @@ func (s *Service) LoadUserTargets(path string) error {
 		return fmt.Errorf("parse %s: %w", path, err)
 	}
 	targets := make([]UserTarget, 0, len(stored))
+	migrated := false
 	for _, t := range stored {
+		if t.Scope == "" {
+			t.Scope, t.AccountID = ScopeAccount, defaultAccountID
+			migrated = true
+		}
 		if nt, err := NormalizeUserTarget(t); err == nil {
 			targets = append(targets, nt)
+		}
+	}
+	if migrated {
+		if err := writeUserTargets(path, targets); err != nil {
+			return err
 		}
 	}
 	s.mu.Lock()
@@ -136,44 +163,117 @@ func (s *Service) UserTargets() []UserTarget {
 	return append([]UserTarget{}, s.userTargets...)
 }
 
-// SetUserTargets validates, replaces and persists the registered services,
-// then probes so results reflect the change straight away.
+// UserTargetsForAccount includes only this account's services and shared services.
+func (s *Service) UserTargetsForAccount(accountID string) []UserTarget {
+	out := []UserTarget{}
+	for _, target := range s.UserTargets() {
+		if target.Scope == ScopeGlobal || target.AccountID == accountID {
+			out = append(out, target)
+		}
+	}
+	return out
+}
+
+// SetUserTargets replaces all registrations. Account requests use SetUserTargetsForAccount.
 func (s *Service) SetUserTargets(ctx context.Context, targets []UserTarget) ([]UserTarget, error) {
+	normalized, err := normalizeUserTargets(targets)
+	if err != nil {
+		return nil, err
+	}
+	s.userTargetsMu.Lock()
+	err = s.replaceUserTargets(normalized)
+	s.userTargetsMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	s.probeUserTargets(ctx)
+	return normalized, nil
+}
+
+// SetUserTargetsForAccount replaces the caller's visible registrations, preserving
+// registrations owned by other accounts. Scope changes take effect on save.
+func (s *Service) SetUserTargetsForAccount(ctx context.Context, accountID string, targets []UserTarget) ([]UserTarget, error) {
+	scoped := make([]UserTarget, 0, len(targets))
+	for _, target := range targets {
+		if target.Scope == "" {
+			target.Scope = ScopeAccount
+		}
+		if target.Scope == ScopeAccount {
+			if target.AccountID != "" && target.AccountID != accountID {
+				return nil, errors.New("cannot register a service for another account")
+			}
+			target.AccountID = accountID
+		}
+		scoped = append(scoped, target)
+	}
+	normalized, err := normalizeUserTargets(scoped)
+	if err != nil {
+		return nil, err
+	}
+	s.userTargetsMu.Lock()
+	merged := []UserTarget{}
+	for _, target := range s.UserTargets() {
+		if target.Scope == ScopeAccount && target.AccountID != accountID {
+			merged = append(merged, target)
+		}
+	}
+	merged = append(merged, normalized...)
+	if len(merged) > MaxUserTargets {
+		s.userTargetsMu.Unlock()
+		return nil, fmt.Errorf("at most %d services can be registered", MaxUserTargets)
+	}
+	err = s.replaceUserTargets(merged)
+	s.userTargetsMu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	s.probeUserTargets(ctx)
+	return normalized, nil
+}
+
+func normalizeUserTargets(targets []UserTarget) ([]UserTarget, error) {
 	if len(targets) > MaxUserTargets {
 		return nil, fmt.Errorf("at most %d services can be registered", MaxUserTargets)
 	}
 	normalized := make([]UserTarget, 0, len(targets))
-	seen := make(map[string]struct{}, len(targets))
-	for _, t := range targets {
-		nt, err := NormalizeUserTarget(t)
+	seen := make(map[string]bool, len(targets))
+	for _, target := range targets {
+		target, err := NormalizeUserTarget(target)
 		if err != nil {
 			return nil, err
 		}
-		if _, dup := seen[nt.ID()]; dup {
-			continue
+		key := target.Scope + "/" + target.AccountID + "/" + target.ID()
+		if !seen[key] {
+			normalized = append(normalized, target)
+			seen[key] = true
 		}
-		seen[nt.ID()] = struct{}{}
-		normalized = append(normalized, nt)
 	}
+	return normalized, nil
+}
 
-	s.mu.Lock()
-	s.userTargets = normalized
-	s.targetsGen++
+// Caller holds userTargetsMu, keeping read/merge/save atomic across accounts.
+func (s *Service) replaceUserTargets(targets []UserTarget) error {
+	s.mu.RLock()
 	path := s.userTargetsPath
-	s.mu.Unlock()
-
+	s.mu.RUnlock()
 	if path != "" {
-		if err := writeUserTargets(path, normalized); err != nil {
-			return nil, err
+		if err := writeUserTargets(path, targets); err != nil {
+			return err
 		}
 	}
+	s.mu.Lock()
+	s.userTargets = targets
+	s.targetsGen++
+	s.mu.Unlock()
+	return nil
+}
 
+func (s *Service) probeUserTargets(ctx context.Context) {
 	if s.enabled {
 		probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		s.ProbeAll(probeCtx)
 	}
-	return normalized, nil
 }
 
 func writeUserTargets(path string, targets []UserTarget) error {

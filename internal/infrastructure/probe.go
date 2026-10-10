@@ -21,7 +21,8 @@ type ProbeTarget struct {
 	// URL is the full address probed for http/https targets; empty means the host root.
 	URL string `json:"url,omitempty"`
 	// Source is "user" for services registered through the admin API, empty for config targets.
-	Source string `json:"source,omitempty"`
+	Source    string `json:"source,omitempty"`
+	AccountID string `json:"accountId,omitempty"`
 }
 
 // ProbeResult holds the outcome of a single probe.
@@ -37,6 +38,7 @@ type ProbeResult struct {
 	ProbedAt  string  `json:"probedAt"`
 	URL       string  `json:"url,omitempty"`
 	Source    string  `json:"source,omitempty"`
+	AccountID string  `json:"accountId,omitempty"`
 }
 
 // Service manages infrastructure probing.
@@ -50,6 +52,7 @@ type Service struct {
 	// userTargets are services registered at runtime, persisted to userTargetsPath.
 	userTargets     []UserTarget
 	userTargetsPath string
+	userTargetsMu   sync.Mutex
 	// targetsGen bumps when targets change so a slow probe of an old target set
 	// cannot overwrite results from a newer one.
 	targetsGen uint64
@@ -267,6 +270,32 @@ func (s *Service) Results() []ProbeResult {
 	return append(out, s.results...)
 }
 
+// ResultsForAccount filters registrations and gives an account-local registration
+// precedence over a global registration at the same endpoint.
+func (s *Service) ResultsForAccount(accountID string) []ProbeResult {
+	out := []ProbeResult{}
+	seen := map[string]int{}
+	for _, result := range s.Results() {
+		if result.Source != SourceUser {
+			out = append(out, result)
+			continue
+		}
+		if result.AccountID != "" && result.AccountID != accountID {
+			continue
+		}
+		key := fmt.Sprintf("%s-%s-%d", result.Kind, result.Host, result.Port)
+		if index, exists := seen[key]; exists {
+			if result.AccountID == accountID {
+				out[index] = result
+			}
+		} else {
+			seen[key] = len(out)
+			out = append(out, result)
+		}
+	}
+	return out
+}
+
 // SetResult sets a single probe result (used for Docker engine status injected externally).
 func (s *Service) SetResult(r ProbeResult) {
 	s.mu.Lock()
@@ -297,12 +326,13 @@ func probe(ctx context.Context, t ProbeTarget) ProbeResult {
 	addr := net.JoinHostPort(t.Host, fmt.Sprintf("%d", t.Port))
 	now := time.Now()
 	result := ProbeResult{
-		Name:     t.Name,
-		Kind:     t.Kind,
-		Host:     t.Host,
-		Port:     t.Port,
-		ProbedAt: now.UTC().Format(time.RFC3339),
-		Source:   t.Source,
+		Name:      t.Name,
+		Kind:      t.Kind,
+		Host:      t.Host,
+		Port:      t.Port,
+		ProbedAt:  now.UTC().Format(time.RFC3339),
+		Source:    t.Source,
+		AccountID: t.AccountID,
 	}
 
 	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
@@ -336,13 +366,14 @@ func probeHTTP(ctx context.Context, t ProbeTarget) ProbeResult {
 	}
 	now := time.Now()
 	result := ProbeResult{
-		Name:     t.Name,
-		Kind:     t.Kind,
-		Host:     t.Host,
-		Port:     t.Port,
-		ProbedAt: now.UTC().Format(time.RFC3339),
-		URL:      t.URL,
-		Source:   t.Source,
+		Name:      t.Name,
+		Kind:      t.Kind,
+		Host:      t.Host,
+		Port:      t.Port,
+		ProbedAt:  now.UTC().Format(time.RFC3339),
+		URL:       t.URL,
+		Source:    t.Source,
+		AccountID: t.AccountID,
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, 3*time.Second)

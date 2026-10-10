@@ -31,10 +31,10 @@ export function setApiAccount(id: string) {
   _activeAccountId = id;
 }
 
-function accountHeaders(): Record<string, string> {
-  if (_activeAccountId === "000000000000") return {};
+function accountHeaders(accountId = _activeAccountId): Record<string, string> {
+  if (accountId === "000000000000") return {};
   return {
-    Authorization: `AWS4-HMAC-SHA256 Credential=${_activeAccountId}/20000101/us-east-1/tarn/aws4_request, SignedHeaders=host, Signature=0`,
+    Authorization: `AWS4-HMAC-SHA256 Credential=${accountId}/20000101/us-east-1/tarn/aws4_request, SignedHeaders=host, Signature=0`,
   };
 }
 
@@ -1116,10 +1116,10 @@ async function extractJSONError(response: Response, fallback: string): Promise<s
   }
 }
 
-export async function fetchUserServices(signal?: AbortSignal): Promise<UserService[]> {
+export async function fetchUserServices({ signal, accountId = _activeAccountId }: { signal?: AbortSignal; accountId?: string } = {}): Promise<UserService[]> {
   const response = await fetch(endpoint("/_tarn/admin/infrastructure/services"), {
     method: "GET",
-    headers: { Accept: "application/json", ...accountHeaders() },
+    headers: { Accept: "application/json", ...accountHeaders(accountId) },
     signal,
   });
   if (!response.ok) {
@@ -1129,10 +1129,10 @@ export async function fetchUserServices(signal?: AbortSignal): Promise<UserServi
   return Array.isArray(payload?.services) ? payload.services : [];
 }
 
-export async function saveUserServices(services: UserService[]): Promise<UserService[]> {
+export async function saveUserServices({ services, accountId = _activeAccountId }: { services: UserService[]; accountId?: string }): Promise<UserService[]> {
   const response = await fetch(endpoint("/_tarn/admin/infrastructure/services"), {
     method: "PUT",
-    headers: { "Content-Type": "application/json", Accept: "application/json", ...accountHeaders() },
+    headers: { "Content-Type": "application/json", Accept: "application/json", ...accountHeaders(accountId) },
     body: JSON.stringify({ services }),
   });
   if (!response.ok) {

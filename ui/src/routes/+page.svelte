@@ -324,6 +324,7 @@
     collapsedSidebarMode={uiSettings.collapsedSidebarMode}
     pollingIntervalSeconds={uiSettings.pollingIntervalSeconds}
     activeAccountId={accountSettings.activeAccountId}
+    activeAccountLabel={accountSettings.knownAccounts.find((account) => account.id === accountSettings.activeAccountId)?.label}
     onSetTab={setTab}
     onOpenSettings={() => setTab("settings")}
     onOpenCommandPalette={() => (commandPaletteOpen = true)}

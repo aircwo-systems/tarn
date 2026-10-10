@@ -4,7 +4,10 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -54,7 +57,7 @@ func TestUserTargetsProbeAndPersist(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "infra-services.json")
 	svc := NewService("", true)
 	svc.targets = nil // only the registered service
-	if err := svc.LoadUserTargets(path); err != nil {
+	if err := svc.LoadUserTargets(path, "000000000000"); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.SetUserTargets(context.Background(), []UserTarget{{Name: "API", URL: srv.URL + "/health"}}); err != nil {
@@ -70,7 +73,7 @@ func TestUserTargetsProbeAndPersist(t *testing.T) {
 	}
 
 	reloaded := NewService("", false)
-	if err := reloaded.LoadUserTargets(path); err != nil {
+	if err := reloaded.LoadUserTargets(path, "000000000000"); err != nil {
 		t.Fatal(err)
 	}
 	if got := reloaded.UserTargets(); len(got) != 1 || got[0].Name != "API" {
@@ -87,5 +90,79 @@ func TestDisabledServiceDoesNotProbeUserTargets(t *testing.T) {
 	defer svc.Stop()
 	if got := svc.Results(); len(got) != 0 {
 		t.Fatalf("probing disabled, got results %+v", got)
+	}
+}
+
+func TestLegacyUserTargetsMigrateToDefaultAccount(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "infra-services.json")
+	if err := os.WriteFile(path, []byte(`[{"name":"Legacy API","url":"localhost:8080"},{"name":"Shared API","url":"localhost:8081","scope":"global"}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService("", false)
+	if err := svc.LoadUserTargets(path, "123456789012"); err != nil {
+		t.Fatal(err)
+	}
+	if got := svc.UserTargetsForAccount("123456789012"); len(got) != 2 || got[0].Scope != ScopeAccount || got[0].AccountID != "123456789012" {
+		t.Fatalf("bad migration: %+v", got)
+	}
+	if got := svc.UserTargetsForAccount("222222222222"); len(got) != 1 || got[0].Name != "Shared API" {
+		t.Fatalf("legacy service visible in another account: %+v", got)
+	}
+	reloaded := NewService("", false)
+	if err := reloaded.LoadUserTargets(path, "999999999999"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(svc.UserTargets(), reloaded.UserTargets()) {
+		t.Fatal("ownership was not persisted or migration ran again")
+	}
+}
+
+func TestAccountUserTargetsConcurrentSavesAndSameEndpoint(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "infra-services.json")
+	svc := NewService("", false)
+	if err := svc.LoadUserTargets(path, "000000000000"); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for _, id := range []string{"111111111111", "222222222222"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := svc.SetUserTargetsForAccount(context.Background(), id, []UserTarget{{Name: id, URL: "localhost:8080"}}); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	wg.Wait()
+	for _, id := range []string{"111111111111", "222222222222"} {
+		if got := svc.UserTargetsForAccount(id); len(got) != 1 || got[0].Name != id {
+			t.Fatalf("account's registration lost: %+v", got)
+		}
+	}
+	reloaded := NewService("", false)
+	if err := reloaded.LoadUserTargets(path, "000000000000"); err != nil {
+		t.Fatal(err)
+	}
+	if len(reloaded.UserTargets()) != 2 {
+		t.Fatal("concurrent saves lost persisted services")
+	}
+}
+
+func TestAccountProbeResultsPreferLocalOverGlobal(t *testing.T) {
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer endpoint.Close()
+	svc := NewService("", false)
+	if _, err := svc.SetUserTargetsForAccount(context.Background(), "111111111111", []UserTarget{
+		{Name: "Shared", URL: endpoint.URL, Scope: ScopeGlobal},
+		{Name: "Local", URL: endpoint.URL, Scope: ScopeAccount},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	svc.ProbeAll(context.Background())
+	if got := svc.ResultsForAccount("111111111111"); len(got) != 1 || got[0].Name != "Local" {
+		t.Fatalf("local did not override duplicate global endpoint: %+v", got)
+	}
+	if got := svc.ResultsForAccount("222222222222"); len(got) != 1 || got[0].Name != "Shared" {
+		t.Fatalf("global not visible: %+v", got)
 	}
 }

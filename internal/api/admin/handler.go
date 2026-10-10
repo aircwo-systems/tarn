@@ -762,7 +762,7 @@ func (h *Handler) buildOverview() ([]byte, error) {
 	logGroups := h.logs.ListGroups()
 	infraResults := []infrasvc.ProbeResult{}
 	if h.infra != nil {
-		infraResults = h.infra.Results()
+		infraResults = h.infra.ResultsForAccount(h.cfg.AccountID)
 	}
 	dynamoTables, dynamoStreams, dynamoRawTables, dynamoWarnings := h.listDynamoOverview()
 
@@ -2802,7 +2802,8 @@ func (h *Handler) PruneLogs(w http.ResponseWriter, r *http.Request) {
 
 // Infrastructure triggers a fresh probe and returns results.
 func (h *Handler) Infrastructure(w http.ResponseWriter, r *http.Request) {
-	results := h.infra.ProbeAll(r.Context())
+	h.infra.ProbeAll(r.Context())
+	results := h.infra.ResultsForAccount(h.cfg.AccountID)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(results)
@@ -2847,7 +2848,7 @@ func (h *Handler) ListUserServices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(userServicesPayload{Services: h.infra.UserTargets()})
+	_ = json.NewEncoder(w).Encode(userServicesPayload{Services: h.infra.UserTargetsForAccount(h.cfg.AccountID)})
 }
 
 // SetUserServices replaces the registered services and probes them.
@@ -2861,7 +2862,7 @@ func (h *Handler) SetUserServices(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
 		return
 	}
-	services, err := h.infra.SetUserTargets(r.Context(), req.Services)
+	services, err := h.infra.SetUserTargetsForAccount(r.Context(), h.cfg.AccountID, req.Services)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
