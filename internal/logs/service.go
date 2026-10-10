@@ -127,8 +127,19 @@ func (s *Service) IngestContainerLogs(functionName, streamName, rawLogs string) 
 			continue
 		}
 
-		ts, msg := parseTimestamp(line)
-		msg, level, source := classifyLambdaLogEvent(msg)
+		var (
+			ts     time.Time
+			msg    string
+			level  LogLevel
+			source LogSource
+		)
+		if hdr, pyMsg, ok := parsePythonLambdaRecord(line); ok {
+			ts, msg = hdr.ts, pyMsg
+			level, source = hdr.level, SourceOutput
+		} else {
+			ts, msg = parseTimestamp(line)
+			msg, level, source = classifyLambdaLogEvent(msg)
+		}
 
 		events = append(events, LogEvent{
 			Timestamp: ts,
@@ -195,6 +206,54 @@ func parseLambdaOutputRecord(msg string) (string, LogLevel, bool) {
 	}
 
 	return message, LogLevel(levelToken), true
+}
+
+type pythonLambdaHeader struct {
+	ts    time.Time
+	level LogLevel
+}
+
+// parsePythonLambdaRecord reads the Python runtime's logging layout,
+// "[LEVEL]\t2026-01-15T10:30:00.000Z\t<request id>\t<message>". The level
+// leads, unlike Node's "<time>\t<request id>\t<LEVEL>\t<message>", so the
+// timestamp parse missed it, the whole line was kept as the message, and its
+// level was guessed from words in the text: an INFO summary saying
+// "errors=0" was stored as an ERROR, and a JSON message never reached the
+// JSON view because the line did not start with "{".
+func parsePythonLambdaRecord(line string) (pythonLambdaHeader, string, bool) {
+	if !strings.HasPrefix(line, "[") {
+		return pythonLambdaHeader{}, "", false
+	}
+	end := strings.Index(line, "]\t")
+	if end < 0 {
+		return pythonLambdaHeader{}, "", false
+	}
+	var level LogLevel
+	switch strings.ToUpper(line[1:end]) {
+	case "DEBUG":
+		level = LevelDEBUG
+	case "INFO":
+		level = LevelINFO
+	case "WARNING", "WARN":
+		level = LevelWARN
+	case "ERROR", "CRITICAL":
+		level = LevelERROR
+	default:
+		return pythonLambdaHeader{}, "", false
+	}
+	parts := strings.SplitN(line[end+2:], "\t", 3)
+	if len(parts) != 3 || !looksLikeLambdaRequestID(strings.TrimSpace(parts[1])) {
+		return pythonLambdaHeader{}, "", false
+	}
+	ts, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(parts[0]))
+	if err != nil {
+		return pythonLambdaHeader{}, "", false
+	}
+	msg := strings.TrimSpace(parts[2])
+	if msg == "" {
+		return pythonLambdaHeader{}, "", false
+	}
+	return pythonLambdaHeader{ts: ts.UTC(), level: level}, msg, true
 }
 
 func looksLikeLambdaRequestID(value string) bool {

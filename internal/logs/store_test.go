@@ -838,3 +838,39 @@ func TestMultiTermPatternMatching(t *testing.T) {
 		}
 	}
 }
+
+// TestIngestContainerLogsPythonRuntime covers the Python runtime's layout,
+// "[LEVEL]\t<time>\t<request id>\t<message>": the level is the record's own,
+// not a keyword guess, and the message is stored without the header so a JSON
+// line reaches the JSON view.
+func TestIngestContainerLogsPythonRuntime(t *testing.T) {
+	svc := NewService(testConfig())
+
+	rawLogs := "[INFO]\t2026-10-10T09:14:24.901Z\t0d3906ac-4cad-4e6b-97ba-ac0bd81282f5\t{\"event\":\"run.end\",\"errors\":0}\n" +
+		"[INFO]\t2026-10-10T09:14:25.000Z\t0d3906ac-4cad-4e6b-97ba-ac0bd81282f5\tworker: errors=0 failed=0/1\n" +
+		"[WARNING]\t2026-10-10T09:14:26.000Z\t0d3906ac-4cad-4e6b-97ba-ac0bd81282f5\trate limited\n" +
+		"[ERROR]\t2026-10-10T09:14:27.000Z\t0d3906ac-4cad-4e6b-97ba-ac0bd81282f5\tboom"
+
+	svc.IngestContainerLogs("myFunc", "2026/10/10/[abc123]", rawLogs)
+
+	want := []struct {
+		msg   string
+		level LogLevel
+		ts    string
+	}{
+		{`{"event":"run.end","errors":0}`, LevelINFO, "2026-10-10T09:14:24.901Z"},
+		{"worker: errors=0 failed=0/1", LevelINFO, "2026-10-10T09:14:25Z"},
+		{"rate limited", LevelWARN, "2026-10-10T09:14:26Z"},
+		{"boom", LevelERROR, "2026-10-10T09:14:27Z"},
+	}
+	events, total, _ := svc.GetLogEvents("/aws/lambda/myFunc", nil)
+	if total != len(want) {
+		t.Fatalf("expected %d events, got %d", len(want), total)
+	}
+	for i, w := range want {
+		evt := events[i]
+		if evt.Message != w.msg || evt.Level != w.level || evt.Source != SourceOutput || evt.Timestamp.Format(time.RFC3339Nano) != w.ts {
+			t.Errorf("event %d = %q %s %s %s, want %q %s output %s", i, evt.Message, evt.Level, evt.Source, evt.Timestamp.Format(time.RFC3339Nano), w.msg, w.level, w.ts)
+		}
+	}
+}
