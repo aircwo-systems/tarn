@@ -3,12 +3,16 @@
 package api
 
 import (
+	"bytes"
+	"compress/gzip"
 	"embed"
 	"io"
 	"io/fs"
 	"log"
+	"mime"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -65,10 +69,10 @@ func newUIHandler(static fs.FS) http.Handler {
 		}
 
 		// Try to open the requested file
-		file, err := static.Open(cleanPath)
+		file, gzipped, err := openUIAsset(static, cleanPath)
 		if err != nil {
 			// Fallback to 200.html for SPA routing
-			file, err = static.Open(htmlToServe)
+			file, gzipped, err = openUIAsset(static, htmlToServe)
 			if err != nil {
 				http.Error(w, "UI "+htmlToServe+" not found", http.StatusNotFound)
 				return
@@ -85,7 +89,71 @@ func newUIHandler(static fs.FS) http.Handler {
 			return
 		}
 
-		_, _ = file.Stat()
-		http.ServeContent(w, r, cleanPath, bootTime, seeker)
+		// Hashed build output never changes under the same name; everything
+		// else (the SPA shell, favicon) must revalidate so a new build shows up.
+		if strings.HasPrefix(cleanPath, "_app/immutable/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache")
+		}
+
+		if !gzipped {
+			http.ServeContent(w, r, cleanPath, bootTime, seeker)
+			return
+		}
+
+		// The build stores text assets gzipped (scripts/compress-ui.sh). Send
+		// them as-is to clients that accept gzip, and inflate for the rest.
+		w.Header().Set("Vary", "Accept-Encoding")
+		if ctype := mime.TypeByExtension(path.Ext(cleanPath)); ctype != "" {
+			w.Header().Set("Content-Type", ctype)
+		}
+		if acceptsGzip(r.Header.Get("Accept-Encoding")) {
+			w.Header().Set("Content-Encoding", "gzip")
+			http.ServeContent(w, r, cleanPath, bootTime, seeker)
+			return
+		}
+		zr, err := gzip.NewReader(seeker)
+		if err != nil {
+			http.Error(w, "UI asset is corrupt", http.StatusInternalServerError)
+			return
+		}
+		body, err := io.ReadAll(zr)
+		if err != nil {
+			http.Error(w, "UI asset is corrupt", http.StatusInternalServerError)
+			return
+		}
+		http.ServeContent(w, r, cleanPath, bootTime, bytes.NewReader(body))
 	})
+}
+
+// openUIAsset opens name, or the gzipped copy the build left in its place.
+// gzipped reports which one it found.
+func openUIAsset(static fs.FS, name string) (file fs.File, gzipped bool, err error) {
+	if file, err = static.Open(name); err == nil {
+		return file, false, nil
+	}
+	if file, err = static.Open(name + ".gz"); err == nil {
+		return file, true, nil
+	}
+	return nil, false, err
+}
+
+// acceptsGzip reports whether an Accept-Encoding header allows gzip, either
+// by name or through "*", without a zero q-value.
+func acceptsGzip(header string) bool {
+	for _, part := range strings.Split(header, ",") {
+		coding, params, _ := strings.Cut(part, ";")
+		coding = strings.TrimSpace(coding)
+		if !strings.EqualFold(coding, "gzip") && coding != "*" {
+			continue
+		}
+		q, found := strings.CutPrefix(strings.TrimSpace(params), "q=")
+		if !found {
+			return true
+		}
+		weight, err := strconv.ParseFloat(strings.TrimSpace(q), 64)
+		return err == nil && weight > 0
+	}
+	return false
 }

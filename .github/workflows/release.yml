@@ -59,6 +59,9 @@ jobs:
           name: ui-dist
           path: internal/api/ui-dist
 
+      - name: Compress UI Dist
+        run: ./scripts/compress-ui.sh internal/api/ui-dist
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:

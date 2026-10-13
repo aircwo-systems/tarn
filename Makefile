@@ -75,6 +75,7 @@ ui-build:
 	cd ui && bun run build
 	find internal/api/ui-dist -mindepth 1 ! -name .gitkeep -delete
 	cp -R ui/build/. internal/api/ui-dist/
+	./scripts/compress-ui.sh internal/api/ui-dist
 	@# The build's 200.html is SvelteKit's SPA fallback and has to be embedded,
 	@# so unlike the CI placeholder it cannot simply be skipped. What must not
 	@# happen is it being committed over that placeholder: a checkout would
