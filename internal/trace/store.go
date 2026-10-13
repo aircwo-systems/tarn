@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aircwo-systems/tarn/internal/trace/span"
 	_ "modernc.org/sqlite"
 )
 
@@ -65,19 +66,10 @@ type Trace struct {
 	Spans         []Span    `json:"spans"`
 }
 
-// Span is one hop in the trace path.
-type Span struct {
-	ID         string            `json:"id,omitempty"`
-	ParentID   string            `json:"parentId,omitempty"`
-	StartedAt  *time.Time        `json:"startedAt,omitempty"`
-	DurationNs int64             `json:"durationNs,omitempty"`
-	Kind       string            `json:"kind"`              // "gateway", "lambda", "queue"
-	Name       string            `json:"name"`              // resource name
-	Service    string            `json:"service,omitempty"` // emitting service, for distributed spans
-	DurationMs int64             `json:"durationMs"`        // wall time for this span
-	Status     string            `json:"status"`            // "ok", "error", "client_error"
-	Meta       map[string]string `json:"meta,omitempty"`
-}
+// Span is one hop in the trace path. It lives in the span package so
+// lightweight binaries such as the secrets-proxy can build spans without
+// linking the SQLite-backed store.
+type Span = span.Span
 
 // NewStore creates a new in-memory trace store (ring buffer fallback).
 // Use OpenStore for SQLite-backed persistence.

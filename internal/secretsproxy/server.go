@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
+	"github.com/aircwo-systems/tarn/internal/trace/span"
 )
 
 const (
@@ -66,7 +66,7 @@ func ListenAndServe(addr string, opts Options) error {
 
 func handleGetSecret(w http.ResponseWriter, r *http.Request, opts Options) {
 	start := time.Now().UTC()
-	callerSpan := tracesvc.ExternalSpanFromRequest(r.Header, r.RemoteAddr)
+	callerSpan := span.FromRequest(r.Header, r.RemoteAddr)
 	callerName := ""
 	callerKind := ""
 	callerUserAgent := strings.TrimSpace(r.Header.Get("User-Agent"))

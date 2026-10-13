@@ -1,15 +1,32 @@
-package trace
+// Package span holds the trace span type and caller detection. It has no
+// storage dependencies so sidecar binaries can import it cheaply.
+package span
 
 import (
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 )
 
-// ExternalSpanFromRequest derives a caller span for direct HTTP clients such as
+// Span is one hop in the trace path.
+type Span struct {
+	ID         string            `json:"id,omitempty"`
+	ParentID   string            `json:"parentId,omitempty"`
+	StartedAt  *time.Time        `json:"startedAt,omitempty"`
+	DurationNs int64             `json:"durationNs,omitempty"`
+	Kind       string            `json:"kind"`              // "gateway", "lambda", "queue"
+	Name       string            `json:"name"`              // resource name
+	Service    string            `json:"service,omitempty"` // emitting service, for distributed spans
+	DurationMs int64             `json:"durationMs"`        // wall time for this span
+	Status     string            `json:"status"`            // "ok", "error", "client_error"
+	Meta       map[string]string `json:"meta,omitempty"`
+}
+
+// FromRequest derives a caller span for direct HTTP clients such as
 // browsers, frontend apps, Postman, curl, or SDK clients.
-func ExternalSpanFromRequest(headers http.Header, remoteAddr string) *Span {
+func FromRequest(headers http.Header, remoteAddr string) *Span {
 	if headers == nil {
 		return externalSpanFromValues("", "", "", "", remoteAddr)
 	}

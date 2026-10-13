@@ -1,16 +1,16 @@
-package trace
+package span
 
 import (
 	"net/http"
 	"testing"
 )
 
-func TestExternalSpanFromRequest_OriginBrowser(t *testing.T) {
+func TestFromRequest_OriginBrowser(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("Origin", "http://localhost:5173")
 	headers.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X)")
 
-	span := ExternalSpanFromRequest(headers, "127.0.0.1:60321")
+	span := FromRequest(headers, "127.0.0.1:60321")
 	if span == nil {
 		t.Fatal("span = nil, want external span")
 	}
@@ -28,11 +28,11 @@ func TestExternalSpanFromRequest_OriginBrowser(t *testing.T) {
 	}
 }
 
-func TestExternalSpanFromRequest_Postman(t *testing.T) {
+func TestFromRequest_Postman(t *testing.T) {
 	headers := http.Header{}
 	headers.Set("User-Agent", "PostmanRuntime/7.43.0")
 
-	span := ExternalSpanFromRequest(headers, "")
+	span := FromRequest(headers, "")
 	if span == nil {
 		t.Fatal("span = nil, want external span")
 	}
@@ -44,8 +44,8 @@ func TestExternalSpanFromRequest_Postman(t *testing.T) {
 	}
 }
 
-func TestExternalSpanFromRequest_Empty(t *testing.T) {
-	if span := ExternalSpanFromRequest(http.Header{}, ""); span != nil {
+func TestFromRequest_Empty(t *testing.T) {
+	if span := FromRequest(http.Header{}, ""); span != nil {
 		t.Fatalf("span = %+v, want nil", span)
 	}
 }

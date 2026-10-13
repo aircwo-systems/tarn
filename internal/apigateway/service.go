@@ -16,6 +16,7 @@ import (
 	"github.com/aircwo-systems/tarn/internal/config"
 	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
+	"github.com/aircwo-systems/tarn/internal/trace/span"
 	"github.com/aircwo-systems/tarn/pkg/types"
 	"github.com/google/uuid"
 )
@@ -623,7 +624,7 @@ func (s *Service) recordTrace(input *InvokeInput, start, end time.Time, correlat
 	if api != nil {
 		gwName = api.Name
 	}
-	if callerSpan := tracesvc.ExternalSpanFromRequest(input.Headers, input.RemoteAddr); callerSpan != nil {
+	if callerSpan := span.FromRequest(input.Headers, input.RemoteAddr); callerSpan != nil {
 		spans = append([]tracesvc.Span{*callerSpan}, spans...)
 	}
 	s.traceStore.Add(&tracesvc.Trace{
