@@ -163,6 +163,12 @@ func (s *Service) ReceiveMessage(queueName string, maxCount, visTimeout, waitTim
 // have arrived or an in-flight one becomes visible, rather than re-scanning
 // the queue on a timer.
 func (s *Service) ReceiveMessageUntil(queueName string, maxCount, visTimeout, waitTimeSec int, cancel <-chan struct{}) ([]*types.SQSMessage, error) {
+	select {
+	case <-cancel:
+		return []*types.SQSMessage{}, nil
+	default:
+	}
+
 	if visTimeout < 0 {
 		// Use queue default
 		q, err := s.store.GetQueue(queueName)
@@ -183,6 +189,12 @@ func (s *Service) ReceiveMessageUntil(queueName string, maxCount, visTimeout, wa
 	defer timer.Stop()
 
 	for {
+		select {
+		case <-cancel:
+			return []*types.SQSMessage{}, nil
+		default:
+		}
+
 		msgs, wake, nextAt, err := s.store.receive(queueName, maxCount, visTimeout)
 		if err != nil {
 			return nil, err
@@ -303,7 +315,7 @@ func (s *Service) ListQueueTags(queueName string) (map[string]string, error) {
 }
 
 func cloneMessageAttributes(src map[string]*types.MessageAttribute) map[string]*types.MessageAttribute {
-	if len(src) == 0 {
+	if src == nil {
 		return nil
 	}
 

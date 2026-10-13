@@ -342,7 +342,7 @@ func (h *Handler) receiveMessage(w http.ResponseWriter, r *http.Request) {
 		waitTime, _ = strconv.Atoi(v)
 	}
 
-	msgs, err := h.svc.ReceiveMessage(name, maxCount, visTimeout, waitTime)
+	msgs, err := h.svc.ReceiveMessageUntil(name, maxCount, visTimeout, waitTime, r.Context().Done())
 	if err != nil {
 		writeXMLError(w, 400, "AWS.SimpleQueueService.NonExistentQueue", err.Error())
 		return

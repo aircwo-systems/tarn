@@ -67,7 +67,7 @@ func (h *Handler) dispatchJSON(w http.ResponseWriter, r *http.Request) {
 	case "SendMessageBatch":
 		h.jsonSendMessageBatch(w, body)
 	case "ReceiveMessage":
-		h.jsonReceiveMessage(w, body)
+		h.jsonReceiveMessage(w, r, body)
 	case "DeleteMessage":
 		h.jsonDeleteMessage(w, body)
 	case "DeleteMessageBatch":
@@ -294,7 +294,7 @@ func (h *Handler) jsonSendMessageBatch(w http.ResponseWriter, body []byte) {
 	})
 }
 
-func (h *Handler) jsonReceiveMessage(w http.ResponseWriter, body []byte) {
+func (h *Handler) jsonReceiveMessage(w http.ResponseWriter, r *http.Request, body []byte) {
 	var req struct {
 		QueueUrl            string `json:"QueueUrl"`
 		MaxNumberOfMessages int    `json:"MaxNumberOfMessages"`
@@ -319,7 +319,7 @@ func (h *Handler) jsonReceiveMessage(w http.ResponseWriter, body []byte) {
 		visTimeout = -1 // use queue default
 	}
 
-	msgs, err := h.svc.ReceiveMessage(name, maxCount, visTimeout, req.WaitTimeSeconds)
+	msgs, err := h.svc.ReceiveMessageUntil(name, maxCount, visTimeout, req.WaitTimeSeconds, r.Context().Done())
 	if err != nil {
 		writeJSONError(w, 400, "QueueDoesNotExist", err.Error())
 		return

@@ -136,7 +136,9 @@ func (s *Store) CreateQueue(name string, attrs map[string]string, tags map[strin
 
 	if q, exists := s.queues[name]; exists {
 		// Idempotent: if same attributes, return existing
-		return q.config, nil
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		return cloneQueueConfig(q.config), nil
 	}
 
 	isFIFO := attrs["FifoQueue"] == "true"
@@ -170,16 +172,16 @@ func (s *Store) CreateQueue(name string, attrs map[string]string, tags map[strin
 	}
 
 	s.queues[name] = &queue{
-		config:   qCfg,
+		config:   cloneQueueConfig(qCfg),
 		messages: nil,
 		dedup:    make(map[string]int64),
 	}
 	s.dirty.Store(true)
 
-	return qCfg, nil
+	return cloneQueueConfig(qCfg), nil
 }
 
-// GetQueue returns a queue config by name.
+// GetQueue returns a queue config snapshot by name.
 func (s *Store) GetQueue(name string) (*types.QueueConfig, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -188,7 +190,9 @@ func (s *Store) GetQueue(name string) (*types.QueueConfig, error) {
 	if !exists {
 		return nil, fmt.Errorf("queue %s not found", name)
 	}
-	return q.config, nil
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return cloneQueueConfig(q.config), nil
 }
 
 // QueueNameFromUrl extracts the queue name from a queue URL.
@@ -206,9 +210,11 @@ func (s *Store) ListQueues(prefix string) []*types.QueueConfig {
 	defer s.mu.RUnlock()
 
 	var result []*types.QueueConfig
-	for _, q := range s.queues {
-		if prefix == "" || strings.HasPrefix(q.config.QueueName, prefix) {
-			result = append(result, q.config)
+	for name, q := range s.queues {
+		if prefix == "" || strings.HasPrefix(name, prefix) {
+			q.mu.Lock()
+			result = append(result, cloneQueueConfig(q.config))
+			q.mu.Unlock()
 		}
 	}
 	return result
@@ -241,9 +247,11 @@ func (s *Store) SetQueueAttributes(name string, attrs map[string]string) error {
 	}
 
 	q.mu.Lock()
-	err := applyQueueAttributes(q.config, attrs)
+	candidate := *q.config
+	err := applyQueueAttributes(&candidate, attrs)
 	if err == nil {
-		q.config.LastModifiedTimestamp = time.Now().Unix()
+		candidate.LastModifiedTimestamp = time.Now().Unix()
+		q.config = &candidate
 	}
 	q.mu.Unlock()
 	if err != nil {
@@ -338,42 +346,43 @@ func (s *Store) GetQueueAttributes(name string, attrNames []string) (map[string]
 		result["RedrivePolicy"] = q.config.RedrivePolicy
 	}
 
-	// Computed attributes
-	if all || contains(attrNames, "ApproximateNumberOfMessages") {
-		count := 0
+	// Computed attributes. Preserve the existing predicates, including
+	// overlapping stale/visible and delayed/in-flight counts.
+	wantVisible := all || contains(attrNames, "ApproximateNumberOfMessages")
+	wantInFlight := all || contains(attrNames, "ApproximateNumberOfMessagesNotVisible")
+	wantDelayed := all || contains(attrNames, "ApproximateNumberOfMessagesDelayed")
+	wantStale := all || contains(attrNames, "ApproximateNumberOfMessagesStale")
+	if wantVisible || wantInFlight || wantDelayed || wantStale {
+		var visible, inFlight, delayed, stale int
 		for _, m := range q.messages {
-			if !m.Deleted && m.VisibleAt <= now && m.DelayUntil <= now && m.ExpiresAt > now {
-				count++
+			if m.Deleted || m.ExpiresAt <= now {
+				continue
+			}
+			if wantVisible && m.VisibleAt <= now && m.DelayUntil <= now {
+				visible++
+			}
+			if wantInFlight && m.VisibleAt > now {
+				inFlight++
+			}
+			if wantDelayed && m.DelayUntil > now {
+				delayed++
+			}
+			if wantStale && m.Stale {
+				stale++
 			}
 		}
-		result["ApproximateNumberOfMessages"] = fmt.Sprintf("%d", count)
-	}
-	if all || contains(attrNames, "ApproximateNumberOfMessagesNotVisible") {
-		count := 0
-		for _, m := range q.messages {
-			if !m.Deleted && m.VisibleAt > now && m.ExpiresAt > now {
-				count++
-			}
+		if wantVisible {
+			result["ApproximateNumberOfMessages"] = fmt.Sprintf("%d", visible)
 		}
-		result["ApproximateNumberOfMessagesNotVisible"] = fmt.Sprintf("%d", count)
-	}
-	if all || contains(attrNames, "ApproximateNumberOfMessagesDelayed") {
-		count := 0
-		for _, m := range q.messages {
-			if !m.Deleted && m.DelayUntil > now && m.ExpiresAt > now {
-				count++
-			}
+		if wantInFlight {
+			result["ApproximateNumberOfMessagesNotVisible"] = fmt.Sprintf("%d", inFlight)
 		}
-		result["ApproximateNumberOfMessagesDelayed"] = fmt.Sprintf("%d", count)
-	}
-	if all || contains(attrNames, "ApproximateNumberOfMessagesStale") {
-		count := 0
-		for _, m := range q.messages {
-			if !m.Deleted && m.Stale && m.ExpiresAt > now {
-				count++
-			}
+		if wantDelayed {
+			result["ApproximateNumberOfMessagesDelayed"] = fmt.Sprintf("%d", delayed)
 		}
-		result["ApproximateNumberOfMessagesStale"] = fmt.Sprintf("%d", count)
+		if wantStale {
+			result["ApproximateNumberOfMessagesStale"] = fmt.Sprintf("%d", stale)
+		}
 	}
 
 	return result, nil
@@ -1038,17 +1047,7 @@ func cloneMessage(src *types.SQSMessage) *types.SQSMessage {
 	}
 
 	cloned := *src
-	if src.MessageAttributes != nil {
-		cloned.MessageAttributes = make(map[string]*types.MessageAttribute, len(src.MessageAttributes))
-		for k, v := range src.MessageAttributes {
-			if v == nil {
-				cloned.MessageAttributes[k] = nil
-				continue
-			}
-			attrCopy := *v
-			cloned.MessageAttributes[k] = &attrCopy
-		}
-	}
+	cloned.MessageAttributes = cloneMessageAttributes(src.MessageAttributes)
 	return &cloned
 }
 
