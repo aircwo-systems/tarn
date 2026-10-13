@@ -92,8 +92,14 @@ type tableSnapshot struct {
 }
 
 type itemView struct {
-	item map[string]any
-	key  map[string]any
+	item  map[string]any
+	key   map[string]any
+	order []cachedAttributeOrder
+}
+
+type cachedAttributeOrder struct {
+	number  *big.Float
+	encoded string
 }
 
 type putItemResult struct {
@@ -890,18 +896,20 @@ func (s *Store) Scan(
 	exclusiveStartKey map[string]any,
 ) (*scanResult, error) {
 	var (
-		keySchema     []types.DynamoDBKeySchemaElement
-		projectionDef *types.DynamoDBProjection
-		views         []itemView
+		keySchema      []types.DynamoDBKeySchemaElement
+		projectionKeys []types.DynamoDBKeySchemaElement
+		projectionDef  *types.DynamoDBProjection
+		views          []itemView
 	)
 	err := s.readTable(tableName, func(state *tableState) error {
 		keySchema = slices.Clone(state.Table.KeySchema)
 		if indexName != "" {
-			_, idxProj, err := lookupIndex(state.Table, indexName)
+			indexSchema, idxProj, err := lookupIndex(state.Table, indexName)
 			if err != nil {
 				return err
 			}
 			projectionDef = idxProj
+			projectionKeys = unionKeySchema(keySchema, indexSchema)
 		}
 		var err error
 		views, err = s.collectSortedItems(state, indexName, false)
@@ -932,7 +940,7 @@ func (s *Store) Scan(
 		count++
 		item := cloneItem(view.item)
 		if projectionDef != nil {
-			item = applyIndexProjection(item, *projectionDef, keySchema)
+			item = applyIndexProjection(item, *projectionDef, projectionKeys)
 		}
 		if projection != "" {
 			item, err = applyProjectionExpression(item, projection, names)
@@ -970,16 +978,19 @@ func (s *Store) Query(
 		return nil, validationError("Query condition missed key schema element")
 	}
 	var (
-		keySchema     []types.DynamoDBKeySchemaElement
-		projectionDef *types.DynamoDBProjection
-		views         []itemView
+		keySchema      []types.DynamoDBKeySchemaElement
+		projectionKeys []types.DynamoDBKeySchemaElement
+		projectionDef  *types.DynamoDBProjection
+		views          []itemView
 	)
 	err := s.readTable(tableName, func(state *tableState) error {
 		keySchema = slices.Clone(state.Table.KeySchema)
 		var err error
-		if _, projectionDef, err = lookupIndex(state.Table, indexName); err != nil {
+		var indexSchema []types.DynamoDBKeySchemaElement
+		if indexSchema, projectionDef, err = lookupIndex(state.Table, indexName); err != nil {
 			return err
 		}
+		projectionKeys = unionKeySchema(keySchema, indexSchema)
 		views, err = s.collectSortedItems(state, indexName, !scanIndexForward)
 		return err
 	})
@@ -1012,7 +1023,7 @@ func (s *Store) Query(
 		}
 		item := cloneItem(view.item)
 		if projectionDef != nil {
-			item = applyIndexProjection(item, *projectionDef, keySchema)
+			item = applyIndexProjection(item, *projectionDef, projectionKeys)
 		}
 		if projection != "" {
 			item, err = applyProjectionExpression(item, projection, names)
@@ -1080,7 +1091,9 @@ func (s *Store) ListStreams(tableName string, limit int, exclusiveStartArn strin
 }
 
 func (s *Store) DescribeStream(streamArn string, limit int, exclusiveStartShardID string) (map[string]any, error) {
-	state, err := s.findStream(streamArn)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	state, err := s.findStreamLocked(streamArn)
 	if err != nil {
 		return nil, err
 	}
@@ -1110,16 +1123,20 @@ func (s *Store) DescribeStream(streamArn string, limit int, exclusiveStartShardI
 			"Shards":                  shards,
 			"LastEvaluatedShardId":    nil,
 			"CreationRequestDateTime": state.Table.CreationDateTime,
-			"KeySchema":               state.Table.KeySchema,
+			"KeySchema":               slices.Clone(state.Table.KeySchema),
 		},
 	}, nil
 }
 
 func (s *Store) GetShardIterator(streamArn, shardID, iteratorType, sequenceNumber string) (string, error) {
-	state, err := s.findStream(streamArn)
+	s.mu.RLock()
+	state, err := s.findStreamLocked(streamArn)
 	if err != nil {
+		s.mu.RUnlock()
 		return "", err
 	}
+	latestSequence := state.Stream.NextSeq
+	s.mu.RUnlock()
 	if shardID != streamShardID {
 		return "", validationError("Requested shard does not exist")
 	}
@@ -1128,7 +1145,7 @@ func (s *Store) GetShardIterator(streamArn, shardID, iteratorType, sequenceNumbe
 	case "TRIM_HORIZON":
 		startSeq = 1
 	case "LATEST":
-		startSeq = state.Stream.NextSeq
+		startSeq = latestSequence + 1
 	case "AT_SEQUENCE_NUMBER":
 		startSeq, err = strconv.ParseInt(sequenceNumber, 10, 64)
 	case "AFTER_SEQUENCE_NUMBER":
@@ -1353,13 +1370,7 @@ func normalizeTableIdentifier(value string) string {
 	return rest
 }
 
-func (s *Store) findStream(streamArn string) (*tableState, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.findStreamLocked(streamArn)
-}
-
-// findStreamLocked is findStream for callers already holding s.mu.
+// findStreamLocked returns a live table state. Caller must hold s.mu while using it.
 func (s *Store) findStreamLocked(streamArn string) (*tableState, error) {
 	for _, state := range s.tables {
 		if state.Stream != nil && state.Stream.ARN == streamArn {
@@ -1378,18 +1389,36 @@ func (s *Store) collectSortedItems(state *tableState, indexName string, reverse 
 		}
 		keySchema = indexSchema
 	}
+	// Index keys determine order, with base-table keys breaking ties. Cache
+	// their comparison values once instead of encoding them during every comparison.
+	combinedSchema := unionKeySchema(state.Table.KeySchema, keySchema)
 	views := make([]itemView, 0, len(state.Items))
 	for _, item := range state.Items {
-		key, err := buildKeyMap(item.Item, unionKeySchema(state.Table.KeySchema, keySchema))
+		key, err := buildKeyMap(item.Item, combinedSchema)
 		if err != nil {
 			continue
 		}
-		views = append(views, itemView{item: cloneItem(item.Item), key: key})
+		cloned := cloneItem(item.Item)
+		order := make([]cachedAttributeOrder, len(combinedSchema))
+		for i, part := range combinedSchema {
+			value := cloned[part.AttributeName]
+			number, _ := asNumber(value)
+			order[i] = cachedAttributeOrder{number: number, encoded: attributeSortValue(value)}
+		}
+		views = append(views, itemView{item: cloned, key: key, order: order})
 	}
 	sort.Slice(views, func(i, j int) bool {
-		cmp := compareForSchema(views[i].item, views[j].item, keySchema)
-		if cmp == 0 {
-			cmp = compareForSchema(views[i].item, views[j].item, state.Table.KeySchema)
+		cmp := 0
+		for k, left := range views[i].order {
+			right := views[j].order[k]
+			if left.number != nil && right.number != nil {
+				cmp = left.number.Cmp(right.number)
+			} else {
+				cmp = strings.Compare(left.encoded, right.encoded)
+			}
+			if cmp != 0 {
+				break
+			}
 		}
 		if reverse {
 			return cmp > 0
@@ -1642,16 +1671,6 @@ func findExclusiveStart(items []itemView, schema []types.DynamoDBKeySchemaElemen
 	return 0
 }
 
-func compareForSchema(left, right map[string]any, schema []types.DynamoDBKeySchemaElement) int {
-	for _, part := range schema {
-		cmp := compareAttributeValues(left[part.AttributeName], right[part.AttributeName])
-		if cmp != 0 {
-			return cmp
-		}
-	}
-	return 0
-}
-
 func lookupIndex(table *types.DynamoDBTable, name string) ([]types.DynamoDBKeySchemaElement, *types.DynamoDBProjection, error) {
 	if table == nil {
 		return nil, nil, notFoundError("Requested resource not found")
@@ -1687,7 +1706,7 @@ func unionKeySchema(primary, secondary []types.DynamoDBKeySchemaElement) []types
 	return out
 }
 
-func applyIndexProjection(item map[string]any, projection types.DynamoDBProjection, primarySchema []types.DynamoDBKeySchemaElement) map[string]any {
+func applyIndexProjection(item map[string]any, projection types.DynamoDBProjection, keySchema []types.DynamoDBKeySchemaElement) map[string]any {
 	if item == nil {
 		return nil
 	}
@@ -1697,7 +1716,7 @@ func applyIndexProjection(item map[string]any, projection types.DynamoDBProjecti
 		return item
 	case "KEYS_ONLY":
 		allowed := make(map[string]struct{})
-		for _, key := range primarySchema {
+		for _, key := range keySchema {
 			allowed[key.AttributeName] = struct{}{}
 		}
 		out := make(map[string]any)
@@ -1709,7 +1728,7 @@ func applyIndexProjection(item map[string]any, projection types.DynamoDBProjecti
 		return out
 	case "INCLUDE":
 		allowed := make(map[string]struct{})
-		for _, key := range primarySchema {
+		for _, key := range keySchema {
 			allowed[key.AttributeName] = struct{}{}
 		}
 		for _, name := range projection.NonKeyAttributes {
