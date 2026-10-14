@@ -1,0 +1,4 @@
+ok  	github.com/aircwo-systems/tarn/internal/dynamodb	(cached)
+ok  	github.com/aircwo-systems/tarn/internal/api/dynamodb	(cached)
+ok  	github.com/aircwo-systems/tarn/internal/eventsource	(cached)
+ok  	github.com/aircwo-systems/tarn/pkg/types	(cached)

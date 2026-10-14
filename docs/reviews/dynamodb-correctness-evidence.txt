@@ -1,0 +1,46 @@
+--- FAIL: TestReviewFilteredLimitAllowsEmptyPage (0.00s)
+    --- FAIL: TestReviewFilteredLimitAllowsEmptyPage/scan (0.00s)
+        review_evidence_test.go:64: page returned 1 items, want zero after examining only filtered-out first item
+        review_evidence_test.go:68: last key=map[pk:map[S:p] sk:map[S:02]], want evaluated first-item key map[pk:map[S:p] sk:map[S:01]]
+    --- FAIL: TestReviewFilteredLimitAllowsEmptyPage/query (0.00s)
+        review_evidence_test.go:64: page returned 1 items, want zero after examining only filtered-out first item
+        review_evidence_test.go:68: last key=map[pk:map[S:p] sk:map[S:02]], want evaluated first-item key map[pk:map[S:p] sk:map[S:01]]
+--- FAIL: TestReviewIndexProjectionIncludesIndexKeys (0.00s)
+    --- FAIL: TestReviewIndexProjectionIncludesIndexKeys/gsi-type/KEYS_ONLY (0.00s)
+        review_evidence_test.go:103: index projection omitted key "gsi_pk": map[pk:map[S:p] sk:map[S:01]]
+        review_evidence_test.go:103: index projection omitted key "gsi_sk": map[pk:map[S:p] sk:map[S:01]]
+    --- FAIL: TestReviewIndexProjectionIncludesIndexKeys/lsi-status/KEYS_ONLY (0.00s)
+        review_evidence_test.go:103: index projection omitted key "lsi_sk": map[pk:map[S:p] sk:map[S:01]]
+    --- FAIL: TestReviewIndexProjectionIncludesIndexKeys/gsi-type/INCLUDE (0.00s)
+        review_evidence_test.go:103: index projection omitted key "gsi_pk": map[keep:map[BOOL:true] pk:map[S:p] sk:map[S:01]]
+        review_evidence_test.go:103: index projection omitted key "gsi_sk": map[keep:map[BOOL:true] pk:map[S:p] sk:map[S:01]]
+    --- FAIL: TestReviewIndexProjectionIncludesIndexKeys/lsi-status/INCLUDE (0.00s)
+        review_evidence_test.go:103: index projection omitted key "lsi_sk": map[keep:map[BOOL:true] pk:map[S:p] sk:map[S:01]]
+--- FAIL: TestReviewQueryRequiresPartitionKey (0.00s)
+    review_evidence_test.go:115: query without partition key succeeded: &{Items:[map[gsi_pk:map[S:g] gsi_sk:map[N:1] keep:map[BOOL:true] lsi_sk:map[S:l] pk:map[S:p] sk:map[S:01]]] Count:1 LastEvaluatedKey:map[pk:map[S:p] sk:map[S:01]]}
+--- FAIL: TestReviewExpressionRejectsTrailingTokens (0.00s)
+    review_evidence_test.go:122: malformed condition succeeded: &{Items:[map[gsi_pk:map[S:g] gsi_sk:map[N:1] keep:map[BOOL:true] lsi_sk:map[S:l] pk:map[S:p] sk:map[S:01]]] Count:1 LastEvaluatedKey:map[pk:map[S:p] sk:map[S:01]]}
+--- FAIL: TestReviewNumericKeysUseNumericIdentity (0.00s)
+    review_evidence_test.go:142: numerically equal key 1.0 could not read stored key 1
+    review_evidence_test.go:152: numerically equal keys stored 2 items, want 1
+--- FAIL: TestReviewKeyAttributeTypesMatchSchema (0.00s)
+    review_evidence_test.go:159: numeric partition key accepted for string key schema
+--- FAIL: TestReviewDeletedCursorDoesNotRestart (0.00s)
+    review_evidence_test.go:180: deleted cursor restarted query: [map[gsi_pk:map[S:g] gsi_sk:map[N:1] keep:map[BOOL:true] lsi_sk:map[S:l] pk:map[S:p] sk:map[S:01]] map[gsi_pk:map[S:g] gsi_sk:map[N:1] keep:map[BOOL:true] lsi_sk:map[S:l] pk:map[S:p] sk:map[S:03]]]
+--- FAIL: TestReviewWireScannedCountBeforeFilter (0.00s)
+    --- FAIL: TestReviewWireScannedCountBeforeFilter/Scan (0.00s)
+        review_evidence_test.go:224: response=200 {"Count":1,"Items":[{"keep":{"BOOL":true},"pk":{"S":"p"},"sk":{"S":"1"}}],"ScannedCount":1}
+            , want Count=1 ScannedCount=2
+    --- FAIL: TestReviewWireScannedCountBeforeFilter/Query (0.00s)
+        review_evidence_test.go:224: response=200 {"Count":1,"Items":[{"keep":{"BOOL":true},"pk":{"S":"p"},"sk":{"S":"1"}}],"ScannedCount":1}
+            , want Count=1 ScannedCount=2
+--- FAIL: TestReviewStringSortUsesRawUTF8 (0.00s)
+    review_evidence_test.go:332: string sort used JSON escaping order: [map[gsi_pk:map[S:g] gsi_sk:map[N:1] keep:map[BOOL:true] lsi_sk:map[S:l] pk:map[S:p] sk:map[S:A]] map[gsi_pk:map[S:g] gsi_sk:map[N:1] keep:map[BOOL:true] lsi_sk:map[S:l] pk:map[S:p] sk:map[S:
+        ]]]
+--- FAIL: TestReviewLatestIteratorStartsAfterExistingRecords (0.00s)
+    review_evidence_test.go:412: LATEST included 1 existing records, want zero
+--- FAIL: TestReviewDescribeStreamSchemaIsIsolated (0.00s)
+    review_evidence_test.go:433: DescribeStream returned live key schema
+FAIL
+FAIL	github.com/aircwo-systems/tarn/internal/ddb_review_sgrq384u	0.357s
+FAIL

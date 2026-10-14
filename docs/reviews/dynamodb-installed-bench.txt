@@ -1,0 +1,15 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/aircwo-systems/tarn/internal/dynamodb
+cpu: Apple M5
+BenchmarkDynamoDBReadPath/ScanPage/10000         	       2	 111390104 ns/op	77115940 B/op	 1111227 allocs/op
+BenchmarkDynamoDBReadPath/ScanPage/10000         	       2	 143110542 ns/op	77115864 B/op	 1111226 allocs/op
+BenchmarkDynamoDBReadPath/ScanPage/10000         	       2	 115985334 ns/op	77115940 B/op	 1111227 allocs/op
+BenchmarkDynamoDBReadPath/QueryMiss/10000        	       2	 128475166 ns/op	93282484 B/op	 1380015 allocs/op
+BenchmarkDynamoDBReadPath/QueryMiss/10000        	       2	 163827958 ns/op	93282492 B/op	 1380015 allocs/op
+BenchmarkDynamoDBReadPath/QueryMiss/10000        	       2	 166471250 ns/op	93282484 B/op	 1380015 allocs/op
+BenchmarkDynamoDBReadPath/QueryPage/10000        	       2	 167431438 ns/op	85252432 B/op	 1246499 allocs/op
+BenchmarkDynamoDBReadPath/QueryPage/10000        	       2	 157498042 ns/op	85252500 B/op	 1246500 allocs/op
+BenchmarkDynamoDBReadPath/QueryPage/10000        	       1	 213006083 ns/op	85252560 B/op	 1246501 allocs/op
+PASS
+ok  	github.com/aircwo-systems/tarn/internal/dynamodb	4.587s

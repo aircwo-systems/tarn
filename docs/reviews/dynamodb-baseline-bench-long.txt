@@ -1,0 +1,15 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/aircwo-systems/tarn/internal/ddb_review_sgrq384u
+cpu: Apple M5
+BenchmarkReviewReadPath/ScanPage/10000         	       4	 326604000 ns/op	259049464 B/op	 3935154 allocs/op
+BenchmarkReviewReadPath/ScanPage/10000         	       4	 318081594 ns/op	256740932 B/op	 3899082 allocs/op
+BenchmarkReviewReadPath/ScanPage/10000         	       4	 346696927 ns/op	257087976 B/op	 3904504 allocs/op
+BenchmarkReviewReadPath/QueryMiss/10000        	       3	 433190611 ns/op	273242549 B/op	 4173107 allocs/op
+BenchmarkReviewReadPath/QueryMiss/10000        	       2	 553167312 ns/op	274563428 B/op	 4193746 allocs/op
+BenchmarkReviewReadPath/QueryMiss/10000        	       2	 938645146 ns/op	272607968 B/op	 4163192 allocs/op
+BenchmarkReviewReadPath/QueryPage/10000        	       2	 624071500 ns/op	264571712 B/op	 4029579 allocs/op
+BenchmarkReviewReadPath/QueryPage/10000        	       3	 421955833 ns/op	264795669 B/op	 4033078 allocs/op
+BenchmarkReviewReadPath/QueryPage/10000        	       3	 393082917 ns/op	264994277 B/op	 4036181 allocs/op
+PASS
+ok  	github.com/aircwo-systems/tarn/internal/ddb_review_sgrq384u	13.062s

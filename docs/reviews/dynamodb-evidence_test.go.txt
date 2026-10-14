@@ -1,0 +1,467 @@
+package dynamodb
+
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"sort"
+	"strings"
+	"sync"
+	"testing"
+
+	api "github.com/aircwo-systems/tarn/internal/api/dynamodb"
+	"github.com/aircwo-systems/tarn/internal/config"
+	actual "github.com/aircwo-systems/tarn/internal/dynamodb"
+	"github.com/aircwo-systems/tarn/pkg/types"
+)
+
+func reviewStore(t testing.TB) *Store {
+	t.Helper()
+	cfg := config.Default()
+	cfg.PersistenceEnabled = false
+	s := NewStore(cfg)
+	table := testTableDefinition()
+	table.StreamSpecification = nil
+	if _, err := s.CreateTable(table); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+func reviewPut(t testing.TB, s *Store, sk string, keep bool) {
+	t.Helper()
+	item := map[string]any{"pk": map[string]any{"S": "p"}, "sk": map[string]any{"S": sk}, "keep": map[string]any{"BOOL": keep}, "gsi_pk": map[string]any{"S": "g"}, "gsi_sk": map[string]any{"N": "1"}, "lsi_sk": map[string]any{"S": "l"}}
+	if _, err := s.PutItem("orders", item, "", nil, nil, "NONE"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestReviewFilteredLimitAllowsEmptyPage(t *testing.T) {
+	for _, op := range []string{"scan", "query"} {
+		t.Run(op, func(t *testing.T) {
+			s := reviewStore(t)
+			reviewPut(t, s, "01", false)
+			reviewPut(t, s, "02", true)
+			values := map[string]any{":p": map[string]any{"S": "p"}, ":yes": map[string]any{"BOOL": true}}
+			var items []map[string]any
+			var last map[string]any
+			if op == "scan" {
+				out, err := s.Scan("orders", "", "keep = :yes", "", nil, values, 1, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				items, last = out.Items, out.LastEvaluatedKey
+			} else {
+				out, err := s.Query("orders", "", "pk = :p", "keep = :yes", "", nil, values, 1, nil, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				items, last = out.Items, out.LastEvaluatedKey
+			}
+			if len(items) != 0 {
+				t.Errorf("page returned %d items, want zero after examining only filtered-out first item", len(items))
+			}
+			want := map[string]any{"pk": map[string]any{"S": "p"}, "sk": map[string]any{"S": "01"}}
+			if !reflect.DeepEqual(last, want) {
+				t.Errorf("last key=%v, want evaluated first-item key %v", last, want)
+			}
+		})
+	}
+}
+
+func TestReviewIndexProjectionIncludesIndexKeys(t *testing.T) {
+	for _, projection := range []string{"KEYS_ONLY", "INCLUDE"} {
+		for _, index := range []string{"gsi-type", "lsi-status"} {
+			t.Run(index+"/"+projection, func(t *testing.T) {
+				cfg := config.Default()
+				cfg.PersistenceEnabled = false
+				s := NewStore(cfg)
+				table := testTableDefinition()
+				table.StreamSpecification = nil
+				table.GlobalSecondaryIndexes[0].Projection = types.DynamoDBProjection{ProjectionType: projection, NonKeyAttributes: []string{"keep"}}
+				table.LocalSecondaryIndexes[0].Projection = types.DynamoDBProjection{ProjectionType: projection, NonKeyAttributes: []string{"keep"}}
+				if _, err := s.CreateTable(table); err != nil {
+					t.Fatal(err)
+				}
+				reviewPut(t, s, "01", true)
+				expr := "gsi_pk = :key"
+				value := "g"
+				keys := []string{"pk", "sk", "gsi_pk", "gsi_sk"}
+				if index == "lsi-status" {
+					expr = "pk = :key"
+					value = "p"
+					keys = []string{"pk", "sk", "lsi_sk"}
+				}
+				out, err := s.Query("orders", index, expr, "", "", nil, map[string]any{":key": map[string]any{"S": value}}, 0, nil, true)
+				if err != nil || len(out.Items) != 1 {
+					t.Fatalf("query: %v %v", out, err)
+				}
+				for _, key := range keys {
+					if _, ok := out.Items[0][key]; !ok {
+						t.Errorf("index projection omitted key %q: %v", key, out.Items[0])
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestReviewQueryRequiresPartitionKey(t *testing.T) {
+	s := reviewStore(t)
+	reviewPut(t, s, "01", true)
+	if out, err := s.Query("orders", "", "keep = :yes", "", "", nil, map[string]any{":yes": map[string]any{"BOOL": true}}, 0, nil, true); err == nil {
+		t.Fatalf("query without partition key succeeded: %+v", out)
+	}
+}
+func TestReviewExpressionRejectsTrailingTokens(t *testing.T) {
+	s := reviewStore(t)
+	reviewPut(t, s, "01", true)
+	if out, err := s.Query("orders", "", "pk = :p ignored", "", "", nil, map[string]any{":p": map[string]any{"S": "p"}}, 0, nil, true); err == nil {
+		t.Fatalf("malformed condition succeeded: %+v", out)
+	}
+}
+func TestReviewNumericKeysUseNumericIdentity(t *testing.T) {
+	cfg := config.Default()
+	cfg.PersistenceEnabled = false
+	s := NewStore(cfg)
+	table := &types.DynamoDBTable{TableName: "numbers", AttributeDefinitions: []types.DynamoDBAttributeDefinition{{AttributeName: "id", AttributeType: "N"}}, KeySchema: []types.DynamoDBKeySchemaElement{{AttributeName: "id", KeyType: "HASH"}}}
+	if _, err := s.CreateTable(table); err != nil {
+		t.Fatal(err)
+	}
+	item := map[string]any{"id": map[string]any{"N": "1"}}
+	if _, err := s.PutItem("numbers", item, "", nil, nil, "NONE"); err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.GetItem("numbers", map[string]any{"id": map[string]any{"N": "1.0"}}, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Item == nil {
+		t.Error("numerically equal key 1.0 could not read stored key 1")
+	}
+	if _, err := s.PutItem("numbers", map[string]any{"id": map[string]any{"N": "1.0"}}, "", nil, nil, "NONE"); err != nil {
+		t.Fatal(err)
+	}
+	described, err := s.DescribeTable("numbers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if described.ItemCount != 1 {
+		t.Errorf("numerically equal keys stored %d items, want 1", described.ItemCount)
+	}
+}
+func TestReviewKeyAttributeTypesMatchSchema(t *testing.T) {
+	s := reviewStore(t)
+	item := map[string]any{"pk": map[string]any{"N": "1"}, "sk": map[string]any{"S": "01"}}
+	if _, err := s.PutItem("orders", item, "", nil, nil, "NONE"); err == nil {
+		t.Fatal("numeric partition key accepted for string key schema")
+	}
+}
+func TestReviewDeletedCursorDoesNotRestart(t *testing.T) {
+	s := reviewStore(t)
+	for _, sk := range []string{"01", "02", "03"} {
+		reviewPut(t, s, sk, true)
+	}
+	values := map[string]any{":p": map[string]any{"S": "p"}}
+	first, err := s.Query("orders", "", "pk = :p", "", "", nil, values, 2, nil, true)
+	if err != nil || len(first.Items) != 2 {
+		t.Fatalf("first: %v %v", first, err)
+	}
+	if _, err := s.DeleteItem("orders", first.LastEvaluatedKey, "", nil, nil, "NONE"); err != nil {
+		t.Fatal(err)
+	}
+	next, err := s.Query("orders", "", "pk = :p", "", "", nil, values, 2, first.LastEvaluatedKey, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next.Items) != 1 || !reflect.DeepEqual(next.Items[0]["sk"], map[string]any{"S": "03"}) {
+		t.Fatalf("deleted cursor restarted query: %v", next.Items)
+	}
+}
+
+// Test the actual HTTP adapter with the original module, not the scratch Store.
+func TestReviewWireScannedCountBeforeFilter(t *testing.T) {
+	for _, action := range []string{"Scan", "Query"} {
+		t.Run(action, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.PersistenceEnabled = false
+			svc := actual.NewService(cfg)
+			t.Cleanup(svc.Close)
+			table := testTableDefinition()
+			table.StreamSpecification = nil
+			if _, err := svc.CreateTable(table); err != nil {
+				t.Fatal(err)
+			}
+			for i := range 2 {
+				item := map[string]any{"pk": map[string]any{"S": "p"}, "sk": map[string]any{"S": fmt.Sprint(i)}, "keep": map[string]any{"BOOL": i == 1}}
+				if _, err := svc.PutItem("orders", item, "", nil, nil, "NONE"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			req := map[string]any{"TableName": "orders", "FilterExpression": "keep = :yes", "ExpressionAttributeValues": map[string]any{":yes": map[string]any{"BOOL": true}}}
+			if action == "Query" {
+				req["KeyConditionExpression"] = "pk = :p"
+				req["ExpressionAttributeValues"].(map[string]any)[":p"] = map[string]any{"S": "p"}
+			}
+			data, err := json.Marshal(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := httptest.NewRequest(http.MethodPost, "http://localhost/", strings.NewReader(string(data)))
+			r.Header.Set("X-Amz-Target", "DynamoDB_20120810."+action)
+			rec := httptest.NewRecorder()
+			api.NewHandler(svc).Dispatch(rec, r)
+			var out struct {
+				Count        int
+				ScannedCount int
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+				t.Fatal(err)
+			}
+			if rec.Code != 200 || out.Count != 1 || out.ScannedCount != 2 {
+				t.Fatalf("response=%d %s, want Count=1 ScannedCount=2", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+// Immutable JSON-native fixtures. Setup is excluded from timings.
+func reviewReadFixture(b *testing.B, n int) *Store {
+	b.Helper()
+	s := reviewStore(b)
+	payload := strings.Repeat("x", 256)
+	state := s.tables["orders"]
+	for i := range n {
+		item := map[string]any{"pk": map[string]any{"S": fmt.Sprintf("p%03d", i%100)}, "sk": map[string]any{"S": fmt.Sprintf("%08d", i)}, "status": map[string]any{"S": "OPEN"}, "payload": map[string]any{"S": payload}, "nested": map[string]any{"M": map[string]any{"list": map[string]any{"L": []any{map[string]any{"S": "a"}, map[string]any{"N": "2"}}}}}}
+		key, err := buildKeyMap(item, state.Table.KeySchema)
+		if err != nil {
+			b.Fatal(err)
+		}
+		id, err := serializeKey(key, state.Table.KeySchema)
+		if err != nil {
+			b.Fatal(err)
+		}
+		state.Items[id] = itemState{Item: item}
+	}
+	return s
+}
+func BenchmarkReviewReadPath(b *testing.B) {
+	for _, n := range []int{1000, 10000} {
+		for _, op := range []string{"ScanPage", "QueryMiss", "QueryPage"} {
+			b.Run(fmt.Sprintf("%s/%d", op, n), func(b *testing.B) {
+				s := reviewReadFixture(b, n)
+				values := map[string]any{":p": map[string]any{"S": "absent"}}
+				if op == "QueryPage" {
+					values[":p"] = map[string]any{"S": "p050"}
+				}
+				b.ReportAllocs()
+				b.ResetTimer()
+				for b.Loop() {
+					if op == "ScanPage" {
+						if _, err := s.Scan("orders", "", "", "", nil, nil, 10, nil); err != nil {
+							b.Fatal(err)
+						}
+					} else {
+						if _, err := s.Query("orders", "", "pk = :p", "", "", nil, values, 10, nil, true); err != nil {
+							b.Fatal(err)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+func BenchmarkReviewCloneItem(b *testing.B) {
+	item := map[string]any{"pk": map[string]any{"S": "p"}, "payload": map[string]any{"S": strings.Repeat("x", 256)}, "nested": map[string]any{"M": map[string]any{"list": map[string]any{"L": []any{map[string]any{"S": "a"}, map[string]any{"N": "2"}}}}}}
+	b.ReportAllocs()
+	for b.Loop() {
+		if out := cloneItem(item); out == nil {
+			b.Fatal("nil clone")
+		}
+	}
+}
+func BenchmarkReviewCondition(b *testing.B) {
+	item := map[string]any{"pk": map[string]any{"S": "p"}}
+	values := map[string]any{":p": map[string]any{"S": "p"}}
+	b.ReportAllocs()
+	for b.Loop() {
+		if ok, err := evaluateConditionExpression("pk = :p", item, nil, values); err != nil || !ok {
+			b.Fatalf("condition: %t %v", ok, err)
+		}
+	}
+}
+func TestReviewCloneParityAndIsolation(t *testing.T) {
+	cases := []map[string]any{
+		nil, {}, {"S": map[string]any{"S": "value"}, "N": map[string]any{"N": "1.00"}, "M": map[string]any{"M": map[string]any{"x": map[string]any{"L": []any{nil, true, float64(1)}}}}},
+		{"map": map[string]any(nil), "list": []any(nil), "empty": []any{}},
+		{"typed": []string{"a", "b"}, "bytes": []byte{1, 2}, "integer": int64(3), "number": json.Number("4")},
+		{"badUTF8": string([]byte{0xff})}, {string([]byte{0xff}): "invalid key"}, {"badNumber": math.NaN()}, {"unsupported": func() {}},
+	}
+	for i, item := range cases {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			var expected map[string]any
+			if item != nil {
+				roundTripClone(item, &expected)
+			}
+			got := cloneItem(item)
+			if !reflect.DeepEqual(got, expected) {
+				t.Fatalf("clone changed normalization: got=%#v want=%#v", got, expected)
+			}
+		})
+	}
+	source := map[string]any{"nested": map[string]any{"L": []any{map[string]any{"S": "original"}}}}
+	out := cloneItem(source)
+	out["nested"].(map[string]any)["L"].([]any)[0].(map[string]any)["S"] = "changed"
+	if source["nested"].(map[string]any)["L"].([]any)[0].(map[string]any)["S"] != "original" {
+		t.Fatal("clone shares nested mutable data")
+	}
+}
+
+func TestReviewStringSortUsesRawUTF8(t *testing.T) {
+	s := reviewStore(t)
+	newline := string(rune(10))
+	reviewPut(t, s, newline, true)
+	reviewPut(t, s, "A", true)
+	out, err := s.Query("orders", "", "pk = :p", "", "", nil, map[string]any{":p": map[string]any{"S": "p"}}, 0, nil, true)
+	if err != nil || len(out.Items) != 2 {
+		t.Fatalf("query: %v %v", out, err)
+	}
+	if !reflect.DeepEqual(out.Items[0]["sk"], map[string]any{"S": newline}) {
+		t.Fatalf("string sort used JSON escaping order: %v", out.Items)
+	}
+}
+
+func TestReviewCachedSortPreservesCurrentComparator(t *testing.T) {
+	s := reviewStore(t)
+	state := s.tables["orders"]
+	for i, value := range []any{map[string]any{"S": "A"}, map[string]any{"S": string(rune(10))}, map[string]any{"S": "z"}, map[string]any{"S": "é"}, map[string]any{"N": "2"}, map[string]any{"N": "10"}, map[string]any{"N": "2.0"}, map[string]any{"B": "AQI="}} {
+		item := testItem(fmt.Sprint(i), fmt.Sprintf("%04d", i), "OPEN", i, "1")
+		item["gsi_pk"] = map[string]any{"S": "g"}
+		item["gsi_sk"] = value
+		key, err := buildKeyMap(item, state.Table.KeySchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		id, err := serializeKey(key, state.Table.KeySchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.Items[id] = itemState{Item: item}
+	}
+	for _, index := range []string{"", "lsi-status", "gsi-type"} {
+		for _, reverse := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%t", index, reverse), func(t *testing.T) {
+				schema, _, err := lookupIndex(state.Table, index)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var expected []itemView
+				for _, stored := range state.Items {
+					key, err := buildKeyMap(stored.Item, unionKeySchema(state.Table.KeySchema, schema))
+					if err != nil {
+						t.Fatal(err)
+					}
+					expected = append(expected, itemView{item: cloneItem(stored.Item), key: key})
+				}
+				sort.Slice(expected, func(i, j int) bool {
+					cmp := compareForSchema(expected[i].item, expected[j].item, schema)
+					if cmp == 0 {
+						cmp = compareForSchema(expected[i].item, expected[j].item, state.Table.KeySchema)
+					}
+					if reverse {
+						return cmp > 0
+					}
+					return cmp < 0
+				})
+				got, err := s.collectSortedItems(state, index, reverse)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(got) != len(expected) {
+					t.Fatalf("size %d want %d", len(got), len(expected))
+				}
+				for i := range got {
+					if !reflect.DeepEqual(got[i].item, expected[i].item) || !reflect.DeepEqual(got[i].key, expected[i].key) {
+						t.Fatalf("changed ordering at %d: got %v want %v", i, got[i], expected[i])
+					}
+				}
+			})
+		}
+	}
+}
+func TestReviewLatestIteratorStartsAfterExistingRecords(t *testing.T) {
+	cfg := config.Default()
+	cfg.PersistenceEnabled = false
+	s := NewStore(cfg)
+	table, err := s.CreateTable(testTableDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reviewPut(t, s, "01", true)
+	iterator, err := s.GetShardIterator(table.LatestStreamArn, streamShardID, "LATEST", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	records, _, err := s.GetRecords(iterator, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("LATEST included %d existing records, want zero", len(records))
+	}
+}
+func TestReviewDescribeStreamSchemaIsIsolated(t *testing.T) {
+	cfg := config.Default()
+	cfg.PersistenceEnabled = false
+	s := NewStore(cfg)
+	table, err := s.CreateTable(testTableDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.DescribeStream(table.LatestStreamArn, 100, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out["StreamDescription"].(map[string]any)["KeySchema"].([]types.DynamoDBKeySchemaElement)[0].AttributeName = "mutated"
+	stored, err := s.DescribeTable("orders")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.KeySchema[0].AttributeName != "pk" {
+		t.Fatal("DescribeStream returned live key schema")
+	}
+}
+func TestReviewLatestIteratorRace(t *testing.T) {
+	cfg := config.Default()
+	cfg.PersistenceEnabled = false
+	s := NewStore(cfg)
+	table, err := s.CreateTable(testTableDefinition())
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		<-start
+		for i := range 200 {
+			item := testItem("p", fmt.Sprint(i), "OPEN", i, "1")
+			if _, err := s.PutItem("orders", item, "", nil, nil, "NONE"); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	})
+	wg.Go(func() {
+		<-start
+		for range 200 {
+			if _, err := s.GetShardIterator(table.LatestStreamArn, streamShardID, "LATEST", ""); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	})
+	close(start)
+	wg.Wait()
+}

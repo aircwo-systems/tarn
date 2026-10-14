@@ -1,0 +1,30 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/aircwo-systems/tarn/internal/ddb_review_sgrq384u
+cpu: Apple M5
+BenchmarkReviewReadPath/ScanPage/1000         	      14	  15850696 ns/op	18875525 B/op	  283739 allocs/op
+BenchmarkReviewReadPath/ScanPage/1000         	      15	  15570414 ns/op	18854160 B/op	  283405 allocs/op
+BenchmarkReviewReadPath/ScanPage/1000         	      15	  15373075 ns/op	18792666 B/op	  282444 allocs/op
+BenchmarkReviewReadPath/QueryMiss/1000        	      13	  16695853 ns/op	20346947 B/op	  308292 allocs/op
+BenchmarkReviewReadPath/QueryMiss/1000        	      14	  16519229 ns/op	20323729 B/op	  307929 allocs/op
+BenchmarkReviewReadPath/QueryMiss/1000        	      14	  16168262 ns/op	20388296 B/op	  308938 allocs/op
+BenchmarkReviewReadPath/QueryPage/1000        	      14	  15663938 ns/op	19608481 B/op	  296020 allocs/op
+BenchmarkReviewReadPath/QueryPage/1000        	      14	  16150827 ns/op	19652472 B/op	  296707 allocs/op
+BenchmarkReviewReadPath/QueryPage/1000        	      13	  15640276 ns/op	19764113 B/op	  298451 allocs/op
+BenchmarkReviewReadPath/ScanPage/10000        	       1	 242099625 ns/op	256746376 B/op	 3899167 allocs/op
+BenchmarkReviewReadPath/ScanPage/10000        	       1	 223483709 ns/op	257153160 B/op	 3905523 allocs/op
+BenchmarkReviewReadPath/ScanPage/10000        	       1	 238580084 ns/op	257869080 B/op	 3916709 allocs/op
+BenchmarkReviewReadPath/QueryMiss/10000       	       1	 233430375 ns/op	272108912 B/op	 4155394 allocs/op
+BenchmarkReviewReadPath/QueryMiss/10000       	       1	 237625209 ns/op	273124064 B/op	 4171256 allocs/op
+BenchmarkReviewReadPath/QueryMiss/10000       	       1	 238900875 ns/op	272499552 B/op	 4161498 allocs/op
+BenchmarkReviewReadPath/QueryPage/10000       	       1	 242682750 ns/op	265431880 B/op	 4043019 allocs/op
+BenchmarkReviewReadPath/QueryPage/10000       	       1	 239681292 ns/op	263672120 B/op	 4015523 allocs/op
+BenchmarkReviewReadPath/QueryPage/10000       	       1	 229005083 ns/op	265630792 B/op	 4046127 allocs/op
+BenchmarkReviewCloneItem                      	   65125	      3679 ns/op	    4576 B/op	      67 allocs/op
+BenchmarkReviewCloneItem                      	   66399	      3570 ns/op	    4576 B/op	      67 allocs/op
+BenchmarkReviewCloneItem                      	   67272	      3593 ns/op	    4576 B/op	      67 allocs/op
+BenchmarkReviewCondition                      	  275203	       884.8 ns/op	    1624 B/op	      27 allocs/op
+BenchmarkReviewCondition                      	  277718	       890.5 ns/op	    1624 B/op	      27 allocs/op
+BenchmarkReviewCondition                      	  273830	       889.2 ns/op	    1624 B/op	      27 allocs/op
+PASS
+ok  	github.com/aircwo-systems/tarn/internal/ddb_review_sgrq384u	6.086s

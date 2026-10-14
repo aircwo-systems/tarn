@@ -1,0 +1,45 @@
+==================
+WARNING: DATA RACE
+Write at 0x00c00008e340 by goroutine 9:
+  github.com/aircwo-systems/tarn/internal/ddb_review_sgrq384u.(*Store).appendStreamRecordLocked()
+      /Users/arcwo/projects_26/OpenStack/internal/ddb_review_sgrq384u/store.go:1409 +0x100
+  github.com/aircwo-systems/tarn/internal/ddb_review_sgrq384u.(*Store).PutItem()
+      /Users/arcwo/projects_26/OpenStack/internal/ddb_review_sgrq384u/store.go:692 +0x3e0
+  github.com/aircwo-systems/tarn/internal/ddb_review_sgrq384u.TestReviewLatestIteratorRace.func1()
+      /Users/arcwo/projects_26/OpenStack/internal/ddb_review_sgrq384u/review_evidence_test.go:450 +0xf8
+  sync.(*WaitGroup).Go.func1()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/sync/waitgroup.go:258 +0x54
+
+Previous read at 0x00c00008e340 by goroutine 10:
+  github.com/aircwo-systems/tarn/internal/ddb_review_sgrq384u.(*Store).GetShardIterator()
+      /Users/arcwo/projects_26/OpenStack/internal/ddb_review_sgrq384u/store.go:1131 +0x1cc
+  github.com/aircwo-systems/tarn/internal/ddb_review_sgrq384u.TestReviewLatestIteratorRace.func2()
+      /Users/arcwo/projects_26/OpenStack/internal/ddb_review_sgrq384u/review_evidence_test.go:459 +0xa0
+  sync.(*WaitGroup).Go.func1()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/sync/waitgroup.go:258 +0x54
+
+Goroutine 9 (running) created at:
+  sync.(*WaitGroup).Go()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/sync/waitgroup.go:238 +0x78
+  github.com/aircwo-systems/tarn/internal/ddb_review_sgrq384u.TestReviewLatestIteratorRace()
+      /Users/arcwo/projects_26/OpenStack/internal/ddb_review_sgrq384u/review_evidence_test.go:446 +0x2bc
+  testing.tRunner()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2036 +0x164
+  testing.(*T).Run.gowrap1()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2101 +0x34
+
+Goroutine 10 (running) created at:
+  sync.(*WaitGroup).Go()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/sync/waitgroup.go:238 +0x78
+  github.com/aircwo-systems/tarn/internal/ddb_review_sgrq384u.TestReviewLatestIteratorRace()
+      /Users/arcwo/projects_26/OpenStack/internal/ddb_review_sgrq384u/review_evidence_test.go:456 +0x3c8
+  testing.tRunner()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2036 +0x164
+  testing.(*T).Run.gowrap1()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2101 +0x34
+==================
+--- FAIL: TestReviewLatestIteratorRace (0.07s)
+    testing.go:1712: race detected during execution of test
+FAIL
+FAIL	github.com/aircwo-systems/tarn/internal/ddb_review_sgrq384u	0.448s
+FAIL

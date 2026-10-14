@@ -1,0 +1,59 @@
+--- a/internal/dynamodb/store.go
++++ b/internal/dynamodb/store.go
+@@ -92,8 +92,14 @@
+ }
+ 
+ type itemView struct {
+-	item map[string]any
+-	key  map[string]any
++	item  map[string]any
++	key   map[string]any
++	order []cachedAttributeOrder
++}
++
++type cachedAttributeOrder struct {
++	number  *big.Float
++	encoded string
+ }
+ 
+ type putItemResult struct {
+@@ -1378,18 +1384,34 @@
+ 		}
+ 		keySchema = indexSchema
+ 	}
++	combinedSchema := unionKeySchema(state.Table.KeySchema, keySchema)
+ 	views := make([]itemView, 0, len(state.Items))
+ 	for _, item := range state.Items {
+-		key, err := buildKeyMap(item.Item, unionKeySchema(state.Table.KeySchema, keySchema))
++		key, err := buildKeyMap(item.Item, combinedSchema)
+ 		if err != nil {
+ 			continue
+ 		}
+-		views = append(views, itemView{item: cloneItem(item.Item), key: key})
++		cloned := cloneItem(item.Item)
++		order := make([]cachedAttributeOrder, len(combinedSchema))
++		for i, part := range combinedSchema {
++			value := cloned[part.AttributeName]
++			number, _ := asNumber(value)
++			order[i] = cachedAttributeOrder{number: number, encoded: attributeSortValue(value)}
++		}
++		views = append(views, itemView{item: cloned, key: key, order: order})
+ 	}
+ 	sort.Slice(views, func(i, j int) bool {
+-		cmp := compareForSchema(views[i].item, views[j].item, keySchema)
+-		if cmp == 0 {
+-			cmp = compareForSchema(views[i].item, views[j].item, state.Table.KeySchema)
++		cmp := 0
++		for k, left := range views[i].order {
++			right := views[j].order[k]
++			if left.number != nil && right.number != nil {
++				cmp = left.number.Cmp(right.number)
++			} else {
++				cmp = strings.Compare(left.encoded, right.encoded)
++			}
++			if cmp != 0 {
++				break
++			}
+ 		}
+ 		if reverse {
+ 			return cmp > 0
