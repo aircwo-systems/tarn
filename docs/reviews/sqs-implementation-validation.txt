@@ -1,0 +1,53 @@
+SQS remaining findings implementation validation, 14 October 2026
+Branch: develop-mvp
+
+Remaining findings resolved:
+  Message ownership: inputs copied; send, duplicate-send and receive detached.
+  DLQ transfer: one atomic operation with current receipt/eligibility checks.
+  Persistence: failed writes remain dirty and retry without new mutations.
+  FIFO wakeups: expiry, stale parking and DLQ movement notify the source.
+  Shutdown: idempotent lifecycle, joined reaper, final pending-state flush.
+
+Preserved behaviours covered by regressions:
+  Obsolete receipts cannot transfer or delete a new delivery.
+  Below-threshold messages do not require a DLQ.
+  Missing/invalid/self destinations retain source messages.
+  Reaper/poller overlap and repeated transfer do not duplicate messages.
+  FIFO group/dedup IDs, original binary attributes and retry count persist.
+  Poller send disruption, default delay, FIFO dedup and joined traces remain.
+  Reaper expiry timing and bypass of send policies remain.
+  Redrive strips retry count, copies attributes and refreshes ID/retention.
+  Failed rename removes its temporary file.
+  Mutations during writes schedule another snapshot.
+  Failed final writes remain dirty and shutdown stays bounded.
+  Empty receives and unchanged reaps do not mark dirty or wake queues.
+  Stop before Start, duplicate Start, concurrent Stop and repeated Close work.
+
+Final checks:
+  go test -race ./internal/sqs ./internal/api/sqs ./internal/api/admin
+    ./internal/eventsource ./internal/sns ./internal/eventbridge
+    ./internal/persist -count=1: PASS
+  make test: PASS, full go test ./... -v -race
+    Docker end-to-end package: PASS, 48.871s
+  make lint: PASS, 0 issues
+  go vet ./...: PASS
+  gofmt: changed Go files formatted
+  git diff --check: PASS
+
+Receive/snapshot benchmark:
+  go test ./internal/sqs -run '^$' -bench '^BenchmarkReceiveMessageSnapshots$'
+    -benchmem -benchtime=200ms -count=3 -cpu=1: PASS
+  Raw output: docs/reviews/sqs-snapshot-bench.txt
+  Measures full in-memory receives; no HTTP or baseline speedup claim.
+
+Detailed local logs:
+  /tmp/tarn-sqs-final-scoped-tests.log
+  /tmp/tarn-sqs-full-tests.log
+  /tmp/tarn-sqs-final-lint.log
+  /tmp/tarn-sqs-vet.log
+  /tmp/tarn-sqs-snapshot-bench.log
+
+All report correctness findings and shutdown/cancellation opportunities are
+resolved. Receipt/ID indexes, cached snapshots, scheduling and replacement
+storage remain optional workload-driven work. Persistence format and public
+method signatures are unchanged. Unrelated workspace changes were preserved.

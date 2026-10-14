@@ -1,0 +1,18 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/aircwo-systems/tarn/internal/sqs
+cpu: Apple M5
+BenchmarkReceiveMessageSnapshots/batch=1/attributes=false         	  664434	       335.9 ns/op	     232 B/op	       4 allocs/op
+BenchmarkReceiveMessageSnapshots/batch=1/attributes=false         	  772231	       306.7 ns/op	     232 B/op	       4 allocs/op
+BenchmarkReceiveMessageSnapshots/batch=1/attributes=false         	  782980	       307.8 ns/op	     232 B/op	       4 allocs/op
+BenchmarkReceiveMessageSnapshots/batch=1/attributes=true          	  438555	       535.7 ns/op	     872 B/op	       9 allocs/op
+BenchmarkReceiveMessageSnapshots/batch=1/attributes=true          	  455847	       533.3 ns/op	     872 B/op	       9 allocs/op
+BenchmarkReceiveMessageSnapshots/batch=1/attributes=true          	  448911	       540.0 ns/op	     872 B/op	       9 allocs/op
+BenchmarkReceiveMessageSnapshots/batch=10/attributes=false        	   90691	      2681 ns/op	    2432 B/op	      32 allocs/op
+BenchmarkReceiveMessageSnapshots/batch=10/attributes=false        	   89011	      2684 ns/op	    2432 B/op	      32 allocs/op
+BenchmarkReceiveMessageSnapshots/batch=10/attributes=false        	   90356	      2677 ns/op	    2432 B/op	      32 allocs/op
+BenchmarkReceiveMessageSnapshots/batch=10/attributes=true         	   48468	      4975 ns/op	    8832 B/op	      82 allocs/op
+BenchmarkReceiveMessageSnapshots/batch=10/attributes=true         	   48478	      4953 ns/op	    8832 B/op	      82 allocs/op
+BenchmarkReceiveMessageSnapshots/batch=10/attributes=true         	   45855	      4999 ns/op	    8832 B/op	      82 allocs/op
+PASS
+ok  	github.com/aircwo-systems/tarn/internal/sqs	4.289s

@@ -3,7 +3,8 @@ package sqs
 import (
 	"fmt"
 	"log"
-	"strconv"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
@@ -15,11 +16,15 @@ const dlqRetryCountAttribute = "TarnRetryCount"
 
 // Service implements SQS business logic.
 type Service struct {
-	cfg        *config.Config
-	store      *Store
-	disruptor  *Disruptor
-	done       chan struct{}
-	traceStore *tracesvc.Store
+	cfg         *config.Config
+	store       *Store
+	disruptor   *Disruptor
+	done        chan struct{}
+	traceStore  *tracesvc.Store
+	lifecycleMu sync.Mutex
+	started     bool
+	stopped     bool
+	reaperDone  chan struct{}
 }
 
 // SetTraceStore records sends carrying distributed context.
@@ -28,10 +33,11 @@ func (s *Service) SetTraceStore(store *tracesvc.Store) { s.traceStore = store }
 // NewService creates a new SQS service.
 func NewService(cfg *config.Config) *Service {
 	return &Service{
-		cfg:       cfg,
-		store:     NewStore(cfg),
-		disruptor: newDisruptor(),
-		done:      make(chan struct{}),
+		cfg:        cfg,
+		store:      NewStore(cfg),
+		disruptor:  newDisruptor(),
+		done:       make(chan struct{}),
+		reaperDone: make(chan struct{}),
 	}
 }
 
@@ -42,16 +48,32 @@ func (s *Service) Init() error {
 
 // Start begins the background reaper goroutine.
 func (s *Service) Start() {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	if s.started || s.stopped {
+		return
+	}
+	s.started = true
 	go s.reaper()
 	log.Println("[sqs] service started")
 }
 
-// Stop shuts down the background reaper.
+// Stop waits for the background reaper. It is safe before Start and on repeat calls.
 func (s *Service) Stop() {
-	close(s.done)
+	s.lifecycleMu.Lock()
+	if !s.stopped {
+		close(s.done)
+		s.stopped = true
+	}
+	started := s.started
+	s.lifecycleMu.Unlock()
+	if started {
+		<-s.reaperDone
+	}
 }
 
 func (s *Service) reaper() {
+	defer close(s.reaperDone)
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -59,6 +81,11 @@ func (s *Service) reaper() {
 		case <-s.done:
 			return
 		case <-ticker.C:
+			select {
+			case <-s.done:
+				return
+			default:
+			}
 			s.store.Reap()
 		}
 	}
@@ -113,7 +140,14 @@ func (s *Service) SendMessage(queueName, body string, delaySec int, attrs map[st
 	}
 	msg, err := s.store.SendMessage(queueName, body, delaySec, attrs, groupId, dedupId)
 	duration := time.Since(start)
-	if err == nil && s.traceStore != nil {
+	if err == nil {
+		s.recordSendTrace(queueName, msg, start, duration)
+	}
+	return msg, err
+}
+
+func (s *Service) recordSendTrace(queueName string, msg *types.SQSMessage, start time.Time, duration time.Duration) {
+	if s.traceStore != nil {
 		if ctx := tracesvc.ContextFromSQSMessage(msg); ctx != nil {
 			s.traceStore.RecordJoined(ctx, s.cfg.AccountID, &tracesvc.Trace{
 				StartedAt: start,
@@ -125,7 +159,6 @@ func (s *Service) SendMessage(queueName, body string, delaySec int, attrs map[st
 			})
 		}
 	}
-	return msg, err
 }
 
 // SetDisruptorRule stores (or replaces) the send-failure rule for a queue.
@@ -255,32 +288,20 @@ func (s *Service) ReleaseMessage(queueName, receiptHandle string) error {
 // If so, it delivers the message to the configured DLQ and deletes it from srcQueue.
 // Returns (true, dlqName, nil) when moved, (false, "", nil) when below threshold or no DLQ configured.
 func (s *Service) MoveToDLQIfExceeded(srcQueue string, msg *types.SQSMessage) (bool, string, error) {
-	q, err := s.store.GetQueue(srcQueue)
-	if err != nil {
+	if msg == nil {
+		return false, "", fmt.Errorf("message is required")
+	}
+	start := time.Now()
+	moved, dlqName, err := s.store.moveToDLQ(srcQueue, dlqCandidate{msg.MessageId, msg.ReceiptHandle}, false, func(name string) error {
+		if err := s.disruptor.shouldFail(name); err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil || moved == nil {
 		return false, "", err
 	}
-	if q.MaxReceiveCount <= 0 || q.DeadLetterTargetArn == "" {
-		return false, "", nil
-	}
-	if msg.ApproximateReceiveCount < q.MaxReceiveCount {
-		return false, "", nil
-	}
-
-	dlqName := queueNameFromArn(q.DeadLetterTargetArn)
-	dlqAttrs := cloneMessageAttributes(msg.MessageAttributes)
-	if dlqAttrs == nil {
-		dlqAttrs = make(map[string]*types.MessageAttribute, 1)
-	}
-	dlqAttrs[dlqRetryCountAttribute] = &types.MessageAttribute{
-		DataType:    "Number",
-		StringValue: strconv.Itoa(msg.ApproximateReceiveCount),
-	}
-	if _, err := s.SendMessage(dlqName, msg.Body, 0, dlqAttrs, msg.MessageGroupId, msg.MessageDeduplicationId); err != nil {
-		return false, "", fmt.Errorf("send to DLQ %q: %w", dlqName, err)
-	}
-	if err := s.DeleteMessage(srcQueue, msg.ReceiptHandle); err != nil {
-		return false, "", fmt.Errorf("delete from source queue: %w", err)
-	}
+	s.recordSendTrace(dlqName, moved, start, time.Since(start))
 	return true, dlqName, nil
 }
 
@@ -326,13 +347,14 @@ func cloneMessageAttributes(src map[string]*types.MessageAttribute) map[string]*
 			continue
 		}
 		attrCopy := *value
-		if value.BinaryValue != nil {
-			attrCopy.BinaryValue = append([]byte(nil), value.BinaryValue...)
-		}
+		attrCopy.BinaryValue = slices.Clone(value.BinaryValue)
 		cloned[key] = &attrCopy
 	}
 	return cloned
 }
 
-// Close stops background persistence after writing any pending state.
-func (s *Service) Close() { s.store.Close() }
+// Close joins background reaping, then flushes pending persistence state.
+func (s *Service) Close() {
+	s.Stop()
+	s.store.Close()
+}

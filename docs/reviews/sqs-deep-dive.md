@@ -16,9 +16,34 @@ Regression tests cover all combinations of message-count states and requested me
 
 The follow-up metrics benchmark at 100,000 entries has a median of 147.51 microseconds across three runs, compared with the original 488.71 microseconds. That is about 3.3x faster locally, with the same 400 bytes and 10 allocations per request. The benchmark now lives in `internal/sqs/metrics_test.go`; HTTP latency was not measured.
 
-The remaining findings include mutable message results/input attributes, DLQ transfer correctness, persistence retries, FIFO reaper wakeups, and reaper shutdown. The analysis below describes the original baseline; its raw failure logs are historical evidence.
+The remaining findings from this batch are resolved by the follow-up below. The analysis and raw failure logs later in this document describe the original baseline.
 
-## Scope and current design
+## Remaining-finding implementation, 14 October 2026
+
+All six numbered correctness findings and the shutdown/cancellation opportunities are now addressed. The first batch fixed config snapshots, rejected-update rollback, binary copying, metrics, and HTTP cancellation. This follow-up completes message ownership and fixes DLQ transfer, persistence retry, FIFO wakeups, and reaper lifecycle:
+
+- Send, duplicate-send, receive, and peek return detached messages while holding the queue lock. Incoming attributes are copied, including nested structs and binary slices. A later receive cannot rewrite an earlier response's receipt or counters. Nil and empty maps/slices retain their shape.
+- One private DLQ transfer operation pins both live queues, locks them in lexical order shared with redrive, and rechecks the stored message's receipt, counters, retention, and current policy. A missing destination or failed delivery retains the source. Repeated and concurrent reaper/poller transfers cannot append it twice. Both paths preserve the group/dedup IDs and attach `TarnRetryCount`; redrive still clears retry metadata, clones attributes, creates a fresh ID, and applies destination retention.
+- Caller policies remain explicit. The reaper waits for visibility expiry and bypasses send disruption, tracing, default destination delay, and send deduplication. The poller retains those send behaviours and records its trace after queue locks are released. Messages below the threshold still return "not moved" without requiring a destination.
+- Persistence failures are logged and re-mark the store dirty, scheduling another attempt through the existing 250 ms flusher interval. Writes still clear dirty before snapshotting so concurrent changes schedule their own write. Failed temporary files are removed. Shutdown makes a final pending-state attempt; a continuing failure stays dirty and is reported without making shutdown retry forever. The shared persistence interface and JSON format are unchanged.
+- Reaping expiry, stale parking, and successful DLQ movement signals the source FIFO queue. Unchanged queues stay asleep. FIFO long polls also consider a blocker's retention deadline so they can progress without waiting for the reaper tick.
+- Start/Stop are idempotent and serialized. Stop waits for an active reap to finish, including concurrent calls and stop-before-start setups. Close joins the reaper before the final persistence flush.
+
+Regression evidence:
+
+| Requirement | Coverage |
+| --- | --- |
+| Message/input ownership and old receipt isolation | [Ownership tests](../../internal/sqs/ownership_test.go), including concurrent response serialization/redelivery and duplicate sends |
+| Missing/failed DLQ, current receipt/eligibility, concurrent transfers, FIFO destinations, trace/disruption policies, and redrive | [DLQ tests](../../internal/sqs/dlq_test.go); existing service and event-source failure-routing tests |
+| Failed writes recover without new mutations; rename cleanup, bounded final write, and mutation during a flush | [Persistence retry tests](../../internal/sqs/persistence_retry_test.go); existing persistence round-trip/final-write tests and shared flusher tests |
+| Expiry/stale/DLQ FIFO wakeups, no unchanged wakeups, retention deadline, and joined shutdown | [Reaper/lifecycle tests](../../internal/sqs/reaper_test.go); existing long-poll/compaction tests |
+| Earlier config, binary-copy, metrics, and HTTP cancellation fixes | Existing attributes/metrics tests and both protocol cancellation tests |
+
+The completed receive fixture ran on Apple M5/macOS arm64 with `-cpu=1 -benchtime=200ms -count=3`. Median one-message receives cost 307.8 ns, 232 bytes and four allocations without attributes, or 535.7 ns, 872 bytes and nine allocations with one string and one 256-byte binary attribute. Ten-message batches cost 2,681 ns/2,432 bytes/32 allocations and 4,975 ns/8,832 bytes/82 allocations respectively. This measures the complete in-memory receive, including receipts and snapshots, not isolated copying or HTTP throughput. It establishes the safety cost without claiming a speedup. See [snapshot benchmark output](sqs-snapshot-bench.txt).
+
+The [validation record](sqs-implementation-validation.txt) records final checks. No correctness finding remains open. Receipt/ID indexes, cached persistence snapshots, timer heaps, and storage replacement remain optional workload-driven work; they are not required to resolve these failures.
+
+## Original review scope and design
 
 The module includes `internal/sqs`, with its callers in the SQS HTTP handlers, Lambda event-source poller, and admin overview. Persistence uses the shared `internal/persist` flusher. SNS and EventBridge are producer integrations checked through their tests.
 

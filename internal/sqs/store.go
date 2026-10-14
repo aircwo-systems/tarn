@@ -388,7 +388,7 @@ func (s *Store) GetQueueAttributes(name string, attrNames []string) (map[string]
 	return result, nil
 }
 
-// SendMessage adds a message to the queue.
+// SendMessage copies attributes into the queue and returns a detached message.
 func (s *Store) SendMessage(name string, body string, delaySec int, attrs map[string]*types.MessageAttribute, groupId, dedupId string) (*types.SQSMessage, error) {
 	s.mu.RLock()
 	q, exists := s.queues[name]
@@ -396,55 +396,53 @@ func (s *Store) SendMessage(name string, body string, delaySec int, attrs map[st
 	if !exists {
 		return nil, fmt.Errorf("queue %s not found", name)
 	}
-
 	q.mu.Lock()
-	if q.config.FifoQueue && groupId == "" {
-		q.mu.Unlock()
-		return nil, fmt.Errorf("MessageGroupId is required for FIFO queues")
-	}
-
-	// FIFO deduplication
-	if q.config.FifoQueue && dedupId != "" {
-		now := nowMs()
-		if expiry, exists := q.dedup[dedupId]; exists && now < expiry {
-			// Duplicate within dedup window — return success without adding
-			for _, m := range q.messages {
-				if m.MessageDeduplicationId == dedupId && !m.Deleted {
-					q.mu.Unlock()
-					return m, nil
-				}
-			}
-		}
-		q.dedup[dedupId] = now + 300000 // 5 minute window
-	}
-
-	now := nowMs()
+	defer q.mu.Unlock()
 	delay := delaySec
 	if delay == 0 {
 		delay = q.config.DelaySeconds
 	}
-
-	msg := &types.SQSMessage{
-		MessageId:              uuid.New().String(),
-		Body:                   body,
-		MD5OfBody:              md5Hash(body),
-		MessageAttributes:      attrs,
-		SentTimestamp:          now,
-		VisibleAt:              now,
-		DelayUntil:             now + int64(delay)*1000,
-		ExpiresAt:              now + int64(q.config.MessageRetentionPeriod)*1000,
-		MessageGroupId:         groupId,
-		MessageDeduplicationId: dedupId,
+	before := len(q.messages)
+	msg, err := enqueueMessageLocked(q, body, delay, attrs, groupId, dedupId, true)
+	if err != nil {
+		return nil, err
 	}
+	if len(q.messages) != before {
+		s.dirty.Store(true)
+	}
+	return cloneMessage(msg), nil
+}
 
+// enqueueMessageLocked owns its input attributes and returns a private stored
+// message. The caller holds q.mu and must snapshot before exposing the result.
+func enqueueMessageLocked(q *queue, body string, delay int, attrs map[string]*types.MessageAttribute, groupId, dedupId string, honorDedup bool) (*types.SQSMessage, error) {
+	if q.config.FifoQueue && groupId == "" {
+		return nil, fmt.Errorf("MessageGroupId is required for FIFO queues")
+	}
+	now := nowMs()
+	if honorDedup && q.config.FifoQueue && dedupId != "" {
+		if expiry, exists := q.dedup[dedupId]; exists && now < expiry {
+			for _, m := range q.messages {
+				if m.MessageDeduplicationId == dedupId && !m.Deleted {
+					return m, nil
+				}
+			}
+		}
+		q.dedup[dedupId] = now + 300000
+	}
+	msg := &types.SQSMessage{
+		MessageId: uuid.New().String(), Body: body, MD5OfBody: md5Hash(body),
+		MessageAttributes: cloneMessageAttributes(attrs), SentTimestamp: now,
+		VisibleAt: now, DelayUntil: now + int64(delay)*1000,
+		ExpiresAt:      now + int64(q.config.MessageRetentionPeriod)*1000,
+		MessageGroupId: groupId, MessageDeduplicationId: dedupId,
+	}
 	q.messages = append(q.messages, msg)
 	q.signal()
-	q.mu.Unlock()
-	s.dirty.Store(true)
 	return msg, nil
 }
 
-// ReceiveMessage returns up to maxCount visible messages and makes them invisible.
+// ReceiveMessage returns snapshots of up to maxCount visible messages and makes them invisible.
 func (s *Store) ReceiveMessage(name string, maxCount, visTimeout int) ([]*types.SQSMessage, error) {
 	msgs, _, _, err := s.receive(name, maxCount, visTimeout)
 	return msgs, err
@@ -452,7 +450,7 @@ func (s *Store) ReceiveMessage(name string, maxCount, visTimeout int) ([]*types.
 
 // receive is ReceiveMessage plus what a long poll needs when nothing was
 // receivable: a channel closed when a message may have arrived, and the epoch
-// ms at which an in-flight or delayed message next becomes visible (0 if none).
+// ms at which visibility, delay, or FIFO blocker expiry can permit delivery (0 if none).
 func (s *Store) receive(name string, maxCount, visTimeout int) ([]*types.SQSMessage, <-chan struct{}, int64, error) {
 	s.mu.RLock()
 	q, exists := s.queues[name]
@@ -499,6 +497,9 @@ func (s *Store) receive(name string, maxCount, visTimeout int) ([]*types.SQSMess
 		}
 		later(m.VisibleAt)
 		later(m.DelayUntil)
+		if q.config.FifoQueue {
+			later(m.ExpiresAt)
+		}
 
 		// Available messages from a FIFO group can share this batch. An earlier
 		// in-flight or delayed message blocks later messages from that group.
@@ -525,7 +526,7 @@ func (s *Store) receive(name string, maxCount, visTimeout int) ([]*types.SQSMess
 		}
 		m.VisibleAt = now + int64(visTimeout)*1000
 
-		result = append(result, m)
+		result = append(result, cloneMessage(m))
 	}
 	var wake <-chan struct{}
 	if len(result) == 0 {
@@ -713,9 +714,9 @@ func (s *Store) DeleteMessageByID(name string, messageID string) error {
 // from fromQueue to toQueue.
 func (s *Store) RedriveMessages(fromQueue, toQueue string, maxMessages int) (int, error) {
 	s.mu.RLock()
+	defer s.mu.RUnlock()
 	qFrom, existsFrom := s.queues[fromQueue]
 	qTo, existsTo := s.queues[toQueue]
-	s.mu.RUnlock()
 
 	if !existsFrom {
 		return 0, fmt.Errorf("source queue %s not found", fromQueue)
@@ -727,15 +728,8 @@ func (s *Store) RedriveMessages(fromQueue, toQueue string, maxMessages int) (int
 		return 0, fmt.Errorf("source and target queue must be different")
 	}
 
-	if fromQueue < toQueue {
-		qFrom.mu.Lock()
-		qTo.mu.Lock()
-	} else {
-		qTo.mu.Lock()
-		qFrom.mu.Lock()
-	}
-	defer qFrom.mu.Unlock()
-	defer qTo.mu.Unlock()
+	unlock := lockQueuePair(fromQueue, toQueue, qFrom, qTo)
+	defer unlock()
 
 	now := nowMs()
 	moved := 0
@@ -847,102 +841,66 @@ func (s *Store) ListQueueTags(name string) (map[string]string, error) {
 // messages that exceeded their maxReceiveCount to the configured DLQ.
 func (s *Store) Reap() {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	now := nowMs()
 	changed := false
-
-	type dlqMove struct {
-		dlqName  string
-		messages []*types.SQSMessage
+	type pendingMove struct {
+		source  string
+		message dlqCandidate
 	}
-	var dlqMoves []dlqMove
-
-	for _, q := range s.queues {
+	var moves []pendingMove
+	for name, q := range s.queues {
 		q.mu.Lock()
-
 		hasDLQ := q.config.MaxReceiveCount > 0 && q.config.DeadLetterTargetArn != ""
-		dlqName := ""
-		if hasDLQ {
-			dlqName = queueNameFromArn(q.config.DeadLetterTargetArn)
-		}
-
-		// Filter in place: most ticks remove nothing, and allocating a fresh
-		// slice per queue per second is pure garbage.
 		alive := q.messages[:0]
-		var toMove []*types.SQSMessage
-
-		staleThreshold := defaultStaleReceiveCount
+		receivabilityChanged := false
+		threshold := defaultStaleReceiveCount
 		if q.config.MaxReceiveCount > 0 {
-			staleThreshold = q.config.MaxReceiveCount
+			threshold = q.config.MaxReceiveCount
 		}
-
 		for _, m := range q.messages {
 			if m.Deleted || m.ExpiresAt <= now {
 				changed = true
+				receivabilityChanged = true
 				continue
 			}
-			// Route to DLQ when a message has been received too many times
-			// and its visibility timeout has expired (consumer didn't delete it).
-			if hasDLQ && m.VisibleAt <= now && m.ApproximateReceiveCount >= q.config.MaxReceiveCount {
-				toMove = append(toMove, cloneMessage(m))
-				changed = true
-				continue
+			// Keep candidates until an atomic transfer has confirmed delivery. Missing
+			// destinations and concurrent re-receives must not remove the source.
+			if hasDLQ && m.VisibleAt <= now && m.ApproximateReceiveCount >= threshold {
+				moves = append(moves, pendingMove{name, dlqCandidate{m.MessageId, m.ReceiptHandle}})
 			}
-			// No DLQ: mark as stale instead of retrying indefinitely.
-			// On real AWS the message would keep retrying until it expires, but in
-			// Tarn we park it to avoid burning CPU. The UI shows it as "stale".
-			if !hasDLQ && !m.Stale && m.VisibleAt <= now && m.ApproximateReceiveCount >= staleThreshold {
+			if !hasDLQ && !m.Stale && m.VisibleAt <= now && m.ApproximateReceiveCount >= threshold {
 				m.Stale = true
 				changed = true
+				receivabilityChanged = true
 			}
 			alive = append(alive, m)
 		}
-		clear(q.messages[len(alive):]) // drop references to removed messages
+		clear(q.messages[len(alive):])
 		q.messages = alive
-
-		// Clean stale dedup entries
 		for id, expiry := range q.dedup {
 			if now >= expiry {
 				delete(q.dedup, id)
 				changed = true
 			}
 		}
-
+		if q.config.FifoQueue && receivabilityChanged {
+			q.signal()
+		}
 		q.mu.Unlock()
-
-		if len(toMove) > 0 {
-			dlqMoves = append(dlqMoves, dlqMove{dlqName: dlqName, messages: toMove})
-		}
 	}
-
-	// Deliver DLQ messages after releasing all source queue locks (avoids deadlock).
-	for _, move := range dlqMoves {
-		dlq, exists := s.queues[move.dlqName]
-		if !exists {
-			log.Printf("[sqs] DLQ %q not found, dropping %d message(s)", move.dlqName, len(move.messages))
-			continue
-		}
-		dlq.mu.Lock()
-		for _, m := range move.messages {
-			dlq.messages = append(dlq.messages, &types.SQSMessage{
-				MessageId:         uuid.New().String(),
-				Body:              m.Body,
-				MD5OfBody:         m.MD5OfBody,
-				MessageAttributes: m.MessageAttributes,
-				SentTimestamp:     now,
-				VisibleAt:         now,
-				ExpiresAt:         now + int64(dlq.config.MessageRetentionPeriod)*1000,
-				MessageGroupId:    m.MessageGroupId,
-			})
-		}
-		dlq.signal()
-		dlq.mu.Unlock()
-		log.Printf("[sqs] moved %d message(s) to DLQ %q", len(move.messages), move.dlqName)
-	}
-
+	s.mu.RUnlock()
 	if changed {
 		s.dirty.Store(true)
+	}
+	for _, move := range moves {
+		// Reaping retains its expiry timing and bypasses send chaos/tracing, default
+		// destination delays, and FIFO send deduplication, as before.
+		msg, name, err := s.moveToDLQ(move.source, move.message, true, nil)
+		if err != nil {
+			log.Printf("[sqs] DLQ transfer from %q retained source: %v", move.source, err)
+		} else if msg != nil {
+			log.Printf("[sqs] moved message to DLQ %q", name)
+		}
 	}
 }
 
@@ -1144,8 +1102,17 @@ func (s *Store) Flush() {
 func (s *Store) Close() { s.flusher.Close() }
 
 func (s *Store) flushToDisk() {
+	if err := s.writeSnapshot(); err != nil {
+		// The shared flusher clears before writing so concurrent mutations remain
+		// visible. Re-mark failures to retry at its bounded coalescing interval.
+		s.dirty.Store(true)
+		log.Printf("[sqs] persist queue state: %v", err)
+	}
+}
+
+func (s *Store) writeSnapshot() error {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
-		return
+		return nil
 	}
 
 	now := nowMs()
@@ -1190,29 +1157,31 @@ func (s *Store) flushToDisk() {
 
 	data, err := json.Marshal(snapshot)
 	if err != nil {
-		return
+		return fmt.Errorf("encode snapshot: %w", err)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(s.cfg.QueuesStatePath()), 0755); err != nil {
-		return
+		return fmt.Errorf("create snapshot directory: %w", err)
 	}
 
 	tmpFile, err := os.CreateTemp(filepath.Dir(s.cfg.QueuesStatePath()), "state-*.json.tmp")
 	if err != nil {
-		return
+		return fmt.Errorf("create snapshot file: %w", err)
 	}
 	tmpPath := tmpFile.Name()
 
 	if _, err := tmpFile.Write(data); err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(tmpPath)
-		return
+		return err
 	}
 	if err := tmpFile.Close(); err != nil {
 		_ = os.Remove(tmpPath)
-		return
+		return err
 	}
 	if err := os.Rename(tmpPath, s.cfg.QueuesStatePath()); err != nil {
 		_ = os.Remove(tmpPath)
+		return fmt.Errorf("replace snapshot: %w", err)
 	}
+	return nil
 }

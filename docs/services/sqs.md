@@ -47,6 +47,9 @@ awslocal lambda create-event-source-mapping \
 
 ### Dead Letter Queues
 Capture messages that fail processing:
+
+DLQ transfers retain the source message if the destination is missing or cannot accept it. Repeated transfer attempts do not duplicate delivery. Both background reaping and Lambda failure handling preserve message attributes and FIFO group/deduplication IDs and add `TarnRetryCount`. Redrive removes that retry attribute and starts the message with a fresh ID and destination retention period.
+
 <div class="example-block">
 <div class="lang">HCL (Terraform)</div>
 
@@ -95,6 +98,10 @@ curl -X DELETE 'http://127.0.0.1:4566/_tarn/admin/sqs/disruptor?all=true'
 Supported codes: `ServiceUnavailable` (503), `InternalError` (500),
 `Throttling` (400), `OverLimit` (400). Batch sends report per-entry failures,
 so partial batch failure is exercised realistically.
+
+### Persistence and shutdown
+
+With persistence enabled, failed snapshot writes are logged and retried through the existing write-behind interval. Shutdown waits for background reaping before attempting the final pending-state write. If the filesystem still rejects that write, Tarn reports the failure and completes shutdown without retrying indefinitely.
 
 ## Examples
 
