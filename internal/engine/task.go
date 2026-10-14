@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"golang.org/x/sync/semaphore"
 	"io"
 	"log"
 	"math"
@@ -180,10 +181,10 @@ type TaskContainerSummary struct {
 }
 
 // refPullMu returns the per-image-reference mutex, creating it lazily.
-func (e *Engine) refPullMu(ref string) *sync.Mutex {
-	mu := &sync.Mutex{}
+func (e *Engine) refPullMu(ref string) *semaphore.Weighted {
+	mu := semaphore.NewWeighted(1)
 	actual, _ := e.refPullMus.LoadOrStore(ref, mu)
-	return actual.(*sync.Mutex)
+	return actual.(*semaphore.Weighted)
 }
 
 // imageRefExists reports whether ref is already present in the local image
@@ -194,6 +195,14 @@ func (e *Engine) imageRefExists(ctx context.Context, ref string) (bool, error) {
 		return false, err
 	}
 	for _, img := range images {
+		if img.ID == ref {
+			return true, nil
+		}
+		for _, digest := range img.RepoDigests {
+			if digest == ref {
+				return true, nil
+			}
+		}
 		for _, tag := range img.RepoTags {
 			if tag == ref {
 				return true, nil
@@ -223,8 +232,10 @@ func (e *Engine) EnsureImageRef(ctx context.Context, ref string) error {
 	}
 
 	mu := e.refPullMu(ref)
-	mu.Lock()
-	defer mu.Unlock()
+	if err := mu.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer mu.Release(1)
 
 	if _, ok := e.imageRefKnown.Load(ref); ok {
 		return nil

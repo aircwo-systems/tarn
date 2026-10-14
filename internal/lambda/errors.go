@@ -10,5 +10,7 @@ var (
 	// ErrFunctionNotReady is returned when a function exists but is not Active.
 	ErrFunctionNotReady = errors.New("function not ready")
 	// ErrTooManyRequests is returned when the concurrency cap is exhausted.
-	ErrTooManyRequests = errors.New("too many requests")
+	ErrTooManyRequests  = errors.New("too many requests")
+	ErrInvalidParameter = errors.New("invalid parameter")
+	ErrResourceConflict = errors.New("resource conflict")
 )

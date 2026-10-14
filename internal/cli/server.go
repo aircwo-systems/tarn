@@ -401,12 +401,8 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 // service. Pools reference triggers by ARN; Invoke takes the function name.
 func cognitoTriggerInvoker(lambdaSvc *lambda.Service) cognito.TriggerInvoker {
 	return func(ctx context.Context, functionArn string, payload []byte) ([]byte, error) {
-		name := functionArn
-		if _, tail, ok := strings.Cut(functionArn, ":function:"); ok {
-			name, _, _ = strings.Cut(tail, ":")
-		}
 		out, err := lambdaSvc.Invoke(ctx, &types.InvokeInput{
-			FunctionName:   name,
+			FunctionName:   functionArn,
 			Payload:        payload,
 			InvocationType: "RequestResponse",
 		})

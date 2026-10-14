@@ -18,6 +18,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/aircwo-systems/tarn/internal/config"
+	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	"github.com/aircwo-systems/tarn/internal/stepfunctions/asl"
 	"github.com/aircwo-systems/tarn/internal/stepfunctions/interpreter"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
@@ -1085,18 +1086,15 @@ func resolveLambdaTarget(req interpreter.TaskRequest) (string, []byte, error) {
 
 // lambdaNameFromARNOrName extracts a function name from a Lambda function ARN or
 // returns a bare name unchanged. Unsupported ARNs yield "".
-func lambdaNameFromARNOrName(s string) string {
-	if i := strings.LastIndex(s, ":function:"); i >= 0 {
-		name := s[i+len(":function:"):]
-		if j := strings.IndexByte(name, ':'); j >= 0 { // strip :version or :alias
-			name = name[:j]
-		}
-		return name
-	}
-	if strings.HasPrefix(s, "arn:") {
+func lambdaNameFromARNOrName(reference string) string {
+	name, qualifier, err := lambdasvc.ParseFunctionReference(reference, "")
+	if err != nil {
 		return ""
 	}
-	return s
+	if qualifier != "" {
+		name += ":" + qualifier
+	}
+	return name
 }
 
 // Close stops background persistence after writing any pending state.

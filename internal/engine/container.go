@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
+	"golang.org/x/sync/semaphore"
 	"io"
 	"log"
 	"net"
@@ -83,12 +84,30 @@ type ContainerInfo struct {
 	// handles one invocation at a time, so each container (an "execution
 	// environment") is held exclusively for the duration of an invoke. Guarded
 	// by Engine.mu.
-	Busy bool
+	Busy       bool
+	Revision   string
+	Retired    bool
+	onRemove   func()
+	removeOnce sync.Once
 
 	// logCursor is the timestamp of the last log line ingested from this
 	// container. It lives on the container so it is freed with it.
 	logMu     sync.Mutex
 	logCursor time.Time
+}
+
+// LambdaContainerOptions ties a container to the deployment it mounted.
+type LambdaContainerOptions struct {
+	Revision string
+	OnRemove func()
+}
+
+func (c *ContainerInfo) releaseDeployment() {
+	c.removeOnce.Do(func() {
+		if c.onRemove != nil {
+			c.onRemove()
+		}
+	})
 }
 
 // LogCursor returns the timestamp of the last log line ingested.
@@ -130,10 +149,11 @@ func (e *Engine) resolveAccount(accountID string) string {
 // one: every concurrent invocation gets its own warm container ("execution
 // environment"), created on demand up to a per-function cap and reused when idle.
 type Engine struct {
-	client     *client.Client
-	cfg        *config.Config
-	containers map[string][]*ContainerInfo // poolKey(account, function) -> pool of containers
-	mu         sync.RWMutex
+	client       *client.Client
+	cfg          *config.Config
+	containers   map[string][]*ContainerInfo // poolKey(account, function) -> pool of containers
+	mu           sync.RWMutex
+	availability map[string]chan struct{}
 	// imageKnown caches runtimes confirmed to have their image present locally,
 	// avoiding a Docker ImageList call on every EnsureImage invocation.
 	imageKnown sync.Map // types.Runtime → struct{}
@@ -219,10 +239,10 @@ func (e *Engine) ImageExists(ctx context.Context, runtime types.Runtime) (bool, 
 }
 
 // runtimePullMu returns the per-runtime mutex, creating it lazily.
-func (e *Engine) runtimePullMu(runtime types.Runtime) *sync.Mutex {
-	mu := &sync.Mutex{}
+func (e *Engine) runtimePullMu(runtime types.Runtime) *semaphore.Weighted {
+	mu := semaphore.NewWeighted(1)
 	actual, _ := e.pullMus.LoadOrStore(runtime, mu)
-	return actual.(*sync.Mutex)
+	return actual.(*semaphore.Weighted)
 }
 
 // EnsureImage pulls the runtime image if not already present, blocking until ready.
@@ -234,8 +254,10 @@ func (e *Engine) EnsureImage(ctx context.Context, runtime types.Runtime) error {
 	}
 
 	mu := e.runtimePullMu(runtime)
-	mu.Lock()
-	defer mu.Unlock()
+	if err := mu.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer mu.Release(1)
 
 	if _, ok := e.imageKnown.Load(runtime); ok {
 		return nil
@@ -294,8 +316,15 @@ func buildLambdaContainerEnv(fn *types.FunctionConfig, accountID, region string,
 
 // CreateContainer creates a new Lambda execution container with port mapping
 // so the host can reach the RIE on port 8080 inside the container.
-func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, codeDir string, layerDirs []string, accountID string) (*ContainerInfo, error) {
+func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, codeDir string, layerDirs []string, accountID string, options ...LambdaContainerOptions) (*ContainerInfo, error) {
 	img, ok := types.RuntimeImageMap[fn.Runtime]
+	if fn.PackageType == "Image" {
+		img = fn.ImageURI
+		if fn.ResolvedImageURI != "" {
+			img = fn.ResolvedImageURI
+		}
+		ok = img != ""
+	}
 	if !ok {
 		return nil, fmt.Errorf("unsupported runtime: %s", fn.Runtime)
 	}
@@ -324,8 +353,12 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 
 	env := buildLambdaContainerEnv(fn, accountID, e.cfg.Region, e.cfg.Port, dbURLRewrites)
 
-	binds := []string{
-		fmt.Sprintf("%s:/var/task:ro", codeDir),
+	var binds []string
+	if codeDir != "" {
+		binds = append(binds, fmt.Sprintf("%s:/var/task:ro", codeDir))
+	}
+	if len(layerDirs) > 1 {
+		return nil, fmt.Errorf("layers must be merged into one directory before container creation")
 	}
 	for _, layerDir := range layerDirs {
 		binds = append(binds, fmt.Sprintf("%s:/opt:ro", layerDir))
@@ -343,23 +376,23 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 		secretsProxyPath = e.findSecretsProxy()
 	}
 	if secretsProxyPath != "" {
-		binds = append(binds, fmt.Sprintf("%s:/opt/tarn/secrets-proxy:ro", secretsProxyPath))
+		binds = append(binds, fmt.Sprintf("%s:/tarn-runtime/secrets-proxy:ro", secretsProxyPath))
 		env = append(env,
 			"PARAMETERS_SECRETS_EXTENSION_HTTP_PORT=2773",
 			"AWS_SESSION_TOKEN=local-dev-token",
 			"TARN_INTERNAL_LAMBDA=1",
 		)
-		bgCmds = append(bgCmds, "/opt/tarn/secrets-proxy &")
+		bgCmds = append(bgCmds, "/tarn-runtime/secrets-proxy &")
 	}
 
 	if dbProxyPath != "" {
-		binds = append(binds, fmt.Sprintf("%s:/opt/tarn/db-proxy:ro", dbProxyPath))
+		binds = append(binds, fmt.Sprintf("%s:/tarn-runtime/db-proxy:ro", dbProxyPath))
 		env = append(env,
 			fmt.Sprintf("TARN_DB_UPSTREAM=%s", dbUpstream),
 			fmt.Sprintf("TARN_DB_NAME=%s", dbName),
 			fmt.Sprintf("TARN_DB_PROXY_PORT=%d", dbProxyPort),
 		)
-		bgCmds = append(bgCmds, "/opt/tarn/db-proxy &")
+		bgCmds = append(bgCmds, "/tarn-runtime/db-proxy &")
 	}
 
 	var entrypoint []string
@@ -380,6 +413,17 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 		ExposedPorts: exposedPorts,
 		Cmd:          []string{fn.Handler},
 		Labels:       lambdaContainerLabels(e.cfg.Port, accountID, fn.FunctionName),
+	}
+	if fn.PackageType == "Image" {
+		containerCfg.Cmd = nil
+		if fn.Handler != "" {
+			containerCfg.Cmd = []string{fn.Handler}
+		}
+		if fn.ImageConfig != nil {
+			containerCfg.Cmd = fn.ImageConfig.Command
+			containerCfg.Entrypoint = fn.ImageConfig.EntryPoint
+			containerCfg.WorkingDir = fn.ImageConfig.WorkingDirectory
+		}
 	}
 	if len(entrypoint) > 0 {
 		containerCfg.Entrypoint = entrypoint
@@ -435,10 +479,15 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 		// part of the pool size for concurrency-cap checks.
 		Busy: true,
 	}
+	if len(options) > 0 {
+		info.Revision = options[0].Revision
+		info.onRemove = options[0].OnRemove
+	}
 
 	key := poolKey(accountID, fn.FunctionName)
 	e.mu.Lock()
 	e.containers[key] = append(e.containers[key], info)
+	e.notifyLocked(key)
 	e.mu.Unlock()
 
 	return info, nil
@@ -448,10 +497,25 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 // so the caller has exclusive use of it for one invocation. Returns ok=false when
 // every existing container is busy (or none exist).
 func (e *Engine) AcquireIdle(accountID, functionName string) (*ContainerInfo, bool) {
+	return e.AcquireIdleRevision(accountID, functionName, "")
+}
+
+func (e *Engine) AcquireIdleRevision(accountID, functionName, revision string, limits ...int) (*ContainerInfo, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if len(limits) > 0 {
+		busy := 0
+		for _, info := range e.containers[poolKey(e.resolveAccount(accountID), functionName)] {
+			if info.Busy {
+				busy++
+			}
+		}
+		if busy >= limits[0] {
+			return nil, false
+		}
+	}
 	for _, info := range e.containers[poolKey(e.resolveAccount(accountID), functionName)] {
-		if !info.Busy && info.State == "running" {
+		if !info.Busy && !info.Retired && info.State == "running" && (revision == "" || info.Revision == revision) {
 			info.Busy = true
 			info.LastInvoked = time.Now()
 			return info, true
@@ -468,7 +532,16 @@ func (e *Engine) Release(info *ContainerInfo) {
 	e.mu.Lock()
 	info.Busy = false
 	info.LastInvoked = time.Now()
+	retired := info.Retired
+	key := poolKey(e.resolveAccount(info.AccountID), info.FunctionName)
+	if retired {
+		e.untrackLocked(info.ID)
+	}
+	e.notifyLocked(key)
 	e.mu.Unlock()
+	if retired {
+		go e.forceRemoveAll([]*ContainerInfo{info})
+	}
 }
 
 // CountContainers returns the current pool size for a function (running plus
@@ -522,8 +595,10 @@ func (e *Engine) StartContainer(ctx context.Context, info *ContainerInfo) error 
 		return fmt.Errorf("no port mapping found for container %s after retries", info.ID[:12])
 	}
 
+	e.mu.Lock()
 	info.HostPort = hostPort
 	info.State = "running"
+	e.mu.Unlock()
 
 	log.Printf("[engine] container %s started for %s (port %s)", info.ID[:12], info.FunctionName, info.HostPort)
 	return nil
@@ -555,22 +630,16 @@ func (e *Engine) StopContainer(ctx context.Context, containerID string, timeoutS
 // example when the invoking HTTP client disconnects during a cold start).
 func (e *Engine) RemoveContainer(ctx context.Context, containerID string) error {
 	e.mu.Lock()
-	for name, pool := range e.containers {
-		for i, info := range pool {
-			if info.ID == containerID {
-				e.containers[name] = append(pool[:i], pool[i+1:]...)
-				if len(e.containers[name]) == 0 {
-					delete(e.containers, name)
-				}
-				break
-			}
-		}
-	}
+	info := e.untrackLocked(containerID)
 	e.mu.Unlock()
 
 	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerRemoveTimeout)
 	defer cancel()
-	return e.client.ContainerRemove(removeCtx, containerID, container.RemoveOptions{Force: true})
+	err := e.client.ContainerRemove(removeCtx, containerID, container.RemoveOptions{Force: true})
+	if info != nil && (err == nil || cerrdefs.IsNotFound(err)) {
+		info.releaseDeployment()
+	}
+	return err
 }
 
 // SweepOrphanedLambdaContainers force-removes Lambda containers left behind by
@@ -716,6 +785,7 @@ func (e *Engine) EvictContainerAsync(accountID, functionName string) {
 	e.mu.Lock()
 	pool := e.containers[key]
 	delete(e.containers, key)
+	e.notifyLocked(key)
 	e.mu.Unlock()
 	go e.forceRemoveAll(pool)
 }
@@ -731,6 +801,7 @@ func (e *Engine) EvictAccount(accountID string) int {
 		if strings.HasPrefix(key, prefix) {
 			pool = append(pool, p...)
 			delete(e.containers, key)
+			e.notifyLocked(key)
 		}
 	}
 	e.mu.Unlock()
@@ -746,14 +817,17 @@ func (e *Engine) forceRemoveAll(pool []*ContainerInfo) {
 	var wg sync.WaitGroup
 	for _, info := range pool {
 		wg.Add(1)
-		go func(id string) {
+		go func(info *ContainerInfo) {
 			defer wg.Done()
+			id := info.ID
 			ctx, cancel := context.WithTimeout(context.Background(), containerRemoveTimeout)
 			defer cancel()
 			if err := e.client.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 				log.Printf("[engine] failed to remove Lambda container %s: %v", shortID(id), err)
+			} else {
+				info.releaseDeployment()
 			}
-		}(info.ID)
+		}(info)
 	}
 	wg.Wait()
 }

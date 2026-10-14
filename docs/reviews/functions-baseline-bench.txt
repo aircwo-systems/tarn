@@ -1,0 +1,24 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/aircwo-systems/tarn/internal/lambda
+cpu: Apple M5
+BenchmarkReviewFunctionReads/WarmPreparation/0Layers-8         	   16749	     68406 ns/op	   16937 B/op	     184 allocs/op
+BenchmarkReviewFunctionReads/WarmPreparation/0Layers-8         	   22452	     53530 ns/op	   16936 B/op	     184 allocs/op
+BenchmarkReviewFunctionReads/WarmPreparation/0Layers-8         	   20164	     57681 ns/op	   16936 B/op	     184 allocs/op
+BenchmarkReviewFunctionReads/WarmPreparation/2Layers-8         	   13364	     89661 ns/op	   21608 B/op	     217 allocs/op
+BenchmarkReviewFunctionReads/WarmPreparation/2Layers-8         	   13161	     92667 ns/op	   21608 B/op	     217 allocs/op
+BenchmarkReviewFunctionReads/WarmPreparation/2Layers-8         	   10000	    101666 ns/op	   21608 B/op	     217 allocs/op
+BenchmarkReviewFunctionReads/List/100-8                        	     698	   1912950 ns/op	  220873 B/op	    2220 allocs/op
+BenchmarkReviewFunctionReads/List/100-8                        	     715	   1974572 ns/op	  220872 B/op	    2220 allocs/op
+BenchmarkReviewFunctionReads/List/100-8                        	     697	   1691742 ns/op	  220873 B/op	    2220 allocs/op
+BenchmarkReviewFunctionReads/List/1000-8                       	      62	  16875502 ns/op	 2198168 B/op	   22026 allocs/op
+BenchmarkReviewFunctionReads/List/1000-8                       	      72	  15549012 ns/op	 2198178 B/op	   22026 allocs/op
+BenchmarkReviewFunctionReads/List/1000-8                       	      75	  14769596 ns/op	 2198175 B/op	   22026 allocs/op
+BenchmarkReviewInvocationMetrics/ParseBeforeLock=false-8       	   24332	     48249 ns/op	   22103 B/op	     116 allocs/op
+BenchmarkReviewInvocationMetrics/ParseBeforeLock=false-8       	   23674	     47894 ns/op	   22101 B/op	     116 allocs/op
+BenchmarkReviewInvocationMetrics/ParseBeforeLock=false-8       	   25435	     47733 ns/op	   22103 B/op	     116 allocs/op
+BenchmarkReviewInvocationMetrics/ParseBeforeLock=true-8        	   87843	     14192 ns/op	   22096 B/op	     116 allocs/op
+BenchmarkReviewInvocationMetrics/ParseBeforeLock=true-8        	   78256	     14960 ns/op	   22096 B/op	     116 allocs/op
+BenchmarkReviewInvocationMetrics/ParseBeforeLock=true-8        	   74276	     14846 ns/op	   22096 B/op	     116 allocs/op
+PASS
+ok  	github.com/aircwo-systems/tarn/internal/lambda	24.437s

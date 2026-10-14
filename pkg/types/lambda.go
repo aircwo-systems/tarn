@@ -108,11 +108,18 @@ type FunctionConfig struct {
 	// CreateFunction/GetFunction/GetFunctionConfiguration responses makes
 	// every subsequent plan see drift and replace the function.
 	PackageType string `json:"PackageType,omitempty"`
-	// ImageURI is set for a PackageType "Image" function. Not an AWS field
-	// name (the real field is nested under Code.ImageUri on CreateFunction's
-	// request and Code.ImageUri on GetFunction's response); kept here only so
-	// CreateFunction can infer PackageType and callers can echo it back.
-	ImageURI string `json:"-"`
+	// Image fields persist deployment content references. HTTP adapters expose
+	// these under Code and ImageConfigResponse rather than as private fields.
+	ImageURI         string               `json:"ImageURI,omitempty"`
+	ResolvedImageURI string               `json:"ResolvedImageURI,omitempty"`
+	ImageConfig      *FunctionImageConfig `json:"ImageConfig,omitempty"`
+}
+
+// FunctionImageConfig overrides an image's execution defaults.
+type FunctionImageConfig struct {
+	EntryPoint       []string `json:"EntryPoint,omitempty"`
+	Command          []string `json:"Command,omitempty"`
+	WorkingDirectory string   `json:"WorkingDirectory,omitempty"`
 }
 
 // LayerConfig holds the configuration for a Lambda layer.
@@ -137,15 +144,16 @@ type LayerVersionContent struct {
 // FunctionConfigUpdate holds optional fields for updating function configuration.
 // Pointer types and zero-value checks allow distinguishing "not provided" from "set to zero."
 type FunctionConfigUpdate struct {
-	Handler          string            `json:"Handler,omitempty"`
-	Description      *string           `json:"Description,omitempty"`
-	Timeout          int               `json:"Timeout,omitempty"`
-	MemorySize       int               `json:"MemorySize,omitempty"`
-	Role             string            `json:"Role,omitempty"`
-	Runtime          string            `json:"Runtime,omitempty"`
-	Environment      *EnvVars          `json:"Environment,omitempty"`
-	Layers           []string          `json:"Layers,omitempty"`
-	DeadLetterConfig *DeadLetterConfig `json:"DeadLetterConfig,omitempty"`
+	Handler          string               `json:"Handler,omitempty"`
+	Description      *string              `json:"Description,omitempty"`
+	Timeout          int                  `json:"Timeout,omitempty"`
+	MemorySize       int                  `json:"MemorySize,omitempty"`
+	Role             string               `json:"Role,omitempty"`
+	Runtime          string               `json:"Runtime,omitempty"`
+	Environment      *EnvVars             `json:"Environment,omitempty"`
+	Layers           []string             `json:"Layers,omitempty"`
+	DeadLetterConfig *DeadLetterConfig    `json:"DeadLetterConfig,omitempty"`
+	ImageConfig      *FunctionImageConfig `json:"ImageConfig,omitempty"`
 }
 
 // EnvVars wraps environment variable maps (matches AWS API shape).
@@ -156,6 +164,7 @@ type EnvVars struct {
 // InvokeInput represents a Lambda invocation request.
 type InvokeInput struct {
 	FunctionName   string `json:"FunctionName"`
+	Qualifier      string `json:"Qualifier,omitempty"`
 	Payload        []byte `json:"Payload,omitempty"`
 	InvocationType string `json:"InvocationType,omitempty"` // RequestResponse, Event, DryRun
 	LogType        string `json:"LogType,omitempty"`        // None, Tail

@@ -1,0 +1,4 @@
+ok  	github.com/aircwo-systems/tarn/internal/lambda	1.360s
+ok  	github.com/aircwo-systems/tarn/internal/api/lambda	1.600s
+ok  	github.com/aircwo-systems/tarn/internal/engine	3.069s
+ok  	github.com/aircwo-systems/tarn/internal/asyncqueue	2.124s

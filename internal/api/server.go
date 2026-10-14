@@ -486,6 +486,7 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /2017-10-31/functions/{name}/concurrency", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Lambda.PutFunctionConcurrency(w, r)
 	})
+	mux.HandleFunc("GET /2017-10-31/functions/{name}/concurrency", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.GetFunctionConcurrency(w, r) })
 	mux.HandleFunc("DELETE /2017-10-31/functions/{name}/concurrency", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Lambda.DeleteFunctionConcurrency(w, r)
 	})

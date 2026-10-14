@@ -1,0 +1,307 @@
+package lambda
+
+import (
+	"archive/zip"
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/internal/engine"
+	"github.com/aircwo-systems/tarn/pkg/types"
+)
+
+func reviewStore(tb testing.TB) (*config.Config, *Store) {
+	tb.Helper()
+	cfg := config.Default()
+	cfg.DataDir = tb.TempDir()
+	store := NewStore(cfg)
+	if err := store.Init(); err != nil {
+		tb.Fatal(err)
+	}
+	return cfg, store
+}
+
+func reviewZip(tb testing.TB, body string) []byte {
+	tb.Helper()
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, err := w.Create("index.js")
+	if err != nil {
+		tb.Fatal(err)
+	}
+	if _, err := f.Write([]byte(body)); err != nil {
+		tb.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		tb.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestReviewConcurrentTags(t *testing.T) {
+	for round := range 3 {
+		cfg, store := reviewStore(t)
+		svc := NewService(cfg, store, nil, nil, nil)
+		t.Cleanup(svc.Close)
+		if _, err := svc.CreateFunction(context.Background(), &types.FunctionConfig{FunctionName: "tags", Runtime: types.RuntimeNodeJS20}, nil); err != nil {
+			t.Fatal(err)
+		}
+		const n = 32
+		start := make(chan struct{})
+		errs := make(chan error, n)
+		var wg sync.WaitGroup
+		for i := range n {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				errs <- svc.TagResource("tags", map[string]string{fmt.Sprint(i): "value"})
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		fn, err := svc.GetFunction("tags")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(fn.Tags) != n {
+			t.Errorf("round %d: all %d requests succeeded, persisted %d tags", round, n, len(fn.Tags))
+		}
+	}
+}
+
+func TestReviewConcurrentLayerPublish(t *testing.T) {
+	cfg, store := reviewStore(t)
+	svc := NewService(cfg, store, nil, nil, nil)
+	t.Cleanup(svc.Close)
+	const n = 32
+	start := make(chan struct{})
+	versions := make(chan int64, n)
+	errs := make(chan error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			v, err := svc.PublishLayerVersion("shared", fmt.Sprint(i), nil, []byte(fmt.Sprint(i)))
+			if err != nil {
+				errs <- err
+				return
+			}
+			versions <- v.VersionNumber
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(versions)
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+	unique := map[int64]bool{}
+	for v := range versions {
+		unique[v] = true
+	}
+	listed, err := svc.ListLayerVersions("shared")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unique) != n {
+		t.Fatalf("%d successful publishes produced %d unique versions and %d persisted versions", n, len(unique), len(listed))
+	}
+}
+
+func TestReviewDeploymentPathIsMutable(t *testing.T) {
+	_, store := reviewStore(t)
+	if _, err := store.SaveCode("fn", reviewZip(t, "v1")); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.ExtractCode("fn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.SaveCode("fn", reviewZip(t, "v2")); err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.ExtractCode("fn")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(first, "index.js"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "v1" {
+		t.Fatalf("previously acquired path now reads %q; first=%s second=%s", data, first, second)
+	}
+}
+
+func TestReviewCancelledAcquireWaitsOnMutex(t *testing.T) {
+	cfg, store := reviewStore(t)
+	eng, err := engine.New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = eng.Close() })
+	svc := NewService(cfg, store, eng, nil, nil)
+	t.Cleanup(svc.Close)
+	mu := svc.getFunctionMutex("held")
+	mu.Lock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	done := make(chan error, 1)
+	go func() {
+		// An unsupported runtime guarantees no Docker mutation after unlocking.
+		_, _, err := svc.acquireContainer(ctx, &types.FunctionConfig{FunctionName: "held", Runtime: "invalid"}, "", nil)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		mu.Unlock()
+		if err != context.Canceled {
+			t.Fatalf("got %v, want context cancellation", err)
+		}
+	case <-time.After(100 * time.Millisecond):
+		mu.Unlock()
+		err := <-done
+		t.Fatalf("pre-cancelled acquisition waited for the held cold-start mutex, then returned %v", err)
+	}
+}
+
+func TestReviewFunctionLockChangesAfterDelete(t *testing.T) {
+	_, store := reviewStore(t)
+	if err := store.SaveFunction(&types.FunctionConfig{FunctionName: "fn"}); err != nil {
+		t.Fatal(err)
+	}
+	before := store.fnMu("fn")
+	if err := store.DeleteFunction("fn"); err != nil {
+		t.Fatal(err)
+	}
+	after := store.fnMu("fn")
+	if before != after {
+		t.Fatal("delete replaces the lock; queued operations can retain the old mutex while new operations use a different one")
+	}
+}
+
+func TestReviewFunctionNameEscapesRoot(t *testing.T) {
+	cfg, store := reviewStore(t)
+	svc := NewService(cfg, store, nil, nil, nil)
+	t.Cleanup(svc.Close)
+	if _, err := svc.CreateFunction(context.Background(), &types.FunctionConfig{FunctionName: "../outside", Runtime: types.RuntimeNodeJS20, Handler: "index.handler"}, reviewZip(t, "v1")); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(cfg.DataDir, "outside", "config.json")
+	if _, err := os.Stat(path); err == nil {
+		t.Fatalf("function creation accepted ../outside and wrote config outside FunctionsDir: %s", path)
+	}
+}
+
+func BenchmarkReviewFunctionReads(b *testing.B) {
+	for _, layers := range []int{0, 2} {
+		b.Run(fmt.Sprintf("WarmPreparation/%dLayers", layers), func(b *testing.B) {
+			cfg, store := reviewStore(b)
+			svc := NewService(cfg, store, nil, nil, nil)
+			b.Cleanup(svc.Close)
+			fn := &types.FunctionConfig{FunctionName: "fn", Runtime: types.RuntimeNodeJS20, State: types.FunctionStateActive, Environment: map[string]string{}}
+			for i := range 50 {
+				fn.Environment[fmt.Sprint(i)] = strings.Repeat("v", 64)
+			}
+			code := reviewZip(b, "exports.handler = async () => 'ok'")
+			if _, err := store.SaveCode("fn", code); err != nil {
+				b.Fatal(err)
+			}
+			if _, err := store.ExtractCode("fn"); err != nil {
+				b.Fatal(err)
+			}
+			for i := range layers {
+				v, err := svc.PublishLayerVersion(fmt.Sprintf("layer%d", i), "", nil, code)
+				if err != nil {
+					b.Fatal(err)
+				}
+				fn.Layers = append(fn.Layers, v.LayerVersionArn)
+			}
+			if _, _, err := svc.ResolveLayerDirs(fn.Layers); err != nil {
+				b.Fatal(err)
+			}
+			if err := store.SaveFunction(fn); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				current, err := store.GetFunction("fn")
+				if err != nil {
+					b.Fatal(err)
+				}
+				if _, err := store.ExtractCode("fn"); err != nil {
+					b.Fatal(err)
+				}
+				if _, _, err := svc.ResolveLayerDirs(current.Layers); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+	for _, n := range []int{100, 1000} {
+		b.Run(fmt.Sprintf("List/%d", n), func(b *testing.B) {
+			_, store := reviewStore(b)
+			for i := range n {
+				fn := &types.FunctionConfig{FunctionName: fmt.Sprintf("fn%04d", i), Runtime: types.RuntimeNodeJS20, Environment: map[string]string{"KEY": strings.Repeat("v", 64)}}
+				if err := store.SaveFunction(fn); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := store.ListFunctions(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkReviewInvocationMetrics(b *testing.B) {
+	payload := []byte(`{"Records":[` + strings.Repeat(`{"body":"`+strings.Repeat("x", 128)+`"},`, 99) + `{"body":"last"}]}`)
+	for _, candidate := range []bool{false, true} {
+		b.Run(fmt.Sprintf("ParseBeforeLock=%v", candidate), func(b *testing.B) {
+			svc := &Service{metrics: map[string]*FunctionMetrics{}}
+			b.ReportAllocs()
+			b.ResetTimer()
+			b.RunParallel(func(pb *testing.PB) {
+				for pb.Next() {
+					if !candidate {
+						svc.recordInvocation("fn", payload)
+						continue
+					}
+					count := countProcessedMessages(payload)
+					svc.metricsMu.Lock()
+					metric := svc.metrics["fn"]
+					if metric == nil {
+						metric = &FunctionMetrics{}
+						svc.metrics["fn"] = metric
+					}
+					metric.Invocations++
+					metric.MessagesProcessed += count
+					metric.LastInvokedAt = time.Now().UTC()
+					svc.metricsMu.Unlock()
+				}
+			})
+		})
+	}
+}

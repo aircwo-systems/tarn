@@ -8,8 +8,10 @@ func TestNormalizeLambdaFunctionName(t *testing.T) {
 		want string
 	}{
 		{in: "order-logger", want: "order-logger"},
+		{in: "order-logger:1", want: "order-logger:1"},
+		{in: "000000000000:function:order-logger:live", want: "order-logger:live"},
 		{in: "arn:aws:lambda:us-east-1:000000000000:function:order-logger", want: "order-logger"},
-		{in: "arn:aws:lambda:us-east-1:000000000000:function:order-logger:live", want: "order-logger"},
+		{in: "arn:aws:lambda:us-east-1:000000000000:function:order-logger:live", want: "order-logger:live"},
 		{in: " arn:aws:lambda:us-east-1:000000000000:function:order-logger ", want: "order-logger"},
 		{in: "", want: ""},
 	}

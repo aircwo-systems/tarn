@@ -1,0 +1,44 @@
+Functions report implementation validation, 14 October 2026
+Branch: develop-mvp
+
+make test: PASS
+  Full repository suite runs go test ./... -v -race.
+  internal/lambda: PASS
+  Docker end-to-end suite: PASS, 44.542s
+  New layer/version/update/delete/concurrency Docker regression: PASS
+  New image/published-image Docker regression: PASS
+  Existing Lambda Secrets extension Docker regression: PASS
+  Delete/recreate lifecycle serialisation regression: PASS
+  Old completion/new function metrics isolation regression: PASS
+  One local layer cold/warm execution, including nested content: PASS
+  Startup cleanup retains current/published deployment content: PASS
+
+make lint: PASS, 0 issues
+go vet ./...: PASS
+git diff --check: PASS
+
+Additional pool burst fixture, Apple M5, GOMAXPROCS=8, 32 workers:
+  One environment: 11,245 ns/op, 181 B/op, 18 allocs/op
+  Eight environments: 3,240 ns/op, 118 B/op, 4 allocs/op
+These timings measure in-memory pool contention and wakeups only.
+They do not estimate HTTP or runtime throughput.
+
+Detailed local command logs:
+  Final completion gates after audit additions:
+  /tmp/tarn-functions-completion-tests.log
+  /tmp/tarn-functions-completion-lint.log
+  /tmp/tarn-functions-completion-vet.log
+  Scoped audit checks:
+  /tmp/tarn-functions-audit-scoped-tests.log
+  /tmp/tarn-functions-audit-docker-tests.log
+  Earlier full implementation checks and benchmark:
+  /tmp/tarn-functions-full-tests.log
+  /tmp/tarn-functions-full-lint.log
+  /tmp/tarn-functions-vet.log
+  /tmp/tarn-functions-burst-bench.log
+
+Requirement-by-requirement completion audit:
+  docs/reviews/functions-completion-audit.md
+All seven findings, both performance candidates, metadata caching, and
+deployment revision requirements have implementation and regression evidence.
+Implementation validated on develop-mvp. No report finding is open.

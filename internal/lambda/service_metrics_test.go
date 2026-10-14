@@ -31,8 +31,10 @@ func TestRecordInvocationAccumulatesMetrics(t *testing.T) {
 		metrics: make(map[string]*FunctionMetrics),
 	}
 
-	svc.recordInvocation("orders-consumer", []byte(`{"Records":[{"messageId":"1"},{"messageId":"2"}]}`))
-	svc.recordInvocation("orders-consumer", []byte(`{"ok":true}`))
+	svc.ensureFunctionMetrics("orders-consumer", "instance")
+
+	svc.recordInvocationInstance("orders-consumer", "instance", []byte(`{"Records":[{"messageId":"1"},{"messageId":"2"}]}`))
+	svc.recordInvocationInstance("orders-consumer", "instance", []byte(`{"ok":true}`))
 
 	metrics := svc.GetFunctionMetrics("orders-consumer")
 	if metrics.Invocations != 2 {

@@ -14,6 +14,7 @@ import (
 
 	"github.com/aircwo-systems/tarn/internal/asyncqueue"
 	"github.com/aircwo-systems/tarn/internal/config"
+	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
 	"github.com/google/uuid"
@@ -1829,26 +1830,14 @@ func cloneECSNetworkConfiguration(src *types.EcsNetworkConfiguration) *types.Ecs
 }
 
 func lambdaNameFromTarget(arn string) (string, error) {
-	arn = strings.TrimSpace(arn)
-	if arn == "" {
-		return "", fmt.Errorf("empty target Arn")
+	name, qualifier, err := lambdasvc.ParseFunctionReference(arn, "")
+	if err != nil {
+		return "", err
 	}
-	if !strings.Contains(arn, ":") {
-		return arn, nil
+	if qualifier != "" {
+		name += ":" + qualifier
 	}
-	const marker = ":function:"
-	idx := strings.Index(arn, marker)
-	if idx < 0 {
-		return "", fmt.Errorf("target Arn is not a Lambda function")
-	}
-	tail := arn[idx+len(marker):]
-	if colon := strings.IndexByte(tail, ':'); colon >= 0 {
-		tail = tail[:colon]
-	}
-	if tail == "" {
-		return "", fmt.Errorf("target Arn is invalid")
-	}
-	return tail, nil
+	return name, nil
 }
 
 func buildScheduledEventPayload(rule *types.EventBridgeRule, at time.Time, sessionMeta map[string]string, correlationID string) []byte {

@@ -350,7 +350,7 @@ func TestSecretsProxyInjectedOnlyWhenUsed(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, b := range fake.host.Binds {
-			if strings.Contains(b, "/opt/tarn/secrets-proxy") {
+			if strings.Contains(b, "/tarn-runtime/secrets-proxy") {
 				return true
 			}
 		}

@@ -1,0 +1,27 @@
+File: lambda.test
+Type: cpu
+Time: 2026-10-13 22:14:47 BST
+Duration: 2.27s, Total samples = 1.86s (81.82%)
+Showing nodes accounting for 1.86s, 100% of 1.86s total
+Showing top 20 nodes out of 60
+      flat  flat%   sum%        cum   cum%
+     1.83s 98.39% 98.39%      1.83s 98.39%  syscall.rawsyscalln
+     0.02s  1.08% 99.46%      0.02s  1.08%  runtime.typePointers.next
+     0.01s  0.54%   100%      0.01s  0.54%  encoding/json.checkValid
+         0     0%   100%      0.01s  0.54%  encoding/json.Unmarshal
+         0     0%   100%      0.75s 40.32%  github.com/aircwo-systems/tarn/internal/lambda.(*Service).ResolveLayerDirs
+         0     0%   100%      0.80s 43.01%  github.com/aircwo-systems/tarn/internal/lambda.(*Store).ExtractCode
+         0     0%   100%      0.75s 40.32%  github.com/aircwo-systems/tarn/internal/lambda.(*Store).ExtractLayer
+         0     0%   100%      0.30s 16.13%  github.com/aircwo-systems/tarn/internal/lambda.(*Store).GetFunction
+         0     0%   100%      1.85s 99.46%  github.com/aircwo-systems/tarn/internal/lambda.BenchmarkReviewFunctionReads.func1
+         0     0%   100%      0.01s  0.54%  internal/poll.(*FD).Close
+         0     0%   100%      0.01s  0.54%  internal/poll.(*FD).Fstat
+         0     0%   100%      0.01s  0.54%  internal/poll.(*FD).Fstat.func1 (inline)
+         0     0%   100%      0.16s  8.60%  internal/poll.(*FD).Read
+         0     0%   100%      0.01s  0.54%  internal/poll.(*FD).decref
+         0     0%   100%      0.01s  0.54%  internal/poll.(*FD).destroy
+         0     0%   100%      0.01s  0.54%  internal/poll.(*SysFile).destroy (inline)
+         0     0%   100%      0.01s  0.54%  internal/poll.ignoringEINTR (inline)
+         0     0%   100%      0.16s  8.60%  internal/poll.ignoringEINTRIO (inline)
+         0     0%   100%      0.01s  0.54%  os.(*File).Close
+         0     0%   100%      0.16s  8.60%  os.(*File).Read

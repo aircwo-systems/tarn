@@ -1,0 +1,27 @@
+File: lambda.test
+Type: alloc_space
+Time: 2026-10-13 22:14:49 BST
+Showing nodes accounting for 476.69MB, 98.32% of 484.83MB total
+Dropped 51 nodes (cum <= 2.42MB)
+Showing top 20 nodes out of 46
+      flat  flat%   sum%        cum   cum%
+  143.50MB 29.60% 29.60%   143.50MB 29.60%  os.readFileContents
+  109.66MB 22.62% 52.22%   109.66MB 22.62%  reflect.mapassign_faststr0
+      64MB 13.20% 65.42%       64MB 13.20%  encoding/json.(*decodeState).literalStore
+   51.51MB 10.62% 76.04%    51.51MB 10.62%  internal/bytealg.MakeNoZero
+      23MB  4.74% 80.79%       23MB  4.74%  reflect.unsafe_New
+   21.50MB  4.44% 85.22%    21.50MB  4.44%  syscall.ByteSliceFromString
+      20MB  4.13% 89.35%       20MB  4.13%  os.(*File).Stat
+   13.50MB  2.79% 92.13%       22MB  4.54%  os.statNolog
+    8.50MB  1.75% 93.89%     8.50MB  1.75%  os.newFile
+       8MB  1.65% 95.54%   333.15MB 68.72%  github.com/aircwo-systems/tarn/internal/lambda.(*Store).GetFunction
+       7MB  1.44% 96.98%        7MB  1.44%  strings.genSplit
+    2.50MB  0.52% 97.50%   200.67MB 41.39%  encoding/json.(*decodeState).object
+       2MB  0.41% 97.91%   202.67MB 41.80%  encoding/json.Unmarshal
+       2MB  0.41% 98.32%    45.51MB  9.39%  github.com/aircwo-systems/tarn/internal/lambda.(*Store).ExtractCode
+         0     0% 98.32%   200.67MB 41.39%  encoding/json.(*decodeState).unmarshal
+         0     0% 98.32%   200.67MB 41.39%  encoding/json.(*decodeState).value
+         0     0% 98.32%     7.50MB  1.55%  github.com/aircwo-systems/tarn/internal/config.(*Config).FunctionsDir (inline)
+         0     0% 98.32%     8.50MB  1.75%  github.com/aircwo-systems/tarn/internal/config.(*Config).LayersDir (inline)
+         0     0% 98.32%   101.02MB 20.84%  github.com/aircwo-systems/tarn/internal/lambda.(*Service).ResolveLayerDirs
+         0     0% 98.32%    94.02MB 19.39%  github.com/aircwo-systems/tarn/internal/lambda.(*Store).ExtractLayer

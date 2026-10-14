@@ -1,526 +1,351 @@
 package lambda
 
 import (
-	"archive/zip"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"io"
+	"maps"
 	"os"
 	"path/filepath"
-	"sort"
-	"strconv"
-	"strings"
+	"slices"
 	"sync"
 
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/pkg/types"
+	"github.com/google/uuid"
 )
 
 const functionZipName = "function.zip"
 const configFileName = "config.json"
 
-// Store persists Lambda function configurations and code to disk.
+// Store keeps configuration and durable metadata in one atomic JSON record.
+// Deployment directories are immutable and outlive the containers using them.
 type Store struct {
-	cfg *config.Config
-	// fnMus holds a per-function RWMutex so concurrent creates/reads for
-	// different functions don't block each other.
-	fnMus   sync.Map    // function name → *sync.RWMutex
-	layerMu sync.RWMutex // guards all layer operations
+	cfg      *config.Config
+	fnMus    sync.Map // function name -> stable *sync.RWMutex
+	fnCache  sync.Map // function name -> *functionCache
+	fnLeases sync.Map // function name -> map[deploymentID]int, guarded by fnMu
+	fnGC     sync.Map // function names with obsolete revisions still leased
+	layerMus sync.Map // layer name -> stable *sync.RWMutex
 }
 
-// NewStore creates a new function store.
-func NewStore(cfg *config.Config) *Store {
-	return &Store{cfg: cfg}
+type functionRecord struct {
+	*types.FunctionConfig
+	Metadata     functionMetadata `json:"_tarn,omitempty"`
+	codeToMirror []byte
+	afterCommit  func(*functionRecord)
 }
 
-// fnMu returns the per-function mutex, creating it lazily.
-func (s *Store) fnMu(name string) *sync.RWMutex {
-	mu := &sync.RWMutex{}
-	actual, _ := s.fnMus.LoadOrStore(name, mu)
-	return actual.(*sync.RWMutex)
+type functionCache struct {
+	info   os.FileInfo
+	record *functionRecord
 }
 
-// Init ensures the storage directories exist.
-func (s *Store) Init() error {
-	dirs := []string{
-		s.cfg.FunctionsDir(),
-		s.cfg.LayersDir(),
+func NewStore(cfg *config.Config) *Store { return &Store{cfg: cfg} }
+
+func stableMutex(registry *sync.Map, name string) *sync.RWMutex {
+	if v, ok := registry.Load(name); ok {
+		return v.(*sync.RWMutex)
 	}
-	for _, dir := range dirs {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return fmt.Errorf("failed to create directory %s: %w", dir, err)
+	v, _ := registry.LoadOrStore(name, &sync.RWMutex{})
+	return v.(*sync.RWMutex)
+}
+
+func (s *Store) fnMu(name string) *sync.RWMutex { return stableMutex(&s.fnMus, name) }
+
+func (s *Store) Init() error {
+	for _, dir := range []string{s.cfg.FunctionsDir(), s.cfg.LayersDir(), s.deploymentsRoot()} {
+		if _, err := checkedPath(dir); err != nil {
+			return err
 		}
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
+	// No containers from this store have been acquired yet. Retire revisions
+	// left by an interrupted update, retaining current and published versions.
+	entries, err := os.ReadDir(s.deploymentsRoot())
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || validName(entry.Name(), 64) != nil {
+			continue
+		}
+		mu := s.fnMu(entry.Name())
+		mu.Lock()
+		record, loadErr := s.readFunctionLocked(entry.Name())
+		if loadErr == nil || os.IsNotExist(loadErr) || isFunctionNotFound(loadErr) {
+			s.pruneDeploymentsLocked(entry.Name(), record)
+		}
+		mu.Unlock()
 	}
 	return nil
 }
 
-// SaveFunction persists a function configuration to disk.
-func (s *Store) SaveFunction(fn *types.FunctionConfig) error {
-	mu := s.fnMu(fn.FunctionName)
-	mu.Lock()
-	defer mu.Unlock()
-
-	fnDir := filepath.Join(s.cfg.FunctionsDir(), fn.FunctionName)
-	if err := os.MkdirAll(fnDir, 0755); err != nil {
-		return err
+func cloneFunction(fn *types.FunctionConfig) *types.FunctionConfig {
+	if fn == nil {
+		return nil
 	}
-
-	data, err := json.MarshalIndent(fn, "", "  ")
-	if err != nil {
-		return err
+	copy := *fn
+	copy.Environment = maps.Clone(fn.Environment)
+	copy.Tags = maps.Clone(fn.Tags)
+	copy.Layers = slices.Clone(fn.Layers)
+	if fn.DeadLetterConfig != nil {
+		value := *fn.DeadLetterConfig
+		copy.DeadLetterConfig = &value
 	}
-
-	// Write to a temp file then rename atomically so concurrent readers in
-	// ListFunctions never observe a partial write.
-	configPath := filepath.Join(fnDir, configFileName)
-	tmpPath := configPath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0600); err != nil {
-		return err
+	if fn.ImageConfig != nil {
+		value := *fn.ImageConfig
+		value.EntryPoint = slices.Clone(value.EntryPoint)
+		value.Command = slices.Clone(value.Command)
+		copy.ImageConfig = &value
 	}
-	return os.Rename(tmpPath, configPath)
+	return &copy
 }
 
-// GetFunction loads a function configuration from disk.
-func (s *Store) GetFunction(name string) (*types.FunctionConfig, error) {
-	mu := s.fnMu(name)
-	mu.RLock()
-	defer mu.RUnlock()
+func cloneRecord(record *functionRecord) *functionRecord {
+	copy := *record
+	copy.codeToMirror = nil
+	copy.afterCommit = nil
+	copy.FunctionConfig = cloneFunction(record.FunctionConfig)
+	copy.Metadata = cloneMetadata(record.Metadata)
+	return &copy
+}
 
-	configPath := filepath.Join(s.cfg.FunctionsDir(), name, configFileName)
-	data, err := os.ReadFile(configPath)
+func atomicJSON(path string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	return atomicFile(path, data, 0600)
+}
+
+func atomicFile(path string, data []byte, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(filepath.Dir(path), ".pending-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(file.Name()) }()
+	if err := file.Chmod(mode); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), path)
+}
+
+func (s *Store) functionPath(name string, parts ...string) (string, error) {
+	if err := validName(name, 64); err != nil {
+		return "", err
+	}
+	return checkedPath(s.cfg.FunctionsDir(), append([]string{name}, parts...)...)
+}
+
+func (s *Store) readFunctionLocked(name string) (*functionRecord, error) {
+	path, err := s.functionPath(name, configFileName)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
+			s.fnCache.Delete(name)
 			return nil, fmt.Errorf("%w: %s", ErrFunctionNotFound, name)
 		}
 		return nil, err
 	}
-
-	var fn types.FunctionConfig
-	if err := json.Unmarshal(data, &fn); err != nil {
+	if v, ok := s.fnCache.Load(name); ok {
+		cached := v.(*functionCache)
+		if os.SameFile(info, cached.info) && info.Size() == cached.info.Size() && info.ModTime().Equal(cached.info.ModTime()) {
+			return cached.record, nil
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return nil, err
 	}
-	return &fn, nil
+	record := &functionRecord{FunctionConfig: &types.FunctionConfig{}}
+	if err := json.Unmarshal(data, record); err != nil {
+		return nil, err
+	}
+	if record.FunctionName != name {
+		return nil, invalid("stored function name does not match its directory")
+	}
+	if err := validateMetadata(record.Metadata, name); err != nil {
+		return nil, err
+	}
+	s.fnCache.Store(name, &functionCache{info: info, record: record})
+	s.fnGC.Store(name, true)
+	return record, nil
 }
 
-// ListFunctions returns all stored function configurations.
-func (s *Store) ListFunctions() ([]*types.FunctionConfig, error) {
-	fnDir := s.cfg.FunctionsDir()
-	entries, err := os.ReadDir(fnDir)
+func (s *Store) saveFunctionLocked(record *functionRecord) error {
+	path, err := s.functionPath(record.FunctionName, configFileName)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
+		return err
+	}
+	if err := atomicJSON(path, record); err != nil {
+		return err
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		s.fnCache.Delete(record.FunctionName)
+		return err
+	}
+	s.fnCache.Store(record.FunctionName, &functionCache{info: info, record: cloneRecord(record)})
+	s.fnGC.Store(record.FunctionName, true)
+	return nil
+}
+
+func (s *Store) mutateFunction(name string, mutation func(*functionRecord) error) (*types.FunctionConfig, error) {
+	if err := validName(name, 64); err != nil {
 		return nil, err
 	}
+	mu := s.fnMu(name)
+	mu.Lock()
+	defer mu.Unlock()
+	record, err := s.readFunctionLocked(name)
+	if err != nil {
+		return nil, err
+	}
+	record = cloneRecord(record)
+	if err := mutation(record); err != nil {
+		s.pruneFromCurrentLocked(name)
+		return nil, err
+	}
+	if err := s.saveFunctionLocked(record); err != nil {
+		s.pruneFromCurrentLocked(name)
+		return nil, err
+	}
+	s.mirrorCodeLocked(record, record.codeToMirror)
+	if record.afterCommit != nil {
+		record.afterCommit(record)
+	}
+	s.pruneDeploymentsLocked(name, record)
+	return cloneFunction(record.FunctionConfig), nil
+}
 
+// SaveFunction preserves durable metadata while replacing configuration.
+func (s *Store) SaveFunction(fn *types.FunctionConfig) error {
+	if fn == nil {
+		return invalid("function configuration is required")
+	}
+	if err := validName(fn.FunctionName, 64); err != nil {
+		return err
+	}
+	mu := s.fnMu(fn.FunctionName)
+	mu.Lock()
+	defer mu.Unlock()
+	record, err := s.readFunctionLocked(fn.FunctionName)
+	if err != nil && !isFunctionNotFound(err) {
+		return err
+	}
+	if record == nil {
+		record = &functionRecord{Metadata: functionMetadata{InstanceID: uuid.NewString()}}
+	} else {
+		record = cloneRecord(record)
+	}
+	record.FunctionConfig = cloneFunction(fn)
+	return s.saveFunctionLocked(record)
+}
+
+func (s *Store) GetFunction(reference string) (*types.FunctionConfig, error) {
+	name, qualifier, err := ParseFunctionReference(reference, "")
+	if err != nil {
+		return nil, err
+	}
+	mu := s.fnMu(name)
+	mu.Lock()
+	defer mu.Unlock()
+	record, err := s.readFunctionLocked(name)
+	if err != nil {
+		return nil, err
+	}
+	fn, _, err := selectVersion(record, qualifier)
+	return cloneFunction(fn), err
+}
+
+func (s *Store) ListFunctions() ([]*types.FunctionConfig, error) {
+	if _, err := checkedPath(s.cfg.FunctionsDir()); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(s.cfg.FunctionsDir())
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
 	var functions []*types.FunctionConfig
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !entry.IsDir() || validName(entry.Name(), 64) != nil {
 			continue
 		}
-		configPath := filepath.Join(fnDir, entry.Name(), configFileName)
-		data, err := os.ReadFile(configPath)
-		if err != nil {
-			continue
+		fn, err := s.GetFunction(entry.Name())
+		if err == nil {
+			functions = append(functions, fn)
 		}
-		var fn types.FunctionConfig
-		if err := json.Unmarshal(data, &fn); err != nil {
-			continue
-		}
-		functions = append(functions, &fn)
 	}
 	return functions, nil
 }
 
-// DeleteFunction removes a function and its code from disk.
 func (s *Store) DeleteFunction(name string) error {
+	return s.deleteFunction(name, nil)
+}
+
+func (s *Store) deleteFunction(name string, onDelete func()) error {
+	path, err := s.functionPath(name)
+	if err != nil {
+		return err
+	}
 	mu := s.fnMu(name)
 	mu.Lock()
 	defer mu.Unlock()
-
-	fnDir := filepath.Join(s.cfg.FunctionsDir(), name)
-	if _, err := os.Stat(fnDir); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("%w: %s", ErrFunctionNotFound, name)
-		}
+	if _, err := s.readFunctionLocked(name); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(fnDir); err != nil {
+	if err := os.RemoveAll(path); err != nil {
 		return err
 	}
-	s.fnMus.Delete(name)
+	s.fnCache.Delete(name)
+	if onDelete != nil {
+		onDelete()
+	}
+	// Keep the lock: a queued operation must share the same lock as a recreate.
+	s.pruneDeploymentsLocked(name, nil)
 	return nil
 }
 
-// SaveCode saves function code (zip bytes) and returns the SHA256 hash.
 func (s *Store) SaveCode(name string, code []byte) (string, error) {
+	path, err := s.functionPath(name, "code", functionZipName)
+	if err != nil {
+		return "", err
+	}
 	mu := s.fnMu(name)
 	mu.Lock()
 	defer mu.Unlock()
-
-	codeDir := filepath.Join(s.cfg.FunctionsDir(), name, "code")
-	if err := os.MkdirAll(codeDir, 0755); err != nil {
+	if err := atomicFile(path, code, 0600); err != nil {
 		return "", err
 	}
-
-	codePath := filepath.Join(codeDir, functionZipName)
-	if err := os.WriteFile(codePath, code, 0600); err != nil {
-		return "", err
-	}
-
-	hash := sha256.Sum256(code)
-	return hex.EncodeToString(hash[:]), nil
+	return codeHash(code), nil
 }
 
-// GetCodeDir returns the path to the extracted code directory for a function.
-func (s *Store) GetCodeDir(name string) string {
-	return filepath.Join(s.cfg.FunctionsDir(), name, "code")
-}
-
-// GetCodePath returns the path to the function's zip file.
+func (s *Store) GetCodeDir(name string) string { path, _ := s.functionPath(name, "code"); return path }
 func (s *Store) GetCodePath(name string) string {
-	return filepath.Join(s.cfg.FunctionsDir(), name, "code", functionZipName)
+	path, _ := s.functionPath(name, "code", functionZipName)
+	return path
 }
-
-// FunctionExists checks if a function exists in the store.
-func (s *Store) FunctionExists(name string) bool {
-	mu := s.fnMu(name)
-	mu.RLock()
-	defer mu.RUnlock()
-
-	configPath := filepath.Join(s.cfg.FunctionsDir(), name, "config.json")
-	_, err := os.Stat(configPath)
-	return err == nil
-}
-
-// ExtractCode extracts function.zip into an "extracted" subdirectory and returns
-// the path to it. If already extracted and the zip hasn't changed, returns the
-// cached extraction.
-func (s *Store) ExtractCode(name string) (string, error) {
-	mu := s.fnMu(name)
-	mu.Lock()
-	defer mu.Unlock()
-
-	zipPath := filepath.Join(s.cfg.FunctionsDir(), name, "code", functionZipName)
-	extractDir := filepath.Join(s.cfg.FunctionsDir(), name, "code", "extracted")
-
-	zipInfo, err := os.Stat(zipPath)
-	if err != nil {
-		return "", fmt.Errorf("function code not found for %s: %w", name, err)
-	}
-
-	// Check if extraction is already up-to-date via a marker file
-	markerPath := filepath.Join(extractDir, ".extracted_at")
-	if markerData, err := os.ReadFile(markerPath); err == nil {
-		markerTime := string(markerData)
-		if markerTime == zipInfo.ModTime().String() {
-			return extractDir, nil
-		}
-	}
-
-	// Remove stale extraction
-	_ = os.RemoveAll(extractDir)
-	if err := os.MkdirAll(extractDir, 0755); err != nil {
-		return "", err
-	}
-
-	r, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to open zip: %w", err)
-	}
-	defer func() { _ = r.Close() }()
-
-	for _, f := range r.File {
-		target := filepath.Join(extractDir, f.Name)
-
-		// Guard against zip slip
-		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(extractDir)+string(os.PathSeparator)) {
-			continue
-		}
-
-		if f.FileInfo().IsDir() {
-			// Always use 0755 for directories regardless of the permissions stored
-			// in the ZIP/JAR entry. Maven fat JARs often have entries with mode 0000
-			// which would make the directory inaccessible for subsequent writes.
-			if err := os.MkdirAll(target, 0755); err != nil {
-				return "", err
-			}
-			continue
-		}
-
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-			return "", err
-		}
-
-		// Ensure files are at least user-readable/writable (0644).
-		// ZIP entries from some tools (e.g. maven-shade-plugin) may carry mode 0.
-		mode := f.Mode()
-		if mode&0600 == 0 {
-			mode = 0644
-		}
-		outFile, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
-		if err != nil {
-			return "", err
-		}
-
-		rc, err := f.Open()
-		if err != nil {
-			_ = outFile.Close()
-			return "", err
-		}
-
-		_, err = io.Copy(outFile, rc)
-		_ = rc.Close()
-		_ = outFile.Close()
-		if err != nil {
-			return "", err
-		}
-	}
-
-	// Write marker
-	_ = os.WriteFile(markerPath, []byte(zipInfo.ModTime().String()), 0600)
-
-	return extractDir, nil
-}
-
-// --- Layer operations ---
-
-// SaveLayer saves a layer version's code and config to disk.
-// Returns the SHA256 hash of the code.
-func (s *Store) SaveLayer(name string, version int64, code []byte, cfg *types.LayerConfig) (string, error) {
-	s.layerMu.Lock()
-	defer s.layerMu.Unlock()
-
-	versionDir := filepath.Join(s.cfg.LayersDir(), name, strconv.FormatInt(version, 10))
-	if err := os.MkdirAll(versionDir, 0755); err != nil {
-		return "", err
-	}
-
-	// Save zip
-	if err := os.WriteFile(filepath.Join(versionDir, "layer.zip"), code, 0600); err != nil {
-		return "", err
-	}
-
-	hash := sha256.Sum256(code)
-	hashStr := hex.EncodeToString(hash[:])
-
-	cfg.CodeSHA256 = hashStr
-	cfg.CodeSize = int64(len(code))
-
-	// Save config
-	data, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	if err := os.WriteFile(filepath.Join(versionDir, configFileName), data, 0600); err != nil {
-		return "", err
-	}
-
-	return hashStr, nil
-}
-
-// GetLayer loads a layer version's config from disk.
-func (s *Store) GetLayer(name string, version int64) (*types.LayerConfig, error) {
-	s.layerMu.RLock()
-	defer s.layerMu.RUnlock()
-
-	configPath := filepath.Join(s.cfg.LayersDir(), name, strconv.FormatInt(version, 10), configFileName)
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("layer %s version %d not found", name, version)
-		}
-		return nil, err
-	}
-
-	var cfg types.LayerConfig
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, err
-	}
-	return &cfg, nil
-}
-
-// NextLayerVersion determines the next version number for a layer.
-func (s *Store) NextLayerVersion(name string) int64 {
-	s.layerMu.RLock()
-	defer s.layerMu.RUnlock()
-
-	layerDir := filepath.Join(s.cfg.LayersDir(), name)
-	entries, err := os.ReadDir(layerDir)
-	if err != nil {
-		return 1
-	}
-
-	var maxVersion int64
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		v, err := strconv.ParseInt(entry.Name(), 10, 64)
-		if err != nil {
-			continue
-		}
-		if v > maxVersion {
-			maxVersion = v
-		}
-	}
-	return maxVersion + 1
-}
-
-// ListLayers returns the latest version of each layer.
-func (s *Store) ListLayers() ([]*types.LayerConfig, error) {
-	s.layerMu.RLock()
-	defer s.layerMu.RUnlock()
-
-	layersDir := s.cfg.LayersDir()
-	entries, err := os.ReadDir(layersDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	var layers []*types.LayerConfig
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		// Find the latest version
-		versions, _ := s.listLayerVersionsUnsafe(entry.Name())
-		if len(versions) > 0 {
-			layers = append(layers, versions[len(versions)-1])
-		}
-	}
-	return layers, nil
-}
-
-// ListLayerVersions returns all versions for a specific layer.
-func (s *Store) ListLayerVersions(name string) ([]*types.LayerConfig, error) {
-	s.layerMu.RLock()
-	defer s.layerMu.RUnlock()
-	return s.listLayerVersionsUnsafe(name)
-}
-
-// listLayerVersionsUnsafe returns layer versions without locking (caller must hold lock).
-func (s *Store) listLayerVersionsUnsafe(name string) ([]*types.LayerConfig, error) {
-	layerDir := filepath.Join(s.cfg.LayersDir(), name)
-	entries, err := os.ReadDir(layerDir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	var versions []*types.LayerConfig
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		configPath := filepath.Join(layerDir, entry.Name(), configFileName)
-		data, err := os.ReadFile(configPath)
-		if err != nil {
-			continue
-		}
-		var cfg types.LayerConfig
-		if err := json.Unmarshal(data, &cfg); err != nil {
-			continue
-		}
-		versions = append(versions, &cfg)
-	}
-
-	sort.Slice(versions, func(i, j int) bool {
-		return versions[i].VersionNumber < versions[j].VersionNumber
-	})
-	return versions, nil
-}
-
-// DeleteLayerVersion removes a specific layer version from disk.
-func (s *Store) DeleteLayerVersion(name string, version int64) error {
-	s.layerMu.Lock()
-	defer s.layerMu.Unlock()
-
-	versionDir := filepath.Join(s.cfg.LayersDir(), name, strconv.FormatInt(version, 10))
-	if _, err := os.Stat(versionDir); err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("layer %s version %d not found", name, version)
-		}
-		return err
-	}
-	return os.RemoveAll(versionDir)
-}
-
-// ExtractLayer extracts a layer's zip into an "extracted" subdirectory (same pattern as function code).
-func (s *Store) ExtractLayer(name string, version int64) (string, error) {
-	s.layerMu.Lock()
-	defer s.layerMu.Unlock()
-
-	versionDir := filepath.Join(s.cfg.LayersDir(), name, strconv.FormatInt(version, 10))
-	zipPath := filepath.Join(versionDir, "layer.zip")
-	extractDir := filepath.Join(versionDir, "extracted")
-
-	zipInfo, err := os.Stat(zipPath)
-	if err != nil {
-		return "", fmt.Errorf("layer code not found for %s v%d: %w", name, version, err)
-	}
-
-	// Check cache marker
-	markerPath := filepath.Join(extractDir, ".extracted_at")
-	if markerData, err := os.ReadFile(markerPath); err == nil {
-		if string(markerData) == zipInfo.ModTime().String() {
-			return extractDir, nil
-		}
-	}
-
-	_ = os.RemoveAll(extractDir)
-	if err := os.MkdirAll(extractDir, 0755); err != nil {
-		return "", err
-	}
-
-	r, err := zip.OpenReader(zipPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to open layer zip: %w", err)
-	}
-	defer func() { _ = r.Close() }()
-
-	for _, f := range r.File {
-		target := filepath.Join(extractDir, f.Name)
-		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(extractDir)+string(os.PathSeparator)) {
-			continue
-		}
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(target, 0755); err != nil {
-				return "", err
-			}
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-			return "", err
-		}
-		mode := f.Mode()
-		if mode&0600 == 0 {
-			mode = 0644
-		}
-		outFile, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, mode)
-		if err != nil {
-			return "", err
-		}
-		rc, err := f.Open()
-		if err != nil {
-			_ = outFile.Close()
-			return "", err
-		}
-		_, err = io.Copy(outFile, rc)
-		_ = rc.Close()
-		_ = outFile.Close()
-		if err != nil {
-			return "", err
-		}
-	}
-
-	_ = os.WriteFile(markerPath, []byte(zipInfo.ModTime().String()), 0600)
-	return extractDir, nil
-}
+func (s *Store) FunctionExists(name string) bool { _, err := s.GetFunction(name); return err == nil }

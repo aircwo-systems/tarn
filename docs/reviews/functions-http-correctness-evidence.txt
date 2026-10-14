@@ -1,0 +1,9 @@
+=== RUN   TestReviewAliasResponseIsNotSnapshot
+    deep_dive_probe_test.go:63: create alias request for version 1 returned version 2 after a concurrent update
+--- FAIL: TestReviewAliasResponseIsNotSnapshot (0.00s)
+=== RUN   TestReviewPublishedVersionNotListed
+    deep_dive_probe_test.go:108: publishing version 1 succeeded, but list versions returned {"Versions":[{"CodeSha256":"","CodeSize":0,"FunctionArn":"arn:aws:lambda:us-east-1:000000000000:function:fn","FunctionName":"fn","Handler":"","LastModified":"2026-10-13T22:14:18.484482+01:00","LastUpdateStatus":"Successful","MemorySize":128,"PackageType":"Zip","Role":"","Runtime":"nodejs20.x","State":"Active","Timeout":3,"Version":"$LATEST"}]}
+--- FAIL: TestReviewPublishedVersionNotListed (0.00s)
+FAIL
+FAIL	github.com/aircwo-systems/tarn/internal/api/lambda	1.026s
+FAIL

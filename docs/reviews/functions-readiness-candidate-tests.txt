@@ -1,0 +1,219 @@
+=== RUN   TestCreateContainerLabelsLambdaOwnership
+--- PASS: TestCreateContainerLabelsLambdaOwnership (0.01s)
+=== RUN   TestSweepOrphanedLambdaContainersRemovesOnlyUnownedContainers
+2026/10/13 22:19:33 [engine] removing Lambda container no-port-labe: its tarn.port label is "", so no Tarn can be holding it
+--- PASS: TestSweepOrphanedLambdaContainersRemovesOnlyUnownedContainers (0.00s)
+=== RUN   TestRemoveContainerSurvivesCancelledContext
+--- PASS: TestRemoveContainerSurvivesCancelledContext (0.00s)
+=== RUN   TestCleanupRemovesEveryPool
+--- PASS: TestCleanupRemovesEveryPool (0.00s)
+=== RUN   TestEvictAccountRemovesOnlyThatAccount
+--- PASS: TestEvictAccountRemovesOnlyThatAccount (0.01s)
+=== RUN   TestSweepLegacyLambdaContainersRemovesOnlyStoppedUnlabelled
+--- PASS: TestSweepLegacyLambdaContainersRemovesOnlyStoppedUnlabelled (0.00s)
+=== RUN   TestCreateContainerCapsDockerLogFiles
+--- PASS: TestCreateContainerCapsDockerLogFiles (0.00s)
+=== RUN   TestContainerLogsSinceReadsOnlyNewOutput
+--- PASS: TestContainerLogsSinceReadsOnlyNewOutput (0.00s)
+=== RUN   TestContainerLogsSinceJoinsPartialEntriesOfLongLines
+--- PASS: TestContainerLogsSinceJoinsPartialEntriesOfLongLines (0.00s)
+=== RUN   TestSecretsProxyInjectedOnlyWhenUsed
+--- PASS: TestSecretsProxyInjectedOnlyWhenUsed (0.01s)
+=== RUN   TestBuildLambdaContainerEnvUsesAccountID
+--- PASS: TestBuildLambdaContainerEnvUsesAccountID (0.00s)
+=== RUN   TestBuildLambdaContainerEnvUserOverrideWinsForAccessKey
+--- PASS: TestBuildLambdaContainerEnvUserOverrideWinsForAccessKey (0.00s)
+=== RUN   TestReadContainerLogStreamPreservesInterleaving
+--- PASS: TestReadContainerLogStreamPreservesInterleaving (0.00s)
+=== RUN   TestResolveStopTimeoutSec
+=== RUN   TestResolveStopTimeoutSec/negative_means_default
+=== RUN   TestResolveStopTimeoutSec/zero_means_default
+=== RUN   TestResolveStopTimeoutSec/positive_passes_through
+=== RUN   TestResolveStopTimeoutSec/one_second_passes_through
+--- PASS: TestResolveStopTimeoutSec (0.00s)
+    --- PASS: TestResolveStopTimeoutSec/negative_means_default (0.00s)
+    --- PASS: TestResolveStopTimeoutSec/zero_means_default (0.00s)
+    --- PASS: TestResolveStopTimeoutSec/positive_passes_through (0.00s)
+    --- PASS: TestResolveStopTimeoutSec/one_second_passes_through (0.00s)
+=== RUN   TestReviewAlreadyReadyPortWaitsForFirstTick
+2026/10/13 22:19:33 [invoker] RIE accepting connections on port 63729
+    functions_deep_dive_probe_test.go:37: already-listening port readiness took 172µs
+2026/10/13 22:19:33 [invoker] RIE accepting connections on port 63729
+    functions_deep_dive_probe_test.go:37: already-listening port readiness took 126.25µs
+2026/10/13 22:19:33 [invoker] RIE accepting connections on port 63729
+    functions_deep_dive_probe_test.go:37: already-listening port readiness took 130.458µs
+--- PASS: TestReviewAlreadyReadyPortWaitsForFirstTick (0.00s)
+=== RUN   TestInvokerInvoke
+2026/10/13 22:19:33 [invoker] invoking test-func via RIE on port 63733 (15 bytes payload)
+--- PASS: TestInvokerInvoke (0.05s)
+=== RUN   TestInvokerInvokeWithFunctionError
+2026/10/13 22:19:33 [invoker] invoking err-func via RIE on port 63735 (2 bytes payload)
+--- PASS: TestInvokerInvokeWithFunctionError (0.05s)
+=== RUN   TestInvokerTimeout
+2026/10/13 22:19:33 [invoker] invoking slow-func via RIE on port 63737 (2 bytes payload)
+--- PASS: TestInvokerTimeout (0.25s)
+=== RUN   TestWaitForReady
+2026/10/13 22:19:34 [invoker] RIE accepting connections on port 63739
+--- PASS: TestWaitForReady (0.30s)
+=== RUN   TestWaitForReadyTimeout
+--- PASS: TestWaitForReadyTimeout (0.50s)
+=== RUN   TestInvokerEmptyPayload
+2026/10/13 22:19:34 [invoker] invoking test-func via RIE on port 63749 (2 bytes payload)
+--- PASS: TestInvokerEmptyPayload (0.05s)
+=== RUN   TestAcquireIdleReleaseAndReuse
+--- PASS: TestAcquireIdleReleaseAndReuse (0.00s)
+=== RUN   TestAcquireIdleSkipsNonRunning
+--- PASS: TestAcquireIdleSkipsNonRunning (0.00s)
+=== RUN   TestReleaseNilIsSafe
+--- PASS: TestReleaseNilIsSafe (0.00s)
+=== RUN   TestPoolsAreIsolatedByAccount
+--- PASS: TestPoolsAreIsolatedByAccount (0.00s)
+=== RUN   TestWarmPoolEvictsUnusedContainerDespiteOtherInvokes
+2026/10/13 22:19:34 [warm-pool] evicting idle burst container for fn (idle 1m0s)
+--- PASS: TestWarmPoolEvictsUnusedContainerDespiteOtherInvokes (0.00s)
+=== RUN   TestWarmPoolEvictsBurstContainersSoonerThanBaseline
+2026/10/13 22:19:34 [warm-pool] evicting idle burst container for fn (idle 1m0s)
+--- PASS: TestWarmPoolEvictsBurstContainersSoonerThanBaseline (0.00s)
+=== RUN   TestWarmPoolKeepsBaselineOnTheFullWindow
+--- PASS: TestWarmPoolKeepsBaselineOnTheFullWindow (0.00s)
+=== RUN   TestNewWarmPoolFallsBackToKeepAliveForOverflow
+=== RUN   TestNewWarmPoolFallsBackToKeepAliveForOverflow/shorter_than_baseline
+=== RUN   TestNewWarmPoolFallsBackToKeepAliveForOverflow/unset
+=== RUN   TestNewWarmPoolFallsBackToKeepAliveForOverflow/longer_than_baseline
+--- PASS: TestNewWarmPoolFallsBackToKeepAliveForOverflow (0.00s)
+    --- PASS: TestNewWarmPoolFallsBackToKeepAliveForOverflow/shorter_than_baseline (0.00s)
+    --- PASS: TestNewWarmPoolFallsBackToKeepAliveForOverflow/unset (0.00s)
+    --- PASS: TestNewWarmPoolFallsBackToKeepAliveForOverflow/longer_than_baseline (0.00s)
+=== RUN   TestWarmPoolUntracksBeforeRemoving
+2026/10/13 22:19:34 [warm-pool] evicting idle baseline container for fn (idle 1m0s)
+--- PASS: TestWarmPoolUntracksBeforeRemoving (0.00s)
+=== RUN   TestBuildTaskContainerEnvIncludesEndpointAndSpecEnv
+--- PASS: TestBuildTaskContainerEnvIncludesEndpointAndSpecEnv (0.00s)
+=== RUN   TestBuildTaskContainerEnvUsesSpecAccountID
+--- PASS: TestBuildTaskContainerEnvUsesSpecAccountID (0.00s)
+=== RUN   TestBuildTaskContainerEnvUserOverrideWinsForAccessKey
+--- PASS: TestBuildTaskContainerEnvUserOverrideWinsForAccessKey (0.00s)
+=== RUN   TestBuildTaskContainerEnvIncludesCorrelationID
+--- PASS: TestBuildTaskContainerEnvIncludesCorrelationID (0.00s)
+=== RUN   TestBuildTaskContainerEnvCorrelationIDUserOverrideWins
+--- PASS: TestBuildTaskContainerEnvCorrelationIDUserOverrideWins (0.00s)
+=== RUN   TestBuildTaskContainerEnvUsesFileForLargeEventPayload
+--- PASS: TestBuildTaskContainerEnvUsesFileForLargeEventPayload (0.00s)
+=== RUN   TestBuildTaskPortBindingsPublishesEphemeralHostPorts
+--- PASS: TestBuildTaskPortBindingsPublishesEphemeralHostPorts (0.00s)
+=== RUN   TestBuildTaskPortBindingsHonorsFixedHostPorts
+--- PASS: TestBuildTaskPortBindingsHonorsFixedHostPorts (0.00s)
+=== RUN   TestBuildTaskContainerConfigMapsResourcesToDocker
+--- PASS: TestBuildTaskContainerConfigMapsResourcesToDocker (0.00s)
+=== RUN   TestBuildTaskContainerConfigMapsDriftAvoidanceFields
+--- PASS: TestBuildTaskContainerConfigMapsDriftAvoidanceFields (0.00s)
+=== RUN   TestBuildTaskContainerConfigAppendsBindsAlongsideEventPayload
+--- PASS: TestBuildTaskContainerConfigAppendsBindsAlongsideEventPayload (0.00s)
+=== RUN   TestBuildTaskContainerConfigMapsSupportedNetworkModes
+=== RUN   TestBuildTaskContainerConfigMapsSupportedNetworkModes/default
+=== RUN   TestBuildTaskContainerConfigMapsSupportedNetworkModes/bridge
+=== RUN   TestBuildTaskContainerConfigMapsSupportedNetworkModes/awsvpc
+=== RUN   TestBuildTaskContainerConfigMapsSupportedNetworkModes/host
+=== RUN   TestBuildTaskContainerConfigMapsSupportedNetworkModes/none
+--- PASS: TestBuildTaskContainerConfigMapsSupportedNetworkModes (0.00s)
+    --- PASS: TestBuildTaskContainerConfigMapsSupportedNetworkModes/default (0.00s)
+    --- PASS: TestBuildTaskContainerConfigMapsSupportedNetworkModes/bridge (0.00s)
+    --- PASS: TestBuildTaskContainerConfigMapsSupportedNetworkModes/awsvpc (0.00s)
+    --- PASS: TestBuildTaskContainerConfigMapsSupportedNetworkModes/host (0.00s)
+    --- PASS: TestBuildTaskContainerConfigMapsSupportedNetworkModes/none (0.00s)
+=== RUN   TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations
+=== RUN   TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations/unsupported_mode
+=== RUN   TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations/host_publishes_ports
+=== RUN   TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations/none_publishes_ports
+=== RUN   TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations/negative_cpu
+=== RUN   TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations/negative_memory
+=== RUN   TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations/reservation_above_memory
+--- PASS: TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations (0.00s)
+    --- PASS: TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations/unsupported_mode (0.00s)
+    --- PASS: TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations/host_publishes_ports (0.00s)
+    --- PASS: TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations/none_publishes_ports (0.00s)
+    --- PASS: TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations/negative_cpu (0.00s)
+    --- PASS: TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations/negative_memory (0.00s)
+    --- PASS: TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations/reservation_above_memory (0.00s)
+=== RUN   TestDecodeNetworkBindingsReadsAssignedHostPorts
+--- PASS: TestDecodeNetworkBindingsReadsAssignedHostPorts (0.00s)
+=== RUN   TestBuildLabelFilterArgsMatchesEveryPair
+--- PASS: TestBuildLabelFilterArgsMatchesEveryPair (0.00s)
+=== RUN   TestScanDemuxedLinesDeliversStdoutAndStderrLines
+--- PASS: TestScanDemuxedLinesDeliversStdoutAndStderrLines (0.00s)
+=== RUN   TestScanDemuxedLinesPropagatesStreamError
+--- PASS: TestScanDemuxedLinesPropagatesStreamError (0.00s)
+=== RUN   TestTaskContainerCapsDockerLogFiles
+--- PASS: TestTaskContainerCapsDockerLogFiles (0.00s)
+PASS
+ok  	github.com/aircwo-systems/tarn/internal/engine	2.638s
+=== RUN   TestCountProcessedMessages
+=== RUN   TestCountProcessedMessages/empty_payload
+=== RUN   TestCountProcessedMessages/generic_event
+=== RUN   TestCountProcessedMessages/single_sqs_record
+=== RUN   TestCountProcessedMessages/multiple_sqs_records
+=== RUN   TestCountProcessedMessages/explicit_empty_records
+=== RUN   TestCountProcessedMessages/invalid_json
+--- PASS: TestCountProcessedMessages (0.00s)
+    --- PASS: TestCountProcessedMessages/empty_payload (0.00s)
+    --- PASS: TestCountProcessedMessages/generic_event (0.00s)
+    --- PASS: TestCountProcessedMessages/single_sqs_record (0.00s)
+    --- PASS: TestCountProcessedMessages/multiple_sqs_records (0.00s)
+    --- PASS: TestCountProcessedMessages/explicit_empty_records (0.00s)
+    --- PASS: TestCountProcessedMessages/invalid_json (0.00s)
+=== RUN   TestRecordInvocationAccumulatesMetrics
+--- PASS: TestRecordInvocationAccumulatesMetrics (0.00s)
+=== RUN   TestCreateFunctionCreatesLambdaLogGroup
+--- PASS: TestCreateFunctionCreatesLambdaLogGroup (0.00s)
+=== RUN   TestUpdateFunctionsPopulateLastUpdateStatus
+2026/10/13 22:19:33 [lambda] warning: failed to pre-extract code for update-test: failed to open zip: zip: not a valid zip file
+--- PASS: TestUpdateFunctionsPopulateLastUpdateStatus (0.00s)
+=== RUN   TestTailLogResultKeepsLast4KBOfInvocation
+--- PASS: TestTailLogResultKeepsLast4KBOfInvocation (0.00s)
+=== RUN   TestInvokePromotesPendingFunctionToActive
+--- PASS: TestInvokePromotesPendingFunctionToActive (0.00s)
+=== RUN   TestIsTransientRIEInvokeError
+=== RUN   TestIsTransientRIEInvokeError/transient_eof
+=== RUN   TestIsTransientRIEInvokeError/transient_connection_refused
+=== RUN   TestIsTransientRIEInvokeError/non_transient_runtime_error
+=== RUN   TestIsTransientRIEInvokeError/non_rie_error
+=== RUN   TestIsTransientRIEInvokeError/nil_error
+--- PASS: TestIsTransientRIEInvokeError (0.00s)
+    --- PASS: TestIsTransientRIEInvokeError/transient_eof (0.00s)
+    --- PASS: TestIsTransientRIEInvokeError/transient_connection_refused (0.00s)
+    --- PASS: TestIsTransientRIEInvokeError/non_transient_runtime_error (0.00s)
+    --- PASS: TestIsTransientRIEInvokeError/non_rie_error (0.00s)
+    --- PASS: TestIsTransientRIEInvokeError/nil_error (0.00s)
+=== RUN   TestResolveLayerDirsSkipsUnavailableExternalManagedLayer
+--- PASS: TestResolveLayerDirsSkipsUnavailableExternalManagedLayer (0.00s)
+=== RUN   TestResolveLayerDirsFailsForUnavailableLocalAccountLayer
+--- PASS: TestResolveLayerDirsFailsForUnavailableLocalAccountLayer (0.00s)
+=== RUN   TestCreateFunctionDefaultsPackageType
+--- PASS: TestCreateFunctionDefaultsPackageType (0.00s)
+=== RUN   TestExtractCode
+--- PASS: TestExtractCode (0.00s)
+=== RUN   TestExtractCodeRefreshesWhenZipChanges
+--- PASS: TestExtractCodeRefreshesWhenZipChanges (0.01s)
+=== RUN   TestExtractCodeZipSlip
+--- PASS: TestExtractCodeZipSlip (0.00s)
+=== RUN   TestExtractCodeNested
+--- PASS: TestExtractCodeNested (0.00s)
+=== RUN   TestSaveAndGetLayer
+--- PASS: TestSaveAndGetLayer (0.00s)
+=== RUN   TestExtractLayer
+--- PASS: TestExtractLayer (0.00s)
+=== RUN   TestDeleteLayerVersion
+--- PASS: TestDeleteLayerVersion (0.00s)
+=== RUN   TestNextLayerVersion
+--- PASS: TestNextLayerVersion (0.00s)
+=== RUN   TestRecoverDeadWarmContainer_ReplacesAndRetries
+2026/10/13 22:19:33 [lambda] warm container deadcontaine for fn unreachable (RIE invocation failed: dial tcp 127.0.0.1:63530: connect: connection refused); removing and retrying on a fresh environment
+--- PASS: TestRecoverDeadWarmContainer_ReplacesAndRetries (0.00s)
+=== RUN   TestRecoverDeadWarmContainer_ReacquireFails
+2026/10/13 22:19:33 [lambda] warm container dead for fn unreachable (RIE invocation failed: connection refused); removing and retrying on a fresh environment
+--- PASS: TestRecoverDeadWarmContainer_ReacquireFails (0.00s)
+=== RUN   TestRecoverDeadWarmContainer_ContextDone
+2026/10/13 22:19:33 [lambda] warm container dead for fn unreachable (RIE invocation failed: connection refused); removing and retrying on a fresh environment
+--- PASS: TestRecoverDeadWarmContainer_ContextDone (0.00s)
+PASS
+ok  	github.com/aircwo-systems/tarn/internal/lambda	1.903s

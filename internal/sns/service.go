@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/aircwo-systems/tarn/internal/config"
+	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 	"github.com/aircwo-systems/tarn/pkg/types"
 	"github.com/google/uuid"
@@ -371,18 +372,12 @@ func queueNameFromSubscriptionEndpoint(endpoint string) (string, error) {
 }
 
 func lambdaNameFromEndpoint(endpoint string) string {
-	endpoint = strings.TrimSpace(endpoint)
-	const marker = ":function:"
-	if !strings.Contains(endpoint, marker) {
-		return endpoint
+	name, qualifier, err := lambdasvc.ParseFunctionReference(endpoint, "")
+	if err != nil {
+		return strings.TrimSpace(endpoint)
 	}
-	idx := strings.Index(endpoint, marker)
-	name := endpoint[idx+len(marker):]
-	if colon := strings.IndexByte(name, ':'); colon >= 0 {
-		name = name[:colon]
-	}
-	if name == "" {
-		return endpoint
+	if qualifier != "" {
+		name += ":" + qualifier
 	}
 	return name
 }

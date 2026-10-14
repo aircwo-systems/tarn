@@ -1,0 +1,109 @@
+package lambda
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/aircwo-systems/tarn/pkg/types"
+)
+
+func reviewHandler(t *testing.T) *Handler {
+	t.Helper()
+	h := newLambdaHandler(t)
+	t.Cleanup(h.svc.Close)
+	if _, err := h.svc.CreateFunction(context.Background(), &types.FunctionConfig{FunctionName: "fn", Runtime: types.RuntimeNodeJS20}, nil); err != nil {
+		t.Fatal(err)
+	}
+	return h
+}
+
+func reviewRequest(method, body string) *http.Request {
+	r := httptest.NewRequest(method, "/", strings.NewReader(body))
+	r.SetPathValue("name", "fn")
+	r.SetPathValue("aliasName", "live")
+	return r
+}
+
+type reviewPausedWriter struct {
+	*httptest.ResponseRecorder
+	entered chan struct{}
+	resume  chan struct{}
+}
+
+func (w *reviewPausedWriter) WriteHeader(status int) {
+	close(w.entered)
+	<-w.resume
+	w.ResponseRecorder.WriteHeader(status)
+}
+
+func TestReviewAliasResponseIsNotSnapshot(t *testing.T) {
+	h := reviewHandler(t)
+	w := &reviewPausedWriter{ResponseRecorder: httptest.NewRecorder(), entered: make(chan struct{}), resume: make(chan struct{})}
+	done := make(chan struct{})
+	go func() {
+		h.CreateAlias(w, reviewRequest(http.MethodPost, `{"Name":"live","FunctionVersion":"1"}`))
+		close(done)
+	}()
+	<-w.entered
+	update := httptest.NewRecorder()
+	h.UpdateAlias(update, reviewRequest(http.MethodPut, `{"FunctionVersion":"2"}`))
+	close(w.resume)
+	<-done
+	var response aliasConfig
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.FunctionVersion != "1" {
+		t.Fatalf("create alias request for version 1 returned version %s after a concurrent update", response.FunctionVersion)
+	}
+}
+
+func TestReviewPolicyRace(t *testing.T) {
+	h := reviewHandler(t)
+	h.AddPermission(httptest.NewRecorder(), reviewRequest(http.MethodPost, `{"StatementId":"one","Action":"lambda:InvokeFunction","Principal":"s3.amazonaws.com"}`))
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for worker := range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			for i := range 50 {
+				if worker == 0 {
+					h.GetPolicy(httptest.NewRecorder(), reviewRequest(http.MethodGet, ""))
+				} else {
+					h.AddPermission(httptest.NewRecorder(), reviewRequest(http.MethodPost, fmt.Sprintf(`{"StatementId":"one","Action":"action%d","Principal":"s3.amazonaws.com"}`, i)))
+				}
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+}
+
+func TestReviewPublishedVersionNotListed(t *testing.T) {
+	h := reviewHandler(t)
+	pub := httptest.NewRecorder()
+	h.PublishVersion(pub, reviewRequest(http.MethodPost, `{}`))
+	if pub.Code != http.StatusCreated {
+		t.Fatal(pub.Body.String())
+	}
+	list := httptest.NewRecorder()
+	h.ListVersionsByFunction(list, reviewRequest(http.MethodGet, ""))
+	var response struct{ Versions []struct{ Version string } }
+	if err := json.Unmarshal(list.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range response.Versions {
+		if v.Version == "1" {
+			return
+		}
+	}
+	t.Fatalf("publishing version 1 succeeded, but list versions returned %s", list.Body.String())
+}

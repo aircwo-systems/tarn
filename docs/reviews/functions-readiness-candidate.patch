@@ -1,0 +1,34 @@
+--- a/internal/engine/invoker.go
++++ b/internal/engine/invoker.go
+@@ -53,6 +53,16 @@
+ 	var lastErr error
+ 
+ 	for {
++		if err := ctx.Err(); err != nil {
++			return err
++		}
++		conn, err := (&net.Dialer{Timeout: 500 * time.Millisecond}).DialContext(ctx, "tcp", addr)
++		if err == nil {
++			_ = conn.Close()
++			log.Printf("[invoker] RIE accepting connections on port %s", hostPort)
++			return nil
++		}
++		lastErr = err
+ 		select {
+ 		case <-ctx.Done():
+ 			return ctx.Err()
+@@ -62,14 +72,6 @@
+ 			}
+ 			return fmt.Errorf("container RIE not ready after 60s on port %s", hostPort)
+ 		case <-ticker.C:
+-			conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
+-			if err != nil {
+-				lastErr = err
+-				continue
+-			}
+-			_ = conn.Close()
+-			log.Printf("[invoker] RIE accepting connections on port %s", hostPort)
+-			return nil
+ 		}
+ 	}
+ }

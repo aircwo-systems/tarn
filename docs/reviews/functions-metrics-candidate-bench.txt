@@ -1,0 +1,9 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/aircwo-systems/tarn/internal/lambda
+cpu: Apple M5
+BenchmarkReviewInvocationMetrics/ParseBeforeLock=false-8         	   96681	     12912 ns/op	   22096 B/op	     116 allocs/op
+BenchmarkReviewInvocationMetrics/ParseBeforeLock=false-8         	   96607	     12461 ns/op	   22096 B/op	     116 allocs/op
+BenchmarkReviewInvocationMetrics/ParseBeforeLock=false-8         	   95791	     12665 ns/op	   22096 B/op	     116 allocs/op
+PASS
+ok  	github.com/aircwo-systems/tarn/internal/lambda	4.407s

@@ -1,6 +1,9 @@
 package eventsource
 
-import "strings"
+import (
+	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
+	"strings"
+)
 
 // normalizeLambdaFunctionName returns a Lambda function name from either
 // a plain function name or a Lambda function ARN.
@@ -8,28 +11,14 @@ import "strings"
 // Examples:
 // - "order-logger" -> "order-logger"
 // - "arn:aws:lambda:us-east-1:000000000000:function:order-logger" -> "order-logger"
-// - "arn:aws:lambda:us-east-1:000000000000:function:order-logger:live" -> "order-logger"
-func normalizeLambdaFunctionName(ref string) string {
-	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return ref
+// - "arn:aws:lambda:us-east-1:000000000000:function:order-logger:live" -> "order-logger:live"
+func normalizeLambdaFunctionName(reference string) string {
+	name, qualifier, err := lambdasvc.ParseFunctionReference(reference, "")
+	if err != nil {
+		return strings.TrimSpace(reference)
 	}
-
-	const marker = ":function:"
-	if !strings.HasPrefix(ref, "arn:") {
-		return ref
-	}
-	i := strings.Index(ref, marker)
-	if i == -1 {
-		return ref
-	}
-
-	name := ref[i+len(marker):]
-	if j := strings.IndexByte(name, ':'); j != -1 {
-		name = name[:j]
-	}
-	if name == "" {
-		return ref
+	if qualifier != "" {
+		name += ":" + qualifier
 	}
 	return name
 }

@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,50 +25,17 @@ type s3Getter interface {
 	GetObject(bucket, key string) (*types.Object, io.ReadCloser, error)
 }
 
-// aliasConfig holds an in-memory Lambda alias.
-type aliasConfig struct {
-	Name            string `json:"Name"`
-	FunctionName    string `json:"FunctionName"`
-	FunctionVersion string `json:"FunctionVersion"`
-	Description     string `json:"Description,omitempty"`
-	AliasArn        string `json:"AliasArn"`
-	RevisionId      string `json:"RevisionId"`
-}
-
 // Handler implements HTTP handlers for the Lambda API.
 type Handler struct {
 	svc        *lambdasvc.Service
 	s3         s3Getter
 	traceStore *tracesvc.Store
 	collector  *tracesvc.Collector
-	mu         sync.Mutex
-	policies   map[string]map[string]policyStatement
-	// Version publishing: function name → next version counter
-	versionSeq map[string]int
-	// Published versions: function name → version string → config snapshot
-	versions map[string]map[string]map[string]any
-	// Aliases: function name → alias name → alias config
-	aliases map[string]map[string]*aliasConfig
-}
-
-type policyStatement struct {
-	StatementID   string
-	Action        string
-	Principal     string
-	SourceARN     string
-	SourceAccount string
 }
 
 // NewHandler creates a new Lambda API handler.
 func NewHandler(svc *lambdasvc.Service, s3 s3Getter) *Handler {
-	return &Handler{
-		svc:        svc,
-		s3:         s3,
-		policies:   make(map[string]map[string]policyStatement),
-		versionSeq: make(map[string]int),
-		versions:   make(map[string]map[string]map[string]any),
-		aliases:    make(map[string]map[string]*aliasConfig),
-	}
+	return &Handler{svc: svc, s3: s3}
 }
 
 // SetTraceStore attaches a trace store so direct invocations are recorded.
@@ -90,17 +56,16 @@ func (h *Handler) CreateFunction(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "FunctionName is required")
 		return
 	}
-	if req.Runtime == "" {
-		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Runtime is required")
-		return
-	}
-	if !types.ValidRuntime(req.Runtime) {
-		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", fmt.Sprintf("Unsupported runtime: %s", req.Runtime))
-		return
-	}
-	if req.Handler == "" {
-		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Handler is required")
-		return
+	image := req.PackageType == "Image" || (req.Code != nil && req.Code.ImageUri != "")
+	if !image {
+		if req.Runtime == "" || !types.ValidRuntime(req.Runtime) {
+			writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "A supported Runtime is required")
+			return
+		}
+		if req.Handler == "" {
+			writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Handler is required")
+			return
+		}
 	}
 
 	fn := &types.FunctionConfig{
@@ -115,6 +80,7 @@ func (h *Handler) CreateFunction(w http.ResponseWriter, r *http.Request) {
 		Tags:             req.Tags,
 		DeadLetterConfig: req.DeadLetterConfig,
 		PackageType:      req.PackageType,
+		ImageConfig:      req.ImageConfig,
 	}
 	if req.Environment != nil {
 		fn.Environment = req.Environment.Variables
@@ -144,43 +110,55 @@ func (h *Handler) CreateFunction(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.CreateFunction(r.Context(), fn, code)
 	if err != nil {
-		writeError(w, http.StatusConflict, "ResourceConflictException", err.Error())
+		writeServiceError(w, err)
 		return
 	}
 
+	if req.Publish {
+		result, err = h.svc.PublishVersion(r.Context(), result.FunctionName, req.Description)
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+	}
 	writeJSON(w, http.StatusCreated, toFunctionConfigResponse(result))
 }
 
 // GetFunction handles GET /2015-03-31/functions/{name}
 func (h *Handler) GetFunction(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+	name, err := requestFunctionReference(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
 	fn, err := h.svc.GetFunction(name)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	// ensure field is populated for clients that don't know about it
 	if fn.LastUpdateStatus == "" {
 		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
 	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"Configuration": toFunctionConfigResponse(fn),
-		// Terraform AWS provider (v5/v6) treats GetFunction output as empty when
-		// either Configuration or Code is missing.
-		"Code": map[string]interface{}{
-			"RepositoryType": "S3",
-		},
-	})
+	code := map[string]any{"RepositoryType": "S3"}
+	if fn.PackageType == "Image" {
+		code = map[string]any{"RepositoryType": "ECR", "ImageUri": fn.ImageURI, "ResolvedImageUri": fn.ResolvedImageURI}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"Configuration": toFunctionConfigResponse(fn), "Code": code})
 }
 
 // GetFunctionConfiguration handles GET /2015-03-31/functions/{name}/configuration.
 // Returns the configuration object at the root level (no "Configuration" wrapper).
 // Used by the TF AWS provider v5 waiter (WaitUntilFunctionActiveV2) to poll State.
 func (h *Handler) GetFunctionConfiguration(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+	name, err := requestFunctionReference(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
 	fn, err := h.svc.GetFunction(name)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	if fn.LastUpdateStatus == "" {
@@ -193,54 +171,35 @@ func (h *Handler) GetFunctionConfiguration(w http.ResponseWriter, r *http.Reques
 // Terraform uses this to resolve the latest published (or $LATEST) version
 // during Lambda function reads.
 func (h *Handler) ListVersionsByFunction(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	fn, err := h.svc.GetFunction(name)
+	versions, err := h.svc.ListVersions(r.PathValue("name"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
+		writeServiceError(w, err)
 		return
 	}
-	if fn.Version == "" {
-		fn.Version = "$LATEST"
+	results := make([]map[string]any, 0, len(versions))
+	for _, fn := range versions {
+		results = append(results, toFunctionConfigResponse(fn))
 	}
-	if fn.LastUpdateStatus == "" {
-		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
-	}
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"Versions": []map[string]any{toFunctionConfigResponse(fn)},
-	})
+	writeJSON(w, http.StatusOK, map[string]any{"Versions": results})
 }
 
 // PublishVersion handles POST /2015-03-31/functions/{name}/versions
 func (h *Handler) PublishVersion(w http.ResponseWriter, r *http.Request) {
-	name := normalizeFunctionName(r.PathValue("name"))
-	fn, err := h.svc.GetFunction(name)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
-		return
-	}
-
 	var req struct {
 		Description string `json:"Description,omitempty"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-
-	h.mu.Lock()
-	h.versionSeq[name]++
-	ver := strconv.Itoa(h.versionSeq[name])
-
-	resp := toFunctionConfigResponse(fn)
-	resp["Version"] = ver
-	if req.Description != "" {
-		resp["Description"] = req.Description
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Invalid request body")
+			return
+		}
 	}
-
-	if h.versions[name] == nil {
-		h.versions[name] = make(map[string]map[string]any)
+	result, err := h.svc.PublishVersion(r.Context(), r.PathValue("name"), req.Description)
+	if err != nil {
+		writeServiceError(w, err)
+		return
 	}
-	h.versions[name][ver] = resp
-	h.mu.Unlock()
-
-	writeJSON(w, http.StatusCreated, resp)
+	writeJSON(w, http.StatusCreated, toFunctionConfigResponse(result))
 }
 
 // ListFunctions handles GET /2015-03-31/functions
@@ -264,9 +223,13 @@ func (h *Handler) ListFunctions(w http.ResponseWriter, r *http.Request) {
 
 // DeleteFunction handles DELETE /2015-03-31/functions/{name}
 func (h *Handler) DeleteFunction(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+	name, err := requestFunctionReference(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
 	if err := h.svc.DeleteFunction(r.Context(), name); err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	setRequestID(w)
@@ -275,7 +238,11 @@ func (h *Handler) DeleteFunction(w http.ResponseWriter, r *http.Request) {
 
 // UpdateFunctionCode handles PUT /2015-03-31/functions/{name}/code
 func (h *Handler) UpdateFunctionCode(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+	name, err := requestFunctionReference(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
 
 	var req updateCodeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -300,18 +267,34 @@ func (h *Handler) UpdateFunctionCode(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	result, err := h.svc.UpdateFunctionCode(r.Context(), name, code)
+	var result *types.FunctionConfig
+	if req.ImageUri != "" {
+		result, err = h.svc.UpdateFunctionImage(r.Context(), name, req.ImageUri)
+	} else {
+		result, err = h.svc.UpdateFunctionCode(r.Context(), name, code)
+	}
 	if err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
+		writeServiceError(w, err)
 		return
 	}
 
+	if req.Publish {
+		result, err = h.svc.PublishVersion(r.Context(), name, "")
+		if err != nil {
+			writeServiceError(w, err)
+			return
+		}
+	}
 	writeJSON(w, http.StatusOK, toFunctionConfigResponse(result))
 }
 
 // UpdateFunctionConfiguration handles PUT /2015-03-31/functions/{name}/configuration
 func (h *Handler) UpdateFunctionConfiguration(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+	name, err := requestFunctionReference(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
 
 	var update types.FunctionConfigUpdate
 	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
@@ -326,7 +309,7 @@ func (h *Handler) UpdateFunctionConfiguration(w http.ResponseWriter, r *http.Req
 
 	result, err := h.svc.UpdateFunctionConfiguration(r.Context(), name, &update)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
+		writeServiceError(w, err)
 		return
 	}
 
@@ -335,7 +318,11 @@ func (h *Handler) UpdateFunctionConfiguration(w http.ResponseWriter, r *http.Req
 
 // Invoke handles POST /2015-03-31/functions/{name}/invocations
 func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
+	name, err := requestFunctionReference(r)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
 
 	payload, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -352,6 +339,14 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 
 	if input.InvocationType == "" {
 		input.InvocationType = "RequestResponse"
+	}
+	if input.InvocationType != "RequestResponse" && input.InvocationType != "Event" && input.InvocationType != "DryRun" {
+		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Invalid invocation type")
+		return
+	}
+	if input.LogType != "" && input.LogType != "None" && input.LogType != "Tail" {
+		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Invalid log type")
+		return
 	}
 
 	correlationID := tracesvc.CorrelationIDFromHeaders(r.Header)
@@ -442,16 +437,25 @@ func (h *Handler) invokeAndTrace(ctx context.Context, name string, input *types.
 // was not registered and fell through to the S3 handler returning XML.
 func (h *Handler) PutFunctionConcurrency(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ReservedConcurrentExecutions int `json:"ReservedConcurrentExecutions"`
+		ReservedConcurrentExecutions *int `json:"ReservedConcurrentExecutions"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	writeJSON(w, http.StatusOK, map[string]int{
-		"ReservedConcurrentExecutions": req.ReservedConcurrentExecutions,
-	})
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ReservedConcurrentExecutions == nil {
+		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "ReservedConcurrentExecutions is required")
+		return
+	}
+	if err := h.svc.PutFunctionConcurrency(r.PathValue("name"), *req.ReservedConcurrentExecutions); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"ReservedConcurrentExecutions": *req.ReservedConcurrentExecutions})
 }
 
 // DeleteFunctionConcurrency handles DELETE /2017-10-31/functions/{name}/concurrency.
-func (h *Handler) DeleteFunctionConcurrency(w http.ResponseWriter, _ *http.Request) {
+func (h *Handler) DeleteFunctionConcurrency(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.DeleteFunctionConcurrency(r.PathValue("name")); err != nil {
+		writeServiceError(w, err)
+		return
+	}
 	setRequestID(w)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -461,7 +465,7 @@ func (h *Handler) DeleteFunctionConcurrency(w http.ResponseWriter, _ *http.Reque
 // signing configs, so an existing function reports an empty ARN, as AWS does
 // for a function with none attached.
 func (h *Handler) GetFunctionCodeSigningConfig(w http.ResponseWriter, r *http.Request) {
-	name := normalizeFunctionName(r.PathValue("name"))
+	name := r.PathValue("name")
 	fn, err := h.svc.GetFunction(name)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
@@ -476,7 +480,7 @@ func (h *Handler) GetFunctionCodeSigningConfig(w http.ResponseWriter, r *http.Re
 // DeleteFunctionCodeSigningConfig handles
 // DELETE /2020-06-30/functions/{name}/code-signing-config.
 func (h *Handler) DeleteFunctionCodeSigningConfig(w http.ResponseWriter, r *http.Request) {
-	name := normalizeFunctionName(r.PathValue("name"))
+	name := r.PathValue("name")
 	if _, err := h.svc.GetFunction(name); err != nil {
 		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
 		return
@@ -487,13 +491,6 @@ func (h *Handler) DeleteFunctionCodeSigningConfig(w http.ResponseWriter, r *http
 
 // CreateAlias handles POST /2015-03-31/functions/{name}/aliases
 func (h *Handler) CreateAlias(w http.ResponseWriter, r *http.Request) {
-	name := normalizeFunctionName(r.PathValue("name"))
-	fn, err := h.svc.GetFunction(name)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
-		return
-	}
-
 	var req struct {
 		Name            string `json:"Name"`
 		FunctionVersion string `json:"FunctionVersion"`
@@ -503,138 +500,64 @@ func (h *Handler) CreateAlias(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Invalid request body")
 		return
 	}
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Alias name is required")
+	result, err := h.svc.CreateAlias(r.PathValue("name"), lambdasvc.Alias{Name: req.Name, FunctionVersion: req.FunctionVersion, Description: req.Description})
+	if err != nil {
+		writeServiceError(w, err)
 		return
 	}
-
-	h.mu.Lock()
-	if h.aliases[name] == nil {
-		h.aliases[name] = make(map[string]*aliasConfig)
-	}
-	if _, exists := h.aliases[name][req.Name]; exists {
-		h.mu.Unlock()
-		writeError(w, http.StatusConflict, "ResourceConflictException", "Alias already exists: "+req.Name)
-		return
-	}
-	alias := &aliasConfig{
-		Name:            req.Name,
-		FunctionName:    name,
-		FunctionVersion: req.FunctionVersion,
-		Description:     req.Description,
-		AliasArn:        fn.FunctionArn + ":" + req.Name,
-		RevisionId:      uuid.NewString(),
-	}
-	h.aliases[name][req.Name] = alias
-	h.mu.Unlock()
-
-	writeJSON(w, http.StatusCreated, alias)
+	writeJSON(w, http.StatusCreated, result)
 }
 
 // GetAlias handles GET /2015-03-31/functions/{name}/aliases/{aliasName}
 func (h *Handler) GetAlias(w http.ResponseWriter, r *http.Request) {
-	name := normalizeFunctionName(r.PathValue("name"))
-	aliasName := r.PathValue("aliasName")
-
-	if _, err := h.svc.GetFunction(name); err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
+	result, err := h.svc.GetAlias(r.PathValue("name"), r.PathValue("aliasName"))
+	if err != nil {
+		writeServiceError(w, err)
 		return
 	}
-
-	h.mu.Lock()
-	alias := h.aliases[name][aliasName]
-	h.mu.Unlock()
-
-	if alias == nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Alias not found: "+aliasName)
-		return
-	}
-	writeJSON(w, http.StatusOK, alias)
+	writeJSON(w, http.StatusOK, result)
 }
 
 // ListAliases handles GET /2015-03-31/functions/{name}/aliases
 func (h *Handler) ListAliases(w http.ResponseWriter, r *http.Request) {
-	name := normalizeFunctionName(r.PathValue("name"))
-	if _, err := h.svc.GetFunction(name); err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
+	result, err := h.svc.ListAliases(r.PathValue("name"))
+	if err != nil {
+		writeServiceError(w, err)
 		return
 	}
-
-	h.mu.Lock()
-	fnAliases := h.aliases[name]
-	result := make([]*aliasConfig, 0, len(fnAliases))
-	for _, a := range fnAliases {
-		result = append(result, a)
-	}
-	h.mu.Unlock()
-
 	writeJSON(w, http.StatusOK, map[string]any{"Aliases": result})
 }
 
 // UpdateAlias handles PUT /2015-03-31/functions/{name}/aliases/{aliasName}
 func (h *Handler) UpdateAlias(w http.ResponseWriter, r *http.Request) {
-	name := normalizeFunctionName(r.PathValue("name"))
-	aliasName := r.PathValue("aliasName")
-
-	if _, err := h.svc.GetFunction(name); err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
-		return
-	}
-
 	var req struct {
-		FunctionVersion string `json:"FunctionVersion,omitempty"`
-		Description     string `json:"Description,omitempty"`
+		FunctionVersion *string `json:"FunctionVersion,omitempty"`
+		Description     *string `json:"Description,omitempty"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-
-	h.mu.Lock()
-	alias := h.aliases[name][aliasName]
-	if alias == nil {
-		h.mu.Unlock()
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Alias not found: "+aliasName)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Invalid request body")
 		return
 	}
-	if req.FunctionVersion != "" {
-		alias.FunctionVersion = req.FunctionVersion
+	result, err := h.svc.UpdateAlias(r.PathValue("name"), r.PathValue("aliasName"), req.FunctionVersion, req.Description)
+	if err != nil {
+		writeServiceError(w, err)
+		return
 	}
-	if req.Description != "" {
-		alias.Description = req.Description
-	}
-	alias.RevisionId = uuid.NewString()
-	h.mu.Unlock()
-
-	writeJSON(w, http.StatusOK, alias)
+	writeJSON(w, http.StatusOK, result)
 }
 
 // DeleteAlias handles DELETE /2015-03-31/functions/{name}/aliases/{aliasName}
 func (h *Handler) DeleteAlias(w http.ResponseWriter, r *http.Request) {
-	name := normalizeFunctionName(r.PathValue("name"))
-	aliasName := r.PathValue("aliasName")
-
-	if _, err := h.svc.GetFunction(name); err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+name)
+	if err := h.svc.DeleteAlias(r.PathValue("name"), r.PathValue("aliasName")); err != nil {
+		writeServiceError(w, err)
 		return
 	}
-
-	h.mu.Lock()
-	if fnAliases, ok := h.aliases[name]; ok {
-		delete(fnAliases, aliasName)
-	}
-	h.mu.Unlock()
-
 	setRequestID(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // AddPermission handles POST /2015-03-31/functions/{name}/policy
 func (h *Handler) AddPermission(w http.ResponseWriter, r *http.Request) {
-	functionName := normalizeFunctionName(r.PathValue("name"))
-	fn, err := h.svc.GetFunction(functionName)
-	if err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+functionName)
-		return
-	}
-
 	var req struct {
 		StatementID   string `json:"StatementId"`
 		Action        string `json:"Action"`
@@ -646,109 +569,50 @@ func (h *Handler) AddPermission(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "Invalid request body")
 		return
 	}
-	if strings.TrimSpace(req.StatementID) == "" {
-		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "StatementId is required")
+	permission := lambdasvc.Permission{StatementID: req.StatementID, Action: req.Action, Principal: req.Principal, SourceARN: req.SourceARN, SourceAccount: req.SourceAccount}
+	fn, err := h.svc.GetFunction(r.PathValue("name"))
+	if err != nil {
+		writeServiceError(w, err)
 		return
 	}
-
-	h.mu.Lock()
-	if _, ok := h.policies[functionName]; !ok {
-		h.policies[functionName] = make(map[string]policyStatement)
+	if err := h.svc.AddPermission(r.PathValue("name"), permission); err != nil {
+		writeServiceError(w, err)
+		return
 	}
-	h.policies[functionName][req.StatementID] = policyStatement{
-		StatementID:   req.StatementID,
-		Action:        req.Action,
-		Principal:     req.Principal,
-		SourceARN:     req.SourceARN,
-		SourceAccount: req.SourceAccount,
-	}
-	h.mu.Unlock()
-
-	statement := map[string]any{
-		"Sid":      req.StatementID,
-		"Effect":   "Allow",
-		"Action":   req.Action,
-		"Resource": fn.FunctionArn,
-	}
-	if strings.TrimSpace(req.Principal) != "" {
-		statement["Principal"] = map[string]string{"Service": req.Principal}
-	}
-	if strings.TrimSpace(req.SourceARN) != "" {
-		statement["Condition"] = map[string]any{
-			"ArnLike": map[string]string{"AWS:SourceArn": req.SourceARN},
-		}
-	}
-
-	raw, _ := json.Marshal(statement)
+	raw, _ := json.Marshal(permissionResponse(permission, fn.FunctionArn))
 	writeJSON(w, http.StatusOK, map[string]string{"Statement": string(raw)})
 }
 
 // GetPolicy handles GET /2015-03-31/functions/{name}/policy
 func (h *Handler) GetPolicy(w http.ResponseWriter, r *http.Request) {
-	functionName := normalizeFunctionName(r.PathValue("name"))
-	fn, err := h.svc.GetFunction(functionName)
+	fn, err := h.svc.GetFunction(r.PathValue("name"))
 	if err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+functionName)
+		writeServiceError(w, err)
 		return
 	}
-
-	h.mu.Lock()
-	functionPolicies := h.policies[functionName]
-	h.mu.Unlock()
-
-	if len(functionPolicies) == 0 {
+	permissions, err := h.svc.GetPolicy(r.PathValue("name"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	if len(permissions) == 0 {
 		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "The resource policy for the function does not exist.")
 		return
 	}
-
-	statements := make([]map[string]any, 0, len(functionPolicies))
-	for _, stmt := range functionPolicies {
-		entry := map[string]any{
-			"Sid":      stmt.StatementID,
-			"Effect":   "Allow",
-			"Action":   stmt.Action,
-			"Resource": fn.FunctionArn,
-		}
-		if strings.TrimSpace(stmt.Principal) != "" {
-			entry["Principal"] = map[string]string{"Service": stmt.Principal}
-		}
-		if strings.TrimSpace(stmt.SourceARN) != "" {
-			entry["Condition"] = map[string]any{
-				"ArnLike": map[string]string{"AWS:SourceArn": stmt.SourceARN},
-			}
-		}
-		statements = append(statements, entry)
+	statements := make([]map[string]any, 0, len(permissions))
+	for _, permission := range permissions {
+		statements = append(statements, permissionResponse(permission, fn.FunctionArn))
 	}
-
-	policy := map[string]any{
-		"Version":   "2012-10-17",
-		"Id":        "default",
-		"Statement": statements,
-	}
-	raw, _ := json.Marshal(policy)
+	raw, _ := json.Marshal(map[string]any{"Version": "2012-10-17", "Id": "default", "Statement": statements})
 	writeJSON(w, http.StatusOK, map[string]string{"Policy": string(raw), "RevisionId": "1"})
 }
 
 // RemovePermission handles DELETE /2015-03-31/functions/{name}/policy/{statementId}
 func (h *Handler) RemovePermission(w http.ResponseWriter, r *http.Request) {
-	functionName := normalizeFunctionName(r.PathValue("name"))
-	statementID := strings.TrimSpace(r.PathValue("statementId"))
-	if statementID == "" {
-		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", "StatementId is required")
+	if err := h.svc.RemovePermission(r.PathValue("name"), r.PathValue("statementId")); err != nil {
+		writeServiceError(w, err)
 		return
 	}
-
-	if _, err := h.svc.GetFunction(functionName); err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", "Function not found: "+functionName)
-		return
-	}
-
-	h.mu.Lock()
-	if functionPolicies, ok := h.policies[functionName]; ok {
-		delete(functionPolicies, statementID)
-	}
-	h.mu.Unlock()
-
 	setRequestID(w)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -802,7 +666,10 @@ func (h *Handler) tagTargetName(r *http.Request) string {
 	if unescaped, err := url.PathUnescape(name); err == nil {
 		name = unescaped
 	}
-	return normalizeFunctionName(name)
+	if base, _, err := lambdasvc.ParseFunctionReference(name, ""); err == nil {
+		return base
+	}
+	return name
 }
 
 // parseTagKeys collects tag keys from the query string, supporting both
@@ -830,7 +697,7 @@ func (h *Handler) ListTags(w http.ResponseWriter, r *http.Request) {
 	name := h.tagTargetName(r)
 	fn, err := h.svc.GetFunction(name)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	tags := fn.Tags
@@ -853,7 +720,7 @@ func (h *Handler) TagResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.TagResource(name, req.Tags); err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	setRequestID(w)
@@ -871,7 +738,7 @@ func (h *Handler) UntagResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.UntagResource(name, tagKeys); err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
+		writeServiceError(w, err)
 		return
 	}
 	setRequestID(w)
@@ -925,7 +792,7 @@ func (h *Handler) GetLayerVersion(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.GetLayerVersion(layerName, version)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
+		writeServiceError(w, err)
 		return
 	}
 
@@ -975,7 +842,7 @@ func (h *Handler) DeleteLayerVersion(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.svc.DeleteLayerVersion(layerName, version); err != nil {
-		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
+		writeServiceError(w, err)
 		return
 	}
 
@@ -986,19 +853,21 @@ func (h *Handler) DeleteLayerVersion(w http.ResponseWriter, r *http.Request) {
 // --- Request/Response types ---
 
 type createFunctionRequest struct {
-	FunctionName     string                  `json:"FunctionName"`
-	Runtime          string                  `json:"Runtime"`
-	Handler          string                  `json:"Handler"`
-	Role             string                  `json:"Role"`
-	Description      string                  `json:"Description,omitempty"`
-	Timeout          int                     `json:"Timeout,omitempty"`
-	MemorySize       int                     `json:"MemorySize,omitempty"`
-	Code             *codeInput              `json:"Code,omitempty"`
-	Environment      *envInput               `json:"Environment,omitempty"`
-	Layers           []string                `json:"Layers,omitempty"`
-	Tags             map[string]string       `json:"Tags,omitempty"`
-	DeadLetterConfig *types.DeadLetterConfig `json:"DeadLetterConfig,omitempty"`
-	PackageType      string                  `json:"PackageType,omitempty"`
+	FunctionName     string                     `json:"FunctionName"`
+	Runtime          string                     `json:"Runtime"`
+	Handler          string                     `json:"Handler"`
+	Role             string                     `json:"Role"`
+	Description      string                     `json:"Description,omitempty"`
+	Timeout          int                        `json:"Timeout,omitempty"`
+	MemorySize       int                        `json:"MemorySize,omitempty"`
+	Code             *codeInput                 `json:"Code,omitempty"`
+	Environment      *envInput                  `json:"Environment,omitempty"`
+	Layers           []string                   `json:"Layers,omitempty"`
+	Tags             map[string]string          `json:"Tags,omitempty"`
+	DeadLetterConfig *types.DeadLetterConfig    `json:"DeadLetterConfig,omitempty"`
+	PackageType      string                     `json:"PackageType,omitempty"`
+	ImageConfig      *types.FunctionImageConfig `json:"ImageConfig,omitempty"`
+	Publish          bool                       `json:"Publish,omitempty"`
 }
 
 type codeInput struct {
@@ -1013,6 +882,8 @@ type envInput struct {
 }
 
 type updateCodeRequest struct {
+	ImageUri string `json:"ImageUri,omitempty"`
+	Publish  bool   `json:"Publish,omitempty"`
 	ZipFile  string `json:"ZipFile,omitempty"`  // base64-encoded zip
 	S3Bucket string `json:"S3Bucket,omitempty"` // S3 bucket containing deployment package
 	S3Key    string `json:"S3Key,omitempty"`    // S3 key of deployment package zip
@@ -1081,6 +952,9 @@ func toFunctionConfigResponse(fn *types.FunctionConfig) map[string]any {
 		}
 	}
 
+	if fn.ImageConfig != nil {
+		result["ImageConfigResponse"] = map[string]any{"ImageConfig": fn.ImageConfig}
+	}
 	return result
 }
 
@@ -1136,6 +1010,10 @@ func setRequestID(w http.ResponseWriter) {
 // invokeErrorCode maps an Invoke service error to its AWS status and code.
 func invokeErrorCode(err error) (int, string) {
 	switch {
+	case errors.Is(err, lambdasvc.ErrInvalidParameter):
+		return http.StatusBadRequest, "InvalidParameterValueException"
+	case errors.Is(err, lambdasvc.ErrResourceConflict):
+		return http.StatusConflict, "ResourceConflictException"
 	case errors.Is(err, lambdasvc.ErrFunctionNotFound):
 		return http.StatusNotFound, "ResourceNotFoundException"
 	case errors.Is(err, lambdasvc.ErrFunctionNotReady):
@@ -1147,16 +1025,49 @@ func invokeErrorCode(err error) (int, string) {
 	}
 }
 
-func normalizeFunctionName(name string) string {
-	trimmed := strings.TrimSpace(name)
-	const marker = ":function:"
-	idx := strings.Index(trimmed, marker)
-	if idx < 0 {
-		return trimmed
+func writeServiceError(w http.ResponseWriter, err error) {
+	status, code := invokeErrorCode(err)
+	writeError(w, status, code, err.Error())
+}
+
+func requestFunctionReference(r *http.Request) (string, error) {
+	name, qualifier, err := lambdasvc.ParseFunctionReference(r.PathValue("name"), r.URL.Query().Get("Qualifier"))
+	if err != nil {
+		return "", err
 	}
-	tail := trimmed[idx+len(marker):]
-	if colon := strings.IndexByte(tail, ':'); colon >= 0 {
-		tail = tail[:colon]
+	if qualifier != "" {
+		name += ":" + qualifier
 	}
-	return strings.TrimSpace(tail)
+	return name, nil
+}
+
+func permissionResponse(permission lambdasvc.Permission, arn string) map[string]any {
+	result := map[string]any{"Sid": permission.StatementID, "Effect": "Allow", "Action": permission.Action, "Resource": arn}
+	if permission.Principal != "" {
+		result["Principal"] = map[string]string{"Service": permission.Principal}
+	}
+	conditions := map[string]any{}
+	if permission.SourceARN != "" {
+		conditions["ArnLike"] = map[string]string{"AWS:SourceArn": permission.SourceARN}
+	}
+	if permission.SourceAccount != "" {
+		conditions["StringEquals"] = map[string]string{"AWS:SourceAccount": permission.SourceAccount}
+	}
+	if len(conditions) > 0 {
+		result["Condition"] = conditions
+	}
+	return result
+}
+
+func (h *Handler) GetFunctionConcurrency(w http.ResponseWriter, r *http.Request) {
+	value, err := h.svc.GetFunctionConcurrency(r.PathValue("name"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	response := map[string]int{}
+	if value != nil {
+		response["ReservedConcurrentExecutions"] = *value
+	}
+	writeJSON(w, http.StatusOK, response)
 }

@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+
+	"golang.org/x/sync/semaphore"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,13 +27,13 @@ import (
 
 // Service implements Lambda business logic.
 type Service struct {
-	cfg     *config.Config
-	store   *Store
-	engine  *engine.Engine
-	pool    *engine.WarmPool
-	invoker *engine.Invoker
-	logsSvc *logssvc.Service
-	startMu sync.Map // per-function mutex to prevent duplicate cold starts
+	cfg        *config.Config
+	store      *Store
+	engine     *engine.Engine
+	pool       *engine.WarmPool
+	invoker    *engine.Invoker
+	logsSvc    *logssvc.Service
+	startGates sync.Map // function name -> cancellable cold-start gate
 
 	metricsMu sync.RWMutex
 	metrics   map[string]*FunctionMetrics
@@ -40,6 +43,7 @@ type Service struct {
 
 // FunctionMetrics tracks invoke-level function metrics used by the dashboard.
 type FunctionMetrics struct {
+	instance          string
 	Invocations       int64     `json:"invocations"`
 	MessagesProcessed int64     `json:"messagesProcessed"`
 	LastInvokedAt     time.Time `json:"lastInvokedAt"`
@@ -52,10 +56,6 @@ const (
 	// containerAcquireTimeout bounds how long an invoke waits for a free
 	// execution environment when the function is at its concurrency cap.
 	containerAcquireTimeout = 60 * time.Second
-	// containerAcquirePoll is how soon to first re-check for a freed
-	// environment; waits back off to containerAcquireMaxPoll.
-	containerAcquirePoll    = 25 * time.Millisecond
-	containerAcquireMaxPoll = 250 * time.Millisecond
 
 	// asyncWorkers bounds how many asynchronous invokes run at once across
 	// the account; asyncBacklog is how many may wait before Enqueue reports
@@ -66,6 +66,8 @@ const (
 	// asynchronous invokes before cancelling them.
 	asyncCloseTimeout = 30 * time.Second
 )
+
+type queuedInvocationKey struct{}
 
 // NewService creates a new Lambda service.
 func NewService(cfg *config.Config, store *Store, eng *engine.Engine, pool *engine.WarmPool, logsSvc *logssvc.Service) *Service {
@@ -89,7 +91,7 @@ func (s *Service) Enqueue(functionName string, run func(ctx context.Context)) er
 	if _, err := s.invocableFunction(functionName); err != nil {
 		return err
 	}
-	if err := s.async.Submit(run); err != nil {
+	if err := s.async.Submit(func(ctx context.Context) { run(context.WithValue(ctx, queuedInvocationKey{}, true)) }); err != nil {
 		return fmt.Errorf("asynchronous invoke of %s not queued: %v: %w", functionName, err, ErrTooManyRequests)
 	}
 	return nil
@@ -108,98 +110,85 @@ func (s *Service) Close() { s.async.Close(asyncCloseTimeout) }
 // to retry until timeout and taint the resource, which is unhelpful for a local
 // emulator where disk state can outlive Terraform state.
 func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, code []byte) (*types.FunctionConfig, error) {
-	// Evict any warm container for a pre-existing function so the next invoke
-	// picks up the new code and config.
-	s.evictWarmContainer(fn.FunctionName)
-
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if fn == nil {
+		return nil, invalid("function configuration is required")
+	}
+	fn = cloneFunction(fn)
 	if fn.Timeout == 0 {
 		fn.Timeout = s.cfg.LambdaDefaultTimeout
 	}
 	if fn.MemorySize == 0 {
 		fn.MemorySize = s.cfg.LambdaDefaultMemory
 	}
-	if fn.Version == "" {
-		fn.Version = "$LATEST"
-	}
+	fn.Version = "$LATEST"
 	if fn.PackageType == "" {
+		fn.PackageType = "Zip"
 		if fn.ImageURI != "" {
 			fn.PackageType = "Image"
-		} else {
-			fn.PackageType = "Zip"
 		}
 	}
-
+	if err := validateConfiguration(fn); err != nil {
+		return nil, err
+	}
 	fn.FunctionArn = fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", s.cfg.Region, s.cfg.AccountID, fn.FunctionName)
-	// Skip the Pending→Active transition dance: return Active immediately so
-	// Terraform's WaitUntilFunctionActiveV2 waiter completes on its first poll
-	// rather than requiring two round-trips (~5s per function on default intervals).
 	fn.State = types.FunctionStateActive
 	fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
 	fn.LastModified = time.Now()
-
-	if len(code) > 0 {
-		hash, err := s.store.SaveCode(fn.FunctionName, code)
+	if fn.PackageType == "Image" && s.engine != nil {
+		resolved, err := s.engine.ResolveImageReference(ctx, fn.ImageURI)
 		if err != nil {
-			return nil, fmt.Errorf("failed to save code: %w", err)
+			return nil, err
 		}
-		fn.CodeSHA256 = hash
-		fn.CodeSize = int64(len(code))
-
-		// Pre-extract so the first invoke is faster
-		if _, err := s.store.ExtractCode(fn.FunctionName); err != nil {
-			log.Printf("[lambda] warning: failed to pre-extract code for %s: %v", fn.FunctionName, err)
+		fn.ResolvedImageURI = resolved
+	}
+	result, err := s.store.commitDeployment(fn, code, true, func(record *functionRecord) {
+		if s.engine != nil {
+			s.engine.RetireLatestRevision(s.cfg.AccountID, record.FunctionName, record.Metadata.Deployment.ID+":"+record.Metadata.InstanceID+":"+record.Version)
 		}
+		s.ensureFunctionMetrics(record.FunctionName, record.Metadata.InstanceID)
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	if err := s.store.SaveFunction(fn); err != nil {
-		return nil, fmt.Errorf("failed to save function: %w", err)
-	}
-	s.ensureFunctionMetrics(fn.FunctionName)
 	if s.logsSvc != nil {
-		s.logsSvc.CreateLogGroup(fmt.Sprintf("/aws/lambda/%s", fn.FunctionName))
-		s.logsSvc.LogSystemEvent(logssvc.LevelINFO, fmt.Sprintf("Function created: %s (runtime: %s)", fn.FunctionName, fn.Runtime))
+		s.logsSvc.CreateLogGroup(fmt.Sprintf("/aws/lambda/%s", result.FunctionName))
+		s.logsSvc.LogSystemEvent(logssvc.LevelINFO, fmt.Sprintf("Function created: %s (runtime: %s)", result.FunctionName, result.Runtime))
 	}
-
-	// Pull runtime image in background
 	if s.engine != nil {
+		config := cloneFunction(result)
 		go func() {
 			pullCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 			defer cancel()
-			if err := s.engine.EnsureImage(pullCtx, fn.Runtime); err != nil {
-				log.Printf("[lambda] warning: failed to pull image for %s: %v", fn.Runtime, err)
+			if err := s.ensureFunctionImage(pullCtx, config); err != nil {
+				log.Printf("[lambda] warning: failed to prepare image for %s: %v", config.FunctionName, err)
 			}
 		}()
 	}
-
-	return fn, nil
+	return result, nil
 }
 
 func (s *Service) promoteFunctionToActiveIfPending(name string) error {
-	fn, err := s.store.GetFunction(name)
-	if err != nil {
-		return err
-	}
-
-	if fn.LastUpdateStatus == "" {
-		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
-	}
-
-	if fn.State != types.FunctionStatePending {
-		if fn.LastUpdateStatus == types.LastUpdateStatusSuccessful {
-			return nil
+	_, err := s.store.mutateFunction(name, func(record *functionRecord) error {
+		if record.State == types.FunctionStatePending {
+			record.State = types.FunctionStateActive
 		}
-		return s.store.SaveFunction(fn)
-	}
-
-	fn.State = types.FunctionStateActive
-	fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
-	return s.store.SaveFunction(fn)
+		if record.LastUpdateStatus == "" || record.State == types.FunctionStateActive {
+			record.LastUpdateStatus = types.LastUpdateStatusSuccessful
+		}
+		return nil
+	})
+	return err
 }
 
-// getFunctionMutex returns a per-function mutex (created lazily) to serialize cold starts.
-func (s *Service) getFunctionMutex(name string) *sync.Mutex {
-	v, _ := s.startMu.LoadOrStore(name, &sync.Mutex{})
-	return v.(*sync.Mutex)
+func (s *Service) startGate(name string) *semaphore.Weighted {
+	if v, ok := s.startGates.Load(name); ok {
+		return v.(*semaphore.Weighted)
+	}
+	v, _ := s.startGates.LoadOrStore(name, semaphore.NewWeighted(1))
+	return v.(*semaphore.Weighted)
 }
 
 // ActivatePendingFunctions promotes all persisted functions from Pending to Active
@@ -222,52 +211,20 @@ func (s *Service) ActivatePendingFunctions() {
 	}
 }
 
-// resolveFunctionName strips a Lambda ARN down to the bare function name so
-// tagging endpoints (which receive the ARN as {Resource}) work the same as
-// name-based lookups. It mirrors the API handler's normalizeFunctionName:
-// "arn:aws:lambda:us-east-1:123:function:my-fn" (optionally with ":$LATEST" or
-// ":<version>" suffix) resolves to "my-fn". Plain names pass through.
-func resolveFunctionName(nameOrArn string) string {
-	trimmed := strings.TrimSpace(nameOrArn)
-	const marker = ":function:"
-	idx := strings.Index(trimmed, marker)
-	if idx < 0 {
-		return trimmed
-	}
-	tail := trimmed[idx+len(marker):]
-	if colon := strings.IndexByte(tail, ':'); colon >= 0 {
-		tail = tail[:colon]
-	}
-	return strings.TrimSpace(tail)
-}
-
 // GetFunction retrieves a function by name (or ARN).
-func (s *Service) GetFunction(name string) (*types.FunctionConfig, error) {
-	fn, err := s.store.GetFunction(resolveFunctionName(name))
+func (s *Service) GetFunction(reference string) (*types.FunctionConfig, error) {
+	fn, err := s.store.GetFunction(reference)
 	if err != nil {
 		return nil, err
 	}
-	// older functions may not have the field populated
 	if fn.LastUpdateStatus == "" {
 		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
 	}
-
-	// If we are still in the pending state, return that value once and
-	// transition the persisted configuration to active.  This ensures the
-	// first observer sees "Pending" and subsequent callers observe the
-	// expected AWS-like progression.
 	if fn.State == types.FunctionStatePending {
-		// copy before mutating so we don't modify the object returned to
-		// the caller.
-		original := *fn
-		fn.State = types.FunctionStateActive
-		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
-		// persist the updated state synchronously so the next read
-		// immediately sees Active (an async save races with the next poll).
-		_ = s.store.SaveFunction(fn)
-		return &original, nil
+		if err := s.promoteFunctionToActiveIfPending(fn.FunctionName); err != nil {
+			return nil, err
+		}
 	}
-
 	return fn, nil
 }
 
@@ -277,12 +234,42 @@ func (s *Service) ListFunctions() ([]*types.FunctionConfig, error) {
 }
 
 // DeleteFunction removes a function and its container.
-func (s *Service) DeleteFunction(ctx context.Context, name string) error {
-	s.evictWarmContainer(name)
-	if err := s.store.DeleteFunction(name); err != nil {
+func (s *Service) DeleteFunction(ctx context.Context, reference string) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
-	s.deleteFunctionMetrics(name)
+	name, qualifier, err := ParseFunctionReference(reference, "")
+	if err != nil {
+		return err
+	}
+	if qualifier != "" && qualifier != "$LATEST" {
+		_, err = s.store.mutateFunction(name, func(record *functionRecord) error {
+			if !numberedVersion(qualifier) || record.Metadata.Versions[qualifier] == nil {
+				return fmt.Errorf("%w: version %s", ErrFunctionNotFound, qualifier)
+			}
+			for _, alias := range record.Metadata.Aliases {
+				if alias.FunctionVersion == qualifier {
+					return fmt.Errorf("%w: version is used by an alias", ErrResourceConflict)
+				}
+			}
+			delete(record.Metadata.Versions, qualifier)
+			record.afterCommit = func(*functionRecord) {
+				if s.engine != nil {
+					s.engine.RetireFunctionVersion(s.cfg.AccountID, name, qualifier)
+				}
+			}
+			return nil
+		})
+		return err
+	}
+	if err := s.store.deleteFunction(name, func() {
+		if s.engine != nil {
+			s.engine.RetireFunction(s.cfg.AccountID, name)
+		}
+		s.deleteFunctionMetrics(name)
+	}); err != nil {
+		return err
+	}
 	if s.logsSvc != nil {
 		s.logsSvc.LogSystemEvent(logssvc.LevelINFO, fmt.Sprintf("Function deleted: %s", name))
 	}
@@ -294,8 +281,13 @@ func (s *Service) DeleteFunction(ctx context.Context, name string) error {
 // It handles both raw proxy events ({"httpMethod":...,"body":...}) and plain
 // JSON objects. Returns nil when no events directory exists or code is absent.
 func (s *Service) GetEventExamples(name string) map[string]json.RawMessage {
-	extractDir, err := s.store.ExtractCode(name)
+	lease, err := s.store.acquireDeployment(name, "")
 	if err != nil {
+		return nil
+	}
+	defer lease.release()
+	extractDir := lease.CodeDir
+	if extractDir == "" {
 		return nil
 	}
 	entries, err := os.ReadDir(filepath.Join(extractDir, "events"))
@@ -320,93 +312,75 @@ func (s *Service) GetEventExamples(name string) map[string]json.RawMessage {
 }
 
 // UpdateFunctionCode replaces function code.
-func (s *Service) UpdateFunctionCode(ctx context.Context, name string, code []byte) (*types.FunctionConfig, error) {
-	fn, err := s.store.GetFunction(name)
+func (s *Service) UpdateFunctionCode(ctx context.Context, reference string, code []byte) (*types.FunctionConfig, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	name, err := mutableFunction(reference)
 	if err != nil {
 		return nil, err
 	}
-
-	hash, err := s.store.SaveCode(name, code)
-	if err != nil {
-		return nil, fmt.Errorf("failed to save code: %w", err)
+	if len(code) == 0 {
+		return nil, invalid("function code is required")
 	}
-
-	fn.CodeSHA256 = hash
-	fn.CodeSize = int64(len(code))
-	fn.LastModified = time.Now()
-	fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
-
-	// Pre-extract so the first invoke is faster; failure is non-fatal.
-	if _, err := s.store.ExtractCode(name); err != nil {
-		log.Printf("[lambda] warning: failed to pre-extract code for %s: %v", name, err)
+	result, err := s.store.mutateFunction(name, func(record *functionRecord) error {
+		if record.PackageType == "Image" {
+			return invalid("use ImageUri to update an image function")
+		}
+		record.LastModified = time.Now()
+		record.LastUpdateStatus = types.LastUpdateStatusSuccessful
+		prepared, err := s.store.prepareDeploymentLocked(record.FunctionConfig, code, record.Metadata.Deployment)
+		if err != nil {
+			return err
+		}
+		record.Metadata.Deployment = prepared
+		record.codeToMirror = append([]byte(nil), code...)
+		return nil
+	})
+	if err == nil {
+		s.retireLatestContainers(name)
 	}
-
-	// Evict warm container so next invoke uses new code
-	s.evictWarmContainer(name)
-
-	if err := s.store.SaveFunction(fn); err != nil {
-		return nil, err
-	}
-
-	if s.logsSvc != nil {
-		s.logsSvc.LogSystemEvent(logssvc.LevelINFO, fmt.Sprintf("Function code updated: %s", name))
-	}
-	return fn, nil
+	return result, err
 }
 
 // TagResource adds or overwrites tags on a function (name or ARN).
-func (s *Service) TagResource(name string, tags map[string]string) error {
-	fn, err := s.store.GetFunction(resolveFunctionName(name))
+func (s *Service) TagResource(reference string, tags map[string]string) error {
+	name, err := bareFunction(reference)
 	if err != nil {
 		return err
 	}
-	if fn.Tags == nil {
-		fn.Tags = make(map[string]string)
-	}
-	for k, v := range tags {
-		fn.Tags[k] = v
-	}
-	return s.store.SaveFunction(fn)
+	_, err = s.store.mutateFunction(name, func(record *functionRecord) error {
+		if record.Tags == nil {
+			record.Tags = make(map[string]string)
+		}
+		for key, value := range tags {
+			record.Tags[key] = value
+		}
+		return nil
+	})
+	return err
 }
 
 // UntagResource removes specified tag keys from a function (name or ARN).
-func (s *Service) UntagResource(name string, tagKeys []string) error {
-	fn, err := s.store.GetFunction(resolveFunctionName(name))
+func (s *Service) UntagResource(reference string, tagKeys []string) error {
+	name, err := bareFunction(reference)
 	if err != nil {
 		return err
 	}
-	if fn.Tags != nil {
-		for _, k := range tagKeys {
-			delete(fn.Tags, k)
+	_, err = s.store.mutateFunction(name, func(record *functionRecord) error {
+		for _, key := range tagKeys {
+			delete(record.Tags, key)
 		}
-	}
-	return s.store.SaveFunction(fn)
+		return nil
+	})
+	return err
 }
 
 // --- Layer operations ---
 
 // PublishLayerVersion publishes a new layer version.
 func (s *Service) PublishLayerVersion(name, description string, runtimes []string, code []byte) (*types.LayerConfig, error) {
-	version := s.store.NextLayerVersion(name)
-
-	cfg := &types.LayerConfig{
-		LayerName:          name,
-		LayerArn:           fmt.Sprintf("arn:aws:lambda:%s:%s:layer:%s", s.cfg.Region, s.cfg.AccountID, name),
-		VersionNumber:      version,
-		Description:        description,
-		CompatibleRuntimes: runtimes,
-		CreatedDate:        time.Now().UTC().Format(time.RFC3339),
-	}
-	cfg.LayerVersionArn = fmt.Sprintf("%s:%d", cfg.LayerArn, version)
-
-	hash, err := s.store.SaveLayer(name, version, code, cfg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to save layer: %w", err)
-	}
-	cfg.CodeSHA256 = hash
-	cfg.CodeSize = int64(len(code))
-
-	return cfg, nil
+	return s.store.publishLayer(name, description, runtimes, code)
 }
 
 // GetLayerVersion retrieves a specific layer version.
@@ -476,63 +450,77 @@ func shouldSkipUnavailableExternalLayer(layerARN, localAccountID string, err err
 // "arn:aws:lambda:us-east-1:000000000000:layer:myLayer:1"
 func parseLayerArn(arn string) (string, int64, error) {
 	parts := strings.Split(arn, ":")
-	if len(parts) < 8 {
-		return "", 0, fmt.Errorf("invalid layer ARN: %s", arn)
+	if len(parts) != 8 || parts[0] != "arn" || parts[2] != "lambda" || parts[5] != "layer" {
+		return "", 0, invalid("invalid layer ARN: " + arn)
 	}
 	name := parts[len(parts)-2]
+	if err := validName(name, 140); err != nil {
+		return "", 0, err
+	}
 	version, err := strconv.ParseInt(parts[len(parts)-1], 10, 64)
-	if err != nil {
-		return "", 0, fmt.Errorf("invalid layer version in ARN %s: %w", arn, err)
+	if err != nil || version < 1 {
+		return "", 0, invalid("invalid layer version in ARN " + arn)
 	}
 	return name, version, nil
 }
 
 // UpdateFunctionConfiguration updates a function's configuration without changing its code.
-func (s *Service) UpdateFunctionConfiguration(ctx context.Context, name string, update *types.FunctionConfigUpdate) (*types.FunctionConfig, error) {
-	fn, err := s.store.GetFunction(name)
+func (s *Service) UpdateFunctionConfiguration(ctx context.Context, reference string, update *types.FunctionConfigUpdate) (*types.FunctionConfig, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if update == nil {
+		return nil, invalid("configuration update is required")
+	}
+	name, err := mutableFunction(reference)
 	if err != nil {
 		return nil, err
 	}
-
-	if update.Handler != "" {
-		fn.Handler = update.Handler
+	result, err := s.store.mutateFunction(name, func(record *functionRecord) error {
+		fn := record.FunctionConfig
+		if update.Handler != "" {
+			fn.Handler = update.Handler
+		}
+		if update.Description != nil {
+			fn.Description = *update.Description
+		}
+		if update.Timeout != 0 {
+			fn.Timeout = update.Timeout
+		}
+		if update.MemorySize != 0 {
+			fn.MemorySize = update.MemorySize
+		}
+		if update.Role != "" {
+			fn.Role = update.Role
+		}
+		if update.Runtime != "" {
+			fn.Runtime = types.Runtime(update.Runtime)
+		}
+		if update.Environment != nil {
+			fn.Environment = maps.Clone(update.Environment.Variables)
+		}
+		if update.Layers != nil {
+			fn.Layers = append([]string{}, update.Layers...)
+		}
+		if update.DeadLetterConfig != nil {
+			value := *update.DeadLetterConfig
+			fn.DeadLetterConfig = &value
+		}
+		if update.ImageConfig != nil {
+			fn.ImageConfig = cloneFunction(&types.FunctionConfig{ImageConfig: update.ImageConfig}).ImageConfig
+		}
+		if err := validateConfiguration(fn); err != nil {
+			return err
+		}
+		fn.LastModified = time.Now()
+		fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
+		_, err := s.store.prepareCurrentLocked(record, false)
+		return err
+	})
+	if err == nil {
+		s.retireLatestContainers(name)
 	}
-	if update.Description != nil {
-		fn.Description = *update.Description
-	}
-	if update.Timeout != 0 {
-		fn.Timeout = update.Timeout
-	}
-	if update.MemorySize != 0 {
-		fn.MemorySize = update.MemorySize
-	}
-	if update.Role != "" {
-		fn.Role = update.Role
-	}
-	if update.Runtime != "" {
-		fn.Runtime = types.Runtime(update.Runtime)
-	}
-	if update.Environment != nil {
-		fn.Environment = update.Environment.Variables
-	}
-	if update.Layers != nil {
-		fn.Layers = update.Layers
-	}
-	if update.DeadLetterConfig != nil {
-		fn.DeadLetterConfig = update.DeadLetterConfig
-	}
-
-	fn.LastModified = time.Now()
-	fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
-
-	// Evict warm container since config changed
-	s.evictWarmContainer(name)
-
-	if err := s.store.SaveFunction(fn); err != nil {
-		return nil, err
-	}
-
-	return fn, nil
+	return result, err
 }
 
 // invocableFunction returns the function's configuration if it exists, is
@@ -569,52 +557,70 @@ func (s *Service) invocableFunction(name string) (*types.FunctionConfig, error) 
 // Invoke executes a Lambda function and waits for the result. Callers that
 // want AWS's asynchronous Event behaviour should use Enqueue.
 func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.InvokeOutput, error) {
-	fn, err := s.invocableFunction(input.FunctionName)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if input == nil {
+		return nil, invalid("invocation input is required")
+	}
+	if input.InvocationType != "" && input.InvocationType != "RequestResponse" && input.InvocationType != "Event" && input.InvocationType != "DryRun" {
+		return nil, invalid("invalid invocation type")
+	}
+	if input.LogType != "" && input.LogType != "None" && input.LogType != "Tail" {
+		return nil, invalid("invalid log type")
+	}
+	name, qualifier, err := ParseFunctionReference(input.FunctionName, input.Qualifier)
 	if err != nil {
 		return nil, err
 	}
-
-	// DryRun just validates the function exists and is active
-	if input.InvocationType == "DryRun" {
-		return &types.InvokeOutput{StatusCode: 204}, nil
+	reference := name
+	if qualifier != "" {
+		reference += ":" + qualifier
 	}
-
-	// Ensure code is extracted
-	codeDir, err := s.store.ExtractCode(fn.FunctionName)
+	fn, err := s.invocableFunction(reference)
 	if err != nil {
-		wrapped := fmt.Errorf("failed to extract code: %w", err)
-		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
-		return nil, wrapped
+		return nil, err
 	}
-
-	// Resolve layer directories
-	var layerDirs []string
-	if len(fn.Layers) > 0 {
-		var skippedLayers []string
-		layerDirs, skippedLayers, err = s.ResolveLayerDirs(fn.Layers)
-		if err != nil {
-			wrapped := fmt.Errorf("failed to resolve layers: %w", err)
-			s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
-			return nil, wrapped
+	if input.InvocationType == "DryRun" {
+		return &types.InvokeOutput{StatusCode: 204, ExecutedVersion: fn.Version}, nil
+	}
+	if input.InvocationType == "Event" {
+		queued := *input
+		queued.FunctionName = reference
+		queued.Qualifier = ""
+		queued.InvocationType = "RequestResponse"
+		queued.Payload = append([]byte(nil), input.Payload...)
+		if err := s.Enqueue(reference, func(ctx context.Context) {
+			if _, err := s.Invoke(ctx, &queued); err != nil {
+				s.logFunctionRuntimeEvent(name, logssvc.LevelERROR, err.Error())
+			}
+		}); err != nil {
+			return nil, err
 		}
-		for _, layerARN := range skippedLayers {
-			s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelWARN, fmt.Sprintf("Skipping unavailable external layer %s; invocation continues without it", layerARN))
+		return &types.InvokeOutput{StatusCode: 202, ExecutedVersion: fn.Version}, nil
+	}
+	if fn.PackageType == "Image" && fn.ResolvedImageURI == "" {
+		if err := s.freezeLegacyImage(ctx, reference); err != nil {
+			return nil, err
 		}
 	}
-
-	// Ensure runtime image is available (block if needed)
-	if err := s.engine.EnsureImage(ctx, fn.Runtime); err != nil {
-		wrapped := fmt.Errorf("runtime image not available: %w", err)
-		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
-		return nil, wrapped
+	lease, err := s.store.acquireDeployment(reference, "", func(lease *deploymentLease) { s.ensureFunctionMetrics(lease.Config.FunctionName, lease.InstanceID) })
+	if err != nil {
+		return nil, err
 	}
-
-	// Acquire a dedicated execution environment for this invocation. Concurrent
-	// invokes each get their own warm container (created on demand up to the
-	// per-function concurrency cap), mirroring AWS Lambda — so a Step Functions
-	// Map / parallel fan-out runs truly in parallel instead of serializing on a
-	// single container.
-	info, coldStart, err := s.acquireContainer(ctx, fn, codeDir, layerDirs)
+	defer lease.release()
+	fn = lease.Config
+	if fn.State != types.FunctionStateActive {
+		return nil, fmt.Errorf("%w: %s", ErrFunctionNotReady, fn.FunctionName)
+	}
+	localInput := *input
+	localInput.FunctionName = fn.FunctionName
+	input = &localInput
+	codeDir, layerDirs := lease.CodeDir, lease.LayerDirs
+	for _, arn := range lease.SkippedLayers {
+		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelWARN, "Skipping unavailable external layer "+arn+"; invocation continues without it")
+	}
+	info, coldStart, err := s.acquireContainer(ctx, fn, codeDir, layerDirs, lease.Revision)
 	if err != nil {
 		return nil, err
 	}
@@ -652,12 +658,16 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 				_ = s.engine.RemoveContainer(context.Background(), dead.ID)
 			},
 			reacquire: func() (*engine.ContainerInfo, bool, error) {
-				return s.acquireContainer(ctx, fn, codeDir, layerDirs)
+				return s.acquireContainer(invokeCtx, fn, codeDir, layerDirs, lease.Revision)
 			},
 			invoke: func(next *engine.ContainerInfo, cold bool) (*types.InvokeOutput, error) {
 				return s.invokeWithRetry(invokeCtx, next, input, cold)
 			},
 		})
+	}
+	if info != nil && shortID(info.ID) != logStream {
+		logStream = shortID(info.ID)
+		s.logInvocationBoundary(logGroup, logStream, fmt.Sprintf("START RequestId: %s Version: %s", requestID, fn.Version))
 	}
 	if err != nil {
 		s.logInvocationBoundary(logGroup, logStream, fmt.Sprintf("END RequestId: %s", requestID))
@@ -673,18 +683,7 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	output.RequestID = requestID
 	output.LogGroup = logGroup
 	output.LogStream = logStream
-	s.recordInvocation(fn.FunctionName, input.Payload)
-
-	// For async invocations, return 202 immediately
-	if input.InvocationType == "Event" {
-		return &types.InvokeOutput{
-			StatusCode:      202,
-			ExecutedVersion: fn.Version,
-			RequestID:       requestID,
-			LogGroup:        logGroup,
-			LogStream:       logStream,
-		}, nil
-	}
+	s.recordInvocationInstance(fn.FunctionName, lease.InstanceID, input.Payload)
 
 	return output, nil
 }
@@ -712,73 +711,131 @@ func (s *Service) logInvocationBoundary(logGroup, logStream, message string) {
 // free up. Cold starts are serialized per function so the cap is enforced and
 // Docker isn't stampeded, while invocations themselves run concurrently. The
 // returned container is Busy and must be returned via engine.Release.
-func (s *Service) acquireContainer(ctx context.Context, fn *types.FunctionConfig, codeDir string, layerDirs []string) (*engine.ContainerInfo, bool, error) {
-	maxConc := s.cfg.LambdaMaxConcurrency
-	if maxConc < 1 {
-		maxConc = 1
-	}
-	fnMu := s.getFunctionMutex(fn.FunctionName)
-	deadline := time.Now().Add(containerAcquireTimeout)
-	poll := containerAcquirePoll
-
+func (s *Service) acquireContainer(ctx context.Context, fn *types.FunctionConfig, codeDir string, layerDirs []string, revision string) (*engine.ContainerInfo, bool, error) {
+	acquireCtx, cancel := context.WithTimeout(ctx, containerAcquireTimeout)
+	defer cancel()
+	gate := s.startGate(fn.FunctionName)
+	queued, _ := ctx.Value(queuedInvocationKey{}).(bool)
 	for {
-		// Fast path: reuse an idle warm container.
-		if info, ok := s.engine.AcquireIdle(s.cfg.AccountID, fn.FunctionName); ok {
-			log.Printf("[lambda] warm invoke for %s (container %s)", fn.FunctionName, info.ID[:12])
+		if err := acquireCtx.Err(); err != nil {
+			if ctx.Err() != nil {
+				return nil, false, ctx.Err()
+			}
+			return nil, false, fmt.Errorf("%w: acquisition timed out for %s", ErrTooManyRequests, fn.FunctionName)
+		}
+		var available <-chan struct{}
+		if queued {
+			available = s.engine.Availability(s.cfg.AccountID, fn.FunctionName)
+		}
+		limit, reserved, err := s.functionConcurrency(fn.FunctionName)
+		if err != nil {
+			return nil, false, err
+		}
+		if limit == 0 || (reserved && s.engine.BusyContainers(s.cfg.AccountID, fn.FunctionName) >= limit) {
+			if queued {
+				select {
+				case <-acquireCtx.Done():
+				case <-available:
+				}
+				continue
+			}
+			return nil, false, fmt.Errorf("%w: reserved concurrency limit reached for %s", ErrTooManyRequests, fn.FunctionName)
+		}
+		if info, ok := s.engine.AcquireIdleRevision(s.cfg.AccountID, fn.FunctionName, revision, limit); ok {
 			return info, false, nil
 		}
-
-		// Decide whether to cold-start, serialized per function so the cap holds.
-		fnMu.Lock()
-		// Re-check: another invoke may have released an environment meanwhile.
-		if info, ok := s.engine.AcquireIdle(s.cfg.AccountID, fn.FunctionName); ok {
-			fnMu.Unlock()
-			log.Printf("[lambda] warm invoke for %s (container %s)", fn.FunctionName, info.ID[:12])
+		if err := gate.Acquire(acquireCtx, 1); err != nil {
+			if ctx.Err() != nil {
+				return nil, false, ctx.Err()
+			}
+			return nil, false, fmt.Errorf("%w: acquisition timed out for %s", ErrTooManyRequests, fn.FunctionName)
+		}
+		limit, reserved, err = s.functionConcurrency(fn.FunctionName)
+		if err != nil {
+			gate.Release(1)
+			return nil, false, err
+		}
+		if limit == 0 || (reserved && s.engine.BusyContainers(s.cfg.AccountID, fn.FunctionName) >= limit) {
+			gate.Release(1)
+			if queued {
+				select {
+				case <-acquireCtx.Done():
+				case <-available:
+				}
+				continue
+			}
+			return nil, false, fmt.Errorf("%w: reserved concurrency limit reached for %s", ErrTooManyRequests, fn.FunctionName)
+		}
+		available = s.engine.Availability(s.cfg.AccountID, fn.FunctionName)
+		if info, ok := s.engine.AcquireIdleRevision(s.cfg.AccountID, fn.FunctionName, revision, limit); ok {
+			gate.Release(1)
 			return info, false, nil
 		}
-		if s.engine.CountContainers(s.cfg.AccountID, fn.FunctionName) < maxConc {
-			info, cerr := s.coldStart(ctx, fn, codeDir, layerDirs)
-			fnMu.Unlock()
-			if cerr != nil {
-				return nil, false, cerr
+		if s.engine.CountContainers(s.cfg.AccountID, fn.FunctionName) >= limit {
+			s.engine.DiscardIdleRevision(s.cfg.AccountID, fn.FunctionName, revision)
+		}
+		if s.engine.CountContainers(s.cfg.AccountID, fn.FunctionName) < limit {
+			info, err := s.coldStart(acquireCtx, fn, codeDir, layerDirs, revision)
+			gate.Release(1)
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, false, ctx.Err()
+				}
+				if acquireCtx.Err() != nil {
+					return nil, false, fmt.Errorf("%w: acquisition timed out for %s", ErrTooManyRequests, fn.FunctionName)
+				}
+				return nil, false, err
 			}
 			return info, true, nil
 		}
-		fnMu.Unlock()
-
-		// At the concurrency cap with everything busy — wait for a release.
-		if time.Now().After(deadline) {
-			err := fmt.Errorf("no execution environment available for %s within %s (concurrency cap %d reached): %w", fn.FunctionName, containerAcquireTimeout, maxConc, ErrTooManyRequests)
-			s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, err.Error())
-			return nil, false, err
-		}
+		gate.Release(1)
 		select {
-		case <-ctx.Done():
-			return nil, false, ctx.Err()
-		case <-time.After(poll):
+		case <-acquireCtx.Done():
+		case <-available:
 		}
-		poll = min(poll*2, containerAcquireMaxPoll)
 	}
+}
+
+func (s *Service) functionConcurrency(name string) (int, bool, error) {
+	value, err := s.GetFunctionConcurrency(name)
+	if err != nil {
+		return 0, false, err
+	}
+	limit := max(s.cfg.LambdaMaxConcurrency, 1)
+	if value != nil {
+		return min(limit, *value), true, nil
+	}
+	return limit, false, nil
 }
 
 // coldStart creates, starts and readies a new container for the function and
 // returns it Busy (already counted in the pool). Caller must hold the
 // per-function mutex.
-func (s *Service) coldStart(ctx context.Context, fn *types.FunctionConfig, codeDir string, layerDirs []string) (*engine.ContainerInfo, error) {
+func (s *Service) coldStart(ctx context.Context, fn *types.FunctionConfig, codeDir string, layerDirs []string, revision string) (*engine.ContainerInfo, error) {
 	log.Printf("[lambda] cold start for %s", fn.FunctionName)
 	if s.logsSvc != nil {
 		s.logsSvc.LogSystemEvent(logssvc.LevelINFO, fmt.Sprintf("Cold start: %s", fn.FunctionName))
 	}
+	if err := s.ensureFunctionImage(ctx, fn); err != nil {
+		return nil, fmt.Errorf("runtime image not available: %w", err)
+	}
 
-	info, err := s.engine.CreateContainer(ctx, fn, codeDir, layerDirs, s.cfg.AccountID)
+	id, _, _ := strings.Cut(revision, ":")
+	release, err := s.store.retainDeployment(fn.FunctionName, id)
 	if err != nil {
+		return nil, err
+	}
+	info, err := s.engine.CreateContainer(ctx, fn, codeDir, layerDirs, s.cfg.AccountID, engine.LambdaContainerOptions{Revision: revision, OnRemove: release})
+	if err != nil {
+		release()
 		wrapped := fmt.Errorf("failed to create container: %w", err)
 		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
 		return nil, wrapped
 	}
+	s.retireLatestContainers(fn.FunctionName)
 
 	if err := s.engine.StartContainer(ctx, info); err != nil {
-		_ = s.engine.RemoveContainer(ctx, info.ID)
+		s.engine.DiscardContainerAsync(info)
 		wrapped := fmt.Errorf("failed to start container: %w", err)
 		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelERROR, wrapped.Error())
 		return nil, wrapped
@@ -789,7 +846,7 @@ func (s *Service) coldStart(ctx context.Context, fn *types.FunctionConfig, codeD
 	// would otherwise be lost). Only this container is removed, not the pool.
 	if err := s.invoker.WaitForReady(ctx, info.HostPort); err != nil {
 		s.ingestContainerLogs(fn.FunctionName, info)
-		_ = s.engine.RemoveContainer(ctx, info.ID)
+		s.engine.DiscardContainerAsync(info)
 		if s.logsSvc != nil {
 			s.logsSvc.LogSystemEvent(logssvc.LevelERROR, fmt.Sprintf("Container failed to start: %s: %v", fn.FunctionName, err))
 		}
@@ -913,12 +970,12 @@ func (s *Service) GetFunctionMetrics(name string) FunctionMetrics {
 	return *metric
 }
 
-func (s *Service) ensureFunctionMetrics(name string) {
+func (s *Service) ensureFunctionMetrics(name, instance string) {
 	s.metricsMu.Lock()
 	defer s.metricsMu.Unlock()
 
-	if _, exists := s.metrics[name]; !exists {
-		s.metrics[name] = &FunctionMetrics{}
+	if metric, exists := s.metrics[name]; !exists || metric.instance != instance {
+		s.metrics[name] = &FunctionMetrics{instance: instance}
 	}
 }
 
@@ -928,18 +985,18 @@ func (s *Service) deleteFunctionMetrics(name string) {
 	delete(s.metrics, name)
 }
 
-func (s *Service) recordInvocation(name string, payload []byte) {
+func (s *Service) recordInvocationInstance(name, instance string, payload []byte) {
+	processed := countProcessedMessages(payload)
 	s.metricsMu.Lock()
 	defer s.metricsMu.Unlock()
 
 	metric, exists := s.metrics[name]
-	if !exists {
-		metric = &FunctionMetrics{}
-		s.metrics[name] = metric
+	if !exists || metric.instance != instance {
+		return
 	}
 
 	metric.Invocations++
-	metric.MessagesProcessed += countProcessedMessages(payload)
+	metric.MessagesProcessed += processed
 	metric.LastInvokedAt = time.Now().UTC()
 }
 
@@ -956,13 +1013,6 @@ func countProcessedMessages(payload []byte) int64 {
 	}
 
 	return 1
-}
-
-func (s *Service) evictWarmContainer(functionName string) {
-	if s.engine == nil {
-		return
-	}
-	s.engine.EvictContainerAsync(s.cfg.AccountID, functionName)
 }
 
 // ingestContainerLogs moves output the container wrote since the last ingest

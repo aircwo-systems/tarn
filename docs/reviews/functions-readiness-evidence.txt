@@ -1,0 +1,14 @@
+=== RUN   TestReviewAlreadyReadyPortWaitsForFirstTick
+2026/10/13 22:18:47 [invoker] RIE accepting connections on port 63534
+    functions_deep_dive_probe_test.go:37: already-listening port readiness took 102.559416ms
+    functions_deep_dive_probe_test.go:39: readiness waited for first polling tick
+2026/10/13 22:18:48 [invoker] RIE accepting connections on port 63534
+    functions_deep_dive_probe_test.go:37: already-listening port readiness took 101.671125ms
+    functions_deep_dive_probe_test.go:39: readiness waited for first polling tick
+2026/10/13 22:18:48 [invoker] RIE accepting connections on port 63534
+    functions_deep_dive_probe_test.go:37: already-listening port readiness took 100.835125ms
+    functions_deep_dive_probe_test.go:39: readiness waited for first polling tick
+--- FAIL: TestReviewAlreadyReadyPortWaitsForFirstTick (0.31s)
+FAIL
+FAIL	github.com/aircwo-systems/tarn/internal/engine	0.692s
+FAIL

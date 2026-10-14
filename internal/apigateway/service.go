@@ -934,19 +934,14 @@ func parseLambdaIntegrationURI(integrationURI string) (lambdaArn string, functio
 }
 
 func lambdaFunctionNameFromARN(arn string) (string, error) {
-	idx := strings.Index(arn, ":function:")
-	if idx == -1 {
-		return "", fmt.Errorf("invalid lambda arn %q", arn)
+	name, qualifier, err := lambdasvc.ParseFunctionReference(arn, "")
+	if err != nil {
+		return "", err
 	}
-	tail := arn[idx+len(":function:"):]
-	if tail == "" {
-		return "", fmt.Errorf("invalid lambda arn %q", arn)
+	if qualifier != "" {
+		name += ":" + qualifier
 	}
-	parts := strings.Split(tail, ":")
-	if parts[0] == "" {
-		return "", fmt.Errorf("invalid lambda arn %q", arn)
-	}
-	return parts[0], nil
+	return name, nil
 }
 
 func normalizePath(path string) string {

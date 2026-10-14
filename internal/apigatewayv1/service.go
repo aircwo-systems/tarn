@@ -1250,16 +1250,14 @@ func parseLambdaIntegrationURI(uri string) (lambdaArn, functionName string, err 
 			return "", "", fmt.Errorf("invalid IntegrationUri %q", uri)
 		}
 		lambdaArn = uri[start:end]
-		idx := strings.Index(lambdaArn, ":function:")
-		if idx == -1 {
-			return "", "", fmt.Errorf("invalid lambda arn %q", lambdaArn)
+		name, qualifier, err := lambdasvc.ParseFunctionReference(lambdaArn, "")
+		if err != nil {
+			return "", "", err
 		}
-		tail := lambdaArn[idx+len(":function:"):]
-		parts := strings.Split(tail, ":")
-		if parts[0] == "" {
-			return "", "", fmt.Errorf("invalid lambda arn %q", lambdaArn)
+		if qualifier != "" {
+			name += ":" + qualifier
 		}
-		return lambdaArn, parts[0], nil
+		return lambdaArn, name, nil
 	}
 	return "", "", fmt.Errorf("unsupported IntegrationUri %q", uri)
 }

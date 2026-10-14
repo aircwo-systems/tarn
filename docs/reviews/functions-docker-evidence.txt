@@ -1,0 +1,57 @@
+
+  _____
+ |_   _|_ _ _ __ _ __
+   | |/ _' | '__| '_ \
+   | | (_| | |  | | | |
+   |_|\__,_|_|  |_| |_|
+
+Version:  0.1.0-dev
+Region:   us-east-1
+Endpoint: http://127.0.0.1:14566
+Data Dir: /var/folders/d4/cggf7z1n0gddvmwt5gp6kx7w0000gn/T/tarn-e2e-4251389303
+Services: apigateway, apigatewayv2, lambda, s3, sqs, sns, dynamodb, secretsmanager, eventbridge
+Vault:     /Users/arcwo/.tarn/vault.key
+
+2026/10/13 22:15:40 [trace] opened persistent store at /var/folders/d4/cggf7z1n0gddvmwt5gp6kx7w0000gn/T/tarn-e2e-4251389303/traces.db
+2026/10/13 22:15:40 [vault] secrets encryption enabled (key: /Users/arcwo/.tarn/vault.key)
+2026/10/13 22:15:40 [account] initializing 000000000000 (data: /var/folders/d4/cggf7z1n0gddvmwt5gp6kx7w0000gn/T/tarn-e2e-4251389303)
+2026/10/13 22:15:40 [sqs] service started
+2026/10/13 22:15:40 [eventsource] service started with 0 active pollers
+2026/10/13 22:15:40 Tarn API server listening on 0.0.0.0:14566
+2026/10/13 22:15:41 GET /_tarn/health 200 21.25µs
+=== RUN   TestReviewFunctionTwoLayersExecute
+2026/10/13 22:15:41 POST /2015-03-31/layers/review-two-layers-1791926141167861000-layer0/versions 201 1.988958ms
+2026/10/13 22:15:41 POST /2015-03-31/layers/review-two-layers-1791926141167861000-layer1/versions 201 792.083µs
+2026/10/13 22:15:41 POST /2015-03-31/functions 201 1.648625ms
+Update available: tarn 0.1.0-dev -> v0.6.2-beta (run `tarn update`)
+2026/10/13 22:15:41 [lambda] cold start for review-two-layers-1791926141167861000
+2026/10/13 22:15:41 POST /2015-03-31/functions/review-two-layers-1791926141167861000/invocations 500 278.698416ms
+    functions_deep_dive_probe_test.go:81: two-layer invoke: 500 functionError= body={"Message":"failed to create container: failed to create container: Error response from daemon: Duplicate mount point: /opt","Type":"Service","__type":"ServiceException","message":"failed to create container: failed to create container: Error response from daemon: Duplicate mount point: /opt"}
+2026/10/13 22:15:41 DELETE /2015-03-31/functions/review-two-layers-1791926141167861000 204 589.334µs
+2026/10/13 22:15:41 DELETE /2015-03-31/layers/review-two-layers-1791926141167861000-layer1/versions/1 204 994.459µs
+2026/10/13 22:15:41 DELETE /2015-03-31/layers/review-two-layers-1791926141167861000-layer0/versions/1 204 837.125µs
+--- FAIL: TestReviewFunctionTwoLayersExecute (0.29s)
+=== RUN   TestReviewFunctionTimeoutPoisonsNextInvoke
+2026/10/13 22:15:41 POST /2015-03-31/functions 201 865.209µs
+2026/10/13 22:15:41 [lambda] cold start for review-timeout-1791926141457217000
+2026/10/13 22:15:42 [engine] container 831e39ee4578 started for review-timeout-1791926141457217000 (port 62886)
+2026/10/13 22:15:42 [invoker] RIE accepting connections on port 62886
+2026/10/13 22:15:42 [invoker] invoking review-timeout-1791926141457217000 via RIE on port 62886 (24 bytes payload)
+2026/10/13 22:15:42 [lambda] transient invoke error for review-timeout-1791926141457217000 (attempt 1/5): RIE invocation failed: Post "http://127.0.0.1:62886/2015-03-31/functions/function/invocations": EOF; retrying in 150ms
+2026/10/13 22:15:42 [invoker] invoking review-timeout-1791926141457217000 via RIE on port 62886 (24 bytes payload)
+2026/10/13 22:15:42 POST /2015-03-31/functions/review-timeout-1791926141457217000/invocations 200 1.287935833s
+2026/10/13 22:15:42 [lambda] warm invoke for review-timeout-1791926141457217000 (container 831e39ee4578)
+2026/10/13 22:15:42 [invoker] invoking review-timeout-1791926141457217000 via RIE on port 62886 (26 bytes payload)
+2026/10/13 22:15:43 POST /2015-03-31/functions/review-timeout-1791926141457217000/invocations 200 1.013049125s
+    functions_deep_dive_probe_test.go:106: slow: 200 functionError=Unhandled body={"errorMessage":"Task timed out after context deadline exceeded","errorType":"TimeoutError"}
+2026/10/13 22:15:43 [lambda] warm invoke for review-timeout-1791926141457217000 (container 831e39ee4578)
+2026/10/13 22:15:43 [invoker] invoking review-timeout-1791926141457217000 via RIE on port 62886 (23 bytes payload)
+2026/10/13 22:15:43 POST /2015-03-31/functions/review-timeout-1791926141457217000/invocations 200 82.053958ms
+    functions_deep_dive_probe_test.go:112: fast after timeout: duration=82.3525ms status=200 functionError= body={"id":"fast"}
+2026/10/13 22:15:43 DELETE /2015-03-31/functions/review-timeout-1791926141457217000 204 747.5µs
+--- PASS: TestReviewFunctionTimeoutPoisonsNextInvoke (2.39s)
+FAIL
+2026/10/13 22:15:43
+Shutting down Tarn...
+FAIL	github.com/aircwo-systems/tarn/test	5.757s
+FAIL

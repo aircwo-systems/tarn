@@ -1,0 +1,19 @@
+--- a/internal/lambda/service.go
++++ b/internal/lambda/service.go
+@@ -929,6 +929,7 @@
+ }
+ 
+ func (s *Service) recordInvocation(name string, payload []byte) {
++	processed := countProcessedMessages(payload)
+ 	s.metricsMu.Lock()
+ 	defer s.metricsMu.Unlock()
+ 
+@@ -939,7 +940,7 @@
+ 	}
+ 
+ 	metric.Invocations++
+-	metric.MessagesProcessed += countProcessedMessages(payload)
++	metric.MessagesProcessed += processed
+ 	metric.LastInvokedAt = time.Now().UTC()
+ }
+ 

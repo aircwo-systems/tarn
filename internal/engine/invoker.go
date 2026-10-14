@@ -53,23 +53,22 @@ func (inv *Invoker) WaitForReady(ctx context.Context, hostPort string) error {
 	var lastErr error
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		conn, err := (&net.Dialer{Timeout: 500 * time.Millisecond}).DialContext(ctx, "tcp", addr)
+		if err == nil {
+			_ = conn.Close()
+			log.Printf("[invoker] RIE accepting connections on port %s", hostPort)
+			return nil
+		}
+		lastErr = err
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline:
-			if lastErr != nil {
-				return fmt.Errorf("container RIE not ready after 60s on port %s: %w", hostPort, lastErr)
-			}
-			return fmt.Errorf("container RIE not ready after 60s on port %s", hostPort)
+			return fmt.Errorf("container RIE not ready after 60s on port %s: %w", hostPort, lastErr)
 		case <-ticker.C:
-			conn, err := net.DialTimeout("tcp", addr, 500*time.Millisecond)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			_ = conn.Close()
-			log.Printf("[invoker] RIE accepting connections on port %s", hostPort)
-			return nil
 		}
 	}
 }

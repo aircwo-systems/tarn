@@ -11,16 +11,20 @@ Deploy and invoke serverless functions in Tarn.
 | CreateFunction | Supported | Supports all runtimes (Node, Python, Go, etc.) |
 | DeleteFunction | Supported | |
 | GetFunction | Supported | |
+| GetFunctionConfiguration | Supported | Names, ARNs, versions, and aliases |
 | ListFunctions | Supported | |
 | UpdateFunctionCode | Supported | |
 | UpdateFunctionConfiguration | Supported | Timeout, memory, environment |
 | Invoke | Supported | Sync and async, with payloads |
-| PublishVersion | Supported | Creates a numbered version from $LATEST |
+| PublishVersion | Supported | Durable snapshot of code, configuration, and prepared layers |
+| ListVersionsByFunction | Supported | Includes $LATEST and published versions |
 | CreateAlias | Supported | |
 | GetAlias | Supported | |
 | ListAliases | Supported | |
 | UpdateAlias | Supported | |
 | DeleteAlias | Supported | |
+| AddPermission / GetPolicy / RemovePermission | Supported | Durable policy metadata; authorization is not enforced |
+| PutFunctionConcurrency / GetFunctionConcurrency / DeleteFunctionConcurrency | Supported | Per-function reservations, including zero to pause execution |
 | PublishLayerVersion | Supported | For shared code |
 | GetLayerVersion | Supported | |
 | ListLayerVersions | Supported | |
@@ -52,6 +56,18 @@ export TARN_LAMBDA_OVERFLOW_KEEPALIVE_MS=600000
 
 Containers Tarn started but did not clean up — after a crash, `kill -9`, or a closed terminal — are removed the next time it starts, including any left by a Tarn that had been running on a different port. Containers whose port still has a Tarn listening on it are left alone, so several instances can share one Docker daemon.
 
+Each container mounts an immutable prepared deployment. Code and configuration updates take effect together. Running invocations finish using their acquired deployment, including when the function is updated or deleted. Idle containers for an old deployment are removed; busy ones retire after their invocation finishes. Published versions keep their deployment content independently of `$LATEST`.
+
+Per-function reserved concurrency applies across `$LATEST` and published versions. Setting it to zero pauses execution. Synchronous requests at an exhausted reservation return `TooManyRequestsException`; accepted asynchronous jobs wait for capacity within the bounded acquisition window. `TARN_LAMBDA_MAX_CONCURRENCY` remains the local upper bound even when a larger reservation is requested. Removing the reservation restores the configured default.
+
+Waiting invokes receive a notification when an environment becomes free. Acquisition, including cold-start image preparation and readiness, has a 60-second limit and respects request cancellation.
+
+### Versions, aliases, and image deployments
+
+Published versions, aliases, policies, and concurrency reservations survive a Tarn restart. Invoke accepts a function name or ARN with a version/alias suffix, or the `Qualifier` query parameter. An alias can be updated to another published version. API Gateway, event-source mappings, SNS, EventBridge, Step Functions, and Cognito triggers preserve the qualifier when invoking functions.
+
+Image functions use `PackageType: "Image"` and `Code.ImageUri`; runtime and handler fields are optional. Tarn uses the image's execution defaults unless `ImageConfig` overrides its entrypoint, command, or working directory. The image must expose the Lambda invocation interface on port 8080. Deployments pin the resolved Docker image ID, so retagging an image cannot change an already-published function version. Update the function's image URI to deploy newly tagged content.
+
 ### Supported Runtimes
 - Node.js (18, 20, 22, 24)
 - Python (3.9, 3.10, 3.11, 3.12, 3.13)
@@ -69,6 +85,10 @@ awslocal lambda publish-layer-version \
   --zip-file fileb://layer.zip \
   --compatible-runtimes nodejs20.x python3.11
 ```
+
+Local layers merge into one read-only `/opt` directory in configured order. Later layers replace colliding files from earlier layers. Executable permissions and nested directories are preserved. Functions retain prepared layer content after a layer version is deleted; a new attachment must refer to an available version. Tarn's injected Secrets and DB proxies mount outside `/opt` so they also work with merged layers.
+
+Function and layer names are validated before filesystem access. Invalid ZIPs and failed deployment preparation leave the last working function unchanged. Existing configuration JSON remains readable. Tarn stores durable function metadata under its `_tarn` field and prepared deployments under `lambda-deployments/`. Keep the `_tarn` block when manually editing configuration to retain versions, aliases, policies, and reservations. Metadata reads check file identity, size, and modification time, so direct configuration edits remain visible. Changes to a function's legacy `code/function.zip` are imported into a fresh immutable deployment on preparation.
 
 ### Event Source Mappings
 Automatically invoke Lambda from SQS queues and DynamoDB Streams.
@@ -282,7 +302,9 @@ Other functions run without the extra process.
 - Function timeout maximum: 900 seconds (15 minutes)
 - Memory: 128MB - 10GB in 1MB increments (full range supported)
 - No Lambda@Edge (CloudFront integration)
-- No concurrent execution limits
+- No weighted alias routing or account-wide concurrency quota enforcement
+- Resource policies are stored for tooling; IAM authorization is not enforced
+- Asynchronous retry and dead-letter policies are not emulated; acquisition waits are bounded
 
 ## See Also
 

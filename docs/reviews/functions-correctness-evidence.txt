@@ -1,0 +1,24 @@
+=== RUN   TestReviewConcurrentTags
+    deep_dive_probe_test.go:81: round 0: all 32 requests succeeded, persisted 2 tags
+    deep_dive_probe_test.go:81: round 1: all 32 requests succeeded, persisted 2 tags
+    deep_dive_probe_test.go:81: round 2: all 32 requests succeeded, persisted 2 tags
+--- FAIL: TestReviewConcurrentTags (0.02s)
+=== RUN   TestReviewConcurrentLayerPublish
+    deep_dive_probe_test.go:124: 32 successful publishes produced 2 unique versions and 2 persisted versions
+--- FAIL: TestReviewConcurrentLayerPublish (0.01s)
+=== RUN   TestReviewDeploymentPathIsMutable
+    deep_dive_probe_test.go:149: previously acquired path now reads "v2"; first=/var/folders/d4/cggf7z1n0gddvmwt5gp6kx7w0000gn/T/TestReviewDeploymentPathIsMutable3012428156/001/functions/fn/code/extracted second=/var/folders/d4/cggf7z1n0gddvmwt5gp6kx7w0000gn/T/TestReviewDeploymentPathIsMutable3012428156/001/functions/fn/code/extracted
+--- FAIL: TestReviewDeploymentPathIsMutable (0.00s)
+=== RUN   TestReviewCancelledAcquireWaitsOnMutex
+2026/10/13 22:16:23 [lambda] cold start for held
+    deep_dive_probe_test.go:181: pre-cancelled acquisition waited for the held cold-start mutex, then returned failed to create container: unsupported runtime: invalid
+--- FAIL: TestReviewCancelledAcquireWaitsOnMutex (0.10s)
+=== RUN   TestReviewFunctionLockChangesAfterDelete
+    deep_dive_probe_test.go:196: delete replaces the lock; queued operations can retain the old mutex while new operations use a different one
+--- FAIL: TestReviewFunctionLockChangesAfterDelete (0.00s)
+=== RUN   TestReviewFunctionNameEscapesRoot
+    deep_dive_probe_test.go:209: function creation accepted ../outside and wrote config outside FunctionsDir: /var/folders/d4/cggf7z1n0gddvmwt5gp6kx7w0000gn/T/TestReviewFunctionNameEscapesRoot1444975155/001/outside/config.json
+--- FAIL: TestReviewFunctionNameEscapesRoot (0.00s)
+FAIL
+FAIL	github.com/aircwo-systems/tarn/internal/lambda	0.539s
+FAIL

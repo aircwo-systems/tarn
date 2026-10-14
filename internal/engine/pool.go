@@ -81,6 +81,7 @@ func (wp *WarmPool) evictIdle() {
 	var toEvict []idleEviction
 	e.mu.Lock()
 	for key, pool := range e.containers {
+		before := len(pool)
 		kept := pool[:0]
 		for i, info := range pool {
 			// Pools are append-ordered by creation and preserved by this
@@ -97,6 +98,9 @@ func (wp *WarmPool) evictIdle() {
 			kept = append(kept, info)
 		}
 		clear(pool[len(kept):])
+		if len(kept) != before {
+			e.notifyLocked(key)
+		}
 		if len(kept) == 0 {
 			delete(e.containers, key)
 		} else {

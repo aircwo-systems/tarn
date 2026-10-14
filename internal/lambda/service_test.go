@@ -76,7 +76,7 @@ func TestUpdateFunctionsPopulateLastUpdateStatus(t *testing.T) {
 	}
 
 	// update code
-	updated, err := svc.UpdateFunctionCode(context.Background(), "update-test", []byte("zip"))
+	updated, err := svc.UpdateFunctionCode(context.Background(), "update-test", functionsZIP(t, map[string]string{"index.js": "exports.handler = async () => 'ok';"}))
 	if err != nil {
 		t.Fatalf("update code: %v", err)
 	}
@@ -285,6 +285,7 @@ func TestCreateFunctionDefaultsPackageType(t *testing.T) {
 		Handler:      "index.handler",
 		Role:         "arn:aws:iam::000000000000:role/test",
 		PackageType:  "Image",
+		ImageURI:     "local-function:latest",
 	}, nil)
 	if err != nil {
 		t.Fatalf("create function: %v", err)

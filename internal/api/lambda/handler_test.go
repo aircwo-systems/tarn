@@ -24,6 +24,7 @@ func newLambdaHandler(t *testing.T) *Handler {
 		t.Fatalf("init lambda store: %v", err)
 	}
 	svc := lambdasvc.NewService(cfg, store, nil, nil, nil)
+	t.Cleanup(svc.Close)
 	return NewHandler(svc, nil)
 }
 
