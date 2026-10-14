@@ -19,29 +19,11 @@
     PlugsConnectedIcon,
     FingerprintIcon,
   } from "phosphor-svelte";
-  import { onMount } from "svelte";
+  import { onMount, type Component } from "svelte";
 
   import AppSidebar, { type NavSection } from "$lib/components/layout/app-sidebar.svelte";
   import CommandPalette from "$lib/components/layout/command-palette.svelte";
   import { getLogPulse, startLogPulse } from "$lib/log-pulse.svelte";
-  import SettingsSection from "$lib/components/sections/settings-section.svelte";
-  import APIGatewaysSection from "$lib/components/sections/api-gateways-section.svelte";
-  import FunctionsSection from "$lib/components/sections/functions-section.svelte";
-  import ECSSection from "$lib/components/sections/ecs-section.svelte";
-  import QueuesSection from "$lib/components/sections/queues-section.svelte";
-  import SNSSection from "$lib/components/sections/sns-section.svelte";
-  import SecretsSection from "$lib/components/sections/secrets-section.svelte";
-  import CognitoSection from "$lib/components/sections/cognito-section.svelte";
-  import TriggersSection from "$lib/components/sections/triggers-section.svelte";
-  import EventBridgeSection from "$lib/components/sections/eventbridge-section.svelte";
-  import StepFunctionsSection from "$lib/components/sections/stepfunctions-section.svelte";
-  import DynamoDBSection from "$lib/components/sections/dynamodb-section.svelte";
-  import StorageSection from "$lib/components/sections/storage-section.svelte";
-  import LogsSection from "$lib/components/sections/logs-section.svelte";
-  import XraySection from "$lib/components/sections/xray-section.svelte";
-  import StackSection from "$lib/components/sections/stack-section.svelte";
-  import ServicesSection from "$lib/components/sections/services-section.svelte";
-  import ChaosSection from "$lib/components/sections/chaos-section.svelte";
   import HomeView from "$lib/components/home/home-view.svelte";
   import {
     normalizeTopologyInfraKind,
@@ -133,6 +115,44 @@
     xrayInitialTraceId = traceId;
     window.location.hash = `xray?trace=${encodeURIComponent(traceId)}`;
   }
+
+  // ── Lazy sections ───────────────────────────────────────────────
+  // Each tab ships as its own chunk so first load only pays for home.
+  type SectionModule = { default: Component<any> };
+  const sectionLoaders: Partial<Record<DashboardTab, () => Promise<SectionModule>>> = {
+    gateways: () => import("$lib/components/sections/api-gateways-section.svelte"),
+    functions: () => import("$lib/components/sections/functions-section.svelte"),
+    ecs: () => import("$lib/components/sections/ecs-section.svelte"),
+    logs: () => import("$lib/components/sections/logs-section.svelte"),
+    queues: () => import("$lib/components/sections/queues-section.svelte"),
+    dynamodb: () => import("$lib/components/sections/dynamodb-section.svelte"),
+    sns: () => import("$lib/components/sections/sns-section.svelte"),
+    secrets: () => import("$lib/components/sections/secrets-section.svelte"),
+    cognito: () => import("$lib/components/sections/cognito-section.svelte"),
+    triggers: () => import("$lib/components/sections/triggers-section.svelte"),
+    eventbridge: () => import("$lib/components/sections/eventbridge-section.svelte"),
+    stepfunctions: () => import("$lib/components/sections/stepfunctions-section.svelte"),
+    storage: () => import("$lib/components/sections/storage-section.svelte"),
+    services: () => import("$lib/components/sections/services-section.svelte"),
+    xray: () => import("$lib/components/sections/xray-section.svelte"),
+    stack: () => import("$lib/components/sections/stack-section.svelte"),
+    settings: () => import("$lib/components/sections/settings-section.svelte"),
+    chaos: () => import("$lib/components/sections/chaos-section.svelte"),
+  };
+  let loadedSections = $state.raw<Partial<Record<DashboardTab, Component<any>>>>({});
+  let sectionLoadError = $state("");
+  const ActiveSection = $derived(loadedSections[activeTab]);
+
+  $effect(() => {
+    const tab = activeTab;
+    const load = sectionLoaders[tab];
+    if (!load || loadedSections[tab]) return;
+    sectionLoadError = "";
+    load().then(
+      (mod) => (loadedSections = { ...loadedSections, [tab]: mod.default }),
+      (err) => (sectionLoadError = err instanceof Error ? err.message : String(err)),
+    );
+  });
 
   const logPulse = $derived(getLogPulse());
 
@@ -346,14 +366,18 @@
     </main>
     {:else}
     <main id="main-stage-content" tabindex="-1" class="tab-content-view main-stage min-w-0 flex-1 px-6 py-5 outline-none {activeTab === 'logs' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}" class:sidebar-collapsed={sidebarCollapsed && uiSettings.collapsedSidebarMode === "hidden"}>
-      {#if activeTab === "gateways"}
-        <APIGatewaysSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {#if sectionLoadError}
+        <p class="text-sm text-[var(--accent-red)]">Failed to load section: {sectionLoadError}</p>
+      {:else if !ActiveSection}
+        <!-- section chunk loading -->
+      {:else if activeTab === "gateways"}
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "functions"}
-        <FunctionsSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "ecs"}
-        <ECSSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "logs"}
-        <LogsSection
+        <ActiveSection
           initialGroup={logsInitialGroup}
           initialTimestamp={logsInitialTimestamp}
           initialLevels={logsInitialLevels}
@@ -364,43 +388,43 @@
           onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
         />
       {:else if activeTab === "queues"}
-        <QueuesSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "dynamodb"}
-        <DynamoDBSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "sns"}
-        <SNSSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "secrets"}
-        <SecretsSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "cognito"}
-        <CognitoSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "triggers"}
-        <TriggersSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "eventbridge"}
-        <EventBridgeSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "stepfunctions"}
-        <StepFunctionsSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "storage"}
-        <StorageSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "services"}
-        <ServicesSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} onNavigate={setTab} />
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} onNavigate={setTab} />
       {:else if activeTab === "xray"}
-        <XraySection
+        <ActiveSection
           initialTraceId={xrayInitialTraceId}
           {sidebarCollapsed}
           onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
           onNavigate={setTab}
         />
       {:else if activeTab === "stack"}
-        <StackSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} onNavigate={setTab} />
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} onNavigate={setTab} />
       {:else if activeTab === "settings"}
-        <SettingsSection
+        <ActiveSection
           instanceInfo={dashboard.data?.config ?? null}
           onNavigate={setTab}
           {sidebarCollapsed}
           onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
         />
       {:else if activeTab === "chaos"}
-        <ChaosSection
+        <ActiveSection
           gateways={dashboard.data?.gateways ?? []}
           {sidebarCollapsed}
           onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
