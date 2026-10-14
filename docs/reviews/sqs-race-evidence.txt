@@ -1,0 +1,105 @@
+==================
+WARNING: DATA RACE
+Write at 0x00c00066e210 by goroutine 20:
+  fmt.(*ss).scanOne()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/fmt/scan.go:976 +0x424
+  fmt.(*ss).doScanf()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/fmt/scan.go:1230 +0x318
+  fmt.Fscanf()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/fmt/scan.go:143 +0x90
+  fmt.Sscanf()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/fmt/scan.go:114 +0x768
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.applyQueueAttributes()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/store.go:964 +0x3a4
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.(*Store).SetQueueAttributes()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/store.go:244 +0xb8
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.TestReviewConfigSnapshotRace.func2()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/review_evidence_test.go:38 +0x1ec
+
+Previous read at 0x00c00066e210 by goroutine 19:
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.TestReviewConfigSnapshotRace.func1()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/review_evidence_test.go:31 +0xac
+
+Goroutine 20 (running) created at:
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.TestReviewConfigSnapshotRace()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/review_evidence_test.go:34 +0x4bc
+  testing.tRunner()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2036 +0x164
+  testing.(*T).Run.gowrap1()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2101 +0x34
+
+Goroutine 19 (running) created at:
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.TestReviewConfigSnapshotRace()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/review_evidence_test.go:22 +0x3b4
+  testing.tRunner()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2036 +0x164
+  testing.(*T).Run.gowrap1()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2101 +0x34
+==================
+--- FAIL: TestReviewConfigSnapshotRace (0.02s)
+    testing.go:1712: race detected during execution of test
+==================
+WARNING: DATA RACE
+Write at 0x00c000570030 by goroutine 23:
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.(*Store).receive()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/store.go:512 +0x5bc
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.(*Store).ReceiveMessage()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/store.go:440 +0xc8
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.TestReviewReceiveSnapshotRace.func2()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/review_evidence_test.go:74 +0xcc
+
+Previous read at 0x00c000570030 by goroutine 22:
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.TestReviewReceiveSnapshotRace.func1()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/review_evidence_test.go:67 +0xbc
+
+Goroutine 23 (running) created at:
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.TestReviewReceiveSnapshotRace()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/review_evidence_test.go:70 +0x5e0
+  testing.tRunner()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2036 +0x164
+  testing.(*T).Run.gowrap1()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2101 +0x34
+
+Goroutine 22 (running) created at:
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.TestReviewReceiveSnapshotRace()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/review_evidence_test.go:63 +0x4d8
+  testing.tRunner()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2036 +0x164
+  testing.(*T).Run.gowrap1()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2101 +0x34
+==================
+==================
+WARNING: DATA RACE
+Write at 0x00c000570050 by goroutine 23:
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.(*Store).receive()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/store.go:513 +0x610
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.(*Store).ReceiveMessage()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/store.go:440 +0xc8
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.TestReviewReceiveSnapshotRace.func2()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/review_evidence_test.go:74 +0xcc
+
+Previous read at 0x00c000570050 by goroutine 22:
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.TestReviewReceiveSnapshotRace.func1()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/review_evidence_test.go:67 +0x104
+
+Goroutine 23 (running) created at:
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.TestReviewReceiveSnapshotRace()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/review_evidence_test.go:70 +0x5e0
+  testing.tRunner()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2036 +0x164
+  testing.(*T).Run.gowrap1()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2101 +0x34
+
+Goroutine 22 (running) created at:
+  github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22.TestReviewReceiveSnapshotRace()
+      /Users/arcwo/projects_26/OpenStack/internal/sqs_review_ptez0r22/review_evidence_test.go:63 +0x4d8
+  testing.tRunner()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2036 +0x164
+  testing.(*T).Run.gowrap1()
+      /opt/homebrew/Cellar/go/1.26.0/libexec/src/testing/testing.go:2101 +0x34
+==================
+--- FAIL: TestReviewReceiveSnapshotRace (0.05s)
+    testing.go:1712: race detected during execution of test
+FAIL
+FAIL	github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22	0.573s
+FAIL

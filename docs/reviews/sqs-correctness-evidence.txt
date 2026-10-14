@@ -1,0 +1,20 @@
+2026/10/13 20:55:27 [sqs] DLQ "dlq" not found, dropping 1 message(s)
+--- FAIL: TestReviewMissingDLQPreservesSource (0.00s)
+    review_evidence_test.go:116: source has 0 messages after missing DLQ, want 1
+2026/10/13 20:55:27 [sqs] moved 1 message(s) to DLQ "dlq"
+--- FAIL: TestReviewReaperDLQPreservesMetadata (0.00s)
+    review_evidence_test.go:128: dedup ID = "", want "dedup"
+    review_evidence_test.go:132: retry attribute = <nil>, want TarnRetryCount=1
+--- FAIL: TestReviewPeekBinaryIsIsolated (0.00s)
+    review_evidence_test.go:155: stored binary value mutated through peek: got 9
+--- FAIL: TestReviewRejectedAttributesAreAtomic (0.00s)
+    review_evidence_test.go:173: rejected update changed stored throughput to "perMessageGroupId"
+--- FAIL: TestReviewFailedFlushRetainsDirtyState (0.00s)
+    review_evidence_test.go:198: failed persistence cleared dirty state, preventing an automatic retry
+--- FAIL: TestReviewDLQTransferRetryDoesNotDuplicate (0.00s)
+    review_evidence_test.go:390: retrying transfer created 2 DLQ messages, want 1
+--- FAIL: TestReviewReapWakesUnblockedFIFO (0.00s)
+    review_evidence_test.go:415: reaper did not wake waiters after removing FIFO blocker; timer is still due at 1791924927413
+FAIL
+FAIL	github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22	0.370s
+FAIL

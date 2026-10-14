@@ -1,0 +1,12 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22
+cpu: Apple M5
+BenchmarkReviewMetricSubset/QueueArn         	 1650663	       137.6 ns/op	     336 B/op	       2 allocs/op
+BenchmarkReviewMetricSubset/QueueArn         	 2035330	       136.9 ns/op	     336 B/op	       2 allocs/op
+BenchmarkReviewMetricSubset/QueueArn         	 1727719	       137.2 ns/op	     336 B/op	       2 allocs/op
+BenchmarkReviewMetricSubset/ApproximateNumberOfMessages         	    1906	    118469 ns/op	     352 B/op	       4 allocs/op
+BenchmarkReviewMetricSubset/ApproximateNumberOfMessages         	    1940	    120130 ns/op	     352 B/op	       4 allocs/op
+BenchmarkReviewMetricSubset/ApproximateNumberOfMessages         	    1900	    120521 ns/op	     352 B/op	       4 allocs/op
+PASS
+ok  	github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22	1.746s

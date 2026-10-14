@@ -1,0 +1,432 @@
+package sqs
+
+import (
+	"fmt"
+	"os"
+	"sync"
+	"testing"
+
+	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/pkg/types"
+)
+
+func TestReviewConfigSnapshotRace(t *testing.T) {
+	s := newTestStore()
+	if _, err := s.CreateQueue("q", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			q, err := s.GetQueue("q")
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = fmt.Sprint(q.VisibilityTimeout)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			if err := s.SetQueueAttributes("q", map[string]string{"VisibilityTimeout": fmt.Sprint(i % 30)}); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+	close(start)
+	wg.Wait()
+}
+
+func TestReviewReceiveSnapshotRace(t *testing.T) {
+	s := newTestStore()
+	if _, err := s.CreateQueue("q", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SendMessage("q", "body", 0, nil, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	batch, err := s.ReceiveMessage("q", 1, 0)
+	if err != nil || len(batch) != 1 {
+		t.Fatalf("receive: %v %v", batch, err)
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			_ = fmt.Sprint(batch[0].ReceiptHandle, batch[0].ApproximateReceiveCount)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		<-start
+		for i := 0; i < 1000; i++ {
+			if _, err := s.ReceiveMessage("q", 1, 0); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+	close(start)
+	wg.Wait()
+}
+
+func reviewDLQSource(t *testing.T, targetExists bool) (*Service, *types.SQSMessage) {
+	t.Helper()
+	cfg := config.Default()
+	cfg.PersistenceEnabled = false
+	svc := NewService(cfg)
+	t.Cleanup(svc.Stop)
+	if targetExists {
+		if _, err := svc.CreateQueue("dlq", nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy := fmt.Sprintf(`{"deadLetterTargetArn":"arn:aws:sqs:%s:%s:dlq","maxReceiveCount":1}`, cfg.Region, cfg.AccountID)
+	if _, err := svc.CreateQueue("q", map[string]string{"RedrivePolicy": policy}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SendMessage("q", "body", 0, nil, "group", "dedup"); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := svc.ReceiveMessage("q", 1, 0, 0)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("receive: %v %v", msgs, err)
+	}
+	return svc, msgs[0]
+}
+
+func TestReviewMissingDLQPreservesSource(t *testing.T) {
+	svc, _ := reviewDLQSource(t, false)
+	svc.store.Reap()
+	msgs, err := svc.PeekMessages("q", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("source has %d messages after missing DLQ, want 1", len(msgs))
+	}
+}
+
+func TestReviewReaperDLQPreservesMetadata(t *testing.T) {
+	svc, original := reviewDLQSource(t, true)
+	svc.store.Reap()
+	msgs, err := svc.PeekMessages("dlq", 10)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("DLQ: %v %v", msgs, err)
+	}
+	if msgs[0].MessageDeduplicationId != original.MessageDeduplicationId {
+		t.Errorf("dedup ID = %q, want %q", msgs[0].MessageDeduplicationId, original.MessageDeduplicationId)
+	}
+	attr := msgs[0].MessageAttributes[dlqRetryCountAttribute]
+	if attr == nil || attr.StringValue != "1" {
+		t.Errorf("retry attribute = %+v, want TarnRetryCount=1", attr)
+	}
+}
+
+func TestReviewPeekBinaryIsIsolated(t *testing.T) {
+	s := newTestStore()
+	if _, err := s.CreateQueue("q", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	attrs := map[string]*types.MessageAttribute{"blob": {DataType: "Binary", BinaryValue: []byte{1, 2}}}
+	if _, err := s.SendMessage("q", "body", 0, attrs, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	msgs, err := s.PeekMessages("q", 1)
+	if err != nil || len(msgs) != 1 {
+		t.Fatalf("peek: %v %v", msgs, err)
+	}
+	msgs[0].MessageAttributes["blob"].BinaryValue[0] = 9
+	next, err := s.PeekMessages("q", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := next[0].MessageAttributes["blob"].BinaryValue[0]; got != 1 {
+		t.Fatalf("stored binary value mutated through peek: got %d", got)
+	}
+}
+
+func TestReviewRejectedAttributesAreAtomic(t *testing.T) {
+	s := newTestStore()
+	if _, err := s.CreateQueue("q.fifo", map[string]string{"FifoQueue": "true"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	err := s.SetQueueAttributes("q.fifo", map[string]string{"FifoThroughputLimit": "perMessageGroupId"})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	attrs, err := s.GetQueueAttributes("q.fifo", []string{"FifoThroughputLimit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := attrs["FifoThroughputLimit"]; got != "perQueue" {
+		t.Fatalf("rejected update changed stored throughput to %q", got)
+	}
+}
+
+func TestReviewFailedFlushRetainsDirtyState(t *testing.T) {
+	cfg := config.Default()
+	cfg.PersistenceEnabled = true
+	cfg.DataDir = t.TempDir()
+	s := NewStore(cfg)
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if _, err := s.CreateQueue("q", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	blocked := cfg.QueuesDir()
+	if err := os.Remove(blocked); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(blocked, []byte("block"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	s.Flush()
+	if !s.dirty.Load() {
+		t.Fatal("failed persistence cleared dirty state, preventing an automatic retry")
+	}
+}
+
+// Equal coverage of visible, in-flight, delayed, stale and deleted messages.
+// Fixture construction is excluded from benchmark timing.
+func reviewFixture(b *testing.B, n int) (*Store, *queue) {
+	b.Helper()
+	s := newTestStore()
+	if _, err := s.CreateQueue("q", nil, nil); err != nil {
+		b.Fatal(err)
+	}
+	q := s.queues["q"]
+	now := nowMs()
+	q.messages = make([]*types.SQSMessage, n)
+	for i := range n {
+		m := &types.SQSMessage{MessageId: fmt.Sprint(i), ReceiptHandle: fmt.Sprint(i), Body: "body", VisibleAt: now, DelayUntil: now, ExpiresAt: now + 86400000}
+		switch i % 5 {
+		case 1:
+			m.VisibleAt = now + 3600000
+		case 2:
+			m.DelayUntil = now + 3600000
+		case 3:
+			m.Stale = true
+		case 4:
+			m.Deleted = true
+		}
+		q.messages[i] = m
+	}
+	return s, q
+}
+
+func TestReviewMetricsPredicates(t *testing.T) {
+	s := newTestStore()
+	if _, err := s.CreateQueue("q", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	now := nowMs()
+	q := s.queues["q"]
+	// All 32 combinations, including overlap between delayed, in-flight and stale.
+	for bits := range 32 {
+		m := &types.SQSMessage{VisibleAt: now, DelayUntil: now, ExpiresAt: now + 86400000}
+		if bits&1 != 0 {
+			m.Deleted = true
+		}
+		if bits&2 != 0 {
+			m.Stale = true
+		}
+		if bits&4 != 0 {
+			m.VisibleAt = now + 3600000
+		}
+		if bits&8 != 0 {
+			m.DelayUntil = now + 3600000
+		}
+		if bits&16 != 0 {
+			m.ExpiresAt = now - 3600000
+		}
+		q.messages = append(q.messages, m)
+	}
+	names := []string{"ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible", "ApproximateNumberOfMessagesDelayed", "ApproximateNumberOfMessagesStale"}
+	expected := map[string]string{}
+	for _, name := range names {
+		count := 0
+		for _, m := range q.messages {
+			match := false
+			switch name {
+			case names[0]:
+				match = !m.Deleted && m.VisibleAt <= now && m.DelayUntil <= now && m.ExpiresAt > now
+			case names[1]:
+				match = !m.Deleted && m.VisibleAt > now && m.ExpiresAt > now
+			case names[2]:
+				match = !m.Deleted && m.DelayUntil > now && m.ExpiresAt > now
+			case names[3]:
+				match = !m.Deleted && m.Stale && m.ExpiresAt > now
+			}
+			if match {
+				count++
+			}
+		}
+		expected[name] = fmt.Sprint(count)
+	}
+	for mask := range 16 {
+		requested := []string{}
+		for i, name := range names {
+			if mask&(1<<i) != 0 {
+				requested = append(requested, name)
+			}
+		}
+		got, err := s.GetQueueAttributes("q", requested)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != len(requested) {
+			t.Fatalf("keys: %v want %v", got, requested)
+		}
+		for _, name := range requested {
+			if got[name] != expected[name] {
+				t.Fatalf("%s=%s, want %s", name, got[name], expected[name])
+			}
+		}
+	}
+	for _, requested := range [][]string{nil, {"All"}} {
+		got, err := s.GetQueueAttributes("q", requested)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range names {
+			if got[name] != expected[name] {
+				t.Fatalf("%s=%s, want %s", name, got[name], expected[name])
+			}
+		}
+	}
+}
+
+func BenchmarkReviewMetrics(b *testing.B) {
+	for _, n := range []int{1000, 10000, 100000} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			s, _ := reviewFixture(b, n)
+			names := []string{"ApproximateNumberOfMessages", "ApproximateNumberOfMessagesNotVisible", "ApproximateNumberOfMessagesDelayed", "ApproximateNumberOfMessagesStale"}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := s.GetQueueAttributes("q", names); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+func BenchmarkReviewDeleteTail(b *testing.B) {
+	for _, n := range []int{1000, 10000, 100000} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			s, q := reviewFixture(b, n)
+			m := q.messages[n-1]
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				m.Deleted = false
+				if err := s.DeleteMessage("q", m.ReceiptHandle); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+func BenchmarkReviewReceiveUnavailable(b *testing.B) {
+	for _, n := range []int{1000, 10000, 100000} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			s, q := reviewFixture(b, n)
+			now := nowMs()
+			for _, m := range q.messages {
+				m.Deleted = false
+				m.Stale = false
+				m.VisibleAt = now + 3600000
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := s.ReceiveMessage("q", 10, 30); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+func BenchmarkReviewReapClean(b *testing.B) {
+	for _, n := range []int{1000, 10000, 100000} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			s, q := reviewFixture(b, n)
+			for _, m := range q.messages {
+				m.Deleted = false
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				s.Reap()
+			}
+		})
+	}
+}
+
+func TestReviewDLQTransferRetryDoesNotDuplicate(t *testing.T) {
+	svc, msg := reviewDLQSource(t, true)
+	if moved, _, err := svc.MoveToDLQIfExceeded("q", msg); err != nil || !moved {
+		t.Fatalf("first move: %t %v", moved, err)
+	}
+	_, _, _ = svc.MoveToDLQIfExceeded("q", msg)
+	msgs, err := svc.PeekMessages("dlq", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("retrying transfer created %d DLQ messages, want 1", len(msgs))
+	}
+}
+func TestReviewReapWakesUnblockedFIFO(t *testing.T) {
+	s := newTestStore()
+	if _, err := s.CreateQueue("q.fifo", map[string]string{"FifoQueue": "true"}, nil); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.SendMessage("q.fifo", "first", 0, nil, "A", "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.SendMessage("q.fifo", "second", 0, nil, "A", "2"); err != nil {
+		t.Fatal(err)
+	}
+	first.VisibleAt = nowMs() + 3600000
+	msgs, wake, nextAt, err := s.receive("q.fifo", 10, 30)
+	if err != nil || len(msgs) != 0 || wake == nil {
+		t.Fatalf("receive: %v %v", msgs, err)
+	}
+	first.ExpiresAt = nowMs() - 1
+	s.Reap()
+	select {
+	case <-wake:
+	default:
+		t.Fatalf("reaper did not wake waiters after removing FIFO blocker; timer is still due at %d", nextAt)
+	}
+}
+func BenchmarkReviewMetricSubset(b *testing.B) {
+	for _, name := range []string{"QueueArn", "ApproximateNumberOfMessages"} {
+		b.Run(name, func(b *testing.B) {
+			s, _ := reviewFixture(b, 100000)
+			names := []string{name}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := s.GetQueueAttributes("q", names); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

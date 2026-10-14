@@ -1,0 +1,42 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22
+cpu: Apple M5
+BenchmarkReviewMetrics/1000       	   81218	      2950 ns/op	     360 B/op	       7 allocs/op
+BenchmarkReviewMetrics/1000       	   72412	      3203 ns/op	     360 B/op	       7 allocs/op
+BenchmarkReviewMetrics/1000       	   79093	      2941 ns/op	     360 B/op	       7 allocs/op
+BenchmarkReviewMetrics/10000      	    6730	     34061 ns/op	     400 B/op	      10 allocs/op
+BenchmarkReviewMetrics/10000      	    7364	     32641 ns/op	     400 B/op	      10 allocs/op
+BenchmarkReviewMetrics/10000      	    7306	     33994 ns/op	     400 B/op	      10 allocs/op
+BenchmarkReviewMetrics/100000     	     499	    493045 ns/op	     400 B/op	      10 allocs/op
+BenchmarkReviewMetrics/100000     	     505	    488710 ns/op	     400 B/op	      10 allocs/op
+BenchmarkReviewMetrics/100000     	     519	    460917 ns/op	     400 B/op	      10 allocs/op
+BenchmarkReviewDeleteTail/1000    	  142850	      1600 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewDeleteTail/1000    	  174468	      1582 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewDeleteTail/1000    	  153164	      1561 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewDeleteTail/10000   	   15588	     15453 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewDeleteTail/10000   	   15369	     16105 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewDeleteTail/10000   	   15477	     15473 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewDeleteTail/100000  	    1182	    180889 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewDeleteTail/100000  	    1141	    202136 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewDeleteTail/100000  	    1244	    182640 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReceiveUnavailable/1000         	  168009	      1434 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReceiveUnavailable/1000         	  189054	      1290 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReceiveUnavailable/1000         	  188610	      1283 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReceiveUnavailable/10000        	   16180	     14798 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReceiveUnavailable/10000        	   16168	     15501 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReceiveUnavailable/10000        	   15092	     15862 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReceiveUnavailable/100000       	    1164	    182057 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReceiveUnavailable/100000       	    1254	    225736 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReceiveUnavailable/100000       	     860	    266617 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReapClean/1000                  	  140666	      1726 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReapClean/1000                  	  156342	      1717 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReapClean/1000                  	  153110	      1921 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReapClean/10000                 	   10728	     20233 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReapClean/10000                 	   12508	     18859 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReapClean/10000                 	   11212	     18391 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReapClean/100000                	    1188	    206607 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReapClean/100000                	     968	    226271 ns/op	       0 B/op	       0 allocs/op
+BenchmarkReviewReapClean/100000                	     986	    239966 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/aircwo-systems/tarn/internal/sqs_review_ptez0r22	9.113s
