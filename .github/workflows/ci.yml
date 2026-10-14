@@ -30,10 +30,10 @@ jobs:
         run: go vet ./...
 
       - name: Build tarn
-        run: go build -o ./build/tarn ./cmd/tarn
+        run: go build -trimpath -o ./build/tarn ./cmd/tarn
 
       - name: Build secrets-proxy
-        run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o ./build/secrets-proxy-linux ./cmd/secrets-proxy
+        run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o ./build/secrets-proxy-linux ./cmd/secrets-proxy
 
       - name: Test
         run: go test ./... -v -race -count=1 -short

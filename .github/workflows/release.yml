@@ -75,7 +75,7 @@ jobs:
         run: |
           EXT=""
           if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
-          CGO_ENABLED=0 go build \
+          CGO_ENABLED=0 go build -trimpath \
             -ldflags="-s -w -X github.com/aircwo-systems/tarn/internal/cli.version=${{ github.ref_name }}" \
             -o ./build/tarn-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
             ./cmd/tarn
@@ -83,7 +83,7 @@ jobs:
       - name: Build secrets-proxy (linux/amd64 only)
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
         run: |
-          CGO_ENABLED=0 go build \
+          CGO_ENABLED=0 go build -trimpath \
             -ldflags="-s -w" \
             -o ./build/secrets-proxy-linux-amd64 \
             ./cmd/secrets-proxy

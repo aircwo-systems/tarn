@@ -10,19 +10,19 @@ all: build
 
 build: secrets-proxy db-proxy
 	@mkdir -p $(BUILD_DIR)
-	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/tarn
+	go build -trimpath $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/tarn
 
 build-lite:
 	@mkdir -p $(BUILD_DIR)
-	go build $(LDFLAGS) -tags lite -o $(BUILD_DIR)/$(BINARY_NAME)-lite ./cmd/tarn
+	go build -trimpath $(LDFLAGS) -tags lite -o $(BUILD_DIR)/$(BINARY_NAME)-lite ./cmd/tarn
 
 secrets-proxy:
 	@mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o $(BUILD_DIR)/secrets-proxy-linux ./cmd/secrets-proxy
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o $(BUILD_DIR)/secrets-proxy-linux ./cmd/secrets-proxy
 
 db-proxy:
 	@mkdir -p $(BUILD_DIR)
-	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o $(BUILD_DIR)/db-proxy-linux ./cmd/db-proxy
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o $(BUILD_DIR)/db-proxy-linux ./cmd/db-proxy
 
 start: build
 	$(BUILD_DIR)/$(BINARY_NAME) start
