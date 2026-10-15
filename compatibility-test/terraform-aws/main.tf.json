@@ -1,0 +1,160 @@
+{
+  "terraform": {
+    "required_providers": {
+      "aws": {
+        "source": "hashicorp/aws",
+        "version": "6.66.0"
+      }
+    }
+  },
+  "provider": {
+    "aws": {
+      "region": "eu-west-2",
+      "access_key": "123456789012",
+      "secret_key": "test",
+      "skip_credentials_validation": true,
+      "skip_metadata_api_check": true,
+      "skip_requesting_account_id": true,
+      "s3_use_path_style": true,
+      "endpoints": {
+        "apigateway": "${var.endpoint}",
+        "cloudwatchlogs": "${var.endpoint}",
+        "iam": "${var.endpoint}",
+        "lambda": "${var.endpoint}",
+        "s3": "${var.endpoint}",
+        "sqs": "${var.endpoint}",
+        "sts": "${var.endpoint}"
+      },
+      "default_tags": {
+        "tags": {
+          "project": "tarn-compatibility"
+        }
+      }
+    }
+  },
+  "resource": {
+    "aws_iam_role": {
+      "audit": {
+        "name": "tarn-compatibility",
+        "assume_role_policy": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Principal\": {\"Service\": \"lambda.amazonaws.com\"}, \"Action\": \"sts:AssumeRole\"}]}"
+      }
+    },
+    "aws_cloudwatch_log_group": {
+      "audit": {
+        "name": "/aws/lambda/tarn-compatibility",
+        "retention_in_days": 7
+      }
+    },
+    "aws_lambda_function": {
+      "audit": {
+        "function_name": "tarn-compatibility",
+        "filename": "${path.module}/function.zip",
+        "source_code_hash": "${filebase64sha256(\"${path.module}/function.zip\")}",
+        "role": "${aws_iam_role.audit.arn}",
+        "runtime": "nodejs20.x",
+        "handler": "index.handler",
+        "architectures": [
+          "arm64"
+        ],
+        "environment": {
+          "variables": {
+            "MODE": "test"
+          }
+        },
+        "depends_on": [
+          "aws_cloudwatch_log_group.audit"
+        ]
+      }
+    },
+    "aws_sqs_queue": {
+      "audit": {
+        "name": "tarn-compatibility"
+      }
+    },
+    "aws_lambda_event_source_mapping": {
+      "audit": {
+        "event_source_arn": "${aws_sqs_queue.audit.arn}",
+        "function_name": "${aws_lambda_function.audit.arn}",
+        "function_response_types": [
+          "ReportBatchItemFailures"
+        ],
+        "enabled": false
+      }
+    },
+    "aws_s3_bucket": {
+      "audit": {
+        "bucket": "tarn-compatibility"
+      }
+    },
+    "aws_s3_bucket_notification": {
+      "audit": {
+        "bucket": "${aws_s3_bucket.audit.id}",
+        "queue": [
+          {
+            "queue_arn": "${aws_sqs_queue.audit.arn}",
+            "events": [
+              "s3:ObjectCreated:*"
+            ],
+            "filter_prefix": "objects/"
+          }
+        ]
+      }
+    },
+    "aws_api_gateway_rest_api": {
+      "audit": {
+        "name": "tarn-compatibility",
+        "body": "{\"openapi\": \"3.0.1\", \"info\": {\"title\": \"Audit\", \"version\": \"1\"}, \"paths\": {\"/messages/enqueue\": {\"post\": {\"responses\": {\"200\": {\"description\": \"Queued\"}}, \"security\": [{\"api_key\": []}], \"x-amazon-apigateway-integration\": {\"type\": \"aws\", \"httpMethod\": \"POST\", \"uri\": \"arn:aws:apigateway:eu-west-2:sqs:path/123456789012/${aws_sqs_queue.audit.name}\", \"requestTemplates\": {\"application/json\": \"Action=SendMessage&MessageBody=$util.urlEncode($input.body)\"}, \"responses\": {\"default\": {\"statusCode\": \"200\"}}}}}}, \"components\": {\"securitySchemes\": {\"api_key\": {\"type\": \"apiKey\", \"name\": \"x-api-key\", \"in\": \"header\"}}}}",
+        "endpoint_configuration": {
+          "types": [
+            "REGIONAL"
+          ]
+        }
+      }
+    },
+    "aws_api_gateway_deployment": {
+      "audit": {
+        "rest_api_id": "${aws_api_gateway_rest_api.audit.id}",
+        "triggers": {
+          "redeploy": "${sha1(aws_api_gateway_rest_api.audit.body)}"
+        }
+      }
+    },
+    "aws_api_gateway_stage": {
+      "audit": {
+        "rest_api_id": "${aws_api_gateway_rest_api.audit.id}",
+        "deployment_id": "${aws_api_gateway_deployment.audit.id}",
+        "stage_name": "v1"
+      }
+    },
+    "aws_api_gateway_api_key": {
+      "audit": {
+        "name": "tarn-compatibility",
+        "enabled": true
+      }
+    },
+    "aws_api_gateway_usage_plan": {
+      "audit": {
+        "name": "tarn-compatibility",
+        "api_stages": [
+          {
+            "api_id": "${aws_api_gateway_rest_api.audit.id}",
+            "stage": "${aws_api_gateway_stage.audit.stage_name}"
+          }
+        ]
+      }
+    },
+    "aws_api_gateway_usage_plan_key": {
+      "audit": {
+        "key_id": "${aws_api_gateway_api_key.audit.id}",
+        "key_type": "API_KEY",
+        "usage_plan_id": "${aws_api_gateway_usage_plan.audit.id}"
+      }
+    }
+  },
+  "variable": {
+    "endpoint": {
+      "type": "string",
+      "default": "http://127.0.0.1:14567"
+    }
+  }
+}

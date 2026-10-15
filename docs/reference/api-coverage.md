@@ -1,6 +1,6 @@
 # API coverage
 
-Tarn implements **250+ AWS API actions** across 13 services, with service-specific compatibility fallbacks to keep Terraform and SDK workflows moving when optional APIs are probed.
+Tarn implements **250+ AWS API actions** across 14 services, with service-specific compatibility fallbacks to keep Terraform and SDK workflows moving when optional APIs are probed.
 
 ## Coverage matrix
 
@@ -16,10 +16,11 @@ Tarn implements **250+ AWS API actions** across 13 services, with service-specif
 | **ECS** | JSON 1.1 | 17 | `ecs` |
 | **Step Functions** | JSON (1.0) | 13 | `stepfunctions` |
 | **API Gateway v2** | REST/JSON | 19 | `apigatewayv2` |
-| **API Gateway v1** | REST/JSON | 19 | `apigateway` |
+| **API Gateway v1** | REST/JSON | 48 | `apigateway` |
+| **CloudWatch Logs** | JSON 1.1 | 11 | `cloudwatchlogs` |
 | **IAM** | Query/XML | 17 | default |
 | **Cognito User Pools** | JSON 1.1 | 66 | `cognitoidp` |
-| **Event Source Mapping** | REST/JSON | 5 | `lambda` (shared) |
+| **Event Source Mapping** | REST/JSON | 8 | `lambda` (shared) |
 
 ## ECS
 
@@ -70,6 +71,49 @@ task completion. ECS unit and handler tests use fakes. RunTask overrides are lau
 and are not stored on Task records; the runner rebuilds its container bookkeeping from persisted
 runtime IDs and account-scoped Docker labels after a restart.
 
+## Terraform compatibility
+
+The regression fixture in `compatibility-test/terraform-aws` covers an apply,
+an unchanged second plan and destroy with AWS provider 6.66.0. It exercises
+Lambda environment and architecture readback, IAM/Lambda/mapping default tags,
+CloudWatch log groups and retention, S3 queue notifications and REST/SQS integrations.
+
+Lambda returns `Environment.Variables`, exposes `GetFunction.Tags` at the root,
+and stores `Architectures` through create and code updates. Docker image pulls
+and container creation select the requested Linux platform. The Docker host
+must support that platform, including emulation when needed.
+
+Event mappings store and return `FunctionResponseTypes` and
+`EventSourceMappingArn`. Lambda's shared tagging endpoints also handle mapping
+ARNs. SQS partial failures require `ReportBatchItemFailures`; function errors
+still fail the whole batch.
+
+S3 stores queue destinations and prefix/suffix filters alongside Lambda
+notifications. Object PUT and DELETE events can deliver the S3 event directly to
+this account's standard SQS queue. SNS notification destinations return
+`NotImplemented`.
+
+CloudWatch Logs supports `CreateLogGroup`, `DescribeLogGroups`, `DeleteLogGroup`,
+`PutRetentionPolicy`, `DeleteRetentionPolicy`, `TagResource`, `UntagResource`,
+`ListTagsForResource`, `TagLogGroup`, `UntagLogGroup` and `ListTagsLogGroup`.
+These operations use the account's existing in-memory log store. Retention is
+applied during log pruning. Log streams, log event ingestion/query through AWS
+APIs and restart persistence of log group metadata are outside this coverage.
+Unknown Logs operations return a JSON `UnknownOperationException`.
+
+REST APIs support JSON OpenAPI import with merge or overwrite, API key security,
+AWS/SQS, Lambda proxy and mock integrations. Keys, usage plans and stage/key
+associations have create/read/list/update/delete operations where applicable,
+plus resource tagging and persistence. Requests to methods that require an API
+key must supply an enabled key associated with that API's stage through a plan.
+Usage-plan throttling/quotas, YAML import, arbitrary OpenAPI references and other
+security schemes are outside this coverage. The LocalStack-compatible
+`/restapis/{apiId}/{stage}/_user_request_/{path}` invoke URL is also accepted.
+
+The fixture checks resource lifecycle, configuration readback and message delivery.
+IAM role records remain session-local. Start a separate server with the requested
+`--region` when checking region behaviour.
+
 ## Stub behavior
 
 When Tarn receives an API action it doesn't explicitly implement, the fallback depends on the service protocol. Query and JSON-style services usually return an empty success response for Terraform compatibility, while Lambda and S3 use AWS-style "not configured" responses for unsupported sub-resources.
@@ -113,7 +157,7 @@ Terraform's S3 provider probes many bucket sub-resources during every plan/apply
 
 All services share a single endpoint (`localhost:4566`). Requests are routed by:
 
-1. **`X-Amz-Target` header:** EventBridge (`AWSEvents.*`), Step Functions (`AWSStepFunctions.*`), SQS JSON (`AmazonSQS.*`), Secrets Manager (`secretsmanager.*`), DynamoDB (`DynamoDB_20120810.*`), DynamoDB Streams (`DynamoDBStreams_20120810.*`), ECS (`AmazonEC2ContainerServiceV20141113.*`), and Cognito User Pools (`AWSCognitoIdentityProviderService.*`)
+1. **`X-Amz-Target` header:** CloudWatch Logs (`Logs_20140328.*`), EventBridge (`AWSEvents.*`), Step Functions (`AWSStepFunctions.*`), SQS JSON (`AmazonSQS.*`), Secrets Manager (`secretsmanager.*`), DynamoDB (`DynamoDB_20120810.*`), DynamoDB Streams (`DynamoDBStreams_20120810.*`), ECS (`AmazonEC2ContainerServiceV20141113.*`), and Cognito User Pools (`AWSCognitoIdentityProviderService.*`)
 2. **`Version` form parameter:** IAM (`2010-05-08`) and SNS (`2010-03-31`)
 3. **URL path:** Lambda (`/2015-03-31/functions/`), S3 (`/_s3/`), API Gateway (`/v2/apis/`, `/restapis/`), Cognito JWKS and discovery (`/<poolId>/.well-known/`), and Datadog trace and log intake (`/info`, `/v0.4/traces`, `/api/v2/logs`, `/v1/input`). See [Datadog](/guide/datadog)
 4. **Fallback:** SQS query protocol, the default for `POST /`
