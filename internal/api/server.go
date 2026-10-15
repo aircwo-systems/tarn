@@ -737,6 +737,10 @@ func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
 		hs.DynamoDB.Dispatch(w, r)
 		return
 	}
+	if strings.HasPrefix(r.Header.Get("X-Amz-Target"), "Logs_20140328.") {
+		hs.Logs.DispatchAWS(w, r)
+		return
+	}
 	if strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AWSEvents.") {
 		hs.EventBridge.Dispatch(w, r)
 		return
@@ -898,6 +902,10 @@ func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request)
 	}
 
 	target := strings.TrimSpace(r.Header.Get("X-Amz-Target"))
+	if strings.HasPrefix(target, "Logs_20140328.") {
+		hs.Logs.DispatchAWS(w, r)
+		return true
+	}
 	if strings.HasPrefix(target, "AWSEvents.") {
 		hs.EventBridge.Dispatch(w, r)
 		return true

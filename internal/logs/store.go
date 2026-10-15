@@ -102,9 +102,11 @@ type LogScanResult struct {
 
 // logGroup holds events in a ring buffer.
 type logGroup struct {
-	name      string
-	createdAt time.Time
-	streams   map[string]*LogStream
+	tags            map[string]string
+	retentionInDays int
+	name            string
+	createdAt       time.Time
+	streams         map[string]*LogStream
 	// events grows on demand up to maxEvents, then works as a ring. While it
 	// is still growing, len(events) == count and head == count, so the ring
 	// arithmetic below reads it in order unchanged.
@@ -483,6 +485,13 @@ func (s *Store) PruneOlderThan(cutoff time.Time) int {
 
 	totalPruned := 0
 	for _, g := range s.groups {
+		groupCutoff := cutoff
+		if g.retentionInDays > 0 {
+			c := time.Now().Add(-time.Duration(g.retentionInDays) * 24 * time.Hour)
+			if c.After(groupCutoff) {
+				groupCutoff = c
+			}
+		}
 		if g.count == 0 {
 			continue
 		}
@@ -490,7 +499,7 @@ func (s *Store) PruneOlderThan(cutoff time.Time) int {
 		start := (g.head - g.count + g.maxEvents) % g.maxEvents
 		expired := 0
 		for i := 0; i < g.count; i++ {
-			if g.events[(start+i)%g.maxEvents].Timestamp.Before(cutoff) {
+			if g.events[(start+i)%g.maxEvents].Timestamp.Before(groupCutoff) {
 				expired++
 			}
 		}
@@ -506,7 +515,7 @@ func (s *Store) PruneOlderThan(cutoff time.Time) int {
 		kept := make([]LogEvent, 0, min(max(keptCount, initialLogCapacity), g.maxEvents))
 		for i := 0; i < g.count; i++ {
 			evt := g.events[(start+i)%g.maxEvents]
-			if !evt.Timestamp.Before(cutoff) {
+			if !evt.Timestamp.Before(groupCutoff) {
 				kept = append(kept, evt)
 			}
 		}
