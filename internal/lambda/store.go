@@ -90,6 +90,7 @@ func cloneFunction(fn *types.FunctionConfig) *types.FunctionConfig {
 	copy.Environment = maps.Clone(fn.Environment)
 	copy.Tags = maps.Clone(fn.Tags)
 	copy.Layers = slices.Clone(fn.Layers)
+	copy.Architectures = slices.Clone(fn.Architectures)
 	if fn.DeadLetterConfig != nil {
 		value := *fn.DeadLetterConfig
 		copy.DeadLetterConfig = &value

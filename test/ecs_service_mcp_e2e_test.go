@@ -192,12 +192,13 @@ func TestECSServiceToSQSToLambdaViaMCP(t *testing.T) {
   return { processed: (event.Records || []).length };
 };`
 	call(http.MethodPost, "/2015-03-31/functions", "", map[string]any{
-		"FunctionName": name,
-		"Runtime":      "nodejs20.x",
-		"Handler":      "index.handler",
-		"Role":         "arn:aws:iam::" + account + ":role/" + name,
-		"Timeout":      30,
-		"MemorySize":   128,
+		"FunctionName":  name,
+		"Runtime":       "nodejs20.x",
+		"Architectures": []string{testLambdaArchitecture},
+		"Handler":       "index.handler",
+		"Role":          "arn:aws:iam::" + account + ":role/" + name,
+		"Timeout":       30,
+		"MemorySize":    128,
 		"Code": map[string]string{
 			"ZipFile": base64.StdEncoding.EncodeToString(createZip(t, map[string]string{"index.js": consumerCode})),
 		},

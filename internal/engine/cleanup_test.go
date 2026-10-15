@@ -28,6 +28,7 @@ type fakeDocker struct {
 	mu        sync.Mutex
 	listed    []container.Summary
 	listQuery filters.Args
+	platform  string
 	created   container.Config
 	host      container.HostConfig
 	stopped   []string
@@ -51,6 +52,7 @@ func (f *fakeDocker) handler(w http.ResponseWriter, r *http.Request) {
 		f.listQuery, _ = filters.FromJSON(r.URL.Query().Get("filters"))
 		_ = json.NewEncoder(w).Encode(f.listed)
 	case r.Method == http.MethodPost && path == "/containers/create":
+		f.platform = r.URL.Query().Get("platform")
 		var req container.CreateRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
 		if req.Config != nil {

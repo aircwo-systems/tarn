@@ -223,11 +223,20 @@ func (e *Engine) imageRefExists(ctx context.Context, ref string) (bool, error) {
 // fatal error when the image is already present. Only a missing image that
 // also fails to pull is an error.
 func (e *Engine) EnsureImageRef(ctx context.Context, ref string) error {
+	return e.EnsureImagePlatform(ctx, ref, "")
+}
+
+// EnsureImagePlatform prepares the requested Linux architecture for a Lambda.
+func (e *Engine) EnsureImagePlatform(ctx context.Context, ref, platform string) error {
 	if ref == "" {
 		return fmt.Errorf("image reference must not be empty")
 	}
 
-	if _, ok := e.imageRefKnown.Load(ref); ok {
+	cacheKey := ref
+	if platform != "" {
+		cacheKey += "|" + platform
+	}
+	if _, ok := e.imageRefKnown.Load(cacheKey); ok {
 		return nil
 	}
 
@@ -237,7 +246,7 @@ func (e *Engine) EnsureImageRef(ctx context.Context, ref string) error {
 	}
 	defer mu.Release(1)
 
-	if _, ok := e.imageRefKnown.Load(ref); ok {
+	if _, ok := e.imageRefKnown.Load(cacheKey); ok {
 		return nil
 	}
 
@@ -245,13 +254,20 @@ func (e *Engine) EnsureImageRef(ctx context.Context, ref string) error {
 	if err != nil {
 		return err
 	}
+	if exists && platform != "" {
+		info, inspectErr := e.client.ImageInspect(ctx, ref)
+		if inspectErr != nil {
+			return inspectErr
+		}
+		exists = info.Os+"/"+info.Architecture == platform
+	}
 	if exists {
-		e.imageRefKnown.Store(ref, struct{}{})
+		e.imageRefKnown.Store(cacheKey, struct{}{})
 		return nil
 	}
 
 	log.Printf("[engine] image %s not found locally, pulling...", ref)
-	reader, err := e.client.ImagePull(ctx, ref, image.PullOptions{})
+	reader, err := e.client.ImagePull(ctx, ref, image.PullOptions{Platform: platform})
 	if err != nil {
 		return fmt.Errorf("image %s not found locally and pull failed: %w", ref, err)
 	}
@@ -261,7 +277,7 @@ func (e *Engine) EnsureImageRef(ctx context.Context, ref string) error {
 		return fmt.Errorf("image %s not found locally and pull failed: %w", ref, err)
 	}
 
-	e.imageRefKnown.Store(ref, struct{}{})
+	e.imageRefKnown.Store(cacheKey, struct{}{})
 	log.Printf("[engine] image %s pulled successfully", ref)
 	return nil
 }

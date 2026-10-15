@@ -93,6 +93,7 @@ type FunctionConfig struct {
 	Description      string            `json:"Description,omitempty"`
 	Timeout          int               `json:"Timeout"`
 	MemorySize       int               `json:"MemorySize"`
+	Architectures    []string          `json:"Architectures,omitempty"`
 	Environment      map[string]string `json:"Environment,omitempty"`
 	Layers           []string          `json:"Layers,omitempty"`
 	Tags             map[string]string `json:"Tags,omitempty"`

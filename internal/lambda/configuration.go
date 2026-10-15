@@ -31,6 +31,9 @@ func validateConfiguration(fn *types.FunctionConfig) error {
 	if fn.MemorySize < 128 || fn.MemorySize > 10240 {
 		return invalid("memory must be between 128 and 10240 MB")
 	}
+	if len(fn.Architectures) > 1 || (len(fn.Architectures) == 1 && fn.Architectures[0] != "arm64" && fn.Architectures[0] != "x86_64") {
+		return invalid("Architectures must contain one of arm64 or x86_64")
+	}
 	if len(fn.Layers) > 5 {
 		return invalid("a function may have at most five layers")
 	}
@@ -55,17 +58,10 @@ func validateConfiguration(fn *types.FunctionConfig) error {
 }
 
 func (s *Service) ensureFunctionImage(ctx context.Context, fn *types.FunctionConfig) error {
-	if fn.PackageType == "Image" {
-		ref := fn.ImageURI
-		if fn.ResolvedImageURI != "" {
-			ref = fn.ResolvedImageURI
-		}
-		return s.engine.EnsureImageRef(ctx, ref)
-	}
-	return s.engine.EnsureImage(ctx, fn.Runtime)
+	return s.engine.EnsureLambdaImage(ctx, fn)
 }
 
-func (s *Service) UpdateFunctionImage(ctx context.Context, reference, imageURI string) (*types.FunctionConfig, error) {
+func (s *Service) UpdateFunctionImage(ctx context.Context, reference, imageURI string, architectures ...[]string) (*types.FunctionConfig, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -80,10 +76,19 @@ func (s *Service) UpdateFunctionImage(ctx context.Context, reference, imageURI s
 		if record.PackageType != "Image" {
 			return invalid("function uses a ZIP deployment")
 		}
+		if len(architectures) > 0 && architectures[0] != nil {
+			if len(architectures[0]) != 1 {
+				return invalid("Architectures must contain one architecture")
+			}
+			record.Architectures = append([]string{}, architectures[0]...)
+		}
+		if err := validateConfiguration(record.FunctionConfig); err != nil {
+			return err
+		}
 		record.ImageURI = imageURI
 		record.ResolvedImageURI = ""
 		if s.engine != nil {
-			resolved, err := s.engine.ResolveImageReference(ctx, imageURI)
+			resolved, err := s.engine.ResolveImageReference(ctx, imageURI, record.Architectures...)
 			if err != nil {
 				return err
 			}
@@ -113,7 +118,7 @@ func (s *Service) freezeLegacyImage(ctx context.Context, reference string) error
 		if fn.PackageType != "Image" || fn.ResolvedImageURI != "" {
 			return nil
 		}
-		resolved, err := s.engine.ResolveImageReference(ctx, fn.ImageURI)
+		resolved, err := s.engine.ResolveImageReference(ctx, fn.ImageURI, fn.Architectures...)
 		if err != nil {
 			return err
 		}

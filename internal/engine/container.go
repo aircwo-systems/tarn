@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -317,7 +316,8 @@ func buildLambdaContainerEnv(fn *types.FunctionConfig, accountID, region string,
 // CreateContainer creates a new Lambda execution container with port mapping
 // so the host can reach the RIE on port 8080 inside the container.
 func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, codeDir string, layerDirs []string, accountID string, options ...LambdaContainerOptions) (*ContainerInfo, error) {
-	img, ok := types.RuntimeImageMap[fn.Runtime]
+	img, imageErr := lambdaRuntimeImage(fn)
+	ok := imageErr == nil
 	if fn.PackageType == "Image" {
 		img = fn.ImageURI
 		if fn.ResolvedImageURI != "" {
@@ -333,7 +333,7 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 	// Scan function environment for PostgreSQL URLs so db-proxy can observe them.
 	// Build a rewrite map: original key -> rewritten URL pointing to localhost:15432.
 	const dbProxyPort = 15432
-	dbProxyPath := e.findDBProxy()
+	dbProxyPath := findRuntimeProxy("db-proxy", fn.Architectures)
 	dbURLRewrites := map[string]string{}
 	var dbUpstream, dbName string
 	if dbProxyPath != "" {
@@ -373,7 +373,7 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 
 	secretsProxyPath := ""
 	if e.cfg.ExposeSecretsProxy || usesSecretsExtension(fn) {
-		secretsProxyPath = e.findSecretsProxy()
+		secretsProxyPath = findRuntimeProxy("secrets-proxy", fn.Architectures)
 	}
 	if secretsProxyPath != "" {
 		binds = append(binds, fmt.Sprintf("%s:/tarn-runtime/secrets-proxy:ro", secretsProxyPath))
@@ -461,7 +461,7 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 
 	name := fmt.Sprintf("tarn-lambda-%s-%d", sanitizeName(fn.FunctionName), time.Now().UnixMilli())
 
-	resp, err := e.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, name)
+	resp, err := e.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, lambdaPlatform(fn.Architectures), name)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create container: %w", err)
 	}
@@ -921,9 +921,6 @@ func (e *Engine) cleanupTaskPayloadFiles() {
 	})
 }
 
-// findSecretsProxy locates the secrets-proxy-linux binary.
-// It searches in the build directory (relative to the working directory) and
-// next to the running executable.
 // secretsExtensionEnvPrefixes are the configuration variables of the AWS
 // Parameters and Secrets Lambda Extension. Setting any of them signals a
 // function expects the extension.
@@ -948,49 +945,6 @@ func usesSecretsExtension(fn *types.FunctionConfig) bool {
 		}
 	}
 	return false
-}
-
-func (e *Engine) findSecretsProxy() string {
-	candidates := []string{
-		"./build/secrets-proxy-linux",
-	}
-
-	// Also check relative to the executable
-	if exe, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "secrets-proxy-linux"))
-	}
-
-	for _, path := range candidates {
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			continue
-		}
-		if _, err := os.Stat(abs); err == nil {
-			return abs
-		}
-	}
-
-	return ""
-}
-
-// findDBProxy locates the db-proxy-linux binary using the same strategy as findSecretsProxy.
-func (e *Engine) findDBProxy() string {
-	candidates := []string{
-		"./build/db-proxy-linux",
-	}
-	if exe, err := os.Executable(); err == nil {
-		candidates = append(candidates, filepath.Join(filepath.Dir(exe), "db-proxy-linux"))
-	}
-	for _, path := range candidates {
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			continue
-		}
-		if _, err := os.Stat(abs); err == nil {
-			return abs
-		}
-	}
-	return ""
 }
 
 // rewritePostgresURL rewrites a PostgreSQL connection URL to route through the local

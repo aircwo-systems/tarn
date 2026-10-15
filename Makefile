@@ -19,10 +19,12 @@ build-lite:
 secrets-proxy:
 	@mkdir -p $(BUILD_DIR)
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o $(BUILD_DIR)/secrets-proxy-linux ./cmd/secrets-proxy
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o $(BUILD_DIR)/secrets-proxy-linux-arm64 ./cmd/secrets-proxy
 
 db-proxy:
 	@mkdir -p $(BUILD_DIR)
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o $(BUILD_DIR)/db-proxy-linux ./cmd/db-proxy
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o $(BUILD_DIR)/db-proxy-linux-arm64 ./cmd/db-proxy
 
 start: build
 	$(BUILD_DIR)/$(BINARY_NAME) start
@@ -37,7 +39,7 @@ clean:
 	rm -rf $(BUILD_DIR)
 	go clean
 
-test:
+test: secrets-proxy db-proxy
 	go test ./... -v -race
 
 test-short:

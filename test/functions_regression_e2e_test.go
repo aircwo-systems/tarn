@@ -123,7 +123,7 @@ func TestFunctionLayersVersionsUpdatesAndConcurrencyE2E(t *testing.T) {
 		oneName := name + "-one"
 		onePath := "/2015-03-31/functions/" + oneName
 		code := createZip(t, map[string]string{"index.js": `const fs = require("fs"); exports.handler = async () => ({helper:require("helper0").value, shared:fs.readFileSync("/opt/shared.txt","utf8"), nested:fs.readFileSync("/opt/nested/data/value.txt","utf8")});`})
-		functionHTTP(t, http.MethodPost, "/2015-03-31/functions", map[string]any{"FunctionName": oneName, "Runtime": "nodejs20.x", "Handler": "index.handler", "Timeout": 10, "MemorySize": 128, "Layers": layers[:1], "Code": map[string]string{"ZipFile": base64.StdEncoding.EncodeToString(code)}}, 201)
+		functionHTTP(t, http.MethodPost, "/2015-03-31/functions", map[string]any{"FunctionName": oneName, "Runtime": "nodejs20.x", "Architectures": []string{testLambdaArchitecture}, "Handler": "index.handler", "Timeout": 10, "MemorySize": 128, "Layers": layers[:1], "Code": map[string]string{"ZipFile": base64.StdEncoding.EncodeToString(code)}}, 201)
 		cleanupFunctionResource(t, onePath)
 		for range 2 {
 			result := decodeFunctionResult(t, functionHTTP(t, http.MethodPost, onePath+"/invocations", map[string]any{}, 200))
@@ -136,7 +136,7 @@ func TestFunctionLayersVersionsUpdatesAndConcurrencyE2E(t *testing.T) {
 		return createZip(t, map[string]string{"index.js": fmt.Sprintf(`const fs = require("fs"); exports.handler = async event => { if (event.marker) console.log(event.marker); if (event.sleep) await new Promise(resolve => setTimeout(resolve,event.sleep)); return {code:%q, marker:fs.readFileSync("/var/task/marker.txt","utf8"), environment:process.env.KEY, version:process.env.AWS_LAMBDA_FUNCTION_VERSION, layers:require("helper0").value+require("helper1").value, shared:fs.readFileSync("/opt/shared.txt","utf8")}; };`, version), "marker.txt": version})
 	}
 	path := "/2015-03-31/functions/" + name
-	functionHTTP(t, http.MethodPost, "/2015-03-31/functions", map[string]any{"FunctionName": name, "Runtime": "nodejs20.x", "Handler": "index.handler", "Timeout": 10, "MemorySize": 128, "Layers": layers, "Environment": map[string]any{"Variables": map[string]string{"KEY": "original"}}, "Code": map[string]string{"ZipFile": base64.StdEncoding.EncodeToString(codeFor("v1"))}}, 201)
+	functionHTTP(t, http.MethodPost, "/2015-03-31/functions", map[string]any{"FunctionName": name, "Runtime": "nodejs20.x", "Architectures": []string{testLambdaArchitecture}, "Handler": "index.handler", "Timeout": 10, "MemorySize": 128, "Layers": layers, "Environment": map[string]any{"Variables": map[string]string{"KEY": "original"}}, "Code": map[string]string{"ZipFile": base64.StdEncoding.EncodeToString(codeFor("v1"))}}, 201)
 	cleanupFunctionResource(t, path)
 	first := decodeFunctionResult(t, functionHTTP(t, http.MethodPost, path+"/invocations", map[string]any{}, 200))
 	if first["layers"] != float64(1) || first["shared"] != "second" {
@@ -250,7 +250,7 @@ func TestImageFunctionAndPublishedImageVersionE2E(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(buildDir, "index.js"), []byte(code), 0600); err != nil {
 			t.Fatal(err)
 		}
-		command := exec.Command("docker", "build", "--quiet", "-t", image, buildDir)
+		command := exec.Command("docker", "build", "--platform", "linux/"+map[string]string{"arm64": "arm64", "x86_64": "amd64"}[testLambdaArchitecture], "--quiet", "-t", image, buildDir)
 		var stderr bytes.Buffer
 		command.Stderr = &stderr
 		output, err := command.Output()
@@ -263,7 +263,7 @@ func TestImageFunctionAndPublishedImageVersionE2E(t *testing.T) {
 	}
 	firstID := build("first")
 	path := "/2015-03-31/functions/" + name
-	functionHTTP(t, http.MethodPost, "/2015-03-31/functions", map[string]any{"FunctionName": name, "PackageType": "Image", "Timeout": 10, "MemorySize": 128, "Code": map[string]string{"ImageUri": image}}, 201)
+	functionHTTP(t, http.MethodPost, "/2015-03-31/functions", map[string]any{"FunctionName": name, "PackageType": "Image", "Architectures": []string{testLambdaArchitecture}, "Timeout": 10, "MemorySize": 128, "Code": map[string]string{"ImageUri": image}}, 201)
 	cleanupFunctionResource(t, path)
 	first := decodeFunctionResult(t, functionHTTP(t, http.MethodPost, path+"/invocations", map[string]any{}, 200))
 	if first["value"] != "first" {

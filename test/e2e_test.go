@@ -26,12 +26,31 @@ var endpoint = "http://127.0.0.1:" + serverPort
 // subcommands (tarn mcp) against the same instance.
 var tarnBinary string
 
+// Runtime fixtures follow the Docker host. Tests of AWS default architecture
+// and mixed-platform execution live in the Lambda and engine packages.
+var testLambdaArchitecture string
+
 // TestMain starts the Tarn server before running tests and stops it after.
 func TestMain(m *testing.M) {
 	// Check Docker is available
 	if err := exec.Command("docker", "info").Run(); err != nil {
 		fmt.Println("SKIP: Docker not available")
 		os.Exit(0)
+	}
+
+	arch, err := exec.Command("docker", "info", "--format", "{{.Architecture}}").Output()
+	if err != nil {
+		fmt.Println("Failed to identify Docker architecture:", err)
+		os.Exit(1)
+	}
+	switch strings.TrimSpace(string(arch)) {
+	case "aarch64", "arm64":
+		testLambdaArchitecture = "arm64"
+	case "x86_64", "amd64":
+		testLambdaArchitecture = "x86_64"
+	default:
+		fmt.Println("Unsupported Docker architecture:", string(arch))
+		os.Exit(1)
 	}
 
 	// Find the project root (parent of test/)
@@ -532,12 +551,13 @@ func TestECSFullPipelineE2E(t *testing.T) {
   return { processed: (event.Records || []).length };
 };`
 	createLambdaBody := map[string]any{
-		"FunctionName": lambdaName,
-		"Runtime":      "nodejs20.x",
-		"Handler":      "index.handler",
-		"Role":         "arn:aws:iam::000000000000:role/e2e-full-role",
-		"Timeout":      30,
-		"MemorySize":   128,
+		"FunctionName":  lambdaName,
+		"Runtime":       "nodejs20.x",
+		"Architectures": []string{testLambdaArchitecture},
+		"Handler":       "index.handler",
+		"Role":          "arn:aws:iam::000000000000:role/e2e-full-role",
+		"Timeout":       30,
+		"MemorySize":    128,
 		"Code": map[string]string{
 			"ZipFile": base64.StdEncoding.EncodeToString(createZip(t, map[string]string{"index.js": handlerCode})),
 		},
@@ -854,12 +874,13 @@ func TestNodeJSLambdaE2E(t *testing.T) {
 
 	// Create function
 	createReq := map[string]interface{}{
-		"FunctionName": "e2e-node-test",
-		"Runtime":      "nodejs20.x",
-		"Handler":      "index.handler",
-		"Role":         "arn:aws:iam::000000000000:role/test",
-		"Timeout":      30,
-		"MemorySize":   128,
+		"FunctionName":  "e2e-node-test",
+		"Runtime":       "nodejs20.x",
+		"Architectures": []string{testLambdaArchitecture},
+		"Handler":       "index.handler",
+		"Role":          "arn:aws:iam::000000000000:role/test",
+		"Timeout":       30,
+		"MemorySize":    128,
 		"Code": map[string]string{
 			"ZipFile": base64.StdEncoding.EncodeToString(zipData),
 		},
@@ -960,12 +981,13 @@ func TestLambdaLogsAppearInAdminLogs(t *testing.T) {
 	zipData := createZip(t, map[string]string{"index.js": handlerCode})
 
 	createReq := map[string]interface{}{
-		"FunctionName": "e2e-log-test",
-		"Runtime":      "nodejs20.x",
-		"Handler":      "index.handler",
-		"Role":         "arn:aws:iam::000000000000:role/test",
-		"Timeout":      30,
-		"MemorySize":   128,
+		"FunctionName":  "e2e-log-test",
+		"Runtime":       "nodejs20.x",
+		"Architectures": []string{testLambdaArchitecture},
+		"Handler":       "index.handler",
+		"Role":          "arn:aws:iam::000000000000:role/test",
+		"Timeout":       30,
+		"MemorySize":    128,
 		"Code": map[string]string{
 			"ZipFile": base64.StdEncoding.EncodeToString(zipData),
 		},
@@ -1058,12 +1080,13 @@ def lambda_handler(event, context):
 	zipData := createZip(t, map[string]string{"lambda_function.py": handlerCode})
 
 	createReq := map[string]interface{}{
-		"FunctionName": "e2e-python-test",
-		"Runtime":      "python3.12",
-		"Handler":      "lambda_function.lambda_handler",
-		"Role":         "arn:aws:iam::000000000000:role/test",
-		"Timeout":      30,
-		"MemorySize":   128,
+		"FunctionName":  "e2e-python-test",
+		"Runtime":       "python3.12",
+		"Architectures": []string{testLambdaArchitecture},
+		"Handler":       "lambda_function.lambda_handler",
+		"Role":          "arn:aws:iam::000000000000:role/test",
+		"Timeout":       30,
+		"MemorySize":    128,
 		"Code": map[string]string{
 			"ZipFile": base64.StdEncoding.EncodeToString(zipData),
 		},
@@ -1127,10 +1150,11 @@ func TestDryRunInvoke(t *testing.T) {
 	zipData := createZip(t, map[string]string{"index.js": handlerCode})
 
 	createReq := map[string]interface{}{
-		"FunctionName": "e2e-dryrun",
-		"Runtime":      "nodejs20.x",
-		"Handler":      "index.handler",
-		"Role":         "arn:aws:iam::000000000000:role/test",
+		"FunctionName":  "e2e-dryrun",
+		"Runtime":       "nodejs20.x",
+		"Architectures": []string{testLambdaArchitecture},
+		"Handler":       "index.handler",
+		"Role":          "arn:aws:iam::000000000000:role/test",
 		"Code": map[string]string{
 			"ZipFile": base64.StdEncoding.EncodeToString(zipData),
 		},
@@ -1177,10 +1201,11 @@ func TestAPIGatewayLambdaE2E(t *testing.T) {
 
 	functionName := "e2e-apigw-handler"
 	createReq := map[string]interface{}{
-		"FunctionName": functionName,
-		"Runtime":      "nodejs20.x",
-		"Handler":      "index.handler",
-		"Role":         "arn:aws:iam::000000000000:role/test",
+		"FunctionName":  functionName,
+		"Runtime":       "nodejs20.x",
+		"Architectures": []string{testLambdaArchitecture},
+		"Handler":       "index.handler",
+		"Role":          "arn:aws:iam::000000000000:role/test",
 		"Code": map[string]string{
 			"ZipFile": base64.StdEncoding.EncodeToString(zipData),
 		},
@@ -1654,10 +1679,11 @@ func TestCreateDuplicate(t *testing.T) {
 	zipData := createZip(t, map[string]string{"index.js": handlerCode})
 
 	createReq := map[string]interface{}{
-		"FunctionName": "e2e-dupe",
-		"Runtime":      "nodejs20.x",
-		"Handler":      "index.handler",
-		"Role":         "arn:aws:iam::000000000000:role/test",
+		"FunctionName":  "e2e-dupe",
+		"Runtime":       "nodejs20.x",
+		"Architectures": []string{testLambdaArchitecture},
+		"Handler":       "index.handler",
+		"Role":          "arn:aws:iam::000000000000:role/test",
 		"Code": map[string]string{
 			"ZipFile": base64.StdEncoding.EncodeToString(zipData),
 		},
@@ -1689,13 +1715,14 @@ func TestGetFunction(t *testing.T) {
 	zipData := createZip(t, map[string]string{"index.js": handlerCode})
 
 	createReq := map[string]interface{}{
-		"FunctionName": "e2e-getfunc",
-		"Runtime":      "nodejs20.x",
-		"Handler":      "index.handler",
-		"Role":         "arn:aws:iam::000000000000:role/test",
-		"Description":  "test function",
-		"Timeout":      10,
-		"MemorySize":   256,
+		"FunctionName":  "e2e-getfunc",
+		"Runtime":       "nodejs20.x",
+		"Architectures": []string{testLambdaArchitecture},
+		"Handler":       "index.handler",
+		"Role":          "arn:aws:iam::000000000000:role/test",
+		"Description":   "test function",
+		"Timeout":       10,
+		"MemorySize":    256,
 		"Code": map[string]string{
 			"ZipFile": base64.StdEncoding.EncodeToString(zipData),
 		},
@@ -1795,12 +1822,13 @@ func TestUpdateFunctionConfiguration(t *testing.T) {
 	zipData := createZip(t, map[string]string{"index.js": handlerCode})
 
 	createReq := map[string]interface{}{
-		"FunctionName": "e2e-update-config",
-		"Runtime":      "nodejs20.x",
-		"Handler":      "index.handler",
-		"Role":         "arn:aws:iam::000000000000:role/test",
-		"Timeout":      5,
-		"MemorySize":   128,
+		"FunctionName":  "e2e-update-config",
+		"Runtime":       "nodejs20.x",
+		"Architectures": []string{testLambdaArchitecture},
+		"Handler":       "index.handler",
+		"Role":          "arn:aws:iam::000000000000:role/test",
+		"Timeout":       5,
+		"MemorySize":    128,
 		"Code": map[string]string{
 			"ZipFile": base64.StdEncoding.EncodeToString(zipData),
 		},
@@ -1859,10 +1887,12 @@ func TestUpdateFunctionConfiguration(t *testing.T) {
 
 	var getResult struct {
 		Configuration struct {
-			Timeout     int               `json:"Timeout"`
-			MemorySize  int               `json:"MemorySize"`
-			Description string            `json:"Description"`
-			Environment map[string]string `json:"Environment"`
+			Timeout     int    `json:"Timeout"`
+			MemorySize  int    `json:"MemorySize"`
+			Description string `json:"Description"`
+			Environment struct {
+				Variables map[string]string `json:"Variables"`
+			} `json:"Environment"`
 		} `json:"Configuration"`
 	}
 	json.Unmarshal(getBody, &getResult)
@@ -1870,7 +1900,7 @@ func TestUpdateFunctionConfiguration(t *testing.T) {
 	if getResult.Configuration.Timeout != 30 {
 		t.Fatalf("GET: expected timeout 30, got %d", getResult.Configuration.Timeout)
 	}
-	if getResult.Configuration.Environment["MY_VAR"] != "hello" {
+	if getResult.Configuration.Environment.Variables["MY_VAR"] != "hello" {
 		t.Fatalf("GET: expected MY_VAR=hello, got %v", getResult.Configuration.Environment)
 	}
 
@@ -1886,10 +1916,11 @@ func TestFunctionTags(t *testing.T) {
 
 	// Create with tags
 	createReq := map[string]interface{}{
-		"FunctionName": "e2e-tags",
-		"Runtime":      "nodejs20.x",
-		"Handler":      "index.handler",
-		"Role":         "arn:aws:iam::000000000000:role/test",
+		"FunctionName":  "e2e-tags",
+		"Runtime":       "nodejs20.x",
+		"Architectures": []string{testLambdaArchitecture},
+		"Handler":       "index.handler",
+		"Role":          "arn:aws:iam::000000000000:role/test",
 		"Code": map[string]string{
 			"ZipFile": base64.StdEncoding.EncodeToString(zipData),
 		},
@@ -2031,11 +2062,12 @@ func TestRapidSequentialInvokes(t *testing.T) {
 	zipData := createZip(t, map[string]string{"index.js": handlerCode})
 
 	createReq := map[string]interface{}{
-		"FunctionName": "e2e-rapid",
-		"Runtime":      "nodejs20.x",
-		"Handler":      "index.handler",
-		"Role":         "arn:aws:iam::000000000000:role/test",
-		"Timeout":      30,
+		"FunctionName":  "e2e-rapid",
+		"Runtime":       "nodejs20.x",
+		"Architectures": []string{testLambdaArchitecture},
+		"Handler":       "index.handler",
+		"Role":          "arn:aws:iam::000000000000:role/test",
+		"Timeout":       30,
 		"Code": map[string]string{
 			"ZipFile": base64.StdEncoding.EncodeToString(zipData),
 		},
@@ -2802,12 +2834,13 @@ exports.handler = async (event) => {
 	zipData := createZip(t, map[string]string{"index.js": handlerCode})
 
 	createReq := map[string]interface{}{
-		"FunctionName": "e2e-secrets-ext",
-		"Runtime":      "nodejs20.x",
-		"Handler":      "index.handler",
-		"Role":         "arn:aws:iam::000000000000:role/test",
-		"Timeout":      30,
-		"MemorySize":   128,
+		"FunctionName":  "e2e-secrets-ext",
+		"Runtime":       "nodejs20.x",
+		"Architectures": []string{testLambdaArchitecture},
+		"Handler":       "index.handler",
+		"Role":          "arn:aws:iam::000000000000:role/test",
+		"Timeout":       30,
+		"MemorySize":    128,
 		"Code": map[string]string{
 			"ZipFile": base64.StdEncoding.EncodeToString(zipData),
 		},

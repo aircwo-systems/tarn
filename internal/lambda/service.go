@@ -123,6 +123,9 @@ func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, 
 	if fn.MemorySize == 0 {
 		fn.MemorySize = s.cfg.LambdaDefaultMemory
 	}
+	if len(fn.Architectures) == 0 {
+		fn.Architectures = []string{"x86_64"}
+	}
 	fn.Version = "$LATEST"
 	if fn.PackageType == "" {
 		fn.PackageType = "Zip"
@@ -138,7 +141,7 @@ func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, 
 	fn.LastUpdateStatus = types.LastUpdateStatusSuccessful
 	fn.LastModified = time.Now()
 	if fn.PackageType == "Image" && s.engine != nil {
-		resolved, err := s.engine.ResolveImageReference(ctx, fn.ImageURI)
+		resolved, err := s.engine.ResolveImageReference(ctx, fn.ImageURI, fn.Architectures...)
 		if err != nil {
 			return nil, err
 		}
@@ -312,7 +315,7 @@ func (s *Service) GetEventExamples(name string) map[string]json.RawMessage {
 }
 
 // UpdateFunctionCode replaces function code.
-func (s *Service) UpdateFunctionCode(ctx context.Context, reference string, code []byte) (*types.FunctionConfig, error) {
+func (s *Service) UpdateFunctionCode(ctx context.Context, reference string, code []byte, architectures ...[]string) (*types.FunctionConfig, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -326,6 +329,15 @@ func (s *Service) UpdateFunctionCode(ctx context.Context, reference string, code
 	result, err := s.store.mutateFunction(name, func(record *functionRecord) error {
 		if record.PackageType == "Image" {
 			return invalid("use ImageUri to update an image function")
+		}
+		if len(architectures) > 0 && architectures[0] != nil {
+			if len(architectures[0]) != 1 {
+				return invalid("Architectures must contain one architecture")
+			}
+			record.Architectures = append([]string{}, architectures[0]...)
+		}
+		if err := validateConfiguration(record.FunctionConfig); err != nil {
+			return err
 		}
 		record.LastModified = time.Now()
 		record.LastUpdateStatus = types.LastUpdateStatusSuccessful

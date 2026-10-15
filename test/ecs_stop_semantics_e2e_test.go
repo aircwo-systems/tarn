@@ -289,7 +289,7 @@ func TestTerraformCompatFixesE2E(t *testing.T) {
 	// ── Lambda GetFunctionCodeSigningConfig ─────────────────────────────────
 	fn := "e2e-csc-" + suffix
 	status, _, body := c.do(http.MethodPost, "/2015-03-31/functions", "", "application/json", map[string]any{
-		"FunctionName": fn, "Runtime": "nodejs20.x", "Handler": "index.handler",
+		"FunctionName": fn, "Runtime": "nodejs20.x", "Architectures": []string{testLambdaArchitecture}, "Handler": "index.handler",
 		"Role": "arn:aws:iam::" + account + ":role/e2e", "Code": map[string]any{"ZipFile": ""},
 	})
 	if status != http.StatusCreated {

@@ -4,8 +4,12 @@ import "context"
 
 // ResolveImageReference pins a Lambda deployment to immutable local image
 // content, so retagging an image cannot change a published function version.
-func (e *Engine) ResolveImageReference(ctx context.Context, reference string) (string, error) {
-	if err := e.EnsureImageRef(ctx, reference); err != nil {
+func (e *Engine) ResolveImageReference(ctx context.Context, reference string, architectures ...string) (string, error) {
+	platform := ""
+	if p := lambdaPlatform(architectures); p != nil {
+		platform = p.OS + "/" + p.Architecture
+	}
+	if err := e.EnsureImagePlatform(ctx, reference, platform); err != nil {
 		return "", err
 	}
 	image, err := e.client.ImageInspect(ctx, reference)

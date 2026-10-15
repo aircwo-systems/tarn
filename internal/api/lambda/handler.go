@@ -81,6 +81,7 @@ func (h *Handler) CreateFunction(w http.ResponseWriter, r *http.Request) {
 		DeadLetterConfig: req.DeadLetterConfig,
 		PackageType:      req.PackageType,
 		ImageConfig:      req.ImageConfig,
+		Architectures:    req.Architectures,
 	}
 	if req.Environment != nil {
 		fn.Environment = req.Environment.Variables
@@ -144,7 +145,7 @@ func (h *Handler) GetFunction(w http.ResponseWriter, r *http.Request) {
 	if fn.PackageType == "Image" {
 		code = map[string]any{"RepositoryType": "ECR", "ImageUri": fn.ImageURI, "ResolvedImageUri": fn.ResolvedImageURI}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"Configuration": toFunctionConfigResponse(fn), "Code": code})
+	writeJSON(w, http.StatusOK, map[string]any{"Configuration": toFunctionConfigResponse(fn), "Code": code, "Tags": fn.Tags})
 }
 
 // GetFunctionConfiguration handles GET /2015-03-31/functions/{name}/configuration.
@@ -269,9 +270,9 @@ func (h *Handler) UpdateFunctionCode(w http.ResponseWriter, r *http.Request) {
 
 	var result *types.FunctionConfig
 	if req.ImageUri != "" {
-		result, err = h.svc.UpdateFunctionImage(r.Context(), name, req.ImageUri)
+		result, err = h.svc.UpdateFunctionImage(r.Context(), name, req.ImageUri, req.Architectures)
 	} else {
-		result, err = h.svc.UpdateFunctionCode(r.Context(), name, code)
+		result, err = h.svc.UpdateFunctionCode(r.Context(), name, code, req.Architectures)
 	}
 	if err != nil {
 		writeServiceError(w, err)
@@ -853,6 +854,7 @@ func (h *Handler) DeleteLayerVersion(w http.ResponseWriter, r *http.Request) {
 // --- Request/Response types ---
 
 type createFunctionRequest struct {
+	Architectures    []string                   `json:"Architectures,omitempty"`
 	FunctionName     string                     `json:"FunctionName"`
 	Runtime          string                     `json:"Runtime"`
 	Handler          string                     `json:"Handler"`
@@ -882,11 +884,12 @@ type envInput struct {
 }
 
 type updateCodeRequest struct {
-	ImageUri string `json:"ImageUri,omitempty"`
-	Publish  bool   `json:"Publish,omitempty"`
-	ZipFile  string `json:"ZipFile,omitempty"`  // base64-encoded zip
-	S3Bucket string `json:"S3Bucket,omitempty"` // S3 bucket containing deployment package
-	S3Key    string `json:"S3Key,omitempty"`    // S3 key of deployment package zip
+	Architectures []string `json:"Architectures,omitempty"`
+	ImageUri      string   `json:"ImageUri,omitempty"`
+	Publish       bool     `json:"Publish,omitempty"`
+	ZipFile       string   `json:"ZipFile,omitempty"`  // base64-encoded zip
+	S3Bucket      string   `json:"S3Bucket,omitempty"` // S3 bucket containing deployment package
+	S3Key         string   `json:"S3Key,omitempty"`    // S3 key of deployment package zip
 }
 
 type publishLayerRequest struct {
@@ -905,26 +908,27 @@ func toFunctionConfigResponse(fn *types.FunctionConfig) map[string]any {
 		packageType = "Zip"
 	}
 	result := map[string]any{
-		"FunctionName": fn.FunctionName,
-		"FunctionArn":  fn.FunctionArn,
-		"Runtime":      fn.Runtime,
-		"Handler":      fn.Handler,
-		"Role":         fn.Role,
-		"Timeout":      fn.Timeout,
-		"MemorySize":   fn.MemorySize,
-		"State":        fn.State,
-		"CodeSha256":   fn.CodeSHA256,
-		"CodeSize":     fn.CodeSize,
-		"Version":      fn.Version,
-		"LastModified": fn.LastModified,
-		"PackageType":  packageType,
+		"Architectures": fn.Architectures,
+		"FunctionName":  fn.FunctionName,
+		"FunctionArn":   fn.FunctionArn,
+		"Runtime":       fn.Runtime,
+		"Handler":       fn.Handler,
+		"Role":          fn.Role,
+		"Timeout":       fn.Timeout,
+		"MemorySize":    fn.MemorySize,
+		"State":         fn.State,
+		"CodeSha256":    fn.CodeSHA256,
+		"CodeSize":      fn.CodeSize,
+		"Version":       fn.Version,
+		"LastModified":  fn.LastModified,
+		"PackageType":   packageType,
 	}
 
 	if fn.Description != "" {
 		result["Description"] = fn.Description
 	}
 	if len(fn.Environment) > 0 {
-		result["Environment"] = fn.Environment
+		result["Environment"] = types.EnvVars{Variables: fn.Environment}
 	}
 	if len(fn.Tags) > 0 {
 		result["Tags"] = fn.Tags
