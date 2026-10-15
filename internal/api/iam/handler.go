@@ -1,8 +1,10 @@
 package iam
 
 import (
+	"encoding/xml"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"sort"
@@ -22,6 +24,7 @@ type role struct {
 	AssumeRolePolicyDocument string
 	CreateDate               string
 	MaxSessionDuration       int
+	Tags                     map[string]string
 }
 
 // Handler is the IAM stub handler. It holds in-memory role state so that
@@ -75,9 +78,9 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 	case "UpdateRole", "UpdateRoleDescription", "UpdateAssumeRolePolicy":
 		h.emptyOK(w, action)
 	case "TagRole", "UntagRole":
-		h.emptyOK(w, action)
+		h.updateRoleTags(w, r, action)
 	case "ListRoleTags":
-		h.listRoleTags(w, action)
+		h.listRoleTags(w, r, action)
 	case "AttachRolePolicy":
 		h.attachRolePolicy(w, r)
 	case "DetachRolePolicy":
@@ -130,6 +133,7 @@ func (h *Handler) createRole(w http.ResponseWriter, r *http.Request) {
 		AssumeRolePolicyDocument: assumeDoc,
 		CreateDate:               time.Now().UTC().Format(time.RFC3339),
 		MaxSessionDuration:       3600,
+		Tags:                     readRoleTags(r),
 	}
 	h.roles[name] = ro
 	if _, ok := h.attachedPolicies[name]; !ok {
@@ -169,10 +173,12 @@ func (h *Handler) getRole(w http.ResponseWriter, r *http.Request) {
 			h.inlinePolicies[name] = make(map[string]string)
 		}
 	}
+	copy := *ro
+	copy.Tags = maps.Clone(ro.Tags)
 	h.mu.Unlock()
 
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, h.roleXML("GetRoleResponse", "GetRoleResult", ro))
+	fmt.Fprint(w, h.roleXML("GetRoleResponse", "GetRoleResult", &copy))
 }
 
 func (h *Handler) deleteRole(w http.ResponseWriter, r *http.Request) {
@@ -201,12 +207,13 @@ func (h *Handler) roleXML(response, result string, ro *role) string {
 			`<CreateDate>%s</CreateDate>`+
 			`<AssumeRolePolicyDocument>%s</AssumeRolePolicyDocument>`+
 			`<MaxSessionDuration>%d</MaxSessionDuration>`+
+			`%s`+
 			`</Role>`+
 			`</%s>`+
 			`<ResponseMetadata><RequestId>tarn-iam-stub</RequestId></ResponseMetadata>`+
 			`</%s>`,
 		response, result,
-		ro.Name, ro.RoleID, ro.ARN, ro.Path, ro.CreateDate, policyEncoded, ro.MaxSessionDuration,
+		ro.Name, ro.RoleID, ro.ARN, ro.Path, ro.CreateDate, policyEncoded, ro.MaxSessionDuration, roleTagsXML(ro.Tags),
 		result, response,
 	)
 }
@@ -393,16 +400,78 @@ func (h *Handler) listRolePolicies(w http.ResponseWriter, r *http.Request) {
 		`</ListRolePoliciesResponse>`)
 }
 
-func (h *Handler) listRoleTags(w http.ResponseWriter, action string) {
+func readRoleTags(r *http.Request) map[string]string {
+	tags := map[string]string{}
+	for i := 1; ; i++ {
+		key := r.FormValue(fmt.Sprintf("Tags.member.%d.Key", i))
+		if key == "" {
+			break
+		}
+		tags[key] = r.FormValue(fmt.Sprintf("Tags.member.%d.Value", i))
+	}
+	return tags
+}
+
+func roleTagsXML(tags map[string]string) string {
+	type tag struct {
+		Key   string
+		Value string
+	}
+	keys := make([]string, 0, len(tags))
+	for key := range tags {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var out strings.Builder
+	out.WriteString("<Tags>")
+	for _, key := range keys {
+		data, _ := xml.Marshal(struct {
+			XMLName xml.Name `xml:"member"`
+			tag
+		}{tag: tag{key, tags[key]}})
+		out.Write(data)
+	}
+	out.WriteString("</Tags>")
+	return out.String()
+}
+
+func (h *Handler) updateRoleTags(w http.ResponseWriter, r *http.Request, action string) {
+	h.mu.Lock()
+	ro := h.roles[r.FormValue("RoleName")]
+	if ro != nil {
+		if ro.Tags == nil {
+			ro.Tags = map[string]string{}
+		}
+		if action == "TagRole" {
+			maps.Copy(ro.Tags, readRoleTags(r))
+		} else {
+			for i := 1; ; i++ {
+				key := r.FormValue(fmt.Sprintf("TagKeys.member.%d", i))
+				if key == "" {
+					break
+				}
+				delete(ro.Tags, key)
+			}
+		}
+	}
+	h.mu.Unlock()
+	if ro == nil {
+		http.Error(w, "NoSuchEntity", http.StatusNotFound)
+		return
+	}
+	h.emptyOK(w, action)
+}
+
+func (h *Handler) listRoleTags(w http.ResponseWriter, r *http.Request, action string) {
+	h.mu.Lock()
+	ro := h.roles[r.FormValue("RoleName")]
+	tags := map[string]string{}
+	if ro != nil {
+		tags = maps.Clone(ro.Tags)
+	}
+	h.mu.Unlock()
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintf(w, `<?xml version="1.0" encoding="UTF-8"?>`+
-		`<%sResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/">`+
-		`<%sResult>`+
-		`<Tags/>`+
-		`<IsTruncated>false</IsTruncated>`+
-		`</%sResult>`+
-		`<ResponseMetadata><RequestId>tarn-iam-stub</RequestId></ResponseMetadata>`+
-		`</%sResponse>`, action, action, action, action)
+	fmt.Fprintf(w, `<%sResponse xmlns="https://iam.amazonaws.com/doc/2010-05-08/"><%sResult>%s<IsTruncated>false</IsTruncated></%sResult><ResponseMetadata><RequestId>tarn-iam-stub</RequestId></ResponseMetadata></%sResponse>`, action, action, roleTagsXML(tags), action, action)
 }
 
 // ── Instance profile handlers ─────────────────────────────────────────────────
