@@ -41,15 +41,21 @@ func (u *UnixTime) UnmarshalJSON(data []byte) error {
 }
 
 // RestAPI represents an API Gateway REST API (v1).
+type RestEndpointConfiguration struct {
+	Types          []string `json:"types"`
+	VPCEndpointIDs []string `json:"vpcEndpointIds,omitempty"`
+}
+
 type RestAPI struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	APIStatus      string            `json:"apiStatus"`
-	Description    string            `json:"description,omitempty"`
-	RootResourceID string            `json:"rootResourceId"`
-	APIArn         string            `json:"apiArn,omitempty"`
-	Tags           map[string]string `json:"tags,omitempty"`
-	CreatedDate    UnixTime          `json:"createdDate"`
+	EndpointConfiguration *RestEndpointConfiguration `json:"endpointConfiguration,omitempty"`
+	ID                    string                     `json:"id"`
+	Name                  string                     `json:"name"`
+	APIStatus             string                     `json:"apiStatus"`
+	Description           string                     `json:"description,omitempty"`
+	RootResourceID        string                     `json:"rootResourceId"`
+	APIArn                string                     `json:"apiArn,omitempty"`
+	Tags                  map[string]string          `json:"tags,omitempty"`
+	CreatedDate           UnixTime                   `json:"createdDate"`
 }
 
 // RestResource represents a resource (path segment) in the REST API resource tree.
@@ -64,6 +70,7 @@ type RestResource struct {
 
 // RestMethod represents an HTTP method on a resource.
 type RestMethod struct {
+	APIKeyRequired    bool            `json:"apiKeyRequired"`
 	HTTPMethod        string          `json:"httpMethod"`
 	ResourceID        string          `json:"resourceId,omitempty"`
 	RestAPIID         string          `json:"restApiId,omitempty"`
@@ -73,6 +80,7 @@ type RestMethod struct {
 
 // RestIntegration represents a backend integration for a REST API method.
 type RestIntegration struct {
+	Credentials       string            `json:"credentials,omitempty"`
 	Type              string            `json:"type"`
 	HTTPMethod        string            `json:"httpMethod,omitempty"`
 	URI               string            `json:"uri,omitempty"`
@@ -121,11 +129,12 @@ type RestDeployment struct {
 
 // RestStage represents a stage of a REST API deployment.
 type RestStage struct {
-	StageName    string   `json:"stageName"`
-	RestAPIID    string   `json:"restApiId,omitempty"`
-	DeploymentID string   `json:"deploymentId"`
-	Description  string   `json:"description,omitempty"`
-	InvokeURL    string   `json:"invokeUrl,omitempty"`
-	StageArn     string   `json:"stageArn,omitempty"`
-	CreatedDate  UnixTime `json:"createdDate"`
+	Tags         map[string]string `json:"tags,omitempty"`
+	StageName    string            `json:"stageName"`
+	RestAPIID    string            `json:"restApiId,omitempty"`
+	DeploymentID string            `json:"deploymentId"`
+	Description  string            `json:"description,omitempty"`
+	InvokeURL    string            `json:"invokeUrl,omitempty"`
+	StageArn     string            `json:"stageArn,omitempty"`
+	CreatedDate  UnixTime          `json:"createdDate"`
 }

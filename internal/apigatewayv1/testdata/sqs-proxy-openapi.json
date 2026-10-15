@@ -1,0 +1,23 @@
+{
+  "openapi": "3.0.1",
+  "info": {"title": "SQS proxy test", "version": "1"},
+  "paths": {
+    "/messages/enqueue": {
+      "post": {
+        "responses": {"200": {"description": "Queued"}},
+        "security": [{"api_key": []}],
+        "x-amazon-apigateway-integration": {
+          "type": "aws",
+          "httpMethod": "POST",
+          "credentials": "arn:aws:iam::123456789012:role/api-gateway",
+          "uri": "arn:aws:apigateway:eu-west-2:sqs:path/123456789012/messages",
+          "requestParameters": {"integration.request.header.Content-Type": "'application/x-www-form-urlencoded'"},
+          "requestTemplates": {"application/json": "Action=SendMessage&MessageBody=$util.urlEncode($input.body)"},
+          "responses": {"default": {"statusCode": "200"}},
+          "passthroughBehavior": "when_no_match"
+        }
+      }
+    }
+  },
+  "components": {"securitySchemes": {"api_key": {"type": "apiKey", "name": "x-api-key", "in": "header"}}}
+}

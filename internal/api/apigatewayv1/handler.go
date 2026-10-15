@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	svc "github.com/aircwo-systems/tarn/internal/apigatewayv1"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
 // Handler implements the AWS API Gateway REST API (v1) management and invoke endpoints.
@@ -25,15 +26,16 @@ func NewHandler(s *svc.Service) *Handler {
 // CreateRestAPI handles POST /restapis.
 func (h *Handler) CreateRestAPI(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name        string            `json:"name"`
-		Description string            `json:"description"`
-		Tags        map[string]string `json:"tags"`
+		EndpointConfiguration *types.RestEndpointConfiguration `json:"endpointConfiguration"`
+		Name                  string                           `json:"name"`
+		Description           string                           `json:"description"`
+		Tags                  map[string]string                `json:"tags"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
 		return
 	}
-	api, err := h.svc.CreateAPI(req.Name, req.Description, req.Tags)
+	api, err := h.svc.CreateAPI(req.Name, req.Description, req.Tags, req.EndpointConfiguration)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
 		return
@@ -401,15 +403,16 @@ func (h *Handler) GetDeployment(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) CreateStage(w http.ResponseWriter, r *http.Request) {
 	apiID := r.PathValue("restApiId")
 	var req struct {
-		StageName    string `json:"stageName"`
-		DeploymentId string `json:"deploymentId"`
-		Description  string `json:"description"`
+		Tags         map[string]string `json:"tags"`
+		StageName    string            `json:"stageName"`
+		DeploymentId string            `json:"deploymentId"`
+		Description  string            `json:"description"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
 		return
 	}
-	stage, err := h.svc.CreateStage(apiID, req.StageName, req.DeploymentId, req.Description)
+	stage, err := h.svc.CreateStage(apiID, req.StageName, req.DeploymentId, req.Description, req.Tags)
 	if err != nil {
 		status, code := errorStatus(err)
 		writeError(w, status, code, err.Error())

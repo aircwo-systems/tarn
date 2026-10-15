@@ -89,7 +89,7 @@ func (s *Service) Init() error {
 }
 
 // CreateAPI creates a new REST API with an auto-created root resource.
-func (s *Service) CreateAPI(name, description string, tags map[string]string) (*types.RestAPI, error) {
+func (s *Service) CreateAPI(name, description string, tags map[string]string, endpoints ...*types.RestEndpointConfiguration) (*types.RestAPI, error) {
 	if name == "" {
 		return nil, errors.New("name is required")
 	}
@@ -123,6 +123,13 @@ func (s *Service) CreateAPI(name, description string, tags map[string]string) (*
 		APIArn:         fmt.Sprintf("arn:aws:apigateway:%s::/restapis/%s", s.cfg.Region, apiID),
 		Tags:           cloneTags(tags),
 		CreatedDate:    types.UnixTime{Time: now},
+	}
+	api.EndpointConfiguration = &types.RestEndpointConfiguration{Types: []string{"EDGE"}}
+	if len(endpoints) > 0 && endpoints[0] != nil {
+		copy := *endpoints[0]
+		copy.Types = append([]string(nil), copy.Types...)
+		copy.VPCEndpointIDs = append([]string(nil), copy.VPCEndpointIDs...)
+		api.EndpointConfiguration = &copy
 	}
 	rootRes := &types.RestResource{
 		ID:        rootID,
@@ -476,7 +483,7 @@ func (s *Service) GetDeployment(apiID, deploymentID string) (*types.RestDeployme
 }
 
 // CreateStage creates a named stage linked to a deployment.
-func (s *Service) CreateStage(apiID, stageName, deploymentID, description string) (*types.RestStage, error) {
+func (s *Service) CreateStage(apiID, stageName, deploymentID, description string, tags ...map[string]string) (*types.RestStage, error) {
 	if stageName == "" {
 		return nil, errors.New("stageName is required")
 	}
@@ -495,6 +502,9 @@ func (s *Service) CreateStage(apiID, stageName, deploymentID, description string
 		InvokeURL:    fmt.Sprintf("%s/_aws/execute-api/%s/%s", s.cfg.Endpoint(), apiID, stageName),
 		StageArn:     fmt.Sprintf("arn:aws:apigateway:%s::/restapis/%s/stages/%s", s.cfg.Region, apiID, stageName),
 		CreatedDate:  types.UnixTime{Time: now},
+	}
+	if len(tags) > 0 {
+		stage.Tags = maps.Clone(tags[0])
 	}
 	if err := s.store.CreateStage(apiID, stage); err != nil {
 		return nil, err
@@ -552,7 +562,9 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 	if err != nil {
 		return &InvokeOutput{StatusCode: http.StatusMethodNotAllowed, Body: []byte(`{"message":"Method not allowed"}`)}, nil
 	}
-	_ = method
+	if method.APIKeyRequired && !s.APIKeyAllowed(input.Headers.Get("x-api-key"), api.ID, input.Stage) {
+		return &InvokeOutput{StatusCode: 403, Body: []byte(`{"message":"Forbidden"}`)}, nil
+	}
 
 	// Get integration
 	integration, err := s.store.GetIntegration(api.ID, resource.ID, strings.ToUpper(input.Method))

@@ -519,6 +519,27 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /{bucket}/{key...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 	mux.HandleFunc("OPTIONS /{bucket}/{key...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).S3.Dispatch(w, r) })
 
+	mux.HandleFunc("PUT /restapis/{restApiId}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.PutRestAPI(w, r) })
+	mux.HandleFunc("POST /apikeys", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.CreateAPIKey(w, r) })
+	mux.HandleFunc("GET /apikeys", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.ListAPIKeys(w, r) })
+	mux.HandleFunc("GET /apikeys/{id}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.GetAPIKey(w, r) })
+	mux.HandleFunc("PATCH /apikeys/{id}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.UpdateAPIKey(w, r) })
+	mux.HandleFunc("DELETE /apikeys/{id}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.DeleteAPIKey(w, r) })
+	mux.HandleFunc("POST /usageplans", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.CreateUsagePlan(w, r) })
+	mux.HandleFunc("GET /usageplans", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.ListUsagePlans(w, r) })
+	mux.HandleFunc("GET /usageplans/{id}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.GetUsagePlan(w, r) })
+	mux.HandleFunc("PATCH /usageplans/{id}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.UpdateUsagePlan(w, r) })
+	mux.HandleFunc("DELETE /usageplans/{id}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.DeleteUsagePlan(w, r) })
+	mux.HandleFunc("POST /usageplans/{id}/keys", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.CreateUsagePlanKey(w, r) })
+	mux.HandleFunc("GET /usageplans/{id}/keys", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.ListUsagePlanKeys(w, r) })
+	mux.HandleFunc("GET /usageplans/{id}/keys/{keyId}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.GetUsagePlanKey(w, r) })
+	mux.HandleFunc("DELETE /usageplans/{id}/keys/{keyId}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.DeleteUsagePlanKey(w, r) })
+	for _, method := range []string{"GET", "PUT", "DELETE"} {
+		mux.HandleFunc(method+" /tags/{resource...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.Tags(w, r) })
+	}
+
+	mux.HandleFunc("PATCH /restapis/{restApiId}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.PatchRestAPI(w, r) })
+	mux.HandleFunc("DELETE /restapis/{restApiId}/deployments/{deploymentId}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.DeleteDeployment(w, r) })
 	// API Gateway v1 (REST API) — AWS-compatible management endpoints
 	mux.HandleFunc("POST /restapis", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.CreateRestAPI(w, r) })
 	mux.HandleFunc("GET /restapis", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGatewayV1.ListRestAPIs(w, r) })
@@ -930,6 +951,21 @@ func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request)
 		}
 		hs.ECS.Dispatch(w, r)
 		return true
+	}
+
+	// LocalStack-compatible REST invoke URL used by existing Terraform outputs.
+	// Handle this before the management mux, whose resource patterns overlap it.
+	if strings.HasPrefix(r.URL.Path, "/restapis/") {
+		parts := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/restapis/"), "/", 4)
+		if len(parts) >= 3 && parts[2] == "_user_request_" {
+			r.SetPathValue("apiId", parts[0])
+			r.SetPathValue("stage", parts[1])
+			if len(parts) == 4 {
+				r.SetPathValue("proxy", parts[3])
+			}
+			hs.APIGatewayV1.Invoke(w, r)
+			return true
+		}
 	}
 
 	if strings.HasPrefix(r.URL.Path, "/_tarn/") || strings.TrimSpace(r.URL.Path) == "/_tarn" {

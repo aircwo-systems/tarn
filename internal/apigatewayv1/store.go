@@ -3,6 +3,7 @@ package apigatewayv1
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,11 +16,13 @@ import (
 
 // Store persists REST API (v1) state.
 type Store struct {
-	mu      sync.RWMutex
-	dirty   persist.Dirty
-	flusher *persist.Flusher
-	apis    map[string]*restAPIRecord
-	cfg     *config.Config
+	mu         sync.RWMutex
+	dirty      persist.Dirty
+	flusher    *persist.Flusher
+	apiKeys    map[string]*APIKey
+	usagePlans map[string]*usagePlanRecord
+	apis       map[string]*restAPIRecord
+	cfg        *config.Config
 }
 
 type restAPIRecord struct {
@@ -45,7 +48,9 @@ type responseKey struct {
 }
 
 type storeSnapshot struct {
-	APIs []apiSnapshot `json:"apis"`
+	APIKeys    map[string]*APIKey          `json:"apiKeys,omitempty"`
+	UsagePlans map[string]*usagePlanRecord `json:"usagePlans,omitempty"`
+	APIs       []apiSnapshot               `json:"apis"`
 }
 
 type apiSnapshot struct {
@@ -62,6 +67,7 @@ type apiSnapshot struct {
 // NewStore creates a new v1 REST API store.
 func NewStore(cfg *config.Config) *Store {
 	return &Store{
+		apiKeys: map[string]*APIKey{}, usagePlans: map[string]*usagePlanRecord{},
 		apis: make(map[string]*restAPIRecord),
 		cfg:  cfg,
 	}
@@ -89,6 +95,12 @@ func (s *Store) Init() error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if snap.APIKeys != nil {
+		s.apiKeys = snap.APIKeys
+	}
+	if snap.UsagePlans != nil {
+		s.usagePlans = snap.UsagePlans
+	}
 	s.apis = make(map[string]*restAPIRecord, len(snap.APIs))
 	for _, item := range snap.APIs {
 		if item.API == nil {
@@ -547,6 +559,7 @@ func (s *Store) ListStages(apiID string) ([]*types.RestStage, error) {
 	result := make([]*types.RestStage, 0, len(rec.stages))
 	for _, st := range rec.stages {
 		cp := *st
+		cp.Tags = maps.Clone(st.Tags)
 		result = append(result, &cp)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].StageName < result[j].StageName })
@@ -566,6 +579,7 @@ func (s *Store) GetStage(apiID, stageName string) (*types.RestStage, error) {
 		return nil, fmt.Errorf("stage %s not found", stageName)
 	}
 	cp := *st
+	cp.Tags = maps.Clone(st.Tags)
 	return &cp, nil
 }
 
@@ -614,7 +628,7 @@ func (s *Store) flushToDisk() {
 	}
 	sort.Strings(apiIDs)
 
-	snap := storeSnapshot{APIs: make([]apiSnapshot, 0, len(apiIDs))}
+	snap := storeSnapshot{APIKeys: s.apiKeys, UsagePlans: s.usagePlans, APIs: make([]apiSnapshot, 0, len(apiIDs))}
 	for _, apiID := range apiIDs {
 		rec := s.apis[apiID]
 		item := apiSnapshot{
@@ -650,9 +664,8 @@ func (s *Store) flushToDisk() {
 		}
 		snap.APIs = append(snap.APIs, item)
 	}
-	s.mu.RUnlock()
-
 	data, err := json.Marshal(snap)
+	s.mu.RUnlock()
 	if err != nil {
 		return
 	}
