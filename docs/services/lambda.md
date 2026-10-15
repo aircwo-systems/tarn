@@ -40,6 +40,8 @@ Deploy and invoke serverless functions in Tarn.
 ### Container-Based Execution
 Functions run in Docker containers using AWS Lambda base images and the Runtime Interface Emulator (RIE).
 
+Each execution container has a writable, executable 512 MB `/tmp` directory. Native tools such as Chromium can unpack and run binaries there.
+
 Each function has a pool of containers rather than a single one, so concurrent invokes get an execution environment each. The first container of a function is a baseline kept warm between invocations; any further containers exist to absorb a burst and are released once the burst passes.
 
 | Environment variable | Default | Effect |
@@ -89,6 +91,18 @@ awslocal lambda publish-layer-version \
 Local layers merge into one read-only `/opt` directory in configured order. Later layers replace colliding files from earlier layers. Executable permissions and nested directories are preserved. Functions retain prepared layer content after a layer version is deleted; a new attachment must refer to an available version. Tarn's injected Secrets and DB proxies mount outside `/opt` so they also work with merged layers.
 
 Function and layer names are validated before filesystem access. Invalid ZIPs and failed deployment preparation leave the last working function unchanged. Existing configuration JSON remains readable. Tarn stores durable function metadata under its `_tarn` field and prepared deployments under `lambda-deployments/`. Keep the `_tarn` block when manually editing configuration to retain versions, aliases, policies, and reservations. Metadata reads check file identity, size, and modification time, so direct configuration edits remain visible. Changes to a function's legacy `code/function.zip` are imported into a fresh immutable deployment on preparation.
+
+### Chromium 119 on Node 20
+
+Applications using `@sparticuz/chromium` 119 may check only its legacy `isRunningInAwsLambda()` helper before selecting a layer directory. That helper excludes Node 20. To enable this detection without changing the application, add the following variable to the function's existing environment:
+
+```text
+AWS_LAMBDA_JS_RUNTIME=nodejs
+```
+
+This library-specific workaround makes the legacy check return true alongside the Node 20 check. The actual Node 20 runtime and `AWS_EXECUTION_ENV` stay unchanged. Attach the Chromium layer with its files under `/opt/chromium` and select `x86_64` for the Chromium 119 browser binary.
+
+Path selection and executable temporary files have been verified. Full PDF rendering remains unverified on an ARM Docker host: the x86_64 Chromium browser crashed under QEMU with `uncaught target signal 11`. This setting does not resolve cross-architecture browser failures.
 
 ### Event Source Mappings
 Automatically invoke Lambda from SQS queues and DynamoDB Streams.

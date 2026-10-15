@@ -22,7 +22,6 @@ import (
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
@@ -439,15 +438,10 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 				{HostIP: "127.0.0.1", HostPort: ""}, // let Docker assign a free port
 			},
 		},
-		// Lambda provides writable /tmp (512MB by default)
-		Mounts: []mount.Mount{
-			{
-				Type:   mount.TypeTmpfs,
-				Target: "/tmp",
-				TmpfsOptions: &mount.TmpfsOptions{
-					SizeBytes: 512 * 1024 * 1024, // 512 MB like real Lambda
-				},
-			},
+		// Lambda permits executing binaries extracted into /tmp, including
+		// Chromium. Docker's default tmpfs mount is noexec; set exec explicitly.
+		Tmpfs: map[string]string{
+			"/tmp": "rw,exec,nosuid,nodev,size=512m",
 		},
 		ExtraHosts: []string{"host.docker.internal:host-gateway"},
 		// Warm containers live for minutes under sustained load; cap Docker's
