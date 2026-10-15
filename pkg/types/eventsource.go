@@ -18,22 +18,25 @@ type FilterCriteria struct {
 
 // EventSourceMapping represents an SQS→Lambda event source mapping.
 type EventSourceMapping struct {
-	UUID                           string          `json:"UUID"`
-	EventSourceArn                 string          `json:"EventSourceArn"`
-	FunctionArn                    string          `json:"FunctionArn"`
-	FunctionName                   string          `json:"FunctionName"`
-	SourceType                     string          `json:"SourceType,omitempty"`
-	SourceName                     string          `json:"SourceName,omitempty"`
-	QueueName                      string          `json:"QueueName"`
-	BatchSize                      int             `json:"BatchSize"`
-	MaximumBatchingWindowInSeconds int             `json:"MaximumBatchingWindowInSeconds"`
-	Enabled                        bool            `json:"Enabled"`
-	State                          string          `json:"State"`
-	LastProcessingResult           string          `json:"LastProcessingResult,omitempty"`
-	LastStreamSequence             string          `json:"LastStreamSequence,omitempty"`
-	LastModified                   time.Time       `json:"LastModified"`
-	FilterCriteria                 *FilterCriteria `json:"FilterCriteria,omitempty"`
-	ScalingConfig                  *ScalingConfig  `json:"ScalingConfig,omitempty"`
+	EventSourceMappingArn          string            `json:"EventSourceMappingArn"`
+	FunctionResponseTypes          []string          `json:"FunctionResponseTypes,omitempty"`
+	Tags                           map[string]string `json:"Tags,omitempty"`
+	UUID                           string            `json:"UUID"`
+	EventSourceArn                 string            `json:"EventSourceArn"`
+	FunctionArn                    string            `json:"FunctionArn"`
+	FunctionName                   string            `json:"FunctionName"`
+	SourceType                     string            `json:"SourceType,omitempty"`
+	SourceName                     string            `json:"SourceName,omitempty"`
+	QueueName                      string            `json:"QueueName"`
+	BatchSize                      int               `json:"BatchSize"`
+	MaximumBatchingWindowInSeconds int               `json:"MaximumBatchingWindowInSeconds"`
+	Enabled                        bool              `json:"Enabled"`
+	State                          string            `json:"State"`
+	LastProcessingResult           string            `json:"LastProcessingResult,omitempty"`
+	LastStreamSequence             string            `json:"LastStreamSequence,omitempty"`
+	LastModified                   time.Time         `json:"LastModified"`
+	FilterCriteria                 *FilterCriteria   `json:"FilterCriteria,omitempty"`
+	ScalingConfig                  *ScalingConfig    `json:"ScalingConfig,omitempty"`
 }
 
 // ScalingConfig caps how many concurrent invokes an SQS event source mapping

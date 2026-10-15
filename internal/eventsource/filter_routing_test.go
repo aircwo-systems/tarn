@@ -57,11 +57,12 @@ func TestFailedFIFOMessageReachesFIFODeadLetterQueue(t *testing.T) {
 	lambda := &partialFailureLambda{messageID: msg.MessageId}
 	store := NewStore(cfg)
 	p := newPoller(&types.EventSourceMapping{
-		UUID:           "failed-fifo",
-		QueueName:      "events.fifo",
-		FunctionName:   "handler",
-		EventSourceArn: "arn:aws:sqs:us-east-1:000000000000:events.fifo",
-		BatchSize:      1,
+		UUID:                  "failed-fifo",
+		FunctionResponseTypes: []string{"ReportBatchItemFailures"},
+		QueueName:             "events.fifo",
+		FunctionName:          "handler",
+		EventSourceArn:        "arn:aws:sqs:us-east-1:000000000000:events.fifo",
+		BatchSize:             1,
 	}, sqs, nil, lambda, store, nil, nil)
 	for attempt := range 3 {
 		if attempt > 0 {

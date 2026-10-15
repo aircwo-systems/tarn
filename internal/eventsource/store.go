@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 
 	"github.com/aircwo-systems/tarn/internal/config"
@@ -81,7 +83,12 @@ func (store *Store) Init() error {
 // aliased with the store's internal state or shared with other callers.
 func (store *Store) Save(mapping *types.EventSourceMapping) error {
 	cp := *mapping
+	cp.Tags = maps.Clone(mapping.Tags)
+	cp.FunctionResponseTypes = slices.Clone(mapping.FunctionResponseTypes)
 	store.mu.Lock()
+	if current := store.mappings[mapping.UUID]; current != nil {
+		cp.Tags = maps.Clone(current.Tags)
+	}
 	store.mappings[mapping.UUID] = &cp
 	store.mu.Unlock()
 	return store.persist()
@@ -100,6 +107,8 @@ func (store *Store) Get(uuid string) (*types.EventSourceMapping, error) {
 		return nil, fmt.Errorf("event source mapping %s not found", uuid)
 	}
 	cp := *m
+	cp.Tags = maps.Clone(m.Tags)
+	cp.FunctionResponseTypes = slices.Clone(m.FunctionResponseTypes)
 	return &cp, nil
 }
 
@@ -111,6 +120,8 @@ func (store *Store) List() []*types.EventSourceMapping {
 	result := make([]*types.EventSourceMapping, 0, len(store.mappings))
 	for _, m := range store.mappings {
 		cp := *m
+		cp.Tags = maps.Clone(m.Tags)
+		cp.FunctionResponseTypes = slices.Clone(m.FunctionResponseTypes)
 		result = append(result, &cp)
 	}
 	return result
@@ -187,4 +198,25 @@ func (store *Store) flushToDisk() {
 	if err := os.Rename(tmpPath, statePath); err != nil {
 		_ = os.Remove(tmpPath)
 	}
+}
+
+// UpdateTags changes tags without racing a poller's configuration snapshot.
+func (store *Store) UpdateTags(id string, tags map[string]string, remove []string) error {
+	store.mu.Lock()
+	m := store.mappings[id]
+	if m == nil {
+		store.mu.Unlock()
+		return fmt.Errorf("event source mapping %s not found", id)
+	}
+	if m.Tags == nil {
+		m.Tags = map[string]string{}
+	}
+	for k, v := range tags {
+		m.Tags[k] = v
+	}
+	for _, k := range remove {
+		delete(m.Tags, k)
+	}
+	store.mu.Unlock()
+	return store.persist()
 }

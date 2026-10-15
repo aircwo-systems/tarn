@@ -629,15 +629,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// the /2015-03-31/tags/{resource} alias some SDKs still emit). The
 	// {resource} segment is the function ARN; handlers resolve it to the
 	// bare function name.
-	mux.HandleFunc("GET /2015-03-31/functions/{name}/tags", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.ListTags(w, r) })
-	mux.HandleFunc("POST /2015-03-31/functions/{name}/tags", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.TagResource(w, r) })
-	mux.HandleFunc("DELETE /2015-03-31/functions/{name}/tags", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.UntagResource(w, r) })
-	mux.HandleFunc("GET /2015-03-31/tags/{resource...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.ListTags(w, r) })
-	mux.HandleFunc("POST /2015-03-31/tags/{resource...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.TagResource(w, r) })
-	mux.HandleFunc("DELETE /2015-03-31/tags/{resource...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.UntagResource(w, r) })
-	mux.HandleFunc("GET /2017-03-31/tags/{resource...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.ListTags(w, r) })
-	mux.HandleFunc("POST /2017-03-31/tags/{resource...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.TagResource(w, r) })
-	mux.HandleFunc("DELETE /2017-03-31/tags/{resource...}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.UntagResource(w, r) })
+	for _, prefix := range []string{"/2015-03-31/functions/{name}/tags", "/2015-03-31/tags/{resource...}", "/2017-03-31/tags/{resource...}"} {
+		for _, method := range []string{"GET", "POST", "DELETE"} {
+			mux.HandleFunc(method+" "+prefix, s.lambdaTags)
+		}
+	}
 	// Resource policy compatibility (Terraform aws_lambda_permission)
 	mux.HandleFunc("POST /2015-03-31/functions/{name}/policy", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.AddPermission(w, r) })
 	mux.HandleFunc("GET /2015-03-31/functions/{name}/policy", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.GetPolicy(w, r) })
@@ -710,7 +706,23 @@ func (s *Server) getRootDispatch(w http.ResponseWriter, r *http.Request) {
 	s.hs(r).S3.Dispatch(w, r)
 }
 
-// postRootDispatch routes POST / between Cognito, Secrets Manager, IAM, SNS, SQS, DynamoDB, EventBridge, and ECS.
+func (s *Server) lambdaTags(w http.ResponseWriter, r *http.Request) {
+	hs := s.hs(r)
+	if strings.Contains(r.PathValue("resource"), ":event-source-mapping:") {
+		hs.EventSource.Tags(w, r)
+		return
+	}
+	switch r.Method {
+	case "GET":
+		hs.Lambda.ListTags(w, r)
+	case "POST":
+		hs.Lambda.TagResource(w, r)
+	case "DELETE":
+		hs.Lambda.UntagResource(w, r)
+	}
+}
+
+// postRootDispatch routes AWS protocol calls on POST /.
 func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
 	if cognitohandler.IsCognitoRequest(r) {
 		s.dispatchCognito(w, r)

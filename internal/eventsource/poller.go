@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,7 +35,7 @@ func lambdaErrorMessage(payload []byte) string {
 // batchItemFailures parses the Lambda response payload for the SQS ESM
 // batchItemFailures protocol. Returns the set of failed messageIds.
 // If the function returned a FunctionError, all message IDs are returned as failed.
-func parseBatchItemFailures(output *types.InvokeOutput, msgs []*types.SQSMessage) map[string]bool {
+func parseBatchItemFailures(output *types.InvokeOutput, msgs []*types.SQSMessage, reportPartial ...bool) map[string]bool {
 	// Function error (throw / unhandled exception) — all messages failed.
 	// Check both the FunctionError header and the payload shape: some RIE builds
 	// omit X-Amz-Function-Error but still return {"errorType":...} in the body.
@@ -55,6 +56,9 @@ func parseBatchItemFailures(output *types.InvokeOutput, msgs []*types.SQSMessage
 		return ids
 	}
 
+	if len(reportPartial) > 0 && !reportPartial[0] {
+		return nil
+	}
 	// Partial failure via batchItemFailures response
 	if len(output.Payload) == 0 {
 		return nil
@@ -399,7 +403,7 @@ func (p *poller) poll() bool {
 	// visibility timeout expires, they become visible again for retry.
 	// Messages that exceed the queue's maxReceiveCount are moved to the DLQ directly
 	// by the poller — this avoids a race condition between the poller and the reaper.
-	failed := parseBatchItemFailures(output, msgs)
+	failed := parseBatchItemFailures(output, msgs, slices.Contains(p.mapping.FunctionResponseTypes, "ReportBatchItemFailures"))
 
 	failCount := 0
 	successCount := int64(0)

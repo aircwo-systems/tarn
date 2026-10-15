@@ -3,6 +3,7 @@ package eventsource
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	eventsourcesvc "github.com/aircwo-systems/tarn/internal/eventsource"
 	"github.com/aircwo-systems/tarn/pkg/types"
@@ -19,6 +20,8 @@ func NewHandler(svc *eventsourcesvc.Service) *Handler {
 }
 
 type createMappingRequest struct {
+	FunctionResponseTypes          []string              `json:"FunctionResponseTypes"`
+	Tags                           map[string]string     `json:"Tags"`
 	EventSourceArn                 string                `json:"EventSourceArn"`
 	FunctionName                   string                `json:"FunctionName"`
 	BatchSize                      int                   `json:"BatchSize"`
@@ -29,6 +32,7 @@ type createMappingRequest struct {
 }
 
 type updateMappingRequest struct {
+	FunctionResponseTypes          []string              `json:"FunctionResponseTypes"`
 	FunctionName                   *string               `json:"FunctionName,omitempty"`
 	BatchSize                      *int                  `json:"BatchSize,omitempty"`
 	MaximumBatchingWindowInSeconds *int                  `json:"MaximumBatchingWindowInSeconds,omitempty"`
@@ -41,6 +45,8 @@ type updateMappingRequest struct {
 // LastModified encoded as a numeric Unix timestamp (seconds), which the
 // Terraform AWS provider expects for Lambda event source mapping APIs.
 type eventSourceMappingResponse struct {
+	EventSourceMappingArn          string                `json:"EventSourceMappingArn"`
+	FunctionResponseTypes          []string              `json:"FunctionResponseTypes"`
 	UUID                           string                `json:"UUID"`
 	EventSourceArn                 string                `json:"EventSourceArn"`
 	FunctionArn                    string                `json:"FunctionArn"`
@@ -90,7 +96,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 	// Build the function ARN from name (simplified)
 	functionArn := req.FunctionName
 
-	mapping, err := h.svc.CreateMapping(req.EventSourceArn, functionArn, req.FunctionName, req.BatchSize, req.MaximumBatchingWindowInSeconds, enabled, req.FilterCriteria, req.ScalingConfig)
+	mapping, err := h.svc.CreateMapping(req.EventSourceArn, functionArn, req.FunctionName, req.BatchSize, req.MaximumBatchingWindowInSeconds, enabled, req.FilterCriteria, req.ScalingConfig, eventsourcesvc.MappingOptions{FunctionResponseTypes: req.FunctionResponseTypes, Tags: req.Tags})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "InvalidParameterValueException", err.Error())
 		return
@@ -154,7 +160,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	mapping, err := h.svc.UpdateMapping(uuid, req.BatchSize, req.MaximumBatchingWindowInSeconds, req.Enabled, req.FunctionName, req.FilterCriteria, req.ScalingConfig)
+	mapping, err := h.svc.UpdateMapping(uuid, req.BatchSize, req.MaximumBatchingWindowInSeconds, req.Enabled, req.FunctionName, req.FilterCriteria, req.ScalingConfig, eventsourcesvc.MappingOptions{FunctionResponseTypes: req.FunctionResponseTypes})
 	if err != nil {
 		writeError(w, http.StatusNotFound, "ResourceNotFoundException", err.Error())
 		return
@@ -195,6 +201,8 @@ func toEventSourceMappingResponse(mapping *types.EventSourceMapping) *eventSourc
 		return nil
 	}
 	return &eventSourceMappingResponse{
+		EventSourceMappingArn:          mapping.EventSourceMappingArn,
+		FunctionResponseTypes:          mapping.FunctionResponseTypes,
 		UUID:                           mapping.UUID,
 		EventSourceArn:                 mapping.EventSourceArn,
 		FunctionArn:                    mapping.FunctionArn,
@@ -216,4 +224,36 @@ func toEventSourceMappingResponses(mappings []*types.EventSourceMapping) []*even
 		out = append(out, toEventSourceMappingResponse(mapping))
 	}
 	return out
+}
+
+// Tags handles the shared Lambda tagging endpoints for event source mapping ARNs.
+func (h *Handler) Tags(w http.ResponseWriter, r *http.Request) {
+	arn := r.PathValue("resource")
+	if r.Method == http.MethodGet {
+		id := arn[strings.LastIndex(arn, ":")+1:]
+		m, err := h.svc.GetMapping(id)
+		if err != nil || m.EventSourceMappingArn != arn {
+			writeError(w, 404, "ResourceNotFoundException", "Mapping not found")
+			return
+		}
+		tags := m.Tags
+		if tags == nil {
+			tags = map[string]string{}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"Tags": tags})
+		return
+	}
+	var req struct{ Tags map[string]string }
+	if r.Method == http.MethodPost {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, 400, "InvalidParameterValueException", "invalid JSON body")
+			return
+		}
+	}
+	if err := h.svc.UpdateTags(arn, req.Tags, r.URL.Query()["tagKeys"]); err != nil {
+		writeError(w, 404, "ResourceNotFoundException", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

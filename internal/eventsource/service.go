@@ -3,6 +3,8 @@ package eventsource
 import (
 	"fmt"
 	"log"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -157,8 +159,33 @@ func (s *Service) Stop() {
 	close(s.done)
 }
 
+type MappingOptions struct {
+	FunctionResponseTypes []string
+	Tags                  map[string]string
+}
+
+func (s *Service) mappingARN(id string) string {
+	return fmt.Sprintf("arn:aws:lambda:%s:%s:event-source-mapping:%s", s.cfg.Region, s.cfg.AccountID, id)
+}
+func validResponseTypes(values []string) error {
+	if len(values) > 1 || (len(values) == 1 && values[0] != "ReportBatchItemFailures") {
+		return fmt.Errorf("FunctionResponseTypes must contain only ReportBatchItemFailures")
+	}
+	return nil
+}
+
 // CreateMapping creates and starts a new event source mapping.
-func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string, batchSize, maxBatchingWindow int, enabled bool, filterCriteria *types.FilterCriteria, scalingConfig *types.ScalingConfig) (*types.EventSourceMapping, error) {
+func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string, batchSize, maxBatchingWindow int, enabled bool, filterCriteria *types.FilterCriteria, scalingConfig *types.ScalingConfig, options ...MappingOptions) (*types.EventSourceMapping, error) {
+	var opts MappingOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	if err := validResponseTypes(opts.FunctionResponseTypes); err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(functionArn, "arn:") {
+		functionArn = fmt.Sprintf("arn:aws:lambda:%s:%s:function:%s", s.cfg.Region, s.cfg.AccountID, functionArn)
+	}
 	sourceType, sourceName, err := parseSourceFromArn(eventSourceArn)
 	if err != nil {
 		return nil, err
@@ -198,6 +225,11 @@ func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string
 		s.mu.Unlock()
 
 		updated := *existing
+		updated.EventSourceMappingArn = s.mappingARN(updated.UUID)
+		updated.FunctionResponseTypes = slices.Clone(opts.FunctionResponseTypes)
+		if opts.Tags != nil {
+			updated.Tags = maps.Clone(opts.Tags)
+		}
 		updated.FunctionArn = functionArn
 		updated.FunctionName = normalizedFunctionName
 		updated.SourceType = sourceType
@@ -254,6 +286,9 @@ func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string
 		ScalingConfig:                  scalingConfig,
 	}
 
+	mapping.EventSourceMappingArn = s.mappingARN(mapping.UUID)
+	mapping.FunctionResponseTypes = slices.Clone(opts.FunctionResponseTypes)
+	mapping.Tags = maps.Clone(opts.Tags)
 	if err := s.store.Save(mapping); err != nil {
 		return nil, err
 	}
@@ -267,7 +302,11 @@ func (s *Service) CreateMapping(eventSourceArn, functionArn, functionName string
 
 // GetMapping returns a mapping by UUID.
 func (s *Service) GetMapping(uuid string) (*types.EventSourceMapping, error) {
-	return s.store.Get(uuid)
+	m, err := s.store.Get(uuid)
+	if err == nil && m.EventSourceMappingArn == "" {
+		m.EventSourceMappingArn = s.mappingARN(m.UUID)
+	}
+	return m, err
 }
 
 // ListMappings returns all mappings, optionally filtered.
@@ -291,12 +330,23 @@ func (s *Service) ListMappings(eventSourceArn, functionName string) []*types.Eve
 }
 
 // UpdateMapping updates a mapping's configuration.
-func (s *Service) UpdateMapping(uuid string, batchSize *int, maxBatchingWindow *int, enabled *bool, functionName *string, filterCriteria *types.FilterCriteria, scalingConfig *types.ScalingConfig) (*types.EventSourceMapping, error) {
+func (s *Service) UpdateMapping(uuid string, batchSize *int, maxBatchingWindow *int, enabled *bool, functionName *string, filterCriteria *types.FilterCriteria, scalingConfig *types.ScalingConfig, options ...MappingOptions) (*types.EventSourceMapping, error) {
+	var opts MappingOptions
+	if len(options) > 0 {
+		opts = options[0]
+	}
+	if err := validResponseTypes(opts.FunctionResponseTypes); err != nil {
+		return nil, err
+	}
 	mapping, err := s.store.Get(uuid)
 	if err != nil {
 		return nil, err
 	}
 
+	if opts.FunctionResponseTypes != nil {
+		mapping.FunctionResponseTypes = slices.Clone(opts.FunctionResponseTypes)
+	}
+	mapping.EventSourceMappingArn = s.mappingARN(uuid)
 	if batchSize != nil {
 		bs := *batchSize
 		if bs <= 0 {
@@ -431,3 +481,11 @@ func normalizeSourceType(mapping *types.EventSourceMapping) string {
 
 // Close stops background persistence after writing any pending state.
 func (s *Service) Close() { s.store.Close() }
+
+func (s *Service) UpdateTags(arn string, tags map[string]string, remove []string) error {
+	prefix := fmt.Sprintf("arn:aws:lambda:%s:%s:event-source-mapping:", s.cfg.Region, s.cfg.AccountID)
+	if !strings.HasPrefix(arn, prefix) {
+		return fmt.Errorf("invalid event source mapping ARN")
+	}
+	return s.store.UpdateTags(strings.TrimPrefix(arn, prefix), tags, remove)
+}
