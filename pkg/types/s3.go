@@ -4,9 +4,9 @@ import "time"
 
 // Bucket represents an S3 bucket.
 type Bucket struct {
-	Name         string    `json:"Name"`
-	CreationDate time.Time `json:"CreationDate"`
-	Region       string    `json:"Region"`
+	Name         string            `json:"Name"`
+	CreationDate time.Time         `json:"CreationDate"`
+	Region       string            `json:"Region"`
 	Tags         map[string]string `json:"Tags,omitempty"`
 }
 
@@ -58,8 +58,17 @@ type S3LambdaNotification struct {
 	FilterSuffix       string        `json:"FilterSuffix,omitempty"`
 }
 
+type S3QueueNotification struct {
+	ID           string        `json:"Id"`
+	QueueArn     string        `json:"QueueArn"`
+	Events       []S3EventName `json:"Events"`
+	FilterPrefix string        `json:"FilterPrefix,omitempty"`
+	FilterSuffix string        `json:"FilterSuffix,omitempty"`
+}
+
 // BucketNotificationConfiguration holds all notification configs for a bucket.
 type BucketNotificationConfiguration struct {
+	QueueConfigurations  []S3QueueNotification  `json:"QueueConfigurations,omitempty"`
 	LambdaConfigurations []S3LambdaNotification `json:"LambdaFunctionConfigurations,omitempty"`
 }
 

@@ -279,6 +279,15 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	stepFunctionsSvc.SetECSTaskRunner(ecsRunner, ecsSvc)
 	stepFunctionsSvc.SetTraceStore(shared.traceStore)
 
+	s3Svc.SetQueueSender(func(arn, body string) error {
+		prefix := fmt.Sprintf("arn:aws:sqs:%s:%s:", acctCfg.Region, acctCfg.AccountID)
+		if !strings.HasPrefix(arn, prefix) {
+			return fmt.Errorf("queue ARN must belong to this account and region")
+		}
+		_, err := sqsSvc.SendMessage(strings.TrimPrefix(arn, prefix), body, 0, nil, "", "")
+		return err
+	})
+
 	// S3 event callback — routes object events to this account's Lambda functions.
 	s3Svc.SetEventCallback(func(eventName string, bucket, key string, size int64, etag string) {
 		notifCfg := s3Svc.GetBucketNotificationConfiguration(bucket)

@@ -19,6 +19,7 @@ type Service struct {
 	cfg           *config.Config
 	store         *Store
 	eventCallback S3EventCallback
+	queueSender   func(string, string) error
 }
 
 // NewService creates a new S3 service.
@@ -107,6 +108,7 @@ func (s *Service) PutObject(bucket, key, contentType string, body io.Reader, met
 	if err != nil {
 		return nil, err
 	}
+	s.deliverQueueNotifications("s3:ObjectCreated:Put", bucket, key, obj.Size, obj.ETag)
 	if s.eventCallback != nil {
 		s.eventCallback("s3:ObjectCreated:Put", bucket, key, obj.Size, obj.ETag)
 	}
@@ -129,6 +131,7 @@ func (s *Service) DeleteObject(bucket, key string) error {
 	if err != nil {
 		return err
 	}
+	s.deliverQueueNotifications("s3:ObjectRemoved:Delete", bucket, key, 0, "")
 	if s.eventCallback != nil {
 		s.eventCallback("s3:ObjectRemoved:Delete", bucket, key, 0, "")
 	}
