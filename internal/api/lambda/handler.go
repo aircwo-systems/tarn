@@ -748,7 +748,7 @@ func (h *Handler) UntagResource(w http.ResponseWriter, r *http.Request) {
 
 // --- Layer handlers ---
 
-// PublishLayerVersion handles POST /2015-03-31/layers/{layerName}/versions
+// PublishLayerVersion handles POST /2018-10-31/layers/{layerName}/versions
 func (h *Handler) PublishLayerVersion(w http.ResponseWriter, r *http.Request) {
 	layerName := r.PathValue("layerName")
 
@@ -781,7 +781,7 @@ func (h *Handler) PublishLayerVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, result)
 }
 
-// GetLayerVersion handles GET /2015-03-31/layers/{layerName}/versions/{version}
+// GetLayerVersion handles GET /2018-10-31/layers/{layerName}/versions/{version}
 func (h *Handler) GetLayerVersion(w http.ResponseWriter, r *http.Request) {
 	layerName := r.PathValue("layerName")
 	versionStr := r.PathValue("version")
@@ -800,7 +800,7 @@ func (h *Handler) GetLayerVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// ListLayers handles GET /2015-03-31/layers
+// ListLayers handles GET /2018-10-31/layers
 func (h *Handler) ListLayers(w http.ResponseWriter, r *http.Request) {
 	layers, err := h.svc.ListLayers()
 	if err != nil {
@@ -815,7 +815,7 @@ func (h *Handler) ListLayers(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ListLayerVersions handles GET /2015-03-31/layers/{layerName}/versions
+// ListLayerVersions handles GET /2018-10-31/layers/{layerName}/versions
 func (h *Handler) ListLayerVersions(w http.ResponseWriter, r *http.Request) {
 	layerName := r.PathValue("layerName")
 
@@ -832,7 +832,7 @@ func (h *Handler) ListLayerVersions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// DeleteLayerVersion handles DELETE /2015-03-31/layers/{layerName}/versions/{version}
+// DeleteLayerVersion handles DELETE /2018-10-31/layers/{layerName}/versions/{version}
 func (h *Handler) DeleteLayerVersion(w http.ResponseWriter, r *http.Request) {
 	layerName := r.PathValue("layerName")
 	versionStr := r.PathValue("version")

@@ -659,12 +659,15 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /2015-03-31/functions/{name}/policy", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.AddPermission(w, r) })
 	mux.HandleFunc("GET /2015-03-31/functions/{name}/policy", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.GetPolicy(w, r) })
 	mux.HandleFunc("DELETE /2015-03-31/functions/{name}/policy/{statementId}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.RemovePermission(w, r) })
-	// Layers
-	mux.HandleFunc("POST /2015-03-31/layers/{layerName}/versions", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.PublishLayerVersion(w, r) })
-	mux.HandleFunc("GET /2015-03-31/layers", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.ListLayers(w, r) })
-	mux.HandleFunc("GET /2015-03-31/layers/{layerName}/versions", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.ListLayerVersions(w, r) })
-	mux.HandleFunc("GET /2015-03-31/layers/{layerName}/versions/{version}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.GetLayerVersion(w, r) })
-	mux.HandleFunc("DELETE /2015-03-31/layers/{layerName}/versions/{version}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.DeleteLayerVersion(w, r) })
+	// Layers use a different API version from functions. Retain the old routes
+	// as aliases for existing Tarn clients.
+	for _, prefix := range []string{"/2018-10-31/layers", "/2015-03-31/layers"} {
+		mux.HandleFunc("POST "+prefix+"/{layerName}/versions", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.PublishLayerVersion(w, r) })
+		mux.HandleFunc("GET "+prefix, func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.ListLayers(w, r) })
+		mux.HandleFunc("GET "+prefix+"/{layerName}/versions", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.ListLayerVersions(w, r) })
+		mux.HandleFunc("GET "+prefix+"/{layerName}/versions/{version}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.GetLayerVersion(w, r) })
+		mux.HandleFunc("DELETE "+prefix+"/{layerName}/versions/{version}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).Lambda.DeleteLayerVersion(w, r) })
+	}
 
 	// Catch-all for Lambda function sub-resources we don't emulate.
 	for _, method := range [...]string{

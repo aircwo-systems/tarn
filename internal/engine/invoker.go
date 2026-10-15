@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -114,10 +115,30 @@ func (inv *Invoker) Invoke(ctx context.Context, hostPort string, input *types.In
 		Payload:    body,
 	}
 
-	// The RIE sets this header when the function returns an error
+	// Honor an explicit error flag when available. Some RIE versions return
+	// runtime exceptions as JSON without any error header.
 	if fnErr := resp.Header.Get("X-Amz-Function-Error"); fnErr != "" {
 		output.FunctionError = fnErr
+	} else if isRIEErrorResponse(body) {
+		output.FunctionError = "Unhandled"
 	}
 
 	return output, nil
+}
+
+// isRIEErrorResponse recognizes runtime exception envelopes. Require a trace
+// array as well as the error fields so ordinary results containing errorType
+// and errorMessage remain successful. Node uses trace; Python uses stackTrace.
+// RIE does not otherwise distinguish these envelopes from successful payloads.
+func isRIEErrorResponse(body []byte) bool {
+	var envelope struct {
+		ErrorType    string            `json:"errorType"`
+		ErrorMessage *string           `json:"errorMessage"`
+		Trace        []json.RawMessage `json:"trace"`
+		StackTrace   []json.RawMessage `json:"stackTrace"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return false
+	}
+	return envelope.ErrorType != "" && envelope.ErrorMessage != nil && (envelope.Trace != nil || envelope.StackTrace != nil)
 }

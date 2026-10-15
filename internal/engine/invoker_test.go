@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"syscall"
 	"testing"
@@ -109,6 +110,48 @@ func TestInvokerInvokeWithFunctionError(t *testing.T) {
 	}
 	if output.FunctionError != "Unhandled" {
 		t.Fatalf("expected FunctionError 'Unhandled', got %q", output.FunctionError)
+	}
+}
+
+func TestInvokerRIEErrorResponses(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload, header, wantError string
+	}{
+		{"node throw", `{"errorType":"Error","errorMessage":"PDF failed","trace":["Error: PDF failed"]}`, "", "Unhandled"},
+		{"python throw", `{"errorType":"ValueError","errorMessage":"PDF failed","stackTrace":[["index.py",1,"handler","raise ValueError()"]]}`, "", "Unhandled"},
+		{"empty trace", `{"errorType":"Error","errorMessage":"","trace":[]}`, "", "Unhandled"},
+		{"explicit header", `{"errorMessage":"failed"}`, "Handled", "Handled"},
+		{"header takes precedence", `{"errorType":"Error","errorMessage":"failed","trace":[]}`, "Handled", "Handled"},
+		{"successful error fields", `{"errorType":"Error","errorMessage":"ordinary data"}`, "", ""},
+		{"nested error", `{"result":{"errorType":"Error","errorMessage":"ordinary data","trace":[]}}`, "", ""},
+		{"trace is null", `{"errorType":"Error","errorMessage":"ordinary data","trace":null}`, "", ""},
+		{"trace is string", `{"errorType":"Error","errorMessage":"ordinary data","trace":"data"}`, "", ""},
+		{"missing message", `{"errorType":"Error","trace":[]}`, "", ""},
+		{"null message", `{"errorType":"Error","errorMessage":null,"trace":[]}`, "", ""},
+		{"empty type", `{"errorType":"","errorMessage":"data","trace":[]}`, "", ""},
+		{"array", `[{"errorType":"Error","errorMessage":"data","trace":[]}]`, "", ""},
+		{"not json", `Error: failed`, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.header != "" {
+					w.Header().Set("X-Amz-Function-Error", tc.header)
+				}
+				_, _ = io.WriteString(w, tc.payload)
+			}))
+			defer server.Close()
+			_, port, err := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			output, err := NewInvoker().Invoke(context.Background(), port, &types.InvokeInput{FunctionName: "pdf"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if output.StatusCode != http.StatusOK || output.FunctionError != tc.wantError || string(output.Payload) != tc.payload {
+				t.Fatalf("status=%d FunctionError=%q payload=%s; want status=200 FunctionError=%q and unchanged payload", output.StatusCode, output.FunctionError, output.Payload, tc.wantError)
+			}
+		})
 	}
 }
 
