@@ -6,7 +6,7 @@ DynamoDB has a larger performance opportunity than the SQS metric scans. A ten-i
 
 The review also reproduced pagination, projection, key-validation, ordering, and stream-read failures. Keep those fixes separate from the performance patch. Numeric-key identity needs a migration plan before changing persisted lookup keys.
 
-The original review did not change application code. The [sort candidate](dynamodb-sort-candidate.patch) and [reproducible probes](dynamodb-evidence_test.go.txt) record that baseline. The first implementation batch below now applies the reviewed changes.
+The original review did not change application code. The [sort candidate](https://github.com/aircwo-systems/tarn/blob/develop-mvp/docs/reviews/dynamodb-sort-candidate.patch) and [reproducible probes](dynamodb-evidence_test.go.txt) record that baseline. The first implementation batch below now applies the reviewed changes.
 
 ## First implementation batch, 13 October 2026
 
@@ -18,17 +18,17 @@ New regression tests exercise public store operations for iterator boundaries, e
 
 Public method signatures and the persistence format are unchanged. Pagination/filter limits, ScannedCount, query validation, typed key identity/migration, raw UTF-8 ordering, and persistence retries remain separate work. The analysis and failure logs below describe the original baseline.
 
-The installed-code benchmark confirms the allocation reduction at 10,000 items: 77.1 MB for a ten-item Scan page, 93.3 MB for a missing-partition Query, and 85.3 MB for a ten-item Query page. These remain about 66–70% below the original baseline. Runtime varied across samples, so no fixed latency multiplier is claimed. See the [installed benchmark output](dynamodb-installed-bench.txt). Validation passed: the full race-enabled `make test`, an uncached `go test -race ./test -count=1` Docker end-to-end run, `go vet ./...`, formatting, and `make lint`. Lint reported zero issues after clearing stale generated linter cache; no unrelated source files were changed. Current regression tests are [stream metadata tests](../../internal/dynamodb/stream_metadata_test.go) and [read-path tests](../../internal/dynamodb/read_path_test.go).
+The installed-code benchmark confirms the allocation reduction at 10,000 items: 77.1 MB for a ten-item Scan page, 93.3 MB for a missing-partition Query, and 85.3 MB for a ten-item Query page. These remain about 66–70% below the original baseline. Runtime varied across samples, so no fixed latency multiplier is claimed. See the [installed benchmark output](dynamodb-installed-bench.txt). Validation passed: the full race-enabled `make test`, an uncached `go test -race ./test -count=1` Docker end-to-end run, `go vet ./...`, formatting, and `make lint`. Lint reported zero issues after clearing stale generated linter cache; no unrelated source files were changed. Current regression tests are [stream metadata tests](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/stream_metadata_test.go) and [read-path tests](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/read_path_test.go).
 
 ## Module and callers
 
 `internal/dynamodb/service.go` presents the external interface. `store.go` owns table definitions, items, index metadata, streams, compatibility settings, and snapshots. `expr.go` handles conditions, document paths, updates, projections, and comparisons.
 
-The AWS JSON adapter is `internal/api/dynamodb/handler.go`. The Lambda event-source poller consumes `StreamBatchUntil`, and the admin overview reads table and stream descriptions. [Account initialization](../../internal/cli/server.go#L210) creates an independent DynamoDB module per account.
+The AWS JSON adapter is `internal/api/dynamodb/handler.go`. The Lambda event-source poller consumes `StreamBatchUntil`, and the admin overview reads table and stream descriptions. [Account initialization](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/cli/server.go#L210) creates an independent DynamoDB module per account.
 
 The module is deep enough to keep these caller-facing methods. A generic repository interface would add a hypothetical seam without resolving the observed problems. The useful internal seams are request preparation, item selection/pagination, ordering/projection, and stream metadata reads. They can remain private.
 
-The store has one `RWMutex` for all tables in an account. Writes hold its exclusive lock. Reads use [readTable](../../internal/dynamodb/store.go#L1318), and returned items/table descriptions are normally deep copies. Query and Scan release the lock before expression evaluation and output projection, but take the complete item snapshot and sort while holding it. Other tables' writers therefore wait for that work too.
+The store has one `RWMutex` for all tables in an account. Writes hold its exclusive lock. Reads use [readTable](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/store.go#L1318), and returned items/table descriptions are normally deep copies. Query and Scan release the lock before expression evaluation and output projection, but take the complete item snapshot and sort while holding it. Other tables' writers therefore wait for that work too.
 
 Keep the existing stream improvements. Records are capped at 10,000 per stream, trimmed with reference clearing, located by binary search on sequence, and copied only for the selected window. Waiting pollers use stream wake channels and cancellation. Those behaviors already have tests and should not be replaced with polling or a fresh full-stream scan.
 
@@ -36,7 +36,7 @@ Keep the existing stream improvements. Records are capped at 10,000 per stream, 
 
 Go 1.26.0, macOS arm64, Apple M5, `-cpu=1`. The fixture has 10,000 items across 100 partitions. Items contain string keys, a 256-character payload, status, and nested list/map attributes. Streams and persistence are disabled. Setup is outside benchmark timing.
 
-The Scan and successful Query request ten items. The missing-partition Query returns none. Despite these small responses, [collectSortedItems](../../internal/dynamodb/store.go#L1372) copies and orders the whole eligible table each time.
+The Scan and successful Query request ten items. The missing-partition Query returns none. Despite these small responses, [collectSortedItems](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/store.go#L1372) copies and orders the whole eligible table each time.
 
 The candidate hoists `unionKeySchema` out of the item loop and caches each key's current encoded sort value and parsed numeric value. The sort then compares cached values. Secondary key order, base-key tie breaking, descending order, and current numeric comparison remain the same. The patch deliberately retains JSON-based string ordering so its optimisation does not also change the comparator contract.
 
@@ -66,9 +66,9 @@ Artifacts:
 
 ### Stream metadata escapes its lock
 
-**Priority: high.** [findStream](../../internal/dynamodb/store.go#L1356) returns a live `tableState` pointer after releasing `s.mu`. [GetShardIterator](../../internal/dynamodb/store.go#L1118) reads `state.Stream.NextSeq` outside the lock while `PutItem` increments it under the lock. A focused `-race` test reproduced that conflict.
+**Priority: high.** [findStream](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/store.go#L1356) returns a live `tableState` pointer after releasing `s.mu`. [GetShardIterator](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/store.go#L1118) reads `state.Stream.NextSeq` outside the lock while `PutItem` increments it under the lock. A focused `-race` test reproduced that conflict.
 
-[DescribeStream](../../internal/dynamodb/store.go#L1082) follows the same lookup pattern. A concurrent stream disable replaces `state.Stream` with nil, so the subsequent reads can race or dereference nil. That particular panic was not forced in a test. Its returned `KeySchema` is also the stored slice. A deterministic probe mutated the response and changed the table's real key schema.
+[DescribeStream](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/store.go#L1082) follows the same lookup pattern. A concurrent stream disable replaces `state.Stream` with nil, so the subsequent reads can race or dereference nil. That particular panic was not forced in a test. Its returned `KeySchema` is also the stored slice. A deterministic probe mutated the response and changed the table's real key schema.
 
 Remove the unlocked-pointer helper. Resolve and copy needed metadata under the store's read lock, then encode responses/iterators from detached values. Copy the schema slice. Use the same not-found error if a stream disappears before the locked lookup. Add races against writes and stream disable/reconfiguration as well as response-mutation tests. Public method signatures can remain unchanged.
 
@@ -82,7 +82,7 @@ The Lambda poller has its own last-sequence checkpoint path through `StreamBatch
 
 ### Limit and ScannedCount apply to the wrong population
 
-**Priority: high for client compatibility.** [Scan](../../internal/dynamodb/store.go#L882) and [Query](../../internal/dynamodb/store.go#L957) continue after filtered items and stop when enough returned items have been appended. Their results only contain a returned count. The [HTTP adapter](../../internal/api/dynamodb/handler.go#L535) reports `ScannedCount = Count` for both operations.
+**Priority: high for client compatibility.** [Scan](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/store.go#L882) and [Query](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/store.go#L957) continue after filtered items and stop when enough returned items have been appended. Their results only contain a returned count. The [HTTP adapter](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/api/dynamodb/handler.go#L535) reports `ScannedCount = Count` for both operations.
 
 The fixture contains two ordered items. The first fails the filter, the second passes, and Limit is one. Both operations return the second item instead of an empty first page with a continuation key at the first item. A separate HTTP probe, without a Limit, examines two items and returns one; both wire responses report ScannedCount one instead of two.
 
@@ -94,7 +94,7 @@ The loops also have no 1 MB page-byte accounting. That is an additional gap esta
 
 ### KEYS_ONLY and INCLUDE omit index keys
 
-**Priority: medium, small fix.** [applyIndexProjection](../../internal/dynamodb/store.go#L1690) allows base-table key names and requested included attributes. It never adds the index's own key schema. GSI probes lost `gsi_pk`/`gsi_sk`; LSI probes lost `lsi_sk`. Both projection modes reproduced the problem.
+**Priority: medium, small fix.** [applyIndexProjection](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/store.go#L1690) allows base-table key names and requested included attributes. It never adds the index's own key schema. GSI probes lost `gsi_pk`/`gsi_sk`; LSI probes lost `lsi_sk`. Both projection modes reproduced the problem.
 
 Pass the union of base and selected index keys to the projection helper. Test Query and Scan for both index kinds and all projection modes, including explicit document projection afterward. Keep sparse-index exclusion and base-key continuation values. AWS's projection definition includes the table and index keys, with INCLUDE adding selected attributes. [Index projection documentation](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html#GSI.Projections).
 
@@ -102,7 +102,7 @@ Pass the union of base and selected index keys to the projection helper. Test Qu
 
 **Priority: high for validation.** Query only rejects a blank condition; the generic condition evaluator accepts a condition on `keep` without a partition key. The probe returned rows for `keep = :yes`.
 
-The [expression evaluator](../../internal/dynamodb/expr.go#L60) also does not check that its parser consumed every token. `pk = :p ignored` succeeded. That parser serves filters and conditional writes too, so a malformed suffix can be silently ignored outside Query.
+The [expression evaluator](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/expr.go#L60) also does not check that its parser consumed every token. `pk = :p ignored` succeeded. That parser serves filters and conditional writes too, so a malformed suffix can be silently ignored outside Query.
 
 Require complete token consumption at parsing. Validate Query key conditions against the selected schema: required partition equality and permitted sort-key predicates. Keep the generic evaluator for filters/conditional writes, with its broader operations. AWS requires partition equality for Query. [Query key-condition reference](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html).
 
@@ -110,9 +110,9 @@ Make invalid-input handling a deliberate compatibility change. A prepared-expres
 
 ### Numeric identity and key types are inconsistent
 
-**Priority: high before introducing real indexes.** [serializeKey](../../internal/dynamodb/store.go#L1612) serializes the original attribute representation. Numbers `1` and `1.0` become different map keys even though the numeric comparator considers them equal. The probe could not read `1` using `1.0`, then stored both representations as two items.
+**Priority: high before introducing real indexes.** [serializeKey](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/store.go#L1612) serializes the original attribute representation. Numbers `1` and `1.0` become different map keys even though the numeric comparator considers them equal. The probe could not read `1` using `1.0`, then stored both representations as two items.
 
-[validateItemAgainstTable](../../internal/dynamodb/store.go#L1587) checks presence but not declared key types. A numeric partition attribute was accepted in a table declaring that key as a string. This lets invalid data enter storage before any query planner or maintained index can rely on its schema.
+[validateItemAgainstTable](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/store.go#L1587) checks presence but not declared key types. A numeric partition attribute was accepted in a table declaring that key as a string. This lets invalid data enter storage before any query planner or maintained index can rely on its schema.
 
 Use typed key validation and an exact canonical identity for numeric lookup values. Keep number attributes as strings at the wire interface and preserve decimal precision. AWS stores numbers numerically and trims redundant zeroes; key attributes have declared scalar types. [Data types documentation](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html).
 
@@ -120,7 +120,7 @@ Do not silently rekey old snapshots. Existing state can contain both numeric spe
 
 ### String order follows JSON escaping
 
-**Priority: medium, separate comparator fix.** [compareAttributeValues](../../internal/dynamodb/store.go#L2029) compares JSON encodings for nonnumeric attributes. A newline sorts after `A` because its JSON escape begins with a backslash. The ascending Query probe returned `A` before newline.
+**Priority: medium, separate comparator fix.** [compareAttributeValues](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/store.go#L2029) compares JSON encodings for nonnumeric attributes. A newline sorts after `A` because its JSON escape begins with a backslash. The ascending Query probe returned `A` before newline.
 
 Compare string keys by raw UTF-8 bytes and binary keys by decoded bytes, with separate numeric handling. A validated typed key representation makes this easier and avoids repeated encoding. AWS specifies UTF-8 string collation. [String data types](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/HowItWorks.NamingRulesDataTypes.html).
 
@@ -128,7 +128,7 @@ The tested cache preserves the existing comparator, including this defect. Apply
 
 ### Deleted continuation items restart the read
 
-**Priority: medium, confirmed behavior with an unverified AWS edge case.** [findExclusiveStart](../../internal/dynamodb/store.go#L1628) searches for an exact currently stored primary key. If it cannot find the continuation item, it returns zero.
+**Priority: medium, confirmed behavior with an unverified AWS edge case.** [findExclusiveStart](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/store.go#L1628) searches for an exact currently stored primary key. If it cannot find the continuation item, it returns zero.
 
 The probe read items 01/02, deleted 02, and resumed with that page's continuation key. It got 01/03, repeating 01. The observed restart is definite; AWS's exact behavior for a deleted continuation item was not checked against a live service in this review.
 
@@ -166,7 +166,7 @@ Do not start with a new database adapter or change the public map-shaped request
 
 ### Resolve persistence recovery with the shared flusher
 
-[flushToDisk](../../internal/dynamodb/store.go#L191) marshals all tables while holding the global read lock and silently returns on write failures. The shared flusher clears dirty before writing, so it has the same failed-write retry issue found in SQS. `persist()` always returns nil, meaning mutation methods' persistence-error branches do not report the later flush failure.
+[flushToDisk](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/dynamodb/store.go#L191) marshals all tables while holding the global read lock and silently returns on write failures. The shared flusher clears dirty before writing, so it has the same failed-write retry issue found in SQS. `persist()` always returns nil, meaning mutation methods' persistence-error branches do not report the later flush failure.
 
 Treat retry/error reporting as shared work rather than a second independent mechanism. Preserve serialized rename, dirty changes during a flush, and final pending writes. The SQS failure probe established the shared failure pattern; no new DynamoDB disk-failure probe was added.
 

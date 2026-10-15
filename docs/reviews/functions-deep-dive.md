@@ -26,8 +26,8 @@ Regression tests exercise the module's persistence/preparation interfaces and HT
 
 Implementation and regression coverage:
 
-- [Atomic store and cache](../../internal/lambda/store.go), [deployment preparation and leases](../../internal/lambda/deployment.go), [layer publication](../../internal/lambda/layers.go), and [durable metadata](../../internal/lambda/metadata.go).
-- [Service regressions](../../internal/lambda/regression_test.go), [HTTP regressions](../../internal/api/lambda/regression_test.go), [pool/image/readiness regressions](../../internal/engine/lambda_revision_test.go), and [Docker execution regressions](../../test/functions_regression_e2e_test.go).
+- [Atomic store and cache](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/lambda/store.go), [deployment preparation and leases](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/lambda/deployment.go), [layer publication](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/lambda/layers.go), and [durable metadata](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/lambda/metadata.go).
+- [Service regressions](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/lambda/regression_test.go), [HTTP regressions](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/api/lambda/regression_test.go), [pool/image/readiness regressions](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/engine/lambda_revision_test.go), and [Docker execution regressions](https://github.com/aircwo-systems/tarn/blob/develop-mvp/test/functions_regression_e2e_test.go).
 - [Updated capability documentation](../services/lambda.md).
 - [Completion audit by report requirement](functions-completion-audit.md).
 
@@ -39,12 +39,12 @@ Reservations remain subject to the configured local concurrency ceiling. Weighte
 
 The UI's Functions module corresponds to the Lambda backend:
 
-- [Service](../../internal/lambda/service.go) owns creation, updates, invocation, metrics, layers, and asynchronous submission.
-- [Store](../../internal/lambda/store.go) persists configuration and ZIPs, extracts function/layer code, and supplies filesystem paths.
-- [Engine](../../internal/engine/container.go) creates Docker containers and owns account-scoped pools. [WarmPool](../../internal/engine/pool.go) reaps idle containers. [Invoker](../../internal/engine/invoker.go) handles readiness and RIE HTTP requests.
-- The [Lambda HTTP adapter](../../internal/api/lambda/handler.go) also owns versions, aliases, and policies in memory. The [admin adapter](../../internal/api/admin/handler.go) reads function summaries, metrics, environment, event examples, and invokes functions.
+- [Service](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/lambda/service.go) owns creation, updates, invocation, metrics, layers, and asynchronous submission.
+- [Store](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/lambda/store.go) persists configuration and ZIPs, extracts function/layer code, and supplies filesystem paths.
+- [Engine](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/engine/container.go) creates Docker containers and owns account-scoped pools. [WarmPool](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/engine/pool.go) reaps idle containers. [Invoker](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/engine/invoker.go) handles readiness and RIE HTTP requests.
+- The [Lambda HTTP adapter](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/api/lambda/handler.go) also owns versions, aliases, and policies in memory. The [admin adapter](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/api/admin/handler.go) reads function summaries, metrics, environment, event examples, and invokes functions.
 
-API Gateway v1/v2, SNS, EventBridge, event-source mappings, Step Functions, and Cognito triggers call the invocation interface. [Account initialisation](../../internal/cli/server.go#L163) creates separate stores and services while sharing the engine and warm pool. Fixes inside the module therefore reach these callers without changing their interfaces.
+API Gateway v1/v2, SNS, EventBridge, event-source mappings, Step Functions, and Cognito triggers call the invocation interface. [Account initialisation](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/cli/server.go#L163) creates separate stores and services while sharing the engine and warm pool. Fixes inside the module therefore reach these callers without changing their interfaces.
 
 Keep the existing account-scoped container keys, exclusive container acquisition, overflow reaping, runtime-image cache and pull serialisation, bounded async workers/backlog, incremental log cursor, and nonblocking trace completion. Configuration reads already return detached objects because they decode JSON from disk. Adding another copy to these reads would increase their cost without addressing the defects below.
 
@@ -54,19 +54,19 @@ The useful new internal seam is a prepared deployment revision, containing match
 
 ### 1. Metadata updates lose successful concurrent changes
 
-[TagResource](../../internal/lambda/service.go) and UntagResource load a full configuration, mutate it, and save it. The store locks each read and write independently. Configuration updates and code-metadata updates also use separate read/modify/save steps. Atomic file rename protects the JSON file from partial reads, but does not make these operations atomic.
+[TagResource](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/lambda/service.go) and UntagResource load a full configuration, mutate it, and save it. The store locks each read and write independently. Configuration updates and code-metadata updates also use separate read/modify/save steps. Atomic file rename protects the JSON file from partial reads, but does not make these operations atomic.
 
 Three rounds of 32 concurrent tag requests each returned success and persisted only two tags. This is a semantic concurrency defect, so the race detector does not need to report it.
 
 Add a store operation that performs load, mutation, and atomic persistence under one stable per-function lock. Use it for tags, untagging, configuration changes, and Pending-state promotion. Merge code metadata into the current configuration rather than saving an earlier detached copy. Serialising full code/deployment publication needs the revision work described below; a metadata callback alone does not solve that problem.
 
-[DeleteFunction](../../internal/lambda/store.go) also deletes the function's mutex from its registry. Existing waiters can retain the old mutex while new callers acquire a replacement. The probe confirms the lock identity changes. Keep lock identity stable until users and waiters are gone. Retaining locks until store shutdown is the simplest first repair, with an explicit memory cost per distinct name; safe reclamation can follow if needed.
+[DeleteFunction](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/lambda/store.go) also deletes the function's mutex from its registry. Existing waiters can retain the old mutex while new callers acquire a replacement. The probe confirms the lock identity changes. Keep lock identity stable until users and waiters are gone. Retaining locks until store shutdown is the simplest first repair, with an explicit memory cost per distinct name; safe reclamation can follow if needed.
 
 Regression coverage should require all distinct tags to survive concurrent successful writes, preserve unrelated fields during simultaneous config/code/tag updates, and exercise delete/recreate with queued operations.
 
 ### 2. Layer version allocation is separate from publication
 
-[PublishLayerVersion](../../internal/lambda/service.go) calls NextLayerVersion and then SaveLayer. These acquire the layer lock separately. Multiple publishers can choose the same number and overwrite the same version directory.
+[PublishLayerVersion](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/lambda/service.go) calls NextLayerVersion and then SaveLayer. These acquire the layer lock separately. Multiple publishers can choose the same number and overwrite the same version directory.
 
 The first probe produced three persisted versions from 32 successful publishes. A second run produced two. The saved evidence is the second run.
 
@@ -76,7 +76,7 @@ Require concurrent publishes to return distinct versions with matching retained 
 
 ### 3. Multiple local layers cannot execute
 
-[CreateContainer](../../internal/engine/container.go) appends one bind mount to `/opt` for every layer directory. Two local layers therefore produce duplicate mount targets.
+[CreateContainer](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/engine/container.go) appends one bind mount to `/opt` for every layer directory. Two local layers therefore produce duplicate mount targets.
 
 The Docker probe published two small Node modules, created a function using both, and invoked it. Creation succeeded; invocation returned HTTP 500 with the daemon error `Duplicate mount point: /opt`. Existing TestLambdaLayers covers publication/listing/deletion of one layer, but never executes a function using a layer.
 
@@ -94,7 +94,7 @@ This changes invalid input behaviour, so return a typed validation error and pre
 
 ### 5. HTTP responses expose live alias and policy state
 
-[GetPolicy](../../internal/api/lambda/handler.go) copies a map reference under the handler lock, then checks and iterates that map after unlocking. AddPermission and RemovePermission mutate it. A concurrent read/write probe reports data races in GetPolicy and AddPermission. Unsynchronised Go map iteration also risks a process failure.
+[GetPolicy](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/api/lambda/handler.go) copies a map reference under the handler lock, then checks and iterates that map after unlocking. AddPermission and RemovePermission mutate it. A concurrent read/write probe reports data races in GetPolicy and AddPermission. Unsynchronised Go map iteration also risks a process failure.
 
 Alias create/get/list/update responses similarly encode pointers that UpdateAlias can mutate after the lock is released. A deterministic paused-response probe creates an alias for version `1`, updates it to `2`, then resumes the first response. The create response incorrectly reports version `2`.
 
@@ -102,7 +102,7 @@ Copy policy statements and alias values while holding the lock, then encode deta
 
 ### 6. Published versions are metadata in the HTTP adapter
 
-[PublishVersion](../../internal/api/lambda/handler.go) records a response map in `h.versions`. [ListVersionsByFunction](../../internal/api/lambda/handler.go) ignores that map and returns only `$LATEST`. The HTTP probe publishes version `1` successfully, then lists only `$LATEST`.
+[PublishVersion](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/api/lambda/handler.go) records a response map in `h.versions`. [ListVersionsByFunction](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/api/lambda/handler.go) ignores that map and returns only `$LATEST`. The HTTP probe publishes version `1` successfully, then lists only `$LATEST`.
 
 Code inspection also finds no read of the published-version map, no persistence of versions/aliases/policies, and no qualifier resolution in the direct Invoke path. PackageType Image is echoed in metadata, but ImageURI is excluded from persisted JSON; invocation still extracts a ZIP and selects a predefined runtime image. Reserved concurrency endpoints echo/acknowledge values without enforcing them. The configured container cap is a separate, working mechanism.
 
@@ -110,7 +110,7 @@ These are capability gaps, not performance optimisations. Do not claim that addi
 
 ### 7. Cold-start waiting ignores cancellation while acquiring a mutex
 
-[acquireContainer](../../internal/lambda/service.go) waits on a plain mutex held throughout Docker creation/start/readiness. Its cancellation select runs only once it reaches the concurrency-cap polling branch. The probe holds that mutex and starts an already-cancelled acquisition. It remains blocked for the full observation window, then attempts cold-start work after the lock is released.
+[acquireContainer](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/lambda/service.go) waits on a plain mutex held throughout Docker creation/start/readiness. Its cancellation select runs only once it reaches the concurrency-cap polling branch. The probe holds that mutex and starts an already-cancelled acquisition. It remains blocked for the full observation window, then attempts cold-start work after the lock is released.
 
 Check cancellation before claiming any environment and use a cancellable per-function start gate. An initial context check fixes the pre-cancelled case, but cannot interrupt cancellation that occurs while queued. Keep the cap invariant intact, recheck idle containers after taking the gate, and avoid one global gate across functions.
 
@@ -133,17 +133,17 @@ Warm preparation reads and decodes a function with 50 environment entries, check
 
 ### Parse metrics before taking the lock
 
-[recordInvocation](../../internal/lambda/service.go) parses the payload while holding the account-wide metrics lock. This blocks completion recording for other functions and dashboard metric readers.
+[recordInvocation](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/lambda/service.go) parses the payload while holding the account-wide metrics lock. This blocks completion recording for other functions and dashboard metric readers.
 
-The [candidate patch](functions-metrics-candidate.patch) moves the existing countProcessedMessages call before the lock, leaving counter mutation and timestamp assignment inside. Parsing semantics and allocations remain the same. The actual patched implementation improves the synthetic benchmark by about 3.8 times; the initial in-test prototype improved it by about 3.2 times. Neither improvement should be applied to an end-to-end invocation latency estimate.
+The [candidate patch](https://github.com/aircwo-systems/tarn/blob/develop-mvp/docs/reviews/functions-metrics-candidate.patch) moves the existing countProcessedMessages call before the lock, leaving counter mutation and timestamp assignment inside. Parsing semantics and allocations remain the same. The actual patched implementation improves the synthetic benchmark by about 3.8 times; the initial in-test prototype improved it by about 3.2 times. Neither improvement should be applied to an end-to-end invocation latency estimate.
 
 Existing Lambda, HTTP adapter, engine, and asyncqueue tests passed with `-race` in the isolated candidate checkout. Scoped `go vet` passed too. Existing message-count cases cover empty payload, generic events, invalid JSON, multiple records, and an explicitly empty Records list.
 
 ### Probe readiness immediately
 
-[WaitForReady](../../internal/engine/invoker.go) waits for the first 100 ms tick before trying TCP, even if the port already accepts connections. Three already-listening-port checks took 100.8–102.6 ms.
+[WaitForReady](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/engine/invoker.go) waits for the first 100 ms tick before trying TCP, even if the port already accepts connections. Three already-listening-port checks took 100.8–102.6 ms.
 
-The [candidate patch](functions-readiness-candidate.patch) checks the port immediately, then retains polling and the existing readiness timeout. It also uses DialContext so cancellation can interrupt connection setup. The same probe takes 126–172 µs with the candidate. Existing engine and Lambda tests pass with `-race`, including readiness timeout and invocation timeout tests; scoped vet passes.
+The [candidate patch](https://github.com/aircwo-systems/tarn/blob/develop-mvp/docs/reviews/functions-readiness-candidate.patch) checks the port immediately, then retains polling and the existing readiness timeout. It also uses DialContext so cancellation can interrupt connection setup. The same probe takes 126–172 µs with the candidate. Existing engine and Lambda tests pass with `-race`, including readiness timeout and invocation timeout tests; scoped vet passes.
 
 This removes an avoidable readiness delay when the port is ready. It does not promise a 100 ms reduction for every Docker cold start, whose runtime and image costs vary.
 
@@ -157,7 +157,7 @@ The measured preparation cost is modest compared with Docker/runtime execution. 
 
 ## Deployment revision work
 
-The extraction probe retains the path returned for code `v1`, updates/extracts `v2`, and reads `v2` through the old path. [ExtractCode](../../internal/lambda/store.go) deletes and rebuilds the same directory. The store also writes the live ZIP directly; UpdateFunctionCode changes/extracts code before evicting the existing pool and committing configuration metadata.
+The extraction probe retains the path returned for code `v1`, updates/extracts `v2`, and reads `v2` through the old path. [ExtractCode](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/lambda/store.go) deletes and rebuilds the same directory. The store also writes the live ZIP directly; UpdateFunctionCode changes/extracts code before evicting the existing pool and committing configuration metadata.
 
 The mutable-path behaviour is reproduced. Mixed configuration/code under a concurrent production invocation is an inference from that behaviour and the update ordering, not a complete Docker reproduction in this review.
 

@@ -4,7 +4,7 @@ Reviewed 13 October 2026 at commit `6c357d634420da5b9553b20b6fcc98697456a907`, a
 
 The SQS module can improve without changing its public method signatures or persistence format. Start by making returned data safe to read and DLQ movement safe to retry. The smallest measured performance improvement is replacing four metric scans with one pass. I would defer a queue scheduler rewrite until a real workload shows that scanning is a bottleneck.
 
-The original review used isolated experiments and did not change application code. The [metrics patch](sqs-metrics-candidate.patch) and [evidence probes](sqs-evidence_test.go.txt) record that original baseline. The metrics patch is now applied by the follow-up below.
+The original review used isolated experiments and did not change application code. The [metrics patch](https://github.com/aircwo-systems/tarn/blob/develop-mvp/docs/reviews/sqs-metrics-candidate.patch) and [evidence probes](sqs-evidence_test.go.txt) record that original baseline. The metrics patch is now applied by the follow-up below.
 
 ## Quick-win implementation, 13 October 2026
 
@@ -33,10 +33,10 @@ Regression evidence:
 
 | Requirement | Coverage |
 | --- | --- |
-| Message/input ownership and old receipt isolation | [Ownership tests](../../internal/sqs/ownership_test.go), including concurrent response serialization/redelivery and duplicate sends |
-| Missing/failed DLQ, current receipt/eligibility, concurrent transfers, FIFO destinations, trace/disruption policies, and redrive | [DLQ tests](../../internal/sqs/dlq_test.go); existing service and event-source failure-routing tests |
-| Failed writes recover without new mutations; rename cleanup, bounded final write, and mutation during a flush | [Persistence retry tests](../../internal/sqs/persistence_retry_test.go); existing persistence round-trip/final-write tests and shared flusher tests |
-| Expiry/stale/DLQ FIFO wakeups, no unchanged wakeups, retention deadline, and joined shutdown | [Reaper/lifecycle tests](../../internal/sqs/reaper_test.go); existing long-poll/compaction tests |
+| Message/input ownership and old receipt isolation | [Ownership tests](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/ownership_test.go), including concurrent response serialization/redelivery and duplicate sends |
+| Missing/failed DLQ, current receipt/eligibility, concurrent transfers, FIFO destinations, trace/disruption policies, and redrive | [DLQ tests](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/dlq_test.go); existing service and event-source failure-routing tests |
+| Failed writes recover without new mutations; rename cleanup, bounded final write, and mutation during a flush | [Persistence retry tests](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/persistence_retry_test.go); existing persistence round-trip/final-write tests and shared flusher tests |
+| Expiry/stale/DLQ FIFO wakeups, no unchanged wakeups, retention deadline, and joined shutdown | [Reaper/lifecycle tests](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/reaper_test.go); existing long-poll/compaction tests |
 | Earlier config, binary-copy, metrics, and HTTP cancellation fixes | Existing attributes/metrics tests and both protocol cancellation tests |
 
 The completed receive fixture ran on Apple M5/macOS arm64 with `-cpu=1 -benchtime=200ms -count=3`. Median one-message receives cost 307.8 ns, 232 bytes and four allocations without attributes, or 535.7 ns, 872 bytes and nine allocations with one string and one 256-byte binary attribute. Ten-message batches cost 2,681 ns/2,432 bytes/32 allocations and 4,975 ns/8,832 bytes/82 allocations respectively. This measures the complete in-memory receive, including receipts and snapshots, not isolated copying or HTTP throughput. It establishes the safety cost without claiming a speedup. See [snapshot benchmark output](sqs-snapshot-bench.txt).
@@ -53,7 +53,7 @@ Internally, `Store` owns a queue-name map behind an `RWMutex`. Each queue owns a
 
 These existing choices should stay:
 
-- Long polling uses a channel and the next visibility/delay deadline rather than timer-based rescanning. See [receive](../../internal/sqs/store.go#L447) and [long polling](../../internal/sqs/service.go#L165).
+- Long polling uses a channel and the next visibility/delay deadline rather than timer-based rescanning. See [receive](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/store.go#L447) and [long polling](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/service.go#L165).
 - Empty receives do not mark persistence dirty. The dedicated test protects this.
 - Reaping compacts in place and clears removed references. The dedicated test protects this too.
 - JSON encoding and file writing happen after queue locks are released. The shared flusher coalesces writes and serializes them.
@@ -74,7 +74,7 @@ The metrics fixture has equal proportions of visible, in-flight, delayed, stale,
 
 Allocation counts did not change. At 100,000 entries both implementations allocate 400 bytes in 10 allocations per metrics request. A config-only `QueueArn` request still avoids scanning: medians were 135 ns before and 137 ns after. A visible-count-only request was 123.28 microseconds before and 120.13 microseconds after. The small differences in those controls are within the variation of this short experiment.
 
-The real caller is [admin overview](../../internal/api/admin/handler.go#L1066), which requests all four counts. The implementation is [GetQueueAttributes](../../internal/sqs/store.go#L341). The larger queues benefit from reading fewer message pointers and fields while holding the queue mutex. At normal developer queue sizes, the absolute saving is small, and the existing overview cache limits how frequently it occurs.
+The real caller is [admin overview](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/api/admin/handler.go#L1066), which requests all four counts. The implementation is [GetQueueAttributes](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/store.go#L341). The larger queues benefit from reading fewer message pointers and fields while holding the queue mutex. At normal developer queue sizes, the absolute saving is small, and the existing overview cache limits how frequently it occurs.
 
 Other current costs:
 
@@ -94,9 +94,9 @@ The existing race-enabled suites passed. Focused probes exposed gaps those tests
 
 ### 1. Returned configs and messages share mutable store state
 
-**Priority: high.** [GetQueue](../../internal/sqs/store.go#L183), `ListQueues`, and `CreateQueue` return stored config pointers. Queue mutations use `q.mu`, but callers read these pointers after the lock is gone. The overview reads config fields and tags, and the receive module reads default visibility and redrive policy this way.
+**Priority: high.** [GetQueue](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/store.go#L183), `ListQueues`, and `CreateQueue` return stored config pointers. Queue mutations use `q.mu`, but callers read these pointers after the lock is gone. The overview reads config fields and tags, and the receive module reads default visibility and redrive policy this way.
 
-[receive](../../internal/sqs/store.go#L512) returns the stored message pointer after assigning its receipt and counters. A later receive can overwrite those fields while the first consumer serializes or processes them. `SendMessage` also returns a stored pointer and retains the caller's attribute map; queue creation retains the caller's tags.
+[receive](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/store.go#L512) returns the stored message pointer after assigning its receipt and counters. A later receive can overwrite those fields while the first consumer serializes or processes them. `SendMessage` also returns a stored pointer and retains the caller's attribute map; queue creation retains the caller's tags.
 
 Two focused `-race` tests reproduced concurrent config reads versus attribute updates, and message reads versus re-receives. The second probe uses zero visibility to make the overlap immediate; a slow consumer surviving a nonzero visibility deadline can encounter the same ownership problem. See [race evidence](sqs-race-evidence.txt).
 
@@ -106,9 +106,9 @@ Some current tests alter returned messages to simulate expiry. Once snapshots ar
 
 ### 2. DLQ transfer has two implementations with different failure behavior
 
-**Priority: high.** [Reap](../../internal/sqs/store.go#L878) removes messages from the source before checking whether the destination exists. At [destination lookup](../../internal/sqs/store.go#L912), a missing DLQ logs a drop. The probe confirmed that the source has zero messages afterward.
+**Priority: high.** [Reap](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/store.go#L878) removes messages from the source before checking whether the destination exists. At [destination lookup](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/store.go#L912), a missing DLQ logs a drop. The probe confirmed that the source has zero messages afterward.
 
-The reaper also drops `MessageDeduplicationId` and does not add `TarnRetryCount`. [MoveToDLQIfExceeded](../../internal/sqs/service.go#L245), used by the poller, preserves the dedup ID and attaches the retry count. The same failure can therefore produce different DLQ metadata depending on which path handles it.
+The reaper also drops `MessageDeduplicationId` and does not add `TarnRetryCount`. [MoveToDLQIfExceeded](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/service.go#L245), used by the poller, preserves the dedup ID and attaches the retry count. The same failure can therefore produce different DLQ metadata depending on which path handles it.
 
 The poller path sends to the destination before deleting the source, with no single transfer claim. A deterministic retry of `MoveToDLQIfExceeded` with the same message produced two destination messages; the second source deletion fails only after its destination send. Reaper/poller concurrency can create another overlap, though that specific interleaving was not dynamically reproduced.
 
@@ -118,7 +118,7 @@ The two callers currently have different timing and side effects. The reaper wai
 
 ### 3. Persistence failure clears the only retry signal
 
-**Priority: high when persistence is enabled.** [Flusher.Flush](../../internal/persist/flusher.go#L106) clears dirty state before invoking its callback. [flushToDisk](../../internal/sqs/store.go#L1147) silently returns on encoding, directory, write, or rename errors. The callback cannot report failure.
+**Priority: high when persistence is enabled.** [Flusher.Flush](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/persist/flusher.go#L106) clears dirty state before invoking its callback. [flushToDisk](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/store.go#L1147) silently returns on encoding, directory, write, or rename errors. The callback cannot report failure.
 
 A probe replaces the freshly created queue directory in its temporary data directory with a regular file, then flushes a dirty queue. The dirty flag becomes false despite the failed write. Without another mutation or explicit flush, an automatic retry is not scheduled. `Close` also skips a final write when the flag is false.
 
@@ -128,13 +128,13 @@ This is error recovery, not a proposal to change the current asynchronous durabi
 
 ### 4. Binary data escapes the existing clone
 
-**Priority: medium, part of the ownership fix.** [cloneMessage](../../internal/sqs/store.go#L1035) copies attribute structs but shares their `BinaryValue` slices. Mutating a binary value returned by `PeekMessages` changed the next peek's stored value from 1 to 9 in the probe.
+**Priority: medium, part of the ownership fix.** [cloneMessage](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/store.go#L1035) copies attribute structs but shares their `BinaryValue` slices. Mutating a binary value returned by `PeekMessages` changed the next peek's stored value from 1 to 9 in the probe.
 
-[cloneMessageAttributes](../../internal/sqs/service.go#L305) already copies binary slices correctly. Reuse one correct helper across snapshots and transfers, preserving nil/empty-map behavior where the existing interface needs it. Add checks for maps, nested attribute structs, binary slices, and caller-owned send attributes.
+[cloneMessageAttributes](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/service.go#L305) already copies binary slices correctly. Reuse one correct helper across snapshots and transfers, preserving nil/empty-map behavior where the existing interface needs it. Add checks for maps, nested attribute structs, binary slices, and caller-owned send attributes.
 
 ### 5. A rejected config update still changes the queue
 
-**Priority: medium.** [applyQueueAttributes](../../internal/sqs/store.go#L942) assigns FIFO throughput settings before validating their combination. `SetQueueAttributes` passes it the live config.
+**Priority: medium.** [applyQueueAttributes](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/store.go#L942) assigns FIFO throughput settings before validating their combination. `SetQueueAttributes` passes it the live config.
 
 Setting `FifoThroughputLimit=perMessageGroupId` without changing default `DeduplicationScope=queue` returns an error but leaves the queue's throughput field changed. The probe confirmed this through `GetQueueAttributes`. The failure path does not mark persistence dirty or update the modification timestamp, so memory and persisted state can also diverge.
 
@@ -142,7 +142,7 @@ Clone the config under `q.mu`, apply and validate on the candidate, then commit 
 
 ### 6. Reaping can unblock a FIFO group without waking its long poll
 
-**Priority: medium.** [receive](../../internal/sqs/store.go#L483) blocks later FIFO messages behind an earlier unavailable one. Its timer considers visibility and delay, not retention expiry. [Reap](../../internal/sqs/store.go#L871) removes expired blockers, or marks them stale, without signaling the source queue.
+**Priority: medium.** [receive](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/store.go#L483) blocks later FIFO messages behind an earlier unavailable one. Its timer considers visibility and delay, not retention expiry. [Reap](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/store.go#L871) removes expired blockers, or marks them stale, without signaling the source queue.
 
 A deterministic probe registered an empty receive's wake channel behind an in-flight FIFO head, expired that head, and reaped it. The wake channel remained open despite a now-available following message. The already-computed timer still pointed at the old visibility deadline.
 
@@ -152,7 +152,7 @@ Signal the source queue when reaping changes FIFO receivability. Cover expiry, s
 
 ### Index receipt lookups when backlog size justifies it
 
-[DeleteMessage](../../internal/sqs/store.go#L565), `ChangeMessageVisibility`, `ReleaseMessage`, and `DeleteMessageByID` scan the entire slice. A private map from current receipt handle to message would make receipt lookup expected constant time. An ID map can support admin deletion separately. Keep the ordered slice for receive, FIFO, peeking, and snapshot iteration.
+[DeleteMessage](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/store.go#L565), `ChangeMessageVisibility`, `ReleaseMessage`, and `DeleteMessageByID` scan the entire slice. A private map from current receipt handle to message would make receipt lookup expected constant time. An ID map can support admin deletion separately. Keep the ordered slice for receive, FIFO, peeking, and snapshot iteration.
 
 The maintenance cost is real. Every new receive must remove the old receipt mapping. Deletion, purge, reaping, DLQ movement, redrive, and persistence reload must rebuild or update indexes. Tombstones must not remain in them. Preserve existing errors for obsolete and missing receipts. Empty receipts currently match unreceived messages in the scan implementation, so tightening that behavior must be an explicit validation fix rather than an unnoticed consequence of indexing only nonempty receipts.
 
@@ -160,13 +160,13 @@ Measure a drain workload and mixed send/receive/delete latency before introducin
 
 ### Cancel HTTP long polls when the request ends
 
-[Query receive](../../internal/api/sqs/handler.go#L345) and [JSON receive](../../internal/api/sqs/json.go#L322) call `ReceiveMessage` with no request cancellation. The module already provides `ReceiveMessageUntil` and the Lambda poller uses it.
+[Query receive](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/api/sqs/handler.go#L345) and [JSON receive](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/api/sqs/json.go#L322) call `ReceiveMessage` with no request cancellation. The module already provides `ReceiveMessageUntil` and the Lambda poller uses it.
 
 Pass `r.Context().Done()` through both handlers. The JSON helper needs the request or cancel channel added to its private parameters. Check for an already-cancelled request before claiming messages. This removes work for abandoned requests while preserving behavior for active clients. Add cancellation tests through both wire protocols, not only the existing direct-service test. This opportunity was inspected, not measured with a disconnect load test.
 
 ### Measure snapshot cost before changing storage
 
-Every dirty flush clones and serializes all queues and their messages. A busy queue can therefore trigger work over unrelated queues. [The snapshot filter](../../internal/sqs/store.go#L1176) only skips a message when it is both deleted and expired, so it can also write tombstones awaiting reaping.
+Every dirty flush clones and serializes all queues and their messages. A busy queue can therefore trigger work over unrelated queues. [The snapshot filter](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/store.go#L1176) only skips a message when it is both deleted and expired, so it can also write tombstones awaiting reaping.
 
 Measure snapshot bytes, flush duration, allocation volume, dirty age, and queue-lock wait time with realistic body sizes and persistence enabled. A per-queue cached snapshot might avoid repeated cloning of unchanged queues while retaining the current file format, but total-file serialization and rewriting would remain. Streaming encoding could reduce the extra encoded byte buffer; it must remain outside queue locks and preserve the atomic rename flow.
 
@@ -174,7 +174,7 @@ Do not promise throughput gains from a new database or journal based on these sc
 
 ### Make shutdown actually wait for the reaper
 
-[Stop](../../internal/sqs/service.go#L50) closes the done channel but does not join the reaper. A tick already executing can still mutate the store. [Account shutdown](../../internal/cli/server.go#L376) then closes persistence after stopping workers and assumes there are no more writes.
+[Stop](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/sqs/service.go#L50) closes the done channel but does not join the reaper. A tick already executing can still mutate the store. [Account shutdown](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/cli/server.go#L376) then closes persistence after stopping workers and assumes there are no more writes.
 
 Use an internal completion signal and idempotent stop so shutdown can wait for an active reap before the final store flush. Keep zero-work service test setups usable. This lifecycle risk is supported by inspection; it was not reproduced with a forced shutdown interleaving.
 
