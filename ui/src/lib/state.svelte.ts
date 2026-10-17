@@ -1,4 +1,5 @@
 import { AccountArchivedError, fetchOverview, fetchUserServices, pruneOldLogs, saveUserServices, setApiAccount } from "$lib/api";
+import { resetLogPulse } from "$lib/log-pulse.svelte";
 import type { InfraProbe, OverviewResponse, UserService } from "$lib/types";
 
 export type InfraProbeKind =
@@ -252,6 +253,7 @@ export function switchAccount(id: string) {
   loading = true;
   userServices = [];
   userServicesLoaded = false;
+  resetLogPulse();
   void loadUserServices();
   persistAccountSettings();
   refresh();

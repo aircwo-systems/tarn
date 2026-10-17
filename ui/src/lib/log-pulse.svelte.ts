@@ -34,6 +34,9 @@ let sampledAt = $state(0);
 let handle: ReturnType<typeof setInterval> | null = null;
 let controller: AbortController | null = null;
 let consumers = 0;
+// Bumped on account switch so a response for the previous account is dropped
+// even if it resolved before its request could be aborted.
+let generation = 0;
 
 function isHidden(): boolean {
   try {
@@ -86,17 +89,34 @@ async function poll() {
   controller?.abort();
   const ctrl = new AbortController();
   controller = ctrl;
+  const gen = generation;
   try {
     const result = await fetchAllLogEvents({ limit: SAMPLE_LIMIT, order: "desc" }, ctrl.signal);
+    if (gen !== generation) return;
     sample = result.events ?? [];
     sampledAt = Date.now();
     status = "ready";
   } catch {
-    if (!ctrl.signal.aborted) status = "unavailable";
+    if (!ctrl.signal.aborted && gen === generation) status = "unavailable";
   } finally {
     if (controller === ctrl) controller = null;
     now = Date.now();
   }
+}
+
+/**
+ * Drops the sample taken for the previous account and, if anything is
+ * watching, samples the newly selected account straight away.
+ */
+export function resetLogPulse() {
+  generation++;
+  controller?.abort();
+  controller = null;
+  sample = [];
+  sampledAt = 0;
+  status = "loading";
+  now = Date.now();
+  if (handle) poll();
 }
 
 /** Ref-counted start; returns an idempotent stop function. */

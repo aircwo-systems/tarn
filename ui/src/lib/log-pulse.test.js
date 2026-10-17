@@ -15,7 +15,7 @@ plugin({
   },
 });
 
-const { startLogPulse } = await import("./log-pulse.svelte.ts");
+const { getLogPulse, resetLogPulse, startLogPulse } = await import("./log-pulse.svelte.ts");
 let documentDescriptor;
 let page;
 let timers;
@@ -106,5 +106,61 @@ describe("log pulse visibility", () => {
     visibility(true);
     visibility(false);
     expect(requests).toHaveLength(1);
+  });
+});
+
+describe("log pulse account switch", () => {
+  let responders;
+
+  beforeEach(() => {
+    responders = [];
+    spies[2].mockImplementation((_url, { signal }) => {
+      requests.push(signal);
+      return new Promise((resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), {
+          once: true,
+        });
+        responders.push((events) => resolve(new Response(JSON.stringify({ events }))));
+      });
+    });
+  });
+
+  function recent(level) {
+    return { timestamp: new Date().toISOString(), level, message: "x" };
+  }
+
+  test("clears the previous account's sample and samples again", async () => {
+    start();
+    responders[0]([recent("ERROR")]);
+    await Bun.sleep(0);
+    expect(getLogPulse().status).toBe("ready");
+    expect(getLogPulse().recentErrors).toBe(1);
+
+    resetLogPulse();
+    expect(getLogPulse().status).toBe("loading");
+    expect(getLogPulse().recentErrors).toBe(0);
+    expect(getLogPulse().bars.every((n) => n === 0)).toBe(true);
+    expect(requests).toHaveLength(2);
+  });
+
+  test("drops a response for the previous account that lands after the switch", async () => {
+    start();
+    const stale = responders[0];
+    stale([recent("ERROR")]);
+    // Switch before the resolved response's continuation runs.
+    resetLogPulse();
+    await Bun.sleep(0);
+    expect(getLogPulse().recentErrors).toBe(0);
+    expect(getLogPulse().status).toBe("loading");
+
+    responders[1]([]);
+    await Bun.sleep(0);
+    expect(getLogPulse().status).toBe("ready");
+    expect(getLogPulse().recentErrors).toBe(0);
+  });
+
+  test("does not poll on reset when nothing is watching", () => {
+    resetLogPulse();
+    expect(requests).toHaveLength(0);
   });
 });
