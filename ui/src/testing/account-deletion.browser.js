@@ -1,7 +1,7 @@
 import { mount, tick, unmount } from "svelte";
-import AccountDeleteConfirmation from "$lib/components/sections/account-delete-confirmation.svelte";
-import SettingsSection from "$lib/components/sections/settings-section.svelte";
-import { getAccountSettings } from "$lib/state.svelte";
+import AccountDeleteConfirmation from "#lib/components/sections/account-delete-confirmation.svelte";
+import SettingsSection from "#lib/components/sections/settings-section.svelte";
+import { getAccountSettings } from "#lib/state.svelte";
 
 // Run in a dashboard dev-server tab:
 // await (await import('/src/testing/account-deletion.browser.js')).checkAccountDeletion()

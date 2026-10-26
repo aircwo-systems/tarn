@@ -18,16 +18,17 @@
     RowsIcon,
   } from "phosphor-svelte";
   import { fly } from "svelte/transition";
-  import { Skeleton } from "$lib/components/ui/skeleton";
-  import EmptyState from "$lib/components/common/empty-state.svelte";
-  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
+  import { Skeleton } from "#lib/components/ui/skeleton";
+  import EmptyState from "#lib/components/common/empty-state.svelte";
+  import FormattedMessageViewer from "#lib/components/common/formatted-message-viewer.svelte";
   import { untrack } from "svelte";
   import { tick } from "svelte";
   import SectionHeader from "./section-header.svelte";
-  import LogStream, { keyEvents } from "$lib/components/logs/log-stream.svelte";
-  import LogSelectionPrompt from "$lib/components/logs/log-selection-prompt.svelte";
-  import LogSummary from "$lib/components/logs/log-summary.svelte";
-  import { PaneGroup, Pane, Handle } from "$lib/components/ui/resizable";
+  import LogStream, { keyEvents } from "#lib/components/logs/log-stream.svelte";
+  import LogActivity from "#lib/components/logs/log-activity.svelte";
+  import LogSelectionPrompt from "#lib/components/logs/log-selection-prompt.svelte";
+  import LogSummary from "#lib/components/logs/log-summary.svelte";
+  import { PaneGroup, Pane, Handle } from "#lib/components/ui/resizable";
   import {
     fetchLogGroups,
     fetchLogEvents,
@@ -38,8 +39,8 @@
     type FetchLogEventsParams,
     type LogScanResult,
     type LogGroupScanResult,
-  } from "$lib/api";
-  import { highlightJSON, highlightSearchText, formatFilterTerm, splitFilterTerms } from "$lib/json-format";
+  } from "#lib/api";
+  import { highlightJSON, highlightSearchText, formatFilterTerm, splitFilterTerms } from "#lib/json-format";
   import {
     parseSpringBootLog,
     looksLikeJSON,
@@ -47,8 +48,8 @@
     computeFormattedMessage,
     tryFormatInlineJSON,
     highlightFormatted,
-    formatDatadogLog,
-  } from "$lib/log-format";
+    formatLogMessage,
+  } from "#lib/log-format";
   import {
     spanColor,
     spanKindLabel,
@@ -57,15 +58,15 @@
     formatSpanDuration,
     orderSpans,
     traceTitle,
-  } from "$lib/trace-utils";
-  import type { LogGroupSummary, LogEvent, RequestTrace } from "$lib/types";
-  import { nextPinnedIndex, pinContextRows, pinEventKey, pinEventSnapshot, pinnedLogId, pinnedLogRow, pinsForView, readPinnedLogs, savePinnedLogs, type PinnedLog } from "$lib/pinned-logs";
-  import { getAccountSettings, getUISettings } from "$lib/state.svelte";
+  } from "#lib/trace-utils";
+  import type { LogGroupSummary, LogEvent, RequestTrace } from "#lib/types";
+  import { nextPinnedIndex, pinContextRows, pinEventKey, pinEventSnapshot, pinnedLogId, pinnedLogRow, pinsForView, readPinnedLogs, savePinnedLogs, type PinnedLog } from "#lib/pinned-logs";
+  import { getAccountSettings, getUISettings } from "#lib/state.svelte";
   import {
     logLocationWithFilters,
     type LogNavigationFilters,
     type LogSortOrder,
-  } from "$lib/navigation-history";
+  } from "#lib/navigation-history";
 
   let {
     initialGroup = "",
@@ -213,6 +214,7 @@
   let highlightTimestamp = $state("");
 
   let stream = $state<ReturnType<typeof LogStream> | null>(null);
+  let streamViewport = $state({ first: 0, last: 0 });
 
 
   const isAllGroup = $derived(selectedGroup === ALL_GROUP);
@@ -971,47 +973,21 @@
     !pinsOnly && (filterLevels.length > 0 || Object.values(levelCounts).filter((n) => n > 0).length > 1),
   );
 
-  // ── Timeline ribbon: loaded events bucketed across their time span ──
-  const RIBBON_BUCKETS = 72;
+  // ── Timeline live rate over the most recent 10s of the window ──
   const ribbon = $derived.by(() => {
     const n = displayEvents.length;
     if (n === 0) return null;
-    let min = Infinity;
     let max = -Infinity;
-    const times = new Float64Array(n);
     for (let i = 0; i < n; i++) {
       const t = Date.parse(displayEvents[i].timestamp);
-      times[i] = t;
-      if (t < min) min = t;
       if (t > max) max = t;
     }
-    const span = Math.max(1, max - min);
-    const counts = new Array<number>(RIBBON_BUCKETS).fill(0);
-    const errors = new Array<number>(RIBBON_BUCKETS).fill(0);
-    const firstIdx = new Array<number>(RIBBON_BUCKETS).fill(-1);
-    for (let i = 0; i < n; i++) {
-      const b = Math.min(RIBBON_BUCKETS - 1, Math.floor(((times[i] - min) / span) * RIBBON_BUCKETS));
-      counts[b]++;
-      if (displayEvents[i].level === "ERROR") errors[b]++;
-      if (firstIdx[b] < 0) firstIdx[b] = i;
-    }
-    const peak = Math.max(...counts);
-    const bucketMs = span / RIBBON_BUCKETS;
-    // Events/sec over the most recent 10s of the window.
     let recent = 0;
-    for (let i = 0; i < n; i++) if (max - times[i] <= 10_000) recent++;
-    return { counts, errors, firstIdx, peak, min, max, bucketMs, rate: recent / 10 };
+    for (let i = 0; i < n; i++) {
+      if (max - Date.parse(displayEvents[i].timestamp) <= 10_000) recent++;
+    }
+    return { rate: recent / 10 };
   });
-
-  let ribbonHover = $state(-1);
-
-  function ribbonLabel(b: number): string {
-    if (!ribbon) return "";
-    const from = new Date(ribbon.min + b * ribbon.bucketMs);
-    const count = ribbon.counts[b];
-    const errs = ribbon.errors[b];
-    return `${formatCompactTime(from.toISOString())} · ${count} event${count === 1 ? "" : "s"}${errs ? ` · ${errs} err` : ""}`;
-  }
 
   // ── Groups list ──────────────────────────────────────────────────────
   const totalEventCount = $derived(groups.reduce((sum, g) => sum + g.eventCount, 0));
@@ -1115,7 +1091,7 @@
       {onToggleSidebar}
     >
       {#snippet lead()}
-        <button type="button" onclick={backToGroups} class="rc-icon-btn" aria-label="Back to log groups">
+        <button type="button" onclick={selectedEvent ? closeDetail : backToGroups} class="rc-icon-btn" aria-label={selectedEvent ? "Back to log list" : "Back to log groups"}>
           <ArrowLeftIcon size={15} />
         </button>
       {/snippet}
@@ -1279,6 +1255,16 @@
       <div class="rc-error" role="alert">{pinError}</div>
     {/if}
 
+    {#if !summaryMode && !pinsOnly}
+      <LogActivity
+        events={displayEvents}
+        viewport={streamViewport}
+        selectedTimestamp={selectedEvent?.timestamp ?? null}
+        groupForEvent={groupForEvent}
+        onSelectBucket={(index) => stream?.scrollToIndex(index)}
+      />
+    {/if}
+
     {#if summaryMode}
       <LogSummary
         groups={isAllGroup ? [] : selectedGroupList}
@@ -1301,33 +1287,6 @@
     {:else if displayEvents.length > 0 || selectedEvent}
       {#snippet streamPanel()}
         <div class="flex h-full min-h-0 flex-col">
-          {#if ribbon}
-            <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div class="rc-ribbon" onpointerleave={() => (ribbonHover = -1)}>
-              {#each ribbon.counts as count, b (b)}
-                <button
-                  type="button"
-                  class="rc-ribbon-bar"
-                  class:hot={ribbonHover === b}
-                  disabled={count === 0}
-                  onpointerenter={() => (ribbonHover = b)}
-                  onclick={() => stream?.scrollToIndex(ribbon.firstIdx[b])}
-                  aria-label={ribbonLabel(b)}
-                >
-                  <span
-                    class="rc-ribbon-fill"
-                    style:height="{count === 0 ? 0 : 12 + Math.sqrt(count / ribbon.peak) * 88}%"
-                  ></span>
-                  {#if ribbon.errors[b] > 0}
-                    <span class="rc-ribbon-err" style:height="{Math.max(18, (ribbon.errors[b] / count) * 100)}%"></span>
-                  {/if}
-                </button>
-              {/each}
-              <span class="rc-ribbon-label">
-                {ribbonHover >= 0 ? ribbonLabel(ribbonHover) : `${formatCompactTime(new Date(ribbon.min).toISOString())} → ${formatCompactTime(new Date(ribbon.max).toISOString())}`}
-              </span>
-            </div>
-          {/if}
           <div class="min-h-0 flex-1">
             <LogStream
               bind:this={stream}
@@ -1343,19 +1302,20 @@
               {pinnedKeys}
               onTogglePin={togglePin}
               onSelect={selectEvent}
+              onViewportChange={(range) => streamViewport = range}
             />
           </div>
         </div>
       {/snippet}
 
       <div class="rc-panel min-h-0 flex-1">
+        <PaneGroup direction="horizontal" class="h-full min-h-0">
+          <Pane defaultSize={62} minSize={35} class="flex min-h-0 flex-col overflow-hidden">
+            {@render streamPanel()}
+          </Pane>
         {#if selectedEvent}
           {@const ev = selectedEvent}
-          {@const dd = uiSettings.formatDatadogLogs ? formatDatadogLog(ev.message) : null}
-          <PaneGroup direction="horizontal" class="h-full min-h-0">
-            <Pane defaultSize={62} minSize={35} class="flex min-h-0 flex-col overflow-hidden">
-              {@render streamPanel()}
-            </Pane>
+          {@const dd = uiSettings.formatDatadogLogs ? formatLogMessage(ev.message) : null}
             <Handle />
             <Pane defaultSize={38} minSize={25} class="flex min-h-0 flex-col overflow-hidden">
               <div class="rc-detail" data-level={ev.level}>
@@ -1496,10 +1456,8 @@
                 </div>
               </div>
             </Pane>
-          </PaneGroup>
-        {:else}
-          {@render streamPanel()}
         {/if}
+        </PaneGroup>
       </div>
 
       {#if hasPagination}
@@ -1541,7 +1499,7 @@
               <button type="button" class="rc-pin-open" onclick={() => openPin(pin)} title="Open pinned log in {pin.group}">
                 <span class="rc-pin-time">{formatDetailTimestamp(pin.event.timestamp)}</span>
                 <span class="rc-pin-group">{groupDisplayName(pin.group)}</span>
-                <span class="rc-pin-message">{(uiSettings.formatDatadogLogs && formatDatadogLog(pin.event.message)?.message) || pin.event.message}</span>
+                <span class="rc-pin-message">{(uiSettings.formatDatadogLogs && formatLogMessage(pin.event.message)?.message) || pin.event.message}</span>
               </button>
               <button type="button" class="rc-pin-remove" onclick={() => unpin(pin)} aria-label="Unpin log from {pin.group}" title="Unpin log"><XIcon size={12} /></button>
             </div>
@@ -2054,65 +2012,6 @@
     overflow: hidden;
   }
 
-  .rc-ribbon {
-    position: relative;
-    display: flex;
-    align-items: flex-end;
-    gap: 1px;
-    height: 34px;
-    padding: 6px 6px 0;
-    border-bottom: 1px solid var(--border-subtle);
-    flex-shrink: 0;
-  }
-
-  .rc-ribbon-bar {
-    position: relative;
-    flex: 1;
-    height: 18px;
-    display: flex;
-    align-items: flex-end;
-    cursor: pointer;
-  }
-
-  .rc-ribbon-bar:disabled {
-    cursor: default;
-  }
-
-  .rc-ribbon-fill {
-    width: 100%;
-    border-radius: 1.5px 1.5px 0 0;
-    background: var(--text-tertiary);
-    opacity: 0.45;
-    transition: height 260ms var(--ease-snappy), opacity 100ms ease, background 100ms ease;
-  }
-
-  .rc-ribbon-err {
-    position: absolute;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    border-radius: 1.5px 1.5px 0 0;
-    background: var(--accent-red);
-    opacity: 0.85;
-  }
-
-  .rc-ribbon-bar.hot .rc-ribbon-fill {
-    opacity: 1;
-    background: var(--text-primary);
-  }
-
-  .rc-ribbon-label {
-    position: absolute;
-    right: 10px;
-    top: 2px;
-    font-family: var(--font-ui-mono, var(--font-mono, monospace));
-    font-size: 10px;
-    color: var(--text-tertiary);
-    pointer-events: none;
-    font-variant-numeric: tabular-nums;
-    padding-left: 6px;
-    background: var(--bg-stage);
-  }
 
   /* ─── Detail panel ─── */
   .rc-detail {

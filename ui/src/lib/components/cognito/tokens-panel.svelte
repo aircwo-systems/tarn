@@ -1,12 +1,12 @@
 <script lang="ts">
   import { CheckIcon, CopyIcon, MagnifyingGlassIcon } from "phosphor-svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
-  import RcTonePill from "$lib/components/rack/rc-tone-pill.svelte";
-  import { decodeCognitoToken, mintCognitoTokens } from "$lib/api";
-  import { formatJSONForViewer } from "$lib/json-format";
-  import type { CognitoClient, CognitoDecodedToken, CognitoTokens, CognitoUser } from "$lib/types";
-  import { formatDate } from "$lib/utils";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
+  import RcTonePill from "#lib/components/rack/rc-tone-pill.svelte";
+  import { decodeCognitoToken, mintCognitoTokens } from "#lib/api";
+  import { formatJSONForViewer } from "#lib/json-format";
+  import type { CognitoClient, CognitoDecodedToken, CognitoTokens, CognitoUser } from "#lib/types";
+  import { formatDate } from "#lib/utils";
   import { createCopier, displayName, expiresIn } from "./cognito-ui.svelte";
 
   let {

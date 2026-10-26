@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { getDashboard } from "$lib/state.svelte";
+  import { getDashboard } from "#lib/state.svelte";
   import { fade } from "svelte/transition";
 
   let {

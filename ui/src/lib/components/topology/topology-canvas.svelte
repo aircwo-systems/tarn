@@ -6,13 +6,13 @@
   } from "phosphor-svelte";
 
   const isMac = /mac/i.test(navigator.platform);
-  import GatewayDetailsPanel from "$lib/components/topology/gateway-details-panel.svelte";
+  import GatewayDetailsPanel from "#lib/components/topology/gateway-details-panel.svelte";
   import {
     getDashboard,
     getDashboardFilters,
     getVisibleInfra,
-  } from "$lib/state.svelte";
-  import type { InfraProbe } from "$lib/types";
+  } from "#lib/state.svelte";
+  import type { InfraProbe } from "#lib/types";
   import type {
     InfraNodePosition,
     NodeOverride,
@@ -23,7 +23,7 @@
   import TopologyComponentsView from "./TopologyComponentsView.svelte";
   import TopologyConnectionView from "./TopologyConnectionView.svelte";
   import type { NodeKind } from "./types";
-  import { resolveDirectPrototypeFilter, matchesResourceFilter, matchesInfrastructureFilter } from "$lib/filter-utils";
+  import { resolveDirectPrototypeFilter, matchesResourceFilter, matchesInfrastructureFilter } from "#lib/filter-utils";
 
   const dashboard = getDashboard();
   const filters = getDashboardFilters();

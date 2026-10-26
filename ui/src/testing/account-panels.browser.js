@@ -1,5 +1,5 @@
-import { getAccountSettings, refresh, stopPolling, switchAccount } from "$lib/state.svelte";
-import { pinnedLogId, savePinnedLogs } from "$lib/pinned-logs";
+import { getAccountSettings, refresh, stopPolling, switchAccount } from "#lib/state.svelte";
+import { pinnedLogId, savePinnedLogs } from "#lib/pinned-logs";
 
 // Run in a dashboard dev-server tab:
 // await (await import('/src/testing/account-panels.browser.js')).checkAccountPanels()

@@ -1,2 +1,4 @@
 [install]
 exact = false
+# supply-chain: ignore package versions published < 3 days ago (seconds)
+minimumReleaseAge = 259200

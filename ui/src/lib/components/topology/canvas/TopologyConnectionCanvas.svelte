@@ -5,9 +5,9 @@
     MagnifyingGlassPlusIcon,
   } from "phosphor-svelte";
   import { Canvas, type CanvasResizeEvent } from "svelte-canvas";
-  import Button from "$lib/components/ui/button/button.svelte";
-  import * as ContextMenu from "$lib/components/ui/context-menu/index.js";
-  import type { RequestTrace } from "$lib/types";
+  import Button from "#lib/components/ui/button/button.svelte";
+  import * as ContextMenu from "#lib/components/ui/context-menu/index.js";
+  import type { RequestTrace } from "#lib/types";
   import {
     getTopologyNodeConfigTab,
     getTopologyNodeSupportedSizes,

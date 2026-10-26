@@ -8,15 +8,15 @@
     MagnifyingGlassIcon,
     UploadSimpleIcon,
   } from "phosphor-svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcStat from "$lib/components/rack/rc-stat.svelte";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcStat from "#lib/components/rack/rc-stat.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
   import ObjectPreview from "./object-preview.svelte";
   import { onDestroy } from "svelte";
-  import { deleteObject, leafName, listObjects, putObject, type S3Listing } from "$lib/s3";
-  import { refresh } from "$lib/state.svelte";
-  import { formatBytes, formatDate, timeAgo } from "$lib/utils";
-  import type { BucketSummary } from "$lib/types";
+  import { deleteObject, leafName, listObjects, putObject, type S3Listing } from "#lib/s3";
+  import { refresh } from "#lib/state.svelte";
+  import { formatBytes, formatDate, timeAgo } from "#lib/utils";
+  import type { BucketSummary } from "#lib/types";
 
   let {
     bucket,

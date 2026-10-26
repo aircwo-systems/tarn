@@ -2,11 +2,11 @@
   import { onMount } from "svelte";
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
-  import RcListRow from "$lib/components/rack/rc-list-row.svelte";
-  import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
-  import PoolDetail from "$lib/components/cognito/pool-detail.svelte";
-  import { getDashboard, getDashboardFilters } from "$lib/state.svelte";
-  import { matchesResourceFilter } from "$lib/filter-utils";
+  import RcListRow from "#lib/components/rack/rc-list-row.svelte";
+  import RcResizableAside from "#lib/components/rack/rc-resizable-aside.svelte";
+  import PoolDetail from "#lib/components/cognito/pool-detail.svelte";
+  import { getDashboard, getDashboardFilters } from "#lib/state.svelte";
+  import { matchesResourceFilter } from "#lib/filter-utils";
 
   let {
     sidebarCollapsed = false,

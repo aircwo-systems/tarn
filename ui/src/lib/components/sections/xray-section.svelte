@@ -10,11 +10,11 @@
     XIcon,
   } from "phosphor-svelte";
   import { fade, slide } from "svelte/transition";
-  import { runEventBridgeRace, tryOperation, type TryOperationResponse } from "$lib/api";
-  import { getDashboard, refresh } from "$lib/state.svelte";
-  import type { RequestTrace, TraceSpan } from "$lib/types";
-  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
-  import { formatJSONForViewer } from "$lib/json-format";
+  import { runEventBridgeRace, tryOperation, type TryOperationResponse } from "#lib/api";
+  import { getDashboard, refresh } from "#lib/state.svelte";
+  import type { RequestTrace, TraceSpan } from "#lib/types";
+  import FormattedMessageViewer from "#lib/components/common/formatted-message-viewer.svelte";
+  import { formatJSONForViewer } from "#lib/json-format";
   import {
     SUB_SPAN_KINDS,
     spanColor,
@@ -26,7 +26,7 @@
     orderSpans,
     worstSpanStatus,
     traceTitle,
-  } from "$lib/trace-utils";
+  } from "#lib/trace-utils";
   import SectionHeader from "./section-header.svelte";
 
   let {

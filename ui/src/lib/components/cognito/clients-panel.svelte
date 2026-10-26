@@ -1,10 +1,10 @@
 <script lang="ts">
   import { CheckIcon, CopyIcon, EyeIcon, EyeSlashIcon } from "phosphor-svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
-  import { fetchCognitoClientSecret } from "$lib/api";
-  import type { CognitoClient } from "$lib/types";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
+  import { fetchCognitoClientSecret } from "#lib/api";
+  import type { CognitoClient } from "#lib/types";
   import { createCopier } from "./cognito-ui.svelte";
 
   let { poolId, clients, index = 0 }: { poolId: string; clients: CognitoClient[]; index?: number } = $props();

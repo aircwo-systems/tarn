@@ -1,13 +1,13 @@
 <script lang="ts">
   import { CheckIcon, CopyIcon, ListBulletsIcon, StopIcon } from "phosphor-svelte";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
-  import { stopECSTask } from "$lib/api";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcStat from "$lib/components/rack/rc-stat.svelte";
-  import RcKv, { type KvItem } from "$lib/components/rack/rc-kv.svelte";
-  import RcListRow from "$lib/components/rack/rc-list-row.svelte";
-  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import FunctionLogs from "$lib/components/functions/function-logs.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
+  import { stopECSTask } from "#lib/api";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcStat from "#lib/components/rack/rc-stat.svelte";
+  import RcKv, { type KvItem } from "#lib/components/rack/rc-kv.svelte";
+  import RcListRow from "#lib/components/rack/rc-list-row.svelte";
+  import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
+  import FunctionLogs from "#lib/components/functions/function-logs.svelte";
   import {
     clusterLabel,
     findTaskDefinition,
@@ -20,9 +20,9 @@
     taskLabel,
     tasksForService,
     type EcsSelection,
-  } from "$lib/ecs";
-  import { formatDate, timeAgo } from "$lib/utils";
-  import type { ECSOverview, ECSTaskSummary } from "$lib/types";
+  } from "#lib/ecs";
+  import { formatDate, timeAgo } from "#lib/utils";
+  import type { ECSOverview, ECSTaskSummary } from "#lib/types";
 
   let {
     sel,

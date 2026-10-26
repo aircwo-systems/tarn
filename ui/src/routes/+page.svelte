@@ -20,14 +20,16 @@
     FingerprintIcon,
   } from "phosphor-svelte";
   import { onMount, type Component } from "svelte";
+  import { unlockAWSOwnerFromLocation } from "#lib/aws-connections";
 
-  import AppSidebar, { type NavSection } from "$lib/components/layout/app-sidebar.svelte";
-  import CommandPalette from "$lib/components/layout/command-palette.svelte";
-  import { getLogPulse, startLogPulse } from "$lib/log-pulse.svelte";
-  import HomeView from "$lib/components/home/home-view.svelte";
+  import AppSidebar, { type NavSection } from "#lib/components/layout/app-sidebar.svelte";
+  import CommandPalette from "#lib/components/layout/command-palette.svelte";
+  import { getLogPulse, startLogPulse } from "#lib/log-pulse.svelte";
+  import { page } from "$app/state";
+  import HomeView from "#lib/components/home/home-view.svelte";
   import {
     normalizeTopologyInfraKind,
-  } from "$lib/components/topology/topology-canvas-theme";
+  } from "#lib/components/topology/topology-canvas-theme";
 
   import {
     getDashboard,
@@ -35,20 +37,20 @@
     getUISettings,
     getAccountSettings,
     getVisibleInfra,
-  } from "$lib/state.svelte";
+  } from "#lib/state.svelte";
 
   import {
     matchesResourceFilter,
     matchesResourceType,
     matchesInfrastructureFilter,
-  } from "$lib/filter-utils";
+  } from "#lib/filter-utils";
   import {
     TabNavigationHistory,
     logStateFromLocation,
     tabFromHash,
     type DashboardTab,
     type LogSortOrder,
-  } from "$lib/navigation-history";
+  } from "#lib/navigation-history";
 
   const dashboard = getDashboard();
   const filters = getDashboardFilters();
@@ -69,6 +71,7 @@
   let homeSection = $state("");
 
   function readHash() {
+    void unlockAWSOwnerFromLocation();
     if (window.location.hash.split("?", 1)[0] === "#overview") {
       window.history.replaceState(null, "", "#home?section=topology");
     }
@@ -120,24 +123,24 @@
   // Each tab ships as its own chunk so first load only pays for home.
   type SectionModule = { default: Component<any> };
   const sectionLoaders: Partial<Record<DashboardTab, () => Promise<SectionModule>>> = {
-    gateways: () => import("$lib/components/sections/api-gateways-section.svelte"),
-    functions: () => import("$lib/components/sections/functions-section.svelte"),
-    ecs: () => import("$lib/components/sections/ecs-section.svelte"),
-    logs: () => import("$lib/components/sections/logs-section.svelte"),
-    queues: () => import("$lib/components/sections/queues-section.svelte"),
-    dynamodb: () => import("$lib/components/sections/dynamodb-section.svelte"),
-    sns: () => import("$lib/components/sections/sns-section.svelte"),
-    secrets: () => import("$lib/components/sections/secrets-section.svelte"),
-    cognito: () => import("$lib/components/sections/cognito-section.svelte"),
-    triggers: () => import("$lib/components/sections/triggers-section.svelte"),
-    eventbridge: () => import("$lib/components/sections/eventbridge-section.svelte"),
-    stepfunctions: () => import("$lib/components/sections/stepfunctions-section.svelte"),
-    storage: () => import("$lib/components/sections/storage-section.svelte"),
-    services: () => import("$lib/components/sections/services-section.svelte"),
-    xray: () => import("$lib/components/sections/xray-section.svelte"),
-    stack: () => import("$lib/components/sections/stack-section.svelte"),
-    settings: () => import("$lib/components/sections/settings-section.svelte"),
-    chaos: () => import("$lib/components/sections/chaos-section.svelte"),
+    gateways: () => import("#lib/components/sections/api-gateways-section.svelte"),
+    functions: () => import("#lib/components/sections/functions-section.svelte"),
+    ecs: () => import("#lib/components/sections/ecs-section.svelte"),
+    logs: () => import("#lib/components/sections/logs-section.svelte"),
+    queues: () => import("#lib/components/sections/queues-section.svelte"),
+    dynamodb: () => import("#lib/components/sections/dynamodb-section.svelte"),
+    sns: () => import("#lib/components/sections/sns-section.svelte"),
+    secrets: () => import("#lib/components/sections/secrets-section.svelte"),
+    cognito: () => import("#lib/components/sections/cognito-section.svelte"),
+    triggers: () => import("#lib/components/sections/triggers-section.svelte"),
+    eventbridge: () => import("#lib/components/sections/eventbridge-section.svelte"),
+    stepfunctions: () => import("#lib/components/sections/stepfunctions-section.svelte"),
+    storage: () => import("#lib/components/sections/storage-section.svelte"),
+    services: () => import("#lib/components/sections/services-section.svelte"),
+    xray: () => import("#lib/components/sections/xray-section.svelte"),
+    stack: () => import("#lib/components/sections/stack-section.svelte"),
+    settings: () => import("#lib/components/sections/settings-section.svelte"),
+    chaos: () => import("#lib/components/sections/chaos-section.svelte"),
   };
   let loadedSections = $state.raw<Partial<Record<DashboardTab, Component<any>>>>({});
   let sectionLoadError = $state("");
@@ -378,7 +381,7 @@
         <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "logs"}
         <ActiveSection
-          initialGroup={logsInitialGroup}
+          initialGroup={logsInitialGroup || (import.meta.env.DEV && page.url.searchParams.get("logs-poc") === "1" ? "__all__" : "")}
           initialTimestamp={logsInitialTimestamp}
           initialLevels={logsInitialLevels}
           initialPattern={logsInitialPattern}

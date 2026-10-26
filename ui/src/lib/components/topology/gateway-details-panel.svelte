@@ -5,8 +5,8 @@
     CopyIcon,
     CheckIcon,
   } from "phosphor-svelte";
-  import Badge from "$lib/components/ui/badge/badge.svelte";
-  import type { GatewaySummary, RouteDetail } from "$lib/types";
+  import Badge from "#lib/components/ui/badge/badge.svelte";
+  import type { GatewaySummary, RouteDetail } from "#lib/types";
   import {
     slugify,
     normalizeTemplate,
@@ -14,7 +14,7 @@
     buildPostmanCollection,
     buildPostmanEnvironment,
     downloadJSON,
-  } from "$lib/postman";
+  } from "#lib/postman";
 
   let {
     gateway,

@@ -10,14 +10,14 @@
     ListBulletsIcon,
     WarningCircleIcon,
   } from "phosphor-svelte";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcTonePill from "$lib/components/rack/rc-tone-pill.svelte";
-  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
-  import { invokeFunction } from "$lib/api";
-  import { loadSavedEvents, saveTestEvent, deleteSavedEvent } from "$lib/saved-events";
-  import { getAccountSettings } from "$lib/state.svelte";
-  import type { InvokeFunctionResult, SavedTestEvent } from "$lib/types";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcTonePill from "#lib/components/rack/rc-tone-pill.svelte";
+  import FormattedMessageViewer from "#lib/components/common/formatted-message-viewer.svelte";
+  import { invokeFunction } from "#lib/api";
+  import { loadSavedEvents, saveTestEvent, deleteSavedEvent } from "#lib/saved-events";
+  import { getAccountSettings } from "#lib/state.svelte";
+  import type { InvokeFunctionResult, SavedTestEvent } from "#lib/types";
 
   let {
     functionName,

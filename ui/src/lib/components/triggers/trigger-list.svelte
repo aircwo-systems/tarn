@@ -26,8 +26,8 @@
 
 <script lang="ts">
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
-  import RcListRow from "$lib/components/rack/rc-list-row.svelte";
-  import RcTonePill from "$lib/components/rack/rc-tone-pill.svelte";
+  import RcListRow from "#lib/components/rack/rc-list-row.svelte";
+  import RcTonePill from "#lib/components/rack/rc-tone-pill.svelte";
 
   let {
     triggers,

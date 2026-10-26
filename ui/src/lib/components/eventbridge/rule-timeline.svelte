@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { describeSchedule } from "$lib/eventbridge-schedule";
-  import { formatDate, timeAgo } from "$lib/utils";
-  import type { EventBridgeRuleSummary } from "$lib/types";
+  import { describeSchedule } from "#lib/eventbridge-schedule";
+  import { formatDate, timeAgo } from "#lib/utils";
+  import type { EventBridgeRuleSummary } from "#lib/types";
 
   let { rule }: { rule: EventBridgeRuleSummary } = $props();
 

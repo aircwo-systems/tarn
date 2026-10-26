@@ -23,7 +23,7 @@ import type {
   CognitoUserAction,
   CognitoTokens,
   CognitoDecodedToken,
-} from "$lib/types";
+} from "#lib/types";
 
 let _activeAccountId = "000000000000";
 
@@ -47,6 +47,11 @@ const awsProtocolBase = normalizeAWSProtocolBase(configuredBase);
 
 function endpoint(path: string): string {
   return `${configuredBase}${path}`;
+}
+
+/** Instance APIs use their own owner session, independently of emulated accounts. */
+export function fetchInstanceResource(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(endpoint(path), { ...init, credentials: "same-origin" });
 }
 
 /** Fetch a backend resource using the configured base and the currently selected account. */

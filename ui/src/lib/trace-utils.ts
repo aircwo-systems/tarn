@@ -1,4 +1,4 @@
-import type { RequestTrace, TraceSpan } from "$lib/types";
+import type { RequestTrace, TraceSpan } from "#lib/types";
 
 export const SUB_SPAN_KINDS = new Set([
   "postgres",

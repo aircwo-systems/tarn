@@ -1,12 +1,12 @@
 import { mount, tick, unmount } from "svelte";
 import Page from "../routes/+page.svelte";
-import EventBridgeSection from "$lib/components/sections/eventbridge-section.svelte";
+import EventBridgeSection from "#lib/components/sections/eventbridge-section.svelte";
 import {
   getAccountSettings,
   getDashboardFilters,
   refresh,
   setDashboardTagFilter,
-} from "$lib/state.svelte";
+} from "#lib/state.svelte";
 
 // Run these exports in a blank HTML page served by the dashboard dev server.
 // API calls are intercepted; no rule is changed on a live backend.

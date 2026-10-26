@@ -1,7 +1,7 @@
 <script lang="ts">
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import type { CognitoPoolDetail } from "$lib/types";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import type { CognitoPoolDetail } from "#lib/types";
   import { functionName } from "./cognito-ui.svelte";
 
   let { pool, index = 0 }: { pool: CognitoPoolDetail; index?: number } = $props();

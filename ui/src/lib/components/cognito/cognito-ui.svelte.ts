@@ -1,5 +1,5 @@
-import type { Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-import type { CognitoUser, CognitoUserStatus } from "$lib/types";
+import type { Tone } from "#lib/components/rack/rc-tone-pill.svelte";
+import type { CognitoUser, CognitoUserStatus } from "#lib/types";
 
 /** The name to lead with. Pools that sign in with email or phone store the
  * user's sub as the username, which says nothing to a reader. */

@@ -1,13 +1,13 @@
 <script lang="ts">
   import { CheckIcon, CopyIcon, EyeIcon, EyeSlashIcon } from "phosphor-svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import RcStat from "$lib/components/rack/rc-stat.svelte";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
-  import { fetchSecretValue } from "$lib/api";
-  import { formatJSONForViewer } from "$lib/json-format";
-  import type { SecretSummary, SecretValueResult } from "$lib/types";
-  import { formatDate, timeAgo } from "$lib/utils";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import RcStat from "#lib/components/rack/rc-stat.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
+  import { fetchSecretValue } from "#lib/api";
+  import { formatJSONForViewer } from "#lib/json-format";
+  import type { SecretSummary, SecretValueResult } from "#lib/types";
+  import { formatDate, timeAgo } from "#lib/utils";
 
   let { secret }: { secret: SecretSummary } = $props();
 

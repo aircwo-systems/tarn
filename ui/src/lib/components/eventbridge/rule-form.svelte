@@ -10,9 +10,9 @@
 
 <script lang="ts">
   import { untrack } from "svelte";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
   import ScheduleField from "./schedule-field.svelte";
-  import { ruleDefinitionError } from "$lib/eventbridge-rule";
+  import { ruleDefinitionError } from "#lib/eventbridge-rule";
 
   let {
     initial,

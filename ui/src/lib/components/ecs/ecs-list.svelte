@@ -1,6 +1,6 @@
 <script lang="ts">
   import { MagnifyingGlassIcon } from "phosphor-svelte";
-  import RcListRow from "$lib/components/rack/rc-list-row.svelte";
+  import RcListRow from "#lib/components/rack/rc-list-row.svelte";
   import {
     clusterLabel,
     ecsKey,
@@ -10,8 +10,8 @@
     taskDefinitionLabel,
     taskLabel,
     type EcsSelection,
-  } from "$lib/ecs";
-  import type { ECSOverview, ECSTaskSummary } from "$lib/types";
+  } from "#lib/ecs";
+  import type { ECSOverview, ECSTaskSummary } from "#lib/types";
 
   let {
     ecs,

@@ -1,10 +1,10 @@
 <script lang="ts">
   import { CheckIcon, CopyIcon } from "phosphor-svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import { formatJSONForViewer } from "$lib/json-format";
-  import type { SubscriptionSummary } from "$lib/types";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
+  import { formatJSONForViewer } from "#lib/json-format";
+  import type { SubscriptionSummary } from "#lib/types";
 
   let {
     subscription,

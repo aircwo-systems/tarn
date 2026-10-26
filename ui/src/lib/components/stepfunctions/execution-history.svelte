@@ -1,13 +1,13 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import { ArrowUpRightIcon, CaretDownIcon } from "phosphor-svelte";
-  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
-  import { formatJSONForViewer } from "$lib/json-format";
+  import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
+  import FormattedMessageViewer from "#lib/components/common/formatted-message-viewer.svelte";
+  import { formatJSONForViewer } from "#lib/json-format";
   import type {
     StateMachineExecutionSummary,
     StateMachineEventSummary,
-  } from "$lib/types";
+  } from "#lib/types";
 
   let { execution }: { execution: StateMachineExecutionSummary } = $props();
 

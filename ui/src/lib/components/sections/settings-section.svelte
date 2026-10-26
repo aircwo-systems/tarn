@@ -3,14 +3,15 @@
   import { onMount, tick, untrack } from "svelte";
   import { fly } from "svelte/transition";
 
-  import type { UserService } from "$lib/types";
-  import { fetchAccounts, changeAccount, fetchConnections, type ServerAccount, type TarnConnections, type MCPSession } from "$lib/api";
-  import { timeAgo } from "$lib/utils";
-  import SectionHeader from "$lib/components/sections/section-header.svelte";
-  import AccountDeleteConfirmation from "$lib/components/sections/account-delete-confirmation.svelte";
-  import DitherBand from "$lib/components/home/dither-band.svelte";
-  import { TARN_ART, TARN_MUTE } from "$lib/components/home/tarn-art";
-  import { BANNER_SCENES, BANNER_STYLES, getBannerPrefs, setBannerScene, setBannerStyle, type BannerScene, type BannerStyle } from "$lib/components/home/banner-prefs.svelte";
+  import type { UserService } from "#lib/types";
+  import { fetchAccounts, changeAccount, fetchConnections, type ServerAccount, type TarnConnections, type MCPSession } from "#lib/api";
+  import { timeAgo } from "#lib/utils";
+  import SectionHeader from "#lib/components/sections/section-header.svelte";
+  import AccountDeleteConfirmation from "#lib/components/sections/account-delete-confirmation.svelte";
+  import AWSConnectionsSettings from "#lib/components/sections/aws-connections-settings.svelte";
+  import DitherBand from "#lib/components/home/dither-band.svelte";
+  import { TARN_ART, TARN_MUTE } from "#lib/components/home/tarn-art";
+  import { BANNER_SCENES, BANNER_STYLES, getBannerPrefs, setBannerScene, setBannerStyle, type BannerScene, type BannerStyle } from "#lib/components/home/banner-prefs.svelte";
   import {
     getUISettings,
     getInfraSettings,
@@ -31,7 +32,7 @@
     type ThemeMode,
     type CollapsedSidebarMode,
     type InfraProbeKind,
-  } from "$lib/state.svelte";
+  } from "#lib/state.svelte";
 
   let {
     instanceInfo = null,
@@ -73,6 +74,7 @@
     { id: "workspace",  label: "Workspace" },
     { id: "infra",      label: "Infrastructure" },
     { id: "integrations", label: "Integrations" },
+    { id: "aws", label: "AWS connections" },
     { id: "instance",   label: "Instance" },
   ];
 
@@ -481,7 +483,7 @@
 <div class="settings" bind:this={root}>
   <SectionHeader
     title="Settings"
-    description="Saved to this browser (cookie + local storage)"
+    description="Browser preferences and local instance connections"
     {sidebarCollapsed}
     {onToggleSidebar}
   />
@@ -627,7 +629,7 @@
         <div class="setting">
           <div class="setting-label">
             <span>Log &amp; trace retention</span>
-            <small>Older events are removed. Max 24h.</small>
+            <small>Logs are kept in memory only. Older events are removed. Max 24h.</small>
           </div>
           <div class="setting-control">
             <div class="chips">
@@ -674,10 +676,10 @@
         </div>
         <div class="setting wrapping-setting">
           <div class="setting-label">
-            <span>Datadog logs</span>
-            <small>Show the message and application fields of Datadog JSON logs, without tracer bookkeeping.</small>
+            <span>JSON logs</span>
+            <small>Show the message or event and its fields. Datadog logs also show service and trace details.</small>
           </div>
-          <div class="segmented two-options" role="group" aria-label="Datadog logs">
+          <div class="segmented two-options" role="group" aria-label="JSON logs">
             <span class="segmented-pill" aria-hidden="true" style="transform: translateX({formatDatadogLogs ? 0 : 100}%)"></span>
             <button type="button" aria-pressed={formatDatadogLogs} class:on={formatDatadogLogs} onclick={() => (formatDatadogLogs = true)}>Formatted</button>
             <button type="button" aria-pressed={!formatDatadogLogs} class:on={!formatDatadogLogs} onclick={() => (formatDatadogLogs = false)}>Raw</button>
@@ -842,6 +844,11 @@
       </section>
 
       <!-- Instance -->
+      <section id="settings-aws" class="panel">
+        <header><h2>AWS connections</h2><p>Real AWS identities saved on this machine.</p></header>
+        <AWSConnectionsSettings />
+      </section>
+
       <section id="settings-instance" class="panel">
         <header>
           <h2>Instance</h2>

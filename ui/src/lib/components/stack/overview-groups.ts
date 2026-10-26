@@ -1,6 +1,6 @@
-import type { OverviewResponse } from "$lib/types";
-import { getVisibleInfra } from "$lib/state.svelte";
-import { buildTopologyGraph } from "$lib/components/topology/topology-connection-model";
+import type { OverviewResponse } from "#lib/types";
+import { getVisibleInfra } from "#lib/state.svelte";
+import { buildTopologyGraph } from "#lib/components/topology/topology-connection-model";
 import { buildStackGroups, type StackGroup } from "./stack-model";
 
 /** The overview's resources as stacks: the topology graph, grouped. */

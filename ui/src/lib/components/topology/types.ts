@@ -1,4 +1,4 @@
-import type { BucketSummary } from "$lib/types";
+import type { BucketSummary } from "#lib/types";
 
 export type NodeKind =
   | "gateway"

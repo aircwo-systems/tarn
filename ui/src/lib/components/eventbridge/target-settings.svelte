@@ -1,6 +1,6 @@
 <script lang="ts">
-  import RcKv, { type KvItem } from "$lib/components/rack/rc-kv.svelte";
-  import type { EventBridgeTargetSummary } from "$lib/types";
+  import RcKv, { type KvItem } from "#lib/components/rack/rc-kv.svelte";
+  import type { EventBridgeTargetSummary } from "#lib/types";
 
   let { target }: { target: EventBridgeTargetSummary } = $props();
 

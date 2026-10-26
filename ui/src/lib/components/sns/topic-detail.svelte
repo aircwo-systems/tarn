@@ -1,11 +1,11 @@
 <script lang="ts">
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcStat from "$lib/components/rack/rc-stat.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import RcTonePill from "$lib/components/rack/rc-tone-pill.svelte";
-  import RcListRow from "$lib/components/rack/rc-list-row.svelte";
-  import { formatUnixSeconds } from "$lib/utils";
-  import type { SubscriptionSummary, TopicSummary } from "$lib/types";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcStat from "#lib/components/rack/rc-stat.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import RcTonePill from "#lib/components/rack/rc-tone-pill.svelte";
+  import RcListRow from "#lib/components/rack/rc-list-row.svelte";
+  import { formatUnixSeconds } from "#lib/utils";
+  import type { SubscriptionSummary, TopicSummary } from "#lib/types";
 
   let {
     topic,

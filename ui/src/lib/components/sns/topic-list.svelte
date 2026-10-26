@@ -1,7 +1,7 @@
 <script lang="ts">
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
-  import RcListRow from "$lib/components/rack/rc-list-row.svelte";
-  import type { TopicSummary } from "$lib/types";
+  import RcListRow from "#lib/components/rack/rc-list-row.svelte";
+  import type { TopicSummary } from "#lib/types";
 
   let {
     topics,

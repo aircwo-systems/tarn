@@ -1,8 +1,8 @@
 <script lang="ts">
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
-  import RcListRow from "$lib/components/rack/rc-list-row.svelte";
-  import { describeSchedule } from "$lib/eventbridge-schedule";
-  import type { EventBridgeRuleSummary } from "$lib/types";
+  import RcListRow from "#lib/components/rack/rc-list-row.svelte";
+  import { describeSchedule } from "#lib/eventbridge-schedule";
+  import type { EventBridgeRuleSummary } from "#lib/types";
 
   let {
     rules,

@@ -1,9 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { XIcon, FloppyDiskIcon, CheckIcon } from "phosphor-svelte";
-  import { saveTestEvent } from "$lib/saved-events";
-  import { getAccountSettings } from "$lib/state.svelte";
-  import type { FunctionSummary } from "$lib/types";
+  import { saveTestEvent } from "#lib/saved-events";
+  import { getAccountSettings } from "#lib/state.svelte";
+  import type { FunctionSummary } from "#lib/types";
 
   let {
     messageBody,

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { SunIcon, MoonIcon } from "phosphor-svelte";
-  import { getUISettings, setThemeMode } from "$lib/state.svelte";
+  import { getUISettings, setThemeMode } from "#lib/state.svelte";
 
   let { class: className = "" }: { class?: string } = $props();
 

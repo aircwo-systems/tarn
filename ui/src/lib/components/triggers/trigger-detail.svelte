@@ -1,10 +1,10 @@
 <script lang="ts">
   import { ArrowUpRightIcon } from "phosphor-svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import RcTonePill from "$lib/components/rack/rc-tone-pill.svelte";
-  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
-  import { formatJSONForViewer } from "$lib/json-format";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import RcTonePill from "#lib/components/rack/rc-tone-pill.svelte";
+  import FormattedMessageViewer from "#lib/components/common/formatted-message-viewer.svelte";
+  import { formatJSONForViewer } from "#lib/json-format";
   import { triggerStateTone, type TriggerRow } from "./trigger-list.svelte";
 
   let {

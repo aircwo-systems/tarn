@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { describeSchedule, SCHEDULE_PRESETS } from "$lib/eventbridge-schedule";
+  import { describeSchedule, SCHEDULE_PRESETS } from "#lib/eventbridge-schedule";
 
   let { value = $bindable(""), id }: { value: string; id?: string } = $props();
 

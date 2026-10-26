@@ -1,19 +1,19 @@
 <script lang="ts">
-  import { matchesInfrastructureFilter } from "$lib/filter-utils";
+  import { matchesInfrastructureFilter } from "#lib/filter-utils";
   import { onMount } from "svelte";
   import { replaceState } from "$app/navigation";
   import { MagnifyingGlassIcon, PlusIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
-  import RcListRow from "$lib/components/rack/rc-list-row.svelte";
-  import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import RcStat from "$lib/components/rack/rc-stat.svelte";
-  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import { getDashboard, getDashboardFilters, getVisibleInfra } from "$lib/state.svelte";
-  import { infraKindCssVar, normalizeTopologyInfraKind } from "$lib/components/topology/topology-canvas-theme";
-  import type { InfraConnection, InfraProbe } from "$lib/types";
-  import { formatDate, timeAgo } from "$lib/utils";
+  import RcListRow from "#lib/components/rack/rc-list-row.svelte";
+  import RcResizableAside from "#lib/components/rack/rc-resizable-aside.svelte";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import RcStat from "#lib/components/rack/rc-stat.svelte";
+  import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
+  import { getDashboard, getDashboardFilters, getVisibleInfra } from "#lib/state.svelte";
+  import { infraKindCssVar, normalizeTopologyInfraKind } from "#lib/components/topology/topology-canvas-theme";
+  import type { InfraConnection, InfraProbe } from "#lib/types";
+  import { formatDate, timeAgo } from "#lib/utils";
 
   let {
     sidebarCollapsed = false,

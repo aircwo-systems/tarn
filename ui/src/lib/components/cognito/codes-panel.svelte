@@ -1,8 +1,8 @@
 <script lang="ts">
   import { CheckIcon, CopyIcon } from "phosphor-svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import type { CognitoPendingCode, CognitoUser } from "$lib/types";
-  import { timeAgo } from "$lib/utils";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import type { CognitoPendingCode, CognitoUser } from "#lib/types";
+  import { timeAgo } from "#lib/utils";
   import { createCopier, displayName, expiresIn, purposeLabel } from "./cognito-ui.svelte";
 
   let {

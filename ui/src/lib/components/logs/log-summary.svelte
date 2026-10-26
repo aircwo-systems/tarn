@@ -1,11 +1,11 @@
 <script lang="ts">
   import { ArrowUpRightIcon, CaretRightIcon, RowsIcon, WarningIcon } from "phosphor-svelte";
   import { slide } from "svelte/transition";
-  import { Skeleton } from "$lib/components/ui/skeleton";
-  import EmptyState from "$lib/components/common/empty-state.svelte";
-  import { fetchLogSummary, type LogSummary, type LogSummaryGroup, type LogSummarySample } from "$lib/api";
-  import { highlightJSON, highlightSearchText } from "$lib/json-format";
-  import type { LogEvent } from "$lib/types";
+  import { Skeleton } from "#lib/components/ui/skeleton";
+  import EmptyState from "#lib/components/common/empty-state.svelte";
+  import { fetchLogSummary, type LogSummary, type LogSummaryGroup, type LogSummarySample } from "#lib/api";
+  import { highlightJSON, highlightSearchText } from "#lib/json-format";
+  import type { LogEvent } from "#lib/types";
 
   let {
     groups = [],

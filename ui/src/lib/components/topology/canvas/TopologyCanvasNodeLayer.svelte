@@ -5,8 +5,8 @@
     FunctionSummary,
     InfraProbe,
     RequestTrace,
-  } from "$lib/types";
-  import { formatBytes } from "$lib/utils";
+  } from "#lib/types";
+  import { formatBytes } from "#lib/utils";
   import {
     CONNECTION_CANVAS,
     DETAIL_ROW,

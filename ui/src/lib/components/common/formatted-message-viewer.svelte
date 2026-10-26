@@ -1,8 +1,8 @@
 <script lang="ts">
   import { CaretDownIcon, CheckIcon, CopySimpleIcon } from "phosphor-svelte";
-  import { Tabs, TabsList, TabsTrigger } from "$lib/components/ui/tabs";
-  import VirtualizedCode from "$lib/components/common/virtualized-code.svelte";
-  import { highlightSearchText } from "$lib/json-format";
+  import { Tabs, TabsList, TabsTrigger } from "#lib/components/ui/tabs";
+  import VirtualizedCode from "#lib/components/common/virtualized-code.svelte";
+  import { highlightSearchText } from "#lib/json-format";
 
   let {
     raw,

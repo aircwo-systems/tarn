@@ -13,19 +13,19 @@
     WarningIcon,
   } from "phosphor-svelte";
   import { tick } from "svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
   import LivingTarn, { type Buoy } from "./living-tarn.svelte";
   import { getBannerPrefs } from "./banner-prefs.svelte";
-  import StackHex from "$lib/components/stack/stack-hex.svelte";
-  import TagFilter from "$lib/components/layout/tag-filter.svelte";
-  import TopologyCanvas from "$lib/components/topology/topology-canvas.svelte";
-  import { stackGroupsFromOverview } from "$lib/components/stack/overview-groups";
-  import { getDashboard, getDashboardFilters, getVisibleInfra } from "$lib/state.svelte";
-  import { getLogPulse } from "$lib/log-pulse.svelte";
-  import { matchesInfrastructureFilter, matchesResourceFilter } from "$lib/filter-utils";
-  import { normalizeTopologyInfraKind } from "$lib/components/topology/topology-canvas-theme";
-  import { timeAgo } from "$lib/utils";
-  import type { RequestTrace } from "$lib/types";
+  import StackHex from "#lib/components/stack/stack-hex.svelte";
+  import TagFilter from "#lib/components/layout/tag-filter.svelte";
+  import TopologyCanvas from "#lib/components/topology/topology-canvas.svelte";
+  import { stackGroupsFromOverview } from "#lib/components/stack/overview-groups";
+  import { getDashboard, getDashboardFilters, getVisibleInfra } from "#lib/state.svelte";
+  import { getLogPulse } from "#lib/log-pulse.svelte";
+  import { matchesInfrastructureFilter, matchesResourceFilter } from "#lib/filter-utils";
+  import { normalizeTopologyInfraKind } from "#lib/components/topology/topology-canvas-theme";
+  import { timeAgo } from "#lib/utils";
+  import type { RequestTrace } from "#lib/types";
 
   // Home is where Tarn opens: the tarn across the top with a buoy for
   // each function, one way to find anything at the seam, then what needs a

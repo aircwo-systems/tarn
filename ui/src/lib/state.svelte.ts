@@ -1,6 +1,6 @@
-import { AccountArchivedError, fetchOverview, fetchUserServices, pruneOldLogs, saveUserServices, setApiAccount } from "$lib/api";
-import { resetLogPulse } from "$lib/log-pulse.svelte";
-import type { InfraProbe, OverviewResponse, UserService } from "$lib/types";
+import { AccountArchivedError, fetchOverview, fetchUserServices, pruneOldLogs, saveUserServices, setApiAccount } from "#lib/api";
+import { resetLogPulse } from "#lib/log-pulse.svelte";
+import type { InfraProbe, OverviewResponse, UserService } from "#lib/types";
 
 export type InfraProbeKind =
   | "docker"
@@ -372,7 +372,7 @@ export function setDashboardTagFilter(next: string) {
   dashboardTagFilter = next.trim();
 }
 
-export { matchesTagFilter } from "$lib/filter-utils";
+export { matchesTagFilter } from "#lib/filter-utils";
 
 function schedulePolling() {
   stopPolling();

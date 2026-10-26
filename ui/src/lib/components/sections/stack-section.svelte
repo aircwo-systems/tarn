@@ -1,19 +1,19 @@
 <script lang="ts">
   import { ArrowLeftIcon, ArrowsLeftRightIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
-  import StackLanes from "$lib/components/stack/stack-lanes.svelte";
-  import StackGrid from "$lib/components/stack/stack-grid.svelte";
-  import StackHex from "$lib/components/stack/stack-hex.svelte";
-  import StackHexCards from "$lib/components/stack/stack-hex-cards.svelte";
-  import { getDashboard, getVisibleInfra } from "$lib/state.svelte";
-  import { buildTopologyGraph } from "$lib/components/topology/topology-connection-model";
+  import StackLanes from "#lib/components/stack/stack-lanes.svelte";
+  import StackGrid from "#lib/components/stack/stack-grid.svelte";
+  import StackHex from "#lib/components/stack/stack-hex.svelte";
+  import StackHexCards from "#lib/components/stack/stack-hex-cards.svelte";
+  import { getDashboard, getVisibleInfra } from "#lib/state.svelte";
+  import { buildTopologyGraph } from "#lib/components/topology/topology-connection-model";
   import {
     buildStackGroups,
     KIND_LABEL,
     KIND_TAB,
     kindVar,
     type StackGroup,
-  } from "$lib/components/stack/stack-model";
+  } from "#lib/components/stack/stack-model";
 
   let {
     sidebarCollapsed = false,

@@ -1,5 +1,5 @@
-import type { FunctionSummary, OverviewResponse, RequestTrace, TraceSpan } from "$lib/types";
-import { SUB_SPAN_KINDS, spanKindLabel } from "$lib/trace-utils";
+import type { FunctionSummary, OverviewResponse, RequestTrace, TraceSpan } from "#lib/types";
+import { SUB_SPAN_KINDS, spanKindLabel } from "#lib/trace-utils";
 
 /** A configured or observed thing that invokes a function. */
 export interface FunctionCaller {

@@ -12,12 +12,12 @@
     CheckCircleIcon,
     WarningIcon,
   } from "phosphor-svelte";
-  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
+  import FormattedMessageViewer from "#lib/components/common/formatted-message-viewer.svelte";
   import SectionHeader from "./section-header.svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
-  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import { formatJSONForViewer } from "$lib/json-format";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
+  import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
+  import { formatJSONForViewer } from "#lib/json-format";
   import type {
     GatewaySummary,
     RouteDetail,
@@ -25,18 +25,18 @@
     ScanSourceResponse,
     ScanMatch,
     ProbeBody,
-  } from "$lib/types";
+  } from "#lib/types";
   import {
     normalizeInvokeUrl,
     buildPostmanCollection,
     downloadJSON,
     slugify,
-  } from "$lib/postman";
+  } from "#lib/postman";
   import {
     getUISettings,
     setSchemaSourceDir,
     sanitizeSchemaSourceDir,
-  } from "$lib/state.svelte";
+  } from "#lib/state.svelte";
 
   let {
     gateways,

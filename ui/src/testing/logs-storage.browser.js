@@ -1,9 +1,9 @@
 import { mount, tick, unmount } from "svelte";
 import { fromStore, writable } from "svelte/store";
-import BucketDetail from "$lib/components/s3/bucket-detail.svelte";
-import LogsSection from "$lib/components/sections/logs-section.svelte";
-import FunctionInvocations from "$lib/components/functions/function-invocations.svelte";
-import { invocationsFromTraces } from "$lib/function-links";
+import BucketDetail from "#lib/components/s3/bucket-detail.svelte";
+import LogsSection from "#lib/components/sections/logs-section.svelte";
+import FunctionInvocations from "#lib/components/functions/function-invocations.svelte";
+import { invocationsFromTraces } from "#lib/function-links";
 
 // Run each exported check in a blank HTML page served by the dashboard dev server.
 // This avoids background dashboard requests. All API responses are synthetic.

@@ -1,6 +1,6 @@
 <script lang="ts" module>
-  import type { InfraProbe } from "$lib/types";
-  import type { LogPulse } from "$lib/log-pulse.svelte";
+  import type { InfraProbe } from "#lib/types";
+  import type { LogPulse } from "#lib/log-pulse.svelte";
 
   type ServiceBlock = Pick<
     InfraProbe,
@@ -34,8 +34,8 @@
 </script>
 
 <script lang="ts">
-  import { timeAgo } from "$lib/utils";
-  import { infraKindCssVar } from "$lib/components/topology/topology-canvas-theme";
+  import { timeAgo } from "#lib/utils";
+  import { infraKindCssVar } from "#lib/components/topology/topology-canvas-theme";
   let { data, width = 0 }: { data: SidebarWidgetData; width?: number } = $props();
 </script>
 

@@ -1,17 +1,17 @@
 <script lang="ts">
-  import { matchesResourceFilter } from "$lib/filter-utils";
+  import { matchesResourceFilter } from "#lib/filter-utils";
   import { onMount } from "svelte";
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
-  import TopicList from "$lib/components/sns/topic-list.svelte";
-  import SubscriptionList from "$lib/components/sns/subscription-list.svelte";
-  import TopicDetail from "$lib/components/sns/topic-detail.svelte";
-  import SubscriptionDetail from "$lib/components/sns/subscription-detail.svelte";
-  import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
+  import TopicList from "#lib/components/sns/topic-list.svelte";
+  import SubscriptionList from "#lib/components/sns/subscription-list.svelte";
+  import TopicDetail from "#lib/components/sns/topic-detail.svelte";
+  import SubscriptionDetail from "#lib/components/sns/subscription-detail.svelte";
+  import RcResizableAside from "#lib/components/rack/rc-resizable-aside.svelte";
   import {
     getDashboard,
     getDashboardFilters,
-  } from "$lib/state.svelte";
+  } from "#lib/state.svelte";
 
   let {
     sidebarCollapsed = false,

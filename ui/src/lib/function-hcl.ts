@@ -1,5 +1,5 @@
-import type { FunctionSummary } from "$lib/types";
-import { formatBytes, formatDate } from "$lib/utils";
+import type { FunctionSummary } from "#lib/types";
+import { formatBytes, formatDate } from "#lib/utils";
 
 /** Render a function summary as an `aws_lambda_function` Terraform block. */
 export function functionToHcl(f: FunctionSummary): string {

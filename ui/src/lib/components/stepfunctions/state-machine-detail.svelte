@@ -1,13 +1,13 @@
 <script lang="ts">
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcStat from "$lib/components/rack/rc-stat.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import RcListRow from "$lib/components/rack/rc-list-row.svelte";
-  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcStat from "#lib/components/rack/rc-stat.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
+  import RcListRow from "#lib/components/rack/rc-list-row.svelte";
+  import FormattedMessageViewer from "#lib/components/common/formatted-message-viewer.svelte";
   import ExecutionHistory from "./execution-history.svelte";
-  import { formatJSONForViewer } from "$lib/json-format";
-  import type { StateMachineSummary } from "$lib/types";
+  import { formatJSONForViewer } from "#lib/json-format";
+  import type { StateMachineSummary } from "#lib/types";
 
   let {
     machine,

@@ -1,12 +1,12 @@
 <script lang="ts">
   import { CaretRightIcon, MagnifyingGlassIcon } from "phosphor-svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcTonePill from "$lib/components/rack/rc-tone-pill.svelte";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import { cognitoUserAction } from "$lib/api";
-  import type { CognitoUser, CognitoUserAction } from "$lib/types";
-  import { formatDate, timeAgo } from "$lib/utils";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcTonePill from "#lib/components/rack/rc-tone-pill.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import { cognitoUserAction } from "#lib/api";
+  import type { CognitoUser, CognitoUserAction } from "#lib/types";
+  import { formatDate, timeAgo } from "#lib/utils";
   import { displayName, statusLabel, statusTone } from "./cognito-ui.svelte";
 
   let {

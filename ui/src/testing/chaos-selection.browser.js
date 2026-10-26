@@ -1,4 +1,4 @@
-import { refresh, stopPolling } from "$lib/state.svelte";
+import { refresh, stopPolling } from "#lib/state.svelte";
 
 // Run in a dashboard dev-server tab:
 // await (await import('/src/testing/chaos-selection.browser.js')).checkChaosSelection()

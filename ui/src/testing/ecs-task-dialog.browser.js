@@ -1,5 +1,5 @@
 import { mount, tick, unmount } from "svelte";
-import EcsRunTaskDialog from "$lib/components/ecs/ecs-run-task-dialog.svelte";
+import EcsRunTaskDialog from "#lib/components/ecs/ecs-run-task-dialog.svelte";
 
 // Run in a dashboard dev-server tab:
 // await (await import('/src/testing/ecs-task-dialog.browser.js')).checkEcsTaskDialog()

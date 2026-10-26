@@ -3,8 +3,8 @@
   import {
     getDashboardFilters,
     setDashboardTagFilter,
-  } from "$lib/state.svelte";
-  import { parseFilterTokens, mergeFilterTokens } from "$lib/filter-utils";
+  } from "#lib/state.svelte";
+  import { parseFilterTokens, mergeFilterTokens } from "#lib/filter-utils";
 
   const filters = getDashboardFilters();
 

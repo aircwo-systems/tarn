@@ -1,4 +1,4 @@
-import type { SavedTestEvent } from "$lib/types";
+import type { SavedTestEvent } from "#lib/types";
 
 function storageKey(accountId: string, functionName: string): string {
   const acct = accountId?.trim() || "000000000000";

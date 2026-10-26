@@ -9,19 +9,19 @@
     CopyIcon,
     WarningCircleIcon,
   } from "phosphor-svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcStat from "$lib/components/rack/rc-stat.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcStat from "#lib/components/rack/rc-stat.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
+  import FormattedMessageViewer from "#lib/components/common/formatted-message-viewer.svelte";
   import QueueDisruptor from "./queue-disruptor.svelte";
   import QueueSendDialog from "./queue-send-dialog.svelte";
   import QueueRedriveDialog from "./queue-redrive-dialog.svelte";
   import QueueSaveEventDialog from "./queue-save-event-dialog.svelte";
-  import { formatJSONForViewer } from "$lib/json-format";
-  import { formatUnixSeconds } from "$lib/utils";
-  import { purgeQueue, deleteQueueMessage } from "$lib/api";
-  import type { QueueMessageSummary, QueueSummary, FunctionSummary } from "$lib/types";
+  import { formatJSONForViewer } from "#lib/json-format";
+  import { formatUnixSeconds } from "#lib/utils";
+  import { purgeQueue, deleteQueueMessage } from "#lib/api";
+  import type { QueueMessageSummary, QueueSummary, FunctionSummary } from "#lib/types";
 
   let {
     queue,

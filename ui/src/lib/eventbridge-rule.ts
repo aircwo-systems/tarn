@@ -1,4 +1,4 @@
-import { describeSchedule } from "$lib/eventbridge-schedule";
+import { describeSchedule } from "#lib/eventbridge-schedule";
 
 /** Validate the form's definition; the backend validates event matching operators. */
 export function ruleDefinitionError({

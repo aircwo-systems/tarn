@@ -15,7 +15,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -ldflags="-s -w -X github.com/aircwo-systems/tarn/internal/cli.version=${VERSION}" \
     -o /tarn ./cmd/tarn
 
-FROM oven/bun:1 AS ui-builder
+FROM oven/bun:1.4.4 AS ui-builder
 
 ARG TARN_BUILD_UI
 

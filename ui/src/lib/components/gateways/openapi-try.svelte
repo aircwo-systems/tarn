@@ -1,9 +1,9 @@
 <script lang="ts">
   import { untrack } from "svelte";
   import { PaperPlaneTiltIcon } from "phosphor-svelte";
-  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import { tryOperation, type TryOperationResponse } from "$lib/api";
-  import { formatJSONForViewer } from "$lib/json-format";
+  import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
+  import { tryOperation, type TryOperationResponse } from "#lib/api";
+  import { formatJSONForViewer } from "#lib/json-format";
 
   type Param = { name: string; in: string; required?: boolean };
 

@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { matchesResourceType } from "$lib/filter-utils";
+  import { matchesResourceType } from "#lib/filter-utils";
   import { onMount } from "svelte";
   import { PlayIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
-  import EcsList from "$lib/components/ecs/ecs-list.svelte";
-  import EcsDetail from "$lib/components/ecs/ecs-detail.svelte";
-  import EcsRunTaskDialog from "$lib/components/ecs/ecs-run-task-dialog.svelte";
-  import { getDashboard, getDashboardFilters, refresh } from "$lib/state.svelte";
-  import { ecsKey, type EcsSelection } from "$lib/ecs";
+  import EcsList from "#lib/components/ecs/ecs-list.svelte";
+  import EcsDetail from "#lib/components/ecs/ecs-detail.svelte";
+  import EcsRunTaskDialog from "#lib/components/ecs/ecs-run-task-dialog.svelte";
+  import { getDashboard, getDashboardFilters, refresh } from "#lib/state.svelte";
+  import { ecsKey, type EcsSelection } from "#lib/ecs";
 
   let {
     sidebarCollapsed = false,

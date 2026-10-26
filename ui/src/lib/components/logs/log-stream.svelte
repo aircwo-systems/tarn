@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  import type { LogEvent } from "$lib/types";
+  import type { LogEvent } from "#lib/types";
 
   export const ROW_H = 24;
 
@@ -30,8 +30,8 @@
 
 <script lang="ts">
   import { ArrowUpIcon, ArrowDownIcon, PushPinIcon } from "phosphor-svelte";
-  import { buildFlexiblePatternRegex } from "$lib/json-format";
-  import { formatDatadogLog, shortTraceId } from "$lib/log-format";
+  import { buildFlexiblePatternRegex } from "#lib/json-format";
+  import { formatLogMessage, shortTraceId } from "#lib/log-format";
   import { onDestroy } from "svelte";
 
   const OVERSCAN = 12;
@@ -50,6 +50,8 @@
     pinnedKeys = new Set<string>(),
     onTogglePin,
     onSelect,
+    onViewportChange,
+    timeZone = "local",
   }: {
     events: LogEvent[];
     keys: string[];
@@ -59,11 +61,14 @@
     showGroup?: boolean;
     showStream?: boolean;
     highlightPattern?: string;
-    /** Show Datadog JSON records as their message plus application fields. */
+    /** Show structured JSON records as their headline plus application fields. */
     formatDatadog?: boolean;
     pinnedKeys?: Set<string>;
     onTogglePin?: (event: LogEvent, key: string) => void;
     onSelect: (event: LogEvent, key: string) => void;
+    /** Actual visible rows, excluding virtualization overscan. */
+    onViewportChange?: (range: { first: number; last: number }) => void;
+    timeZone?: "local" | "UTC";
   } = $props();
 
   function clip(value: string): string {
@@ -109,8 +114,8 @@
     let hasTraceColumn = false;
     if (!showGroup && !formatDatadog) return { groupLabel, hasTraceColumn };
     for (const ev of events) {
-      const dd = formatDatadog ? formatDatadogLog(ev.message) : null;
-      if (dd) hasTraceColumn = true;
+      const dd = formatDatadog ? formatLogMessage(ev.message) : null;
+      if (dd?.traceId || (dd && ev.traceId)) hasTraceColumn = true;
       if (showGroup) {
         const label = dd?.service ?? groupTag(ev.streamName);
         if (label.length > groupLabel.length) groupLabel = label;
@@ -128,6 +133,13 @@
   const visible = $derived(Array.from({ length: Math.max(0, end - start) }, (_, o) => start + o));
   const selectedIdx = $derived(selectedKey ? (indexByKey.get(selectedKey) ?? -1) : -1);
   const selectedLevel = $derived(selectedIdx >= 0 ? events[selectedIdx]?.level : "");
+
+  $effect(() => {
+    if (!onViewportChange || viewportH <= 0) return;
+    const first = Math.min(total - 1, Math.max(0, Math.floor(scrollTop / ROW_H)));
+    const last = Math.min(total - 1, Math.ceil((scrollTop + viewportH) / ROW_H) - 1);
+    onViewportChange({ first, last });
+  });
 
   function measureEdge() {
     if (!scroller) return;
@@ -305,7 +317,9 @@
     const d = new Date(ts);
     if (Number.isNaN(d.getTime())) return ts;
     const p = (n: number, w = 2) => String(n).padStart(w, "0");
-    return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
+    return timeZone === "UTC"
+      ? `${p(d.getUTCHours())}:${p(d.getUTCMinutes())}:${p(d.getUTCSeconds())}.${p(d.getUTCMilliseconds(), 3)}`
+      : `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${p(d.getMilliseconds(), 3)}`;
   }
 
   function statusClass(status: number): string {
@@ -354,7 +368,7 @@
         {@const key = keys[i]}
         {@const arrived = arrivals.get(key)}
         {@const age = arrived ? clock - arrived : FRESH_MS}
-        {@const dd = formatDatadog ? formatDatadogLog(ev.message) : null}
+        {@const dd = formatDatadog ? formatLogMessage(ev.message) : null}
         {@const text = dd ? dd.message : ev.message}
         {@const traceId = dd ? (dd.traceId ?? ev.traceId ?? "") : ""}
         {@const traceTag = traceId ? shortTraceId(traceId) : ""}
@@ -407,7 +421,7 @@
               title={`${dd.durationMs} ms`}
               style:--duration-fill={`${Math.min(100, Math.max(0, dd.durationMs / 10))}%`}
             ><span class="log-duration-fill" class:nonzero={dd.durationMs > 0}></span></span>
-          {:else if dd}
+          {:else if dd?.service || dd?.traceId}
             <span class="log-duration-slot" aria-hidden="true"></span>
           {/if}
           {#if onTogglePin}

@@ -1,11 +1,11 @@
-import type { Tone } from "$lib/components/rack/rc-tone-pill.svelte";
+import type { Tone } from "#lib/components/rack/rc-tone-pill.svelte";
 import type {
   ECSClusterSummary,
   ECSOverview,
   ECSServiceSummary,
   ECSTaskDefinitionSummary,
   ECSTaskSummary,
-} from "$lib/types";
+} from "#lib/types";
 
 export type EcsSelection =
   | { kind: "cluster"; resource: ECSClusterSummary }

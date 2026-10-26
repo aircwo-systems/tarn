@@ -1,11 +1,11 @@
 <script lang="ts">
   import { tick } from "svelte";
   import { CheckIcon, CopyIcon } from "phosphor-svelte";
-  import RcStat from "$lib/components/rack/rc-stat.svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import { fetchCognitoPool } from "$lib/api";
-  import type { CognitoPoolDetail, CognitoPoolSummary } from "$lib/types";
-  import { timeAgo } from "$lib/utils";
+  import RcStat from "#lib/components/rack/rc-stat.svelte";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import { fetchCognitoPool } from "#lib/api";
+  import type { CognitoPoolDetail, CognitoPoolSummary } from "#lib/types";
+  import { timeAgo } from "#lib/utils";
   import CodesPanel from "./codes-panel.svelte";
   import UsersPanel from "./users-panel.svelte";
   import ClientsPanel from "./clients-panel.svelte";

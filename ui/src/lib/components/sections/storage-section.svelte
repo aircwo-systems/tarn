@@ -1,13 +1,13 @@
 <script lang="ts">
-  import { matchesResourceFilter } from "$lib/filter-utils";
+  import { matchesResourceFilter } from "#lib/filter-utils";
   import { onMount } from "svelte";
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
-  import RcListRow from "$lib/components/rack/rc-list-row.svelte";
-  import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
-  import BucketDetail from "$lib/components/s3/bucket-detail.svelte";
-  import { getDashboard, getDashboardFilters } from "$lib/state.svelte";
-  import { formatBytes } from "$lib/utils";
+  import RcListRow from "#lib/components/rack/rc-list-row.svelte";
+  import RcResizableAside from "#lib/components/rack/rc-resizable-aside.svelte";
+  import BucketDetail from "#lib/components/s3/bucket-detail.svelte";
+  import { getDashboard, getDashboardFilters } from "#lib/state.svelte";
+  import { formatBytes } from "#lib/utils";
 
   let {
     sidebarCollapsed = false,

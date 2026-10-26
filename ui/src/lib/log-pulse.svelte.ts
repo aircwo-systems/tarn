@@ -1,5 +1,5 @@
-import { fetchAllLogEvents } from "$lib/api";
-import type { LogEvent } from "$lib/types";
+import { fetchAllLogEvents } from "#lib/api";
+import type { LogEvent } from "#lib/types";
 
 /**
  * Lightweight, app-wide pulse of recent log activity. Lives at module level so

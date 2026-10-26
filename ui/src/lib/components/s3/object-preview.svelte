@@ -1,8 +1,8 @@
 <script lang="ts">
   import { CheckIcon, CopyIcon, DownloadSimpleIcon, TrashIcon, XIcon } from "phosphor-svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
   import {
     getObject,
     headObject,
@@ -12,10 +12,10 @@
     MAX_TEXT_PREVIEW_BYTES,
     type S3Object,
     type S3ObjectHead,
-  } from "$lib/s3";
-  import { formatJSONForViewer } from "$lib/json-format";
-  import { formatBytes, formatDate } from "$lib/utils";
-  import { getAccountSettings } from "$lib/state.svelte";
+  } from "#lib/s3";
+  import { formatJSONForViewer } from "#lib/json-format";
+  import { formatBytes, formatDate } from "#lib/utils";
+  import { getAccountSettings } from "#lib/state.svelte";
 
   let {
     bucket,

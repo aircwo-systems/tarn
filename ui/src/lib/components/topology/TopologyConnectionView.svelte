@@ -12,7 +12,7 @@
     EventSourceMappingSummary,
     InfraConnection,
     RequestTrace
-  } from "$lib/types";
+  } from "#lib/types";
   import type { ConnectionNode } from "./types";
   import {
     buildTopologyGraph,

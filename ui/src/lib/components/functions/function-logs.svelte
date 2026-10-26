@@ -1,7 +1,7 @@
 <script lang="ts">
   import { untrack } from "svelte";
-  import { fetchLogEvents } from "$lib/api";
-  import type { LogEvent } from "$lib/types";
+  import { fetchLogEvents } from "#lib/api";
+  import type { LogEvent } from "#lib/types";
 
   let {
     functionName = "",

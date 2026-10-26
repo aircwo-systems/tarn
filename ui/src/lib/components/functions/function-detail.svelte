@@ -1,9 +1,9 @@
 <script lang="ts">
   import { CheckIcon, CopyIcon, ListBulletsIcon, PathIcon, PlayIcon } from "phosphor-svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcStat from "$lib/components/rack/rc-stat.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcStat from "#lib/components/rack/rc-stat.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
   import FunctionInvocations from "./function-invocations.svelte";
   import FunctionLinksList, { type LinkItem } from "./function-links-list.svelte";
   import FunctionLogs from "./function-logs.svelte";
@@ -17,11 +17,11 @@
     observedCallers,
     percentile,
     type FunctionCaller,
-  } from "$lib/function-links";
-  import { functionToHcl } from "$lib/function-hcl";
-  import { formatMs, spanKindLabel } from "$lib/trace-utils";
-  import { formatBytes, formatDate, timeAgo } from "$lib/utils";
-  import type { FunctionSummary, OverviewResponse } from "$lib/types";
+  } from "#lib/function-links";
+  import { functionToHcl } from "#lib/function-hcl";
+  import { formatMs, spanKindLabel } from "#lib/trace-utils";
+  import { formatBytes, formatDate, timeAgo } from "#lib/utils";
+  import type { FunctionSummary, OverviewResponse } from "#lib/types";
 
   let { fn, data }: { fn: FunctionSummary; data: OverviewResponse | null } = $props();
 

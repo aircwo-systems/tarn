@@ -1,8 +1,8 @@
 <script lang="ts">
   import { EyeIcon, EyeSlashIcon } from "phosphor-svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
-  import { fetchFunctionEnvironment } from "$lib/api";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
+  import { fetchFunctionEnvironment } from "#lib/api";
 
   let { name, keys }: { name: string; keys: string[] } = $props();
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Tooltip } from "$lib/components/ui/simple-tooltip";
+  import { Tooltip } from "#lib/components/ui/simple-tooltip";
 
   export interface SparkBar {
     h: number;

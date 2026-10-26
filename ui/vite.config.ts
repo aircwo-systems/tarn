@@ -1,3 +1,4 @@
+import adapter from "@sveltejs/adapter-static";
 import { sveltekit } from "@sveltejs/kit/vite";
 import tailwindcss from "@tailwindcss/vite";
 import { defineConfig, loadEnv, type Plugin, type ViteDevServer } from "vite";
@@ -17,7 +18,9 @@ export default defineConfig(({ mode }) => {
   };
 
   return {
-    plugins: [svelteStyles(), tailwindcss(), sveltekit()],
+    plugins: [svelteStyles(), tailwindcss(), sveltekit({
+        adapter: adapter({ fallback: "200.html" }),
+      })],
     server: {
       proxy,
     },

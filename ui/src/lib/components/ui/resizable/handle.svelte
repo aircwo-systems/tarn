@@ -1,6 +1,6 @@
 <script lang="ts">
   import { PaneResizer } from "paneforge";
-  import { cn } from "$lib/lib/utils.js";
+  import { cn } from "#lib/lib/utils.js";
 
   let {
     class: className,

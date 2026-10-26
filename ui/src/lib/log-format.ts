@@ -2,7 +2,7 @@ import {
   highlightJSON,
   renderTokensWithHighlight,
   type SyntaxToken,
-} from "$lib/json-format";
+} from "#lib/json-format";
 
 export interface ParsedSpringBootLog {
   pid: string;
@@ -20,7 +20,7 @@ export function parseSpringBootLog(raw: string): ParsedSpringBootLog | null {
   return { pid: m[1], thread: m[2].trim(), logger: m[3], message: m[4] };
 }
 
-export interface DatadogLog {
+export interface FormattedLog {
   message: string;
   /** Application fields as `key=value` pairs; empty when there are none. */
   extras: string;
@@ -39,13 +39,59 @@ const DATADOG_OMIT = new Set([
   "dd", "dd.trace_id", "dd.span_id", "ddsource", "ddtags", "service", "hostname",
   "host", "env", "version", "level", "status", "timestamp", "message",
 ]);
-const datadogCache = new Map<string, DatadogLog | null>();
+const datadogCache = new Map<string, FormattedLog | null>();
+const structuredCache = new Map<string, FormattedLog | null>();
+
+/** Python basicConfig with `%(levelname)s %(name)s: %(message)s`. */
+function splitPythonJSONLog(raw: string): { prefix: string; payload: string } | null {
+  const match = raw.match(/^((?:DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL|NOTSET)\s+[\w.-]+:)\s+(\{[\s\S]*\})\s*$/);
+  return match ? { prefix: match[1], payload: match[2] } : null;
+}
+
+/** Compact JSON log headlines; preserve the original record in the detail panel. */
+export function formatLogMessage(raw: string): FormattedLog | null {
+  const content = splitPythonJSONLog(raw)?.payload ?? raw;
+  const datadog = formatDatadogLog(content);
+  if (datadog) return datadog;
+  const cached = structuredCache.get(raw);
+  if (cached !== undefined) return cached;
+  const result = parseStructuredLog(content);
+  if (structuredCache.size >= 2000) structuredCache.clear();
+  structuredCache.set(raw, result);
+  return result;
+}
+
+function parseStructuredLog(raw: string): FormattedLog | null {
+  if (!raw.trimStart().startsWith("{")) return null;
+  let doc: unknown;
+  try {
+    doc = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!doc || typeof doc !== "object" || Array.isArray(doc)) return null;
+  const fields: [string, unknown][] = Object.entries(doc);
+  const headline = ["message", "msg", "event"]
+    .map((key) => fields.find(([name, value]) => name === key && typeof value === "string" && value.trim()))
+    .find((field) => field !== undefined);
+  if (!headline || typeof headline[1] !== "string") return null;
+  const extras = fields.filter(([key]) => key !== headline[0]);
+  // Long correlation IDs should not hide the fields that distinguish adjacent rows.
+  const ordered = [...extras.filter(([key]) => key !== "run_id"), ...extras.filter(([key]) => key === "run_id")];
+  return {
+    message: headline[1],
+    extras: ordered.map(([key, value]) => {
+      const text = typeof value === "string" && !/\s/.test(value) ? value : JSON.stringify(value);
+      return `${key}=${text}`;
+    }).join(" "),
+  };
+}
 
 /**
  * Datadog-shaped JSON logs (injected `dd` context, or shipper fields such as
  * `ddsource`) reduce to their message plus any application fields.
  */
-export function formatDatadogLog(raw: string): DatadogLog | null {
+export function formatDatadogLog(raw: string): FormattedLog | null {
   const cached = datadogCache.get(raw);
   if (cached !== undefined) return cached;
   const result = parseDatadogLog(raw);
@@ -55,7 +101,7 @@ export function formatDatadogLog(raw: string): DatadogLog | null {
   return result;
 }
 
-function parseDatadogLog(raw: string): DatadogLog | null {
+function parseDatadogLog(raw: string): FormattedLog | null {
   if (!raw.trimStart().startsWith("{")) return null;
   let doc: unknown;
   try {
@@ -76,7 +122,7 @@ function parseDatadogLog(raw: string): DatadogLog | null {
     const text = typeof value === "string" ? value : JSON.stringify(value);
     extras.push(`${key}=${typeof value === "string" && /\s/.test(text) ? JSON.stringify(text) : text}`);
   }
-  const result: DatadogLog = { message: record.message, extras: extras.join(" ") };
+  const result: FormattedLog = { message: record.message, extras: extras.join(" ") };
   const dd = record.dd as Record<string, unknown> | undefined;
   const service = typeof dd?.service === "string" ? dd.service : record.service;
   if (typeof service === "string" && service) result.service = service;
@@ -117,7 +163,7 @@ export function looksLikeJSON(str: string): boolean {
 }
 
 export function isComplexMessage(msg: string): boolean {
-  return msg.length > 300 || hasJavaToString(msg) || looksLikeJSON(msg);
+  return msg.length > 300 || hasJavaToString(msg) || looksLikeJSON(msg) || splitPythonJSONLog(msg) !== null;
 }
 
 /**
@@ -183,6 +229,14 @@ export function deepUnescapeJSON(val: unknown): unknown {
 }
 
 export function computeFormattedMessage(content: string): string | null {
+  const python = splitPythonJSONLog(content);
+  if (python) {
+    try {
+      return `${python.prefix}\n${JSON.stringify(deepUnescapeJSON(JSON.parse(python.payload)), null, 2)}`;
+    } catch {
+      return null;
+    }
+  }
   const invokeError = content.match(/^Invoke Error[ \t]+([\s\S]+)$/);
   if (invokeError) {
     try {
@@ -340,7 +394,7 @@ export function highlightJavaToString(text: string, searchPattern?: string): str
 }
 
 export function highlightFormatted(text: string, searchPattern?: string): string {
-  return looksLikeJSON(text) || text.startsWith("Invoke Error\n")
+  return looksLikeJSON(text) || text.startsWith("Invoke Error\n") || splitPythonJSONLog(text) !== null
     ? highlightJSON(text, searchPattern)
     : highlightJavaToString(text, searchPattern);
 }

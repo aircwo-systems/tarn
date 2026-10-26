@@ -1,9 +1,9 @@
 <script lang="ts">
   import { ArrowUpRightIcon } from "phosphor-svelte";
   import { fly } from "svelte/transition";
-  import type { FunctionInvocation } from "$lib/function-links";
-  import { formatMs, spanKindLabel } from "$lib/trace-utils";
-  import { timeAgo } from "$lib/utils";
+  import type { FunctionInvocation } from "#lib/function-links";
+  import { formatMs, spanKindLabel } from "#lib/trace-utils";
+  import { timeAgo } from "#lib/utils";
 
   let {
     invocations,

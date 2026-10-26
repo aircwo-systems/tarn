@@ -1,15 +1,15 @@
 <script lang="ts">
-  import { matchesResourceFilter } from "$lib/filter-utils";
+  import { matchesResourceFilter } from "#lib/filter-utils";
   import { onMount } from "svelte";
   import { fly } from "svelte/transition";
   import { MagnifyingGlassIcon, SidebarSimpleIcon, PlusIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
-  import RuleList from "$lib/components/eventbridge/rule-list.svelte";
-  import RuleDetail from "$lib/components/eventbridge/rule-detail.svelte";
-  import RuleForm, { type RuleDraft } from "$lib/components/eventbridge/rule-form.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcResizableAside from "#lib/components/rack/rc-resizable-aside.svelte";
+  import RuleList from "#lib/components/eventbridge/rule-list.svelte";
+  import RuleDetail from "#lib/components/eventbridge/rule-detail.svelte";
+  import RuleForm, { type RuleDraft } from "#lib/components/eventbridge/rule-form.svelte";
   import {
     putEventBridgeRule,
     enableEventBridgeRule,
@@ -18,8 +18,8 @@
     putEventBridgeTargets,
     removeEventBridgeTargets,
     fireEventBridgeRule,
-  } from "$lib/api";
-  import { getDashboard, getDashboardFilters, refresh } from "$lib/state.svelte";
+  } from "#lib/api";
+  import { getDashboard, getDashboardFilters, refresh } from "#lib/state.svelte";
 
   let {
     sidebarCollapsed = false,

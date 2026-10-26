@@ -1,5 +1,46 @@
 import { describe, expect, test } from "bun:test";
-import { computeFormattedMessage, formatDatadogLog, highlightFormatted, shortTraceId } from "./log-format";
+import { computeFormattedMessage, formatDatadogLog, formatLogMessage, highlightFormatted, isComplexMessage, shortTraceId } from "./log-format";
+
+describe("structured log rows", () => {
+  test("recognises the Python logging prefix used by Garmin ECS tasks", () => {
+    const raw = 'INFO health_bridge.garmin: {"event":"daily.written","run_id":"83778686-5802-4bf6-baf3-8e37d38949bf","kind":"hrv","day":"2026-03-01","count":0}';
+    expect(formatLogMessage(raw)).toEqual({ message: "daily.written", extras: "kind=hrv day=2026-03-01 count=0 run_id=83778686-5802-4bf6-baf3-8e37d38949bf" });
+    expect(isComplexMessage(raw)).toBe(true);
+    expect(computeFormattedMessage(raw)).toBe('INFO health_bridge.garmin:\n' + JSON.stringify(JSON.parse(raw.slice(raw.indexOf("{"))), null, 2));
+    expect(highlightFormatted(computeFormattedMessage(raw))).toContain('color:var(--lh-key)">"event"</span>');
+    expect(formatLogMessage('INFO health_bridge.garmin: {broken}')).toBeNull();
+    expect(computeFormattedMessage('INFO health_bridge.garmin: {broken}')).toBeNull();
+  });
+
+  test("shows Garmin events with useful fields before the long run id", () => {
+    const raw = JSON.stringify({ event: "daily.written", run_id: "09910546-d7b6-49b0-a48d-dca888f49954", kind: "hrv", day: "2026-10-10", count: 1 });
+    expect(formatLogMessage(raw)).toEqual({
+      message: "daily.written",
+      extras: "kind=hrv day=2026-10-10 count=1 run_id=09910546-d7b6-49b0-a48d-dca888f49954",
+    });
+    expect(computeFormattedMessage(raw)).toBe(JSON.stringify(JSON.parse(raw), null, 2));
+  });
+
+  test("recognises Python message and Pino msg records", () => {
+    expect(formatLogMessage('{"message":"sync complete","count":0,"cached":false}')).toEqual({ message: "sync complete", extras: "count=0 cached=false" });
+    expect(formatLogMessage('{"msg":"request complete","note":"two words","err":{"code":"timeout"}}')).toEqual({ message: "request complete", extras: 'note="two words" err={"code":"timeout"}' });
+  });
+
+  test("preserves other fields, including an event alongside a message", () => {
+    expect(formatLogMessage('{"message":"done","event":"daily.written","empty":null,"items":[]}')).toEqual({ message: "done", extras: "event=daily.written empty=null items=[]" });
+  });
+
+  test("leaves payloads without a nonempty string headline untouched", () => {
+    for (const raw of ['{"count":1}', '{"event":1}', '{"event":""}', '{"event":"   "}', '[{"event":"done"}]', 'plain text', '{broken}']) {
+      expect(formatLogMessage(raw)).toBeNull();
+    }
+  });
+
+  test("retains Datadog request formatting", () => {
+    const raw = '{"dd":{"service":"api","trace_id":"1"},"message":"GET /health 200 12ms"}';
+    expect(formatLogMessage(raw)).toEqual(formatDatadogLog(raw));
+  });
+});
 
 describe("Invoke Error logs", () => {
   const error = {

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { MagnifyingGlassIcon, XIcon } from "phosphor-svelte";
-  import type { NodeKind } from "$lib/components/topology/types";
+  import type { NodeKind } from "#lib/components/topology/types";
   import { KIND_LABEL, kindVar, SHARED_KINDS, type StackGroup } from "./stack-model";
 
   let {

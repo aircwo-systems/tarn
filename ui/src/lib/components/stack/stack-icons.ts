@@ -10,7 +10,7 @@ import {
   QueueIcon,
   ShareNetworkIcon,
 } from "phosphor-svelte";
-import type { NodeKind } from "$lib/components/topology/types";
+import type { NodeKind } from "#lib/components/topology/types";
 
 /** One glyph per resource kind, so a tile reads without its label. */
 export const KIND_ICON: Record<NodeKind, typeof CubeIcon> = {

@@ -1,12 +1,12 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { CheckIcon, CopyIcon } from "phosphor-svelte";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcStat from "$lib/components/rack/rc-stat.svelte";
-  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import type { DynamoDBStreamSummary, DynamoDBTableSummary, OverviewResponse } from "$lib/types";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcStat from "#lib/components/rack/rc-stat.svelte";
+  import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
+  import type { DynamoDBStreamSummary, DynamoDBTableSummary, OverviewResponse } from "#lib/types";
 
   let {
     table,

@@ -1,15 +1,15 @@
 <script lang="ts">
   import { ArrowUpRightIcon, CheckIcon, CopyIcon, PauseIcon, PlayIcon, TrashIcon } from "phosphor-svelte";
   import { fly } from "svelte/transition";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
-  import RcTonePill from "$lib/components/rack/rc-tone-pill.svelte";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
+  import RcTonePill from "#lib/components/rack/rc-tone-pill.svelte";
   import RuleTimeline from "./rule-timeline.svelte";
   import RuleTargets from "./rule-targets.svelte";
   import RuleForm, { type RuleDraft } from "./rule-form.svelte";
-  import { describeSchedule } from "$lib/eventbridge-schedule";
-  import type { EventBridgeFireResult, EventBridgeRuleSummary, FunctionSummary } from "$lib/types";
+  import { describeSchedule } from "#lib/eventbridge-schedule";
+  import type { EventBridgeFireResult, EventBridgeRuleSummary, FunctionSummary } from "#lib/types";
 
   let {
     rule,

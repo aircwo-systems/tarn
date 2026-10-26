@@ -1,4 +1,4 @@
-import { fetchAccountResource } from "$lib/api";
+import { fetchAccountResource } from "#lib/api";
 
 export interface S3Object {
   key: string;

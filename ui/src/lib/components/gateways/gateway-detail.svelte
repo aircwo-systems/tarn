@@ -1,10 +1,10 @@
 <script lang="ts">
   import { CheckIcon, CopyIcon, DownloadSimpleIcon } from "phosphor-svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcStat from "$lib/components/rack/rc-stat.svelte";
-  import RcKv from "$lib/components/rack/rc-kv.svelte";
-  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import type { GatewaySummary, RouteDetail } from "$lib/types";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcStat from "#lib/components/rack/rc-stat.svelte";
+  import RcKv from "#lib/components/rack/rc-kv.svelte";
+  import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
+  import type { GatewaySummary, RouteDetail } from "#lib/types";
   import {
     slugify,
     normalizeTemplate,
@@ -12,7 +12,7 @@
     buildPostmanCollection,
     buildPostmanEnvironment,
     downloadJSON,
-  } from "$lib/postman";
+  } from "#lib/postman";
   import OpenAPIViewer from "./openapi-viewer.svelte";
 
   let {

@@ -1,9 +1,9 @@
 <script lang="ts">
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcTonePill from "$lib/components/rack/rc-tone-pill.svelte";
-  import { clearDisruptorRules, setDisruptorRules } from "$lib/api";
-  import { refresh } from "$lib/state.svelte";
-  import type { QueueSummary } from "$lib/types";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcTonePill from "#lib/components/rack/rc-tone-pill.svelte";
+  import { clearDisruptorRules, setDisruptorRules } from "#lib/api";
+  import { refresh } from "#lib/state.svelte";
+  import type { QueueSummary } from "#lib/types";
 
   let {
     targets,

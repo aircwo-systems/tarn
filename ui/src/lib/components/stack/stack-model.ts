@@ -1,4 +1,4 @@
-import type { ConnectionNode, NodeKind } from "$lib/components/topology/types";
+import type { ConnectionNode, NodeKind } from "#lib/components/topology/types";
 
 /**
  * Stack view model: turns the topology graph into independent groups of

@@ -1,16 +1,16 @@
 <script lang="ts">
-  import { matchesResourceType } from "$lib/filter-utils";
+  import { matchesResourceType } from "#lib/filter-utils";
   import { onMount } from "svelte";
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
-  import TriggerList, { type TriggerRow, triggerStateTone } from "$lib/components/triggers/trigger-list.svelte";
-  import TriggerDetail from "$lib/components/triggers/trigger-detail.svelte";
-  import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
+  import TriggerList, { type TriggerRow, triggerStateTone } from "#lib/components/triggers/trigger-list.svelte";
+  import TriggerDetail from "#lib/components/triggers/trigger-detail.svelte";
+  import RcResizableAside from "#lib/components/rack/rc-resizable-aside.svelte";
   import {
     getDashboard,
     getDashboardFilters,
     matchesTagFilter,
-  } from "$lib/state.svelte";
+  } from "#lib/state.svelte";
 
   let {
     sidebarCollapsed = false,

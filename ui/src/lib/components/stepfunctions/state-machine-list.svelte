@@ -1,8 +1,8 @@
 <script lang="ts">
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
-  import RcListRow from "$lib/components/rack/rc-list-row.svelte";
-  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import type { StateMachineSummary } from "$lib/types";
+  import RcListRow from "#lib/components/rack/rc-list-row.svelte";
+  import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
+  import type { StateMachineSummary } from "#lib/types";
 
   let {
     machines,

@@ -23,8 +23,8 @@
     ArrowsClockwiseIcon,
     FingerprintIcon,
   } from "phosphor-svelte";
-  import { getDashboard, refresh } from "$lib/state.svelte";
-  import { timeAgo } from "$lib/utils";
+  import { getDashboard, refresh } from "#lib/state.svelte";
+  import { timeAgo } from "#lib/utils";
   import type { Component } from "svelte";
 
   type FilterId = "pages" | "actions" | "functions" | "queues" | "apis" | "tables" | "buckets" | "secrets" | "pools" | "rules" | "machines";

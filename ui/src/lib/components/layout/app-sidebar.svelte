@@ -1,11 +1,11 @@
 <script lang="ts">
   import { GearIcon, MagnifyingGlassIcon } from "phosphor-svelte";
-  import TarnLogo from "$lib/components/common/tarn-logo.svelte";
-  import ThemeToggle from "$lib/components/layout/theme-toggle.svelte";
+  import TarnLogo from "#lib/components/common/tarn-logo.svelte";
+  import ThemeToggle from "#lib/components/layout/theme-toggle.svelte";
   import type { Component } from "svelte";
   import { onMount } from "svelte";
-  import type { LogPulse } from "$lib/log-pulse.svelte";
-  import type { CollapsedSidebarMode } from "$lib/state.svelte";
+  import type { LogPulse } from "#lib/log-pulse.svelte";
+  import type { CollapsedSidebarMode } from "#lib/state.svelte";
   import SidebarWidget, { type SidebarWidgetData } from "./sidebar-widget.svelte";
 
   export interface NavItem {

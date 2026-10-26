@@ -1,14 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { PlayIcon, XIcon } from "phosphor-svelte";
-  import { describeECSTaskDefinition, runECSTask } from "$lib/api";
-  import { parseCommandOverride } from "$lib/ecs-command";
+  import { describeECSTaskDefinition, runECSTask } from "#lib/api";
+  import { parseCommandOverride } from "#lib/ecs-command";
   import type {
     ECSClusterSummary,
     ECSRunTaskResult,
     ECSTaskDefinitionDetail,
     ECSTaskDefinitionSummary,
-  } from "$lib/types";
+  } from "#lib/types";
 
   let {
     clusters,

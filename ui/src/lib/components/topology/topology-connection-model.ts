@@ -12,7 +12,7 @@ import type {
   TopicSummary,
   RequestTrace,
   SecretSummary,
-} from "$lib/types";
+} from "#lib/types";
 import { resolveTopologyNodeSize, resolveTopologyNodeView } from "./registry";
 import type { ConnectionNode, NodeSide, NodeSize, NodeView } from "./types";
 export type { NodeSide, NodeSize } from "./types";

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { ArrowSquareOutIcon, CaretRightIcon, MagnifyingGlassIcon, PushPinIcon, XIcon } from "phosphor-svelte";
-  import type { NodeKind } from "$lib/components/topology/types";
+  import type { NodeKind } from "#lib/components/topology/types";
   import { KIND_LABEL, KIND_TAB, kindVar, type StackGroup } from "./stack-model";
 
   let {

@@ -31,14 +31,14 @@
 
 <script lang="ts">
   import { CaretRightIcon, CheckIcon, CopySimpleIcon, DownloadSimpleIcon } from "phosphor-svelte";
-  import RcPanel from "$lib/components/rack/rc-panel.svelte";
-  import RcTonePill, { type Tone } from "$lib/components/rack/rc-tone-pill.svelte";
-  import FormattedMessageViewer from "$lib/components/common/formatted-message-viewer.svelte";
+  import RcPanel from "#lib/components/rack/rc-panel.svelte";
+  import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
+  import FormattedMessageViewer from "#lib/components/common/formatted-message-viewer.svelte";
   import OpenAPITry from "./openapi-try.svelte";
-  import { fetchOpenAPI } from "$lib/api";
-  import { formatJSONForViewer } from "$lib/json-format";
-  import { downloadJSON, parseTarget, slugify } from "$lib/postman";
-  import type { GatewaySummary } from "$lib/types";
+  import { fetchOpenAPI } from "#lib/api";
+  import { formatJSONForViewer } from "#lib/json-format";
+  import { downloadJSON, parseTarget, slugify } from "#lib/postman";
+  import type { GatewaySummary } from "#lib/types";
 
   let { gateway, index = 0 }: { gateway: GatewaySummary; index?: number } = $props();
 

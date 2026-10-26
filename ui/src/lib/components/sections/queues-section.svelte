@@ -1,18 +1,18 @@
 <script lang="ts">
-  import { matchesResourceFilter } from "$lib/filter-utils";
+  import { matchesResourceFilter } from "#lib/filter-utils";
   import { onMount } from "svelte";
   import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
-  import QueueList from "$lib/components/queues/queue-list.svelte";
-  import QueueDetail from "$lib/components/queues/queue-detail.svelte";
-  import QueueDisruptor from "$lib/components/queues/queue-disruptor.svelte";
-  import RcResizableAside from "$lib/components/rack/rc-resizable-aside.svelte";
-  import { fetchQueueMessages } from "$lib/api";
+  import QueueList from "#lib/components/queues/queue-list.svelte";
+  import QueueDetail from "#lib/components/queues/queue-detail.svelte";
+  import QueueDisruptor from "#lib/components/queues/queue-disruptor.svelte";
+  import RcResizableAside from "#lib/components/rack/rc-resizable-aside.svelte";
+  import { fetchQueueMessages } from "#lib/api";
   import {
     getDashboard,
     getDashboardFilters,
-  } from "$lib/state.svelte";
-  import type { QueueMessageSummary } from "$lib/types";
+  } from "#lib/state.svelte";
+  import type { QueueMessageSummary } from "#lib/types";
 
   let {
     sidebarCollapsed = false,

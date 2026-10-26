@@ -1,8 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { XIcon, ArrowsClockwiseIcon, CheckIcon, WarningCircleIcon } from "phosphor-svelte";
-  import { redriveQueueMessages } from "$lib/api";
-  import type { QueueSummary, RedriveQueueResult } from "$lib/types";
+  import { redriveQueueMessages } from "#lib/api";
+  import type { QueueSummary, RedriveQueueResult } from "#lib/types";
 
   let {
     queue,

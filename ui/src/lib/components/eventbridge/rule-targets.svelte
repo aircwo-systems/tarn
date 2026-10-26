@@ -1,11 +1,11 @@
 <script lang="ts">
   import { ArrowUpRightIcon, CaretRightIcon, PencilSimpleIcon, PlusIcon, XIcon } from "phosphor-svelte";
   import { slide } from "svelte/transition";
-  import RcButton from "$lib/components/rack/rc-button.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
   import TargetSettings from "./target-settings.svelte";
-  import { functionNameFromArn, targetService } from "$lib/eventbridge-schedule";
-  import { timeAgo } from "$lib/utils";
-  import type { EventBridgeRuleSummary, EventBridgeTargetSummary, FunctionSummary } from "$lib/types";
+  import { functionNameFromArn, targetService } from "#lib/eventbridge-schedule";
+  import { timeAgo } from "#lib/utils";
+  import type { EventBridgeRuleSummary, EventBridgeTargetSummary, FunctionSummary } from "#lib/types";
 
   let {
     rule,
