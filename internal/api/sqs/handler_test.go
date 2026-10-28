@@ -246,7 +246,7 @@ func TestJSONReceiveMessage_ReturnsMessageAttributes(t *testing.T) {
 	h.Dispatch(rec, req)
 
 	recvPayload := `{
-		"QueueUrl": "http://localhost:4566/000000000000/recv-test-queue"
+		"QueueUrl": "http://localhost:4566/000000000000/recv-test-queue", "MessageAttributeNames": ["All"]
 	}`
 	recvReq := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(recvPayload))
 	recvReq.Header.Set("Content-Type", "application/x-amz-json-1.0")
@@ -258,6 +258,9 @@ func TestJSONReceiveMessage_ReturnsMessageAttributes(t *testing.T) {
 		t.Fatalf("status=%d body=%s", recvRec.Code, recvRec.Body.String())
 	}
 
+	if !strings.Contains(recvRec.Body.String(), "MD5OfMessageAttributes") {
+		t.Fatal("missing attribute checksum: " + recvRec.Body.String())
+	}
 	var resp struct {
 		Messages []struct {
 			Body              string `json:"Body"`

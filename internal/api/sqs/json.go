@@ -233,10 +233,11 @@ func (h *Handler) jsonSendMessage(w http.ResponseWriter, body []byte) {
 		writeSendJSONError(w, err)
 		return
 	}
-	writeJSON(w, 200, map[string]string{
-		"MessageId":        msg.MessageId,
-		"MD5OfMessageBody": msg.MD5OfBody,
-	})
+	response := map[string]string{"MessageId": msg.MessageId, "MD5OfMessageBody": msg.MD5OfBody}
+	if digest := attributeMD5(msg.MessageAttributes); digest != "" {
+		response["MD5OfMessageAttributes"] = digest
+	}
+	writeJSON(w, 200, response)
 }
 
 type jsonBatchEntry struct {
@@ -264,9 +265,10 @@ func (h *Handler) jsonSendMessageBatch(w http.ResponseWriter, body []byte) {
 	}
 
 	type successEntry struct {
-		Id               string `json:"Id"`
-		MessageId        string `json:"MessageId"`
-		MD5OfMessageBody string `json:"MD5OfMessageBody"`
+		MD5OfMessageAttributes string `json:"MD5OfMessageAttributes,omitempty"`
+		Id                     string `json:"Id"`
+		MessageId              string `json:"MessageId"`
+		MD5OfMessageBody       string `json:"MD5OfMessageBody"`
 	}
 	type failEntry struct {
 		Id          string `json:"Id"`
@@ -285,7 +287,7 @@ func (h *Handler) jsonSendMessageBatch(w http.ResponseWriter, body []byte) {
 			failures = append(failures, failEntry{Id: entry.Id, Code: code, Message: err.Error(), SenderFault: senderFault})
 			continue
 		}
-		successes = append(successes, successEntry{Id: entry.Id, MessageId: msg.MessageId, MD5OfMessageBody: msg.MD5OfBody})
+		successes = append(successes, successEntry{Id: entry.Id, MessageId: msg.MessageId, MD5OfMessageBody: msg.MD5OfBody, MD5OfMessageAttributes: attributeMD5(msg.MessageAttributes)})
 	}
 
 	writeJSON(w, 200, map[string]any{
@@ -296,10 +298,11 @@ func (h *Handler) jsonSendMessageBatch(w http.ResponseWriter, body []byte) {
 
 func (h *Handler) jsonReceiveMessage(w http.ResponseWriter, r *http.Request, body []byte) {
 	var req struct {
-		QueueUrl            string `json:"QueueUrl"`
-		MaxNumberOfMessages int    `json:"MaxNumberOfMessages"`
-		VisibilityTimeout   int    `json:"VisibilityTimeout"`
-		WaitTimeSeconds     int    `json:"WaitTimeSeconds"`
+		MessageAttributeNames []string `json:"MessageAttributeNames"`
+		QueueUrl              string   `json:"QueueUrl"`
+		MaxNumberOfMessages   int      `json:"MaxNumberOfMessages"`
+		VisibilityTimeout     int      `json:"VisibilityTimeout"`
+		WaitTimeSeconds       int      `json:"WaitTimeSeconds"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
 		writeJSONError(w, 400, "InvalidRequest", "invalid JSON")
@@ -326,12 +329,13 @@ func (h *Handler) jsonReceiveMessage(w http.ResponseWriter, r *http.Request, bod
 	}
 
 	type jsonMessage struct {
-		MessageId         string                             `json:"MessageId"`
-		ReceiptHandle     string                             `json:"ReceiptHandle"`
-		MD5OfBody         string                             `json:"MD5OfBody"`
-		Body              string                             `json:"Body"`
-		Attributes        map[string]string                  `json:"Attributes"`
-		MessageAttributes map[string]*types.MessageAttribute `json:"MessageAttributes,omitempty"`
+		MD5OfMessageAttributes string                             `json:"MD5OfMessageAttributes,omitempty"`
+		MessageId              string                             `json:"MessageId"`
+		ReceiptHandle          string                             `json:"ReceiptHandle"`
+		MD5OfBody              string                             `json:"MD5OfBody"`
+		Body                   string                             `json:"Body"`
+		Attributes             map[string]string                  `json:"Attributes"`
+		MessageAttributes      map[string]*types.MessageAttribute `json:"MessageAttributes,omitempty"`
 	}
 
 	out := make([]jsonMessage, 0, len(msgs))
@@ -348,9 +352,8 @@ func (h *Handler) jsonReceiveMessage(w http.ResponseWriter, r *http.Request, bod
 				"ApproximateFirstReceiveTimestamp": strconv.FormatInt(m.ApproximateFirstReceiveTimestamp, 10),
 			},
 		}
-		if len(m.MessageAttributes) > 0 {
-			item.MessageAttributes = m.MessageAttributes
-		}
+		item.MessageAttributes = selectMessageAttributes(m.MessageAttributes, req.MessageAttributeNames)
+		item.MD5OfMessageAttributes = attributeMD5(item.MessageAttributes)
 		out = append(out, item)
 	}
 	writeJSON(w, 200, map[string]any{"Messages": out})

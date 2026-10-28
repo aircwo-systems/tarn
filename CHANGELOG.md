@@ -2,6 +2,10 @@
 
 All notable changes are documented in [GitHub Releases](https://github.com/aircwo-systems/tarn/releases).
 
+## v0.6.6-beta
+
+- Fix SQS message-attribute checksums on send, batch send and receive for JSON and Query APIs, including SNS fanout. Receive now honors requested message-attribute selection; Query receive returns selected attributes.
+
 ## Versioning
 
 This project follows [Semantic Versioning](https://semver.org/). During beta (`0.x.y`), minor version bumps may include breaking changes—see each release's notes for migration guidance.

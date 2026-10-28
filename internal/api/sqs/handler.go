@@ -269,11 +269,12 @@ func (h *Handler) sendMessage(w http.ResponseWriter, r *http.Request) {
   <SendMessageResult>
     <MD5OfMessageBody>%s</MD5OfMessageBody>
     <MessageId>%s</MessageId>
+    %s
   </SendMessageResult>
   <ResponseMetadata>
     <RequestId>%s</RequestId>
   </ResponseMetadata>
-</SendMessageResponse>`, xmlNS, msg.MD5OfBody, msg.MessageId, uuid.New().String())
+</SendMessageResponse>`, xmlNS, msg.MD5OfBody, msg.MessageId, attributeMD5XML(msg.MessageAttributes), uuid.New().String())
 
 	writeXML(w, 200, body)
 }
@@ -308,7 +309,7 @@ func (h *Handler) sendMessageBatch(w http.ResponseWriter, r *http.Request) {
 			failXML += fmt.Sprintf("    <BatchResultErrorEntry>\n      <Id>%s</Id>\n      <SenderFault>%t</SenderFault>\n      <Code>%s</Code>\n      <Message>%s</Message>\n    </BatchResultErrorEntry>\n", id, senderFault, code, xmlEscape(err.Error()))
 			continue
 		}
-		successXML += fmt.Sprintf("    <SendMessageBatchResultEntry>\n      <Id>%s</Id>\n      <MessageId>%s</MessageId>\n      <MD5OfMessageBody>%s</MD5OfMessageBody>\n    </SendMessageBatchResultEntry>\n", id, msg.MessageId, msg.MD5OfBody)
+		successXML += fmt.Sprintf("    <SendMessageBatchResultEntry>\n      <Id>%s</Id>\n      <MessageId>%s</MessageId>\n      <MD5OfMessageBody>%s</MD5OfMessageBody>\n      %s\n    </SendMessageBatchResultEntry>\n", id, msg.MessageId, msg.MD5OfBody, attributeMD5XML(msg.MessageAttributes))
 	}
 
 	body := fmt.Sprintf(`<SendMessageBatchResponse xmlns="%s">
@@ -348,6 +349,14 @@ func (h *Handler) receiveMessage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var requested []string
+	for i := 1; ; i++ {
+		name := r.FormValue(fmt.Sprintf("MessageAttributeName.%d", i))
+		if name == "" {
+			break
+		}
+		requested = append(requested, name)
+	}
 	var msgsXML string
 	for _, m := range msgs {
 		attrsXML := ""
@@ -355,6 +364,16 @@ func (h *Handler) receiveMessage(w http.ResponseWriter, r *http.Request) {
 		attrsXML += fmt.Sprintf("      <Attribute><Name>SentTimestamp</Name><Value>%d</Value></Attribute>\n", m.SentTimestamp)
 		attrsXML += fmt.Sprintf("      <Attribute><Name>ApproximateReceiveCount</Name><Value>%d</Value></Attribute>\n", m.ApproximateReceiveCount)
 		attrsXML += fmt.Sprintf("      <Attribute><Name>ApproximateFirstReceiveTimestamp</Name><Value>%d</Value></Attribute>\n", m.ApproximateFirstReceiveTimestamp)
+
+		selected := selectMessageAttributes(m.MessageAttributes, requested)
+		attrsXML += attributeMD5XML(selected)
+		for name, attr := range selected {
+			value := "<StringValue>" + xmlEscape(attr.StringValue) + "</StringValue>"
+			if strings.SplitN(attr.DataType, ".", 2)[0] == "Binary" {
+				value = "<BinaryValue>" + base64.StdEncoding.EncodeToString(attr.BinaryValue) + "</BinaryValue>"
+			}
+			attrsXML += "<MessageAttribute><Name>" + xmlEscape(name) + "</Name><Value><DataType>" + xmlEscape(attr.DataType) + "</DataType>" + value + "</Value></MessageAttribute>"
+		}
 
 		msgsXML += fmt.Sprintf(`    <Message>
       <MessageId>%s</MessageId>
