@@ -92,8 +92,9 @@ func (s *Service) LogSystemEvent(level LogLevel, message string) {
 	})
 }
 
-// LogAPIRequest writes an event to the /tarn/api log group.
-func (s *Service) LogAPIRequest(method, path string, status int, duration time.Duration) {
+// LogAPIRequest writes an event to the /tarn/api log group. JSON-protocol calls
+// all POST to "/", so target (the X-Amz-Target operation) names the call.
+func (s *Service) LogAPIRequest(method, path string, status int, duration time.Duration, target string) {
 	level := LevelINFO
 	if status >= 500 {
 		level = LevelERROR
@@ -102,6 +103,9 @@ func (s *Service) LogAPIRequest(method, path string, status int, duration time.D
 	}
 
 	msg := fmt.Sprintf("%s %s %d %s", method, path, status, duration)
+	if target != "" {
+		msg += " target=" + target
+	}
 	s.store.PutLogEvents("/tarn/api", "requests", []LogEvent{
 		{
 			Timestamp: time.Now().UTC(),

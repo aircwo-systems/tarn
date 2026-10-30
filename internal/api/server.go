@@ -875,7 +875,7 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 				logsSvc = hs.Logs
 			}
 			if logsSvc != nil {
-				logsSvc.LogAPIRequest(r.Method, r.URL.Path, wrapped.status, duration)
+				logsSvc.LogAPIRequest(r.Method, r.URL.Path, wrapped.status, duration, target)
 			}
 		}
 	})
