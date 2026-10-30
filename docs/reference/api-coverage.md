@@ -20,6 +20,7 @@ Tarn implements **250+ AWS API actions** across 14 services, with service-specif
 | **CloudWatch Logs** | JSON 1.1 | 11 | `cloudwatchlogs` |
 | **IAM** | Query/XML | 17 | default |
 | **Cognito User Pools** | JSON 1.1 | 66 | `cognitoidp` |
+| **KMS** | JSON 1.1 | 27 | `kms` |
 | **Event Source Mapping** | REST/JSON | 8 | `lambda` (shared) |
 
 ## ECS
