@@ -87,8 +87,7 @@ func (s *Service) openLocked(blob []byte, keyID string, ctx map[string]string) (
 	if len(blob) < blobHeader+tagLen || blob[0] != blobVersion {
 		return nil, nil, errInvalidCiphertext
 	}
-	id := string(blob[1 : 1+keyIDLen])
-	k := s.keys[id]
+	k := s.keys[string(blob[1:1+keyIDLen])]
 	if k == nil || s.expiredLocked(k) {
 		return nil, nil, errInvalidCiphertext
 	}

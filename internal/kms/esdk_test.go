@@ -115,10 +115,10 @@ func TestEncryptMessageFollowsESDKFormat(t *testing.T) {
 	for _, size := range []int{0, 6, 4095, 4096, 4097, 10000} {
 		t.Run(fmt.Sprint(size), func(t *testing.T) {
 			plaintext := bytes.Repeat([]byte{'x'}, size)
-			msg, err := s.EncryptMessage("alias/missing", plaintext, ctx)
+			_, err := s.EncryptMessage("alias/missing", plaintext, ctx)
 			wantCode(t, err, "NotFoundException")
 
-			msg, err = s.EncryptMessage(m.KeyId, plaintext, ctx)
+			msg, err := s.EncryptMessage(m.KeyId, plaintext, ctx)
 			if err != nil {
 				t.Fatalf("EncryptMessage: %v", err)
 			}
