@@ -27,7 +27,7 @@ func TestDescribeStreamReturnsSchemaSnapshot(t *testing.T) {
 	if !reflect.DeepEqual(table.KeySchema, testTableDefinition().KeySchema) {
 		t.Fatalf("stream response changed the stored key schema: %+v", table.KeySchema)
 	}
-	if _, err := store.PutItem("orders", testItem("p", "a", "OPEN", 1, "1"), "", nil, nil, "NONE"); err != nil {
+	if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: testItem("p", "a", "OPEN", 1, "1")}); err != nil {
 		t.Fatalf("put after response mutation: %v", err)
 	}
 }
@@ -37,7 +37,7 @@ func TestLatestIteratorReadsOnlySubsequentWrites(t *testing.T) {
 		t.Run(fmt.Sprintf("existing=%d", existing), func(t *testing.T) {
 			store, arn := newStreamWaitStore(t)
 			for i := range existing {
-				if _, err := store.PutItem("orders", testItem("p", fmt.Sprint(i), "OPEN", i, "1"), "", nil, nil, "NONE"); err != nil {
+				if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: testItem("p", fmt.Sprint(i), "OPEN", i, "1")}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -49,7 +49,7 @@ func TestLatestIteratorReadsOnlySubsequentWrites(t *testing.T) {
 			if err != nil || len(records) != 0 {
 				t.Fatalf("LATEST replayed existing records: %v %v", records, err)
 			}
-			if _, err := store.PutItem("orders", testItem("p", "new", "OPEN", existing, "1"), "", nil, nil, "NONE"); err != nil {
+			if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: testItem("p", "new", "OPEN", existing, "1")}); err != nil {
 				t.Fatal(err)
 			}
 			records, _, err = store.GetRecords(next, 10)
@@ -57,7 +57,7 @@ func TestLatestIteratorReadsOnlySubsequentWrites(t *testing.T) {
 				t.Fatalf("subsequent write: %v %v", records, err)
 			}
 			want := strconv.Itoa(existing + 1)
-			if records[0]["dynamodb"].(map[string]any)["SequenceNumber"] != want {
+			if records[0].Dynamodb.SequenceNumber != want {
 				t.Fatalf("sequence=%v, want %s", records[0], want)
 			}
 		})
@@ -67,7 +67,7 @@ func TestLatestIteratorReadsOnlySubsequentWrites(t *testing.T) {
 func TestShardIteratorBoundariesAndValidation(t *testing.T) {
 	store, arn := newStreamWaitStore(t)
 	for i := range 2 {
-		if _, err := store.PutItem("orders", testItem("p", fmt.Sprint(i), "OPEN", i, "1"), "", nil, nil, "NONE"); err != nil {
+		if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: testItem("p", fmt.Sprint(i), "OPEN", i, "1")}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -93,7 +93,7 @@ func TestShardIteratorBoundariesAndValidation(t *testing.T) {
 			}
 			got := make([]string, 0, len(records))
 			for _, record := range records {
-				got = append(got, record["dynamodb"].(map[string]any)["SequenceNumber"].(string))
+				got = append(got, record.Dynamodb.SequenceNumber)
 			}
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Fatalf("sequences=%v, want %v", got, tc.want)
@@ -127,7 +127,7 @@ func TestStreamMetadataDuringWritesAndReconfiguration(t *testing.T) {
 	wg.Go(func() {
 		<-start
 		for i := range 100 {
-			if _, err := store.PutItem("orders", testItem("p", fmt.Sprint(i), "OPEN", i, "1"), "", nil, nil, "NONE"); err != nil {
+			if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: testItem("p", fmt.Sprint(i), "OPEN", i, "1")}); err != nil {
 				t.Error(err)
 				return
 			}
@@ -137,7 +137,7 @@ func TestStreamMetadataDuringWritesAndReconfiguration(t *testing.T) {
 		<-start
 		for range 50 {
 			for _, enabled := range []bool{false, true} {
-				if _, err := store.UpdateTableDefinition("orders", &types.DynamoDBStreamSpecification{StreamEnabled: enabled, StreamViewType: "NEW_IMAGE"}); err != nil {
+				if _, err := store.UpdateTable(&UpdateTableInput{TableName: "orders", StreamSpecification: &types.DynamoDBStreamSpecification{StreamEnabled: enabled, StreamViewType: "NEW_IMAGE"}}); err != nil {
 					t.Error(err)
 					return
 				}
@@ -175,7 +175,7 @@ func TestStreamMetadataDuringWritesAndReconfiguration(t *testing.T) {
 	})
 	close(start)
 	wg.Wait()
-	if _, err := store.UpdateTableDefinition("orders", &types.DynamoDBStreamSpecification{StreamEnabled: false}); err != nil {
+	if _, err := store.UpdateTable(&UpdateTableInput{TableName: "orders", StreamSpecification: &types.DynamoDBStreamSpecification{StreamEnabled: false}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.DescribeStream(arn, 100, ""); err == nil {

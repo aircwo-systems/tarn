@@ -863,10 +863,10 @@ func TestDynamoStreamPollerInvokesLambdaAndAdvancesCheckpoint(t *testing.T) {
 		t.Fatalf("create table: %v", err)
 	}
 
-	if _, err := dynamo.PutItem("orders", map[string]any{
+	if _, err := dynamo.PutItem(&dynamodb.WriteInput{TableName: "orders", Item: map[string]any{
 		"pk": map[string]any{"S": "acct#1"},
 		"sk": map[string]any{"S": "order#1"},
-	}, "", nil, nil, "NONE"); err != nil {
+	}}); err != nil {
 		t.Fatalf("put item: %v", err)
 	}
 

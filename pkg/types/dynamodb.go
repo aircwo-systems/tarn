@@ -39,9 +39,12 @@ type DynamoDBProjection struct {
 }
 
 type DynamoDBLocalSecondaryIndex struct {
-	IndexName  string                     `json:"IndexName"`
-	KeySchema  []DynamoDBKeySchemaElement `json:"KeySchema"`
-	Projection DynamoDBProjection         `json:"Projection"`
+	IndexName      string                     `json:"IndexName"`
+	KeySchema      []DynamoDBKeySchemaElement `json:"KeySchema"`
+	Projection     DynamoDBProjection         `json:"Projection"`
+	IndexArn       string                     `json:"IndexArn,omitempty"`
+	ItemCount      int64                      `json:"ItemCount"`
+	IndexSizeBytes int64                      `json:"IndexSizeBytes"`
 }
 
 type DynamoDBGlobalSecondaryIndex struct {
@@ -49,6 +52,11 @@ type DynamoDBGlobalSecondaryIndex struct {
 	KeySchema             []DynamoDBKeySchemaElement     `json:"KeySchema"`
 	Projection            DynamoDBProjection             `json:"Projection"`
 	ProvisionedThroughput *DynamoDBProvisionedThroughput `json:"ProvisionedThroughput,omitempty"`
+	IndexStatus           string                         `json:"IndexStatus,omitempty"`
+	WarmThroughput        *DynamoDBWarmThroughput        `json:"WarmThroughput,omitempty"`
+	IndexArn              string                         `json:"IndexArn,omitempty"`
+	ItemCount             int64                          `json:"ItemCount"`
+	IndexSizeBytes        int64                          `json:"IndexSizeBytes"`
 }
 
 type DynamoDBStreamSpecification struct {
@@ -81,6 +89,8 @@ type DynamoDBTable struct {
 	ItemCount              int64                          `json:"ItemCount"`
 	TableSizeBytes         int64                          `json:"TableSizeBytes"`
 	WarmThroughput         *DynamoDBWarmThroughput        `json:"WarmThroughput,omitempty"`
+	// DeletionProtectionEnabled makes DeleteTable fail until it is turned off.
+	DeletionProtectionEnabled bool `json:"DeletionProtectionEnabled"`
 }
 
 func (t *DynamoDBTable) UnmarshalJSON(data []byte) error {
@@ -120,13 +130,19 @@ type DynamoDBWarmThroughput struct {
 }
 
 type StreamRecord struct {
-	EventID        string           `json:"eventID"`
-	EventName      string           `json:"eventName"`
-	EventVersion   string           `json:"eventVersion"`
-	EventSource    string           `json:"eventSource"`
-	AwsRegion      string           `json:"awsRegion"`
-	EventSourceARN string           `json:"eventSourceARN"`
-	Dynamodb       StreamRecordData `json:"dynamodb"`
+	EventID        string              `json:"eventID"`
+	EventName      string              `json:"eventName"`
+	EventVersion   string              `json:"eventVersion"`
+	EventSource    string              `json:"eventSource"`
+	AwsRegion      string              `json:"awsRegion"`
+	EventSourceARN string              `json:"eventSourceARN"`
+	Dynamodb       StreamRecordData    `json:"dynamodb"`
+	UserIdentity   *StreamUserIdentity `json:"userIdentity,omitempty"`
+}
+
+type StreamUserIdentity struct {
+	Type        string `json:"type"`
+	PrincipalID string `json:"principalId"`
 }
 
 type StreamRecordData struct {

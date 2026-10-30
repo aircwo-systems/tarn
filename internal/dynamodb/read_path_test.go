@@ -18,8 +18,12 @@ func newReadTestStore(t testing.TB, projection string) *Store {
 	store := NewStore(cfg)
 	table := testTableDefinition()
 	table.StreamSpecification = nil
-	table.LocalSecondaryIndexes[0].Projection = types.DynamoDBProjection{ProjectionType: projection, NonKeyAttributes: []string{"status"}}
-	table.GlobalSecondaryIndexes[0].Projection = types.DynamoDBProjection{ProjectionType: projection, NonKeyAttributes: []string{"status"}}
+	indexProjection := types.DynamoDBProjection{ProjectionType: projection}
+	if projection == "INCLUDE" {
+		indexProjection.NonKeyAttributes = []string{"status"}
+	}
+	table.LocalSecondaryIndexes[0].Projection = indexProjection
+	table.GlobalSecondaryIndexes[0].Projection = indexProjection
 	if _, err := store.CreateTable(table); err != nil {
 		t.Fatal(err)
 	}
@@ -33,11 +37,11 @@ func TestIndexProjectionIncludesTableAndIndexKeys(t *testing.T) {
 				t.Run(projection+"/"+index+"/"+operation, func(t *testing.T) {
 					store := newReadTestStore(t, projection)
 					item := testItem("p", "a", "OPEN", 1, "2")
-					if _, err := store.PutItem("orders", item, "", nil, nil, "NONE"); err != nil {
+					if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: item}); err != nil {
 						t.Fatal(err)
 					}
 					// An item without the index keys must remain absent from the index.
-					if _, err := store.PutItem("orders", map[string]any{"pk": map[string]any{"S": "p"}, "sk": map[string]any{"S": "sparse"}}, "", nil, nil, "NONE"); err != nil {
+					if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: map[string]any{"pk": map[string]any{"S": "p"}, "sk": map[string]any{"S": "sparse"}}}); err != nil {
 						t.Fatal(err)
 					}
 					keyCondition := "pk = :key"
@@ -49,13 +53,13 @@ func TestIndexProjectionIncludesTableAndIndexKeys(t *testing.T) {
 					}
 					read := func(documentProjection string) ([]map[string]any, map[string]any, error) {
 						if operation == "Scan" {
-							out, err := store.Scan("orders", index, "", documentProjection, nil, nil, 1, nil)
+							out, err := store.Scan(&ReadInput{TableName: "orders", IndexName: index, ProjectionExpression: documentProjection, Limit: 1})
 							if err != nil {
 								return nil, nil, err
 							}
 							return out.Items, out.LastEvaluatedKey, nil
 						}
-						out, err := store.Query("orders", index, keyCondition, "", documentProjection, nil, map[string]any{":key": map[string]any{"S": value}}, 1, nil, true)
+						out, err := store.Query(&ReadInput{TableName: "orders", IndexName: index, KeyConditionExpression: keyCondition, ProjectionExpression: documentProjection, ExpressionAttributeValues: map[string]any{":key": map[string]any{"S": value}}, Limit: 1})
 						if err != nil {
 							return nil, nil, err
 						}
@@ -96,7 +100,7 @@ func TestIndexProjectionIncludesTableAndIndexKeys(t *testing.T) {
 					}
 					items[0]["pk"].(map[string]any)["S"] = "caller mutation"
 					stored, err := store.GetItem("orders", map[string]any{"pk": item["pk"], "sk": item["sk"]}, "", nil)
-					if err != nil || !reflect.DeepEqual(stored.Item, item) {
+					if err != nil || !reflect.DeepEqual(stored, item) {
 						t.Fatalf("result mutation changed stored item: %v %v", stored, err)
 					}
 				})
@@ -117,11 +121,11 @@ func TestQueryOrderingAndPagination(t *testing.T) {
 	} {
 		item := testItem("p", input.key, input.status, i, input.number)
 		item["gsi_pk"] = map[string]any{"S": "g"}
-		if _, err := store.PutItem("orders", item, "", nil, nil, "NONE"); err != nil {
+		if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: item}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := store.PutItem("orders", map[string]any{"pk": map[string]any{"S": "p"}, "sk": map[string]any{"S": "g"}}, "", nil, nil, "NONE"); err != nil {
+	if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: map[string]any{"pk": map[string]any{"S": "p"}, "sk": map[string]any{"S": "g"}}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
@@ -146,7 +150,7 @@ func TestQueryOrderingAndPagination(t *testing.T) {
 					if page > len(want) {
 						t.Fatal("pagination did not terminate")
 					}
-					out, err := store.Query("orders", tc.index, tc.keyCondition, "", "", nil, map[string]any{":key": map[string]any{"S": tc.value}}, 2, cursor, forward)
+					out, err := store.Query(&ReadInput{TableName: "orders", IndexName: tc.index, KeyConditionExpression: tc.keyCondition, ExpressionAttributeValues: map[string]any{":key": map[string]any{"S": tc.value}}, Limit: 2, ExclusiveStartKey: cursor, ScanIndexForward: &[]bool{forward}[0]})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -166,15 +170,15 @@ func TestQueryOrderingAndPagination(t *testing.T) {
 	}
 }
 
-func TestCachedSortPreservesExistingStringComparison(t *testing.T) {
+func TestSortKeysOrderByUTF8Bytes(t *testing.T) {
 	store := newReadTestStore(t, "ALL")
 	newline := string(rune(10))
 	for _, key := range []string{"A", "z", "é", newline, `"`} {
-		if _, err := store.PutItem("orders", testItem("p", key, "OPEN", 1, "1"), "", nil, nil, "NONE"); err != nil {
+		if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: testItem("p", key, "OPEN", 1, "1")}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	out, err := store.Query("orders", "", "pk = :key", "", "", nil, map[string]any{":key": map[string]any{"S": "p"}}, 0, nil, true)
+	out, err := store.Query(&ReadInput{TableName: "orders", KeyConditionExpression: "pk = :key", ExpressionAttributeValues: map[string]any{":key": map[string]any{"S": "p"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,11 +186,10 @@ func TestCachedSortPreservesExistingStringComparison(t *testing.T) {
 	for _, item := range out.Items {
 		got = append(got, item["sk"].(map[string]any)["S"].(string))
 	}
-	// Keep the existing encoded comparison until raw UTF-8 ordering is fixed
-	// separately. Caching comparison values must not change this behavior.
-	want := []string{"A", `"`, newline, "z", "é"}
+	// DynamoDB orders strings by their UTF-8 bytes.
+	want := []string{newline, `"`, "A", "z", "é"}
 	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("cached comparison changed ordering: %q, want %q", got, want)
+		t.Fatalf("ordering = %q, want %q", got, want)
 	}
 }
 
@@ -204,7 +207,7 @@ func BenchmarkDynamoDBReadPath(b *testing.B) {
 						"payload": map[string]any{"S": payload},
 						"nested":  map[string]any{"M": map[string]any{"list": map[string]any{"L": []any{map[string]any{"S": "a"}, map[string]any{"N": "2"}}}}},
 					}
-					if _, err := store.PutItem("orders", item, "", nil, nil, "NONE"); err != nil {
+					if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: item}); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -217,14 +220,37 @@ func BenchmarkDynamoDBReadPath(b *testing.B) {
 				b.ResetTimer()
 				for b.Loop() {
 					if operation == "ScanPage" {
-						if _, err := store.Scan("orders", "", "", "", nil, nil, 10, nil); err != nil {
+						if _, err := store.Scan(&ReadInput{TableName: "orders", Limit: 10}); err != nil {
 							b.Fatal(err)
 						}
-					} else if _, err := store.Query("orders", "", "pk = :key", "", "", nil, values, 10, nil, true); err != nil {
+					} else if _, err := store.Query(&ReadInput{TableName: "orders", KeyConditionExpression: "pk = :key", ExpressionAttributeValues: values, Limit: 10}); err != nil {
 						b.Fatal(err)
 					}
 				}
 			})
 		}
+	}
+}
+
+// A key condition that also names a non-key attribute must not stop at the
+// first item that fails it: later items can still match.
+func TestQueryKeyConditionMatchesAreNotAssumedContiguous(t *testing.T) {
+	store := newReadTestStore(t, "ALL")
+	for _, item := range []map[string]any{testItem("p", "a", "A", 1, "1"), testItem("p", "b", "B", 1, "1"), testItem("p", "c", "A", 1, "1")} {
+		if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: item}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := store.Query(&ReadInput{
+		TableName:                 "orders",
+		KeyConditionExpression:    "pk = :p AND #st = :a",
+		ExpressionAttributeNames:  map[string]string{"#st": "status"},
+		ExpressionAttributeValues: map[string]any{":p": map[string]any{"S": "p"}, ":a": map[string]any{"S": "A"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Count != 2 {
+		t.Fatalf("matches = %d, want 2", out.Count)
 	}
 }

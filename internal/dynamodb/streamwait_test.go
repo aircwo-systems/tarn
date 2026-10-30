@@ -48,7 +48,7 @@ func TestStreamBatchUntilWakesOnAppend(t *testing.T) {
 
 	// Give the reader time to park on the stream, then write behind its back.
 	time.Sleep(50 * time.Millisecond)
-	if _, err := store.PutItem("orders", testItem("acct#1", "order#1", "PENDING", 1, "1"), "", nil, nil, "NONE"); err != nil {
+	if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: testItem("acct#1", "order#1", "PENDING", 1, "1")}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -117,7 +117,7 @@ func TestStreamBatchUntilWakesWhenStreamDisabled(t *testing.T) {
 	store, arn := newStreamWaitStore(t)
 	res := streamBatchAsync(store, arn, "", 10, 20, nil)
 	time.Sleep(20 * time.Millisecond)
-	if _, err := store.UpdateTableDefinition("orders", &types.DynamoDBStreamSpecification{StreamEnabled: false}); err != nil {
+	if _, err := store.UpdateTable(&UpdateTableInput{TableName: "orders", StreamSpecification: &types.DynamoDBStreamSpecification{StreamEnabled: false}}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -159,7 +159,7 @@ func TestStreamSignalWakesEveryReaderOnOneStream(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	for i := range 5 {
 		item := testItem("acct#1", "order#"+strconv.Itoa(i), "PENDING", i, "1")
-		if _, err := store.PutItem("orders", item, "", nil, nil, "NONE"); err != nil {
+		if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: item}); err != nil {
 			t.Fatal(err)
 		}
 	}

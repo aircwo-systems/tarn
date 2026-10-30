@@ -195,29 +195,14 @@ func applySetClause(item map[string]any, body string, names map[string]string, v
 }
 
 func evalUpdateValue(expr string, item map[string]any, names map[string]string, values map[string]any) (any, error) {
-	if strings.HasPrefix(strings.ToLower(expr), "if_not_exists(") && strings.HasSuffix(expr, ")") {
-		body := strings.TrimSuffix(strings.TrimPrefix(expr, "if_not_exists("), ")")
-		parts := splitTopLevel(body, ',')
-		if len(parts) != 2 {
-			return nil, validationError("Invalid if_not_exists expression")
-		}
-		path, err := resolvePath(strings.TrimSpace(parts[0]), names)
-		if err != nil {
-			return nil, err
-		}
-		if value, ok := getPathValue(item, path); ok {
-			return cloneAny(value), nil
-		}
-		return evalUpdateValue(strings.TrimSpace(parts[1]), item, names, values)
-	}
-
+	expr = strings.TrimSpace(expr)
 	for _, op := range []string{"+", "-"} {
-		if idx := topLevelOperatorIndex(expr, op); idx >= 0 {
-			left, err := evalUpdateValue(strings.TrimSpace(expr[:idx]), item, names, values)
+		if idx := topLevelOperatorIndex(expr, op); idx > 0 {
+			left, err := evalUpdateValue(expr[:idx], item, names, values)
 			if err != nil {
 				return nil, err
 			}
-			right, err := evalUpdateValue(strings.TrimSpace(expr[idx+1:]), item, names, values)
+			right, err := evalUpdateValue(expr[idx+1:], item, names, values)
 			if err != nil {
 				return nil, err
 			}
@@ -225,10 +210,42 @@ func evalUpdateValue(expr string, item map[string]any, names map[string]string, 
 		}
 	}
 
+	if args, ok := callArgs(expr, "if_not_exists"); ok {
+		if len(args) != 2 {
+			return nil, validationError("Invalid UpdateExpression: Incorrect number of operands for operator or function; operator or function: if_not_exists")
+		}
+		path, err := resolvePath(args[0], names)
+		if err != nil {
+			return nil, err
+		}
+		if value, ok := getPathValue(item, path); ok {
+			return cloneAny(value), nil
+		}
+		return evalUpdateValue(args[1], item, names, values)
+	}
+	if args, ok := callArgs(expr, "list_append"); ok {
+		if len(args) != 2 {
+			return nil, validationError("Invalid UpdateExpression: Incorrect number of operands for operator or function; operator or function: list_append")
+		}
+		out := make([]any, 0)
+		for _, arg := range args {
+			value, err := evalUpdateValue(arg, item, names, values)
+			if err != nil {
+				return nil, err
+			}
+			list, ok := value.(map[string]any)["L"].([]any)
+			if !ok {
+				return nil, validationError("Invalid UpdateExpression: Incorrect operand type for operator or function; operator or function: list_append, operand type: %s", attributeKind(value))
+			}
+			out = append(out, list...)
+		}
+		return map[string]any{"L": out}, nil
+	}
+
 	if strings.HasPrefix(expr, ":") {
 		value, ok := values[expr]
 		if !ok {
-			return nil, validationError("Missing expression value: %s", expr)
+			return nil, validationError("Invalid UpdateExpression: An expression attribute value used in expression is not defined; attribute value: %s", expr)
 		}
 		return cloneAny(value), nil
 	}
@@ -239,9 +256,34 @@ func evalUpdateValue(expr string, item map[string]any, names map[string]string, 
 	}
 	value, ok := getPathValue(item, path)
 	if !ok {
-		return nil, nil
+		return nil, validationError("The provided expression refers to an attribute that does not exist in the item")
 	}
 	return cloneAny(value), nil
+}
+
+// callArgs splits "name(a, b)" into its arguments when expr is exactly one
+// call to the named function.
+func callArgs(expr, name string) ([]string, bool) {
+	if len(expr) <= len(name) || !strings.EqualFold(expr[:len(name)], name) {
+		return nil, false
+	}
+	rest := strings.TrimSpace(expr[len(name):])
+	if !strings.HasPrefix(rest, "(") || !strings.HasSuffix(rest, ")") {
+		return nil, false
+	}
+	depth := 0
+	for i, ch := range rest {
+		switch ch {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 && i != len(rest)-1 {
+				return nil, false
+			}
+		}
+	}
+	return splitTopLevel(rest[1:len(rest)-1], ','), true
 }
 
 func applyRemoveClause(item map[string]any, body string, names map[string]string) error {
@@ -618,6 +660,16 @@ func (p *exprParser) parseOperand() (exprNode, error) {
 	if tok.kind != "word" {
 		return nil, validationError("Invalid expression token: %s", tok.text)
 	}
+	if strings.EqualFold(tok.text, "size") && p.peek("(") {
+		fn, err := p.parseFunction(tok.text)
+		if err != nil {
+			return nil, err
+		}
+		if len(fn.(functionNode).args) != 1 {
+			return nil, validationError("Invalid ConditionExpression: Incorrect number of operands for operator or function; operator or function: size")
+		}
+		return sizeNode{arg: fn.(functionNode).args[0]}, nil
+	}
 	return operandNode{raw: tok.text, isValue: strings.HasPrefix(tok.text, ":")}, nil
 }
 
@@ -701,14 +753,19 @@ func (n compareNode) eval(item map[string]any, names map[string]string, values m
 		return nil, false, err
 	}
 	if !leftExists || !rightExists {
-		return false, true, nil
+		return n.op == "<>" && leftExists != rightExists, true, nil
 	}
-	cmp := compareAttributeValues(left, right)
 	switch n.op {
 	case "=":
-		return cmp == 0, true, nil
+		return attributeValueEqual(left, right), true, nil
 	case "<>":
-		return cmp != 0, true, nil
+		return !attributeValueEqual(left, right), true, nil
+	}
+	cmp, ok := compareScalars(left, right)
+	if !ok {
+		return false, true, nil
+	}
+	switch n.op {
 	case "<":
 		return cmp < 0, true, nil
 	case "<=":
@@ -735,7 +792,9 @@ func (n betweenNode) eval(item map[string]any, names map[string]string, values m
 	if err != nil || !ok {
 		return false, true, err
 	}
-	return compareAttributeValues(target, low) >= 0 && compareAttributeValues(target, high) <= 0, true, nil
+	lowCmp, lowOK := compareScalars(target, low)
+	highCmp, highOK := compareScalars(target, high)
+	return lowOK && highOK && lowCmp >= 0 && highCmp <= 0, true, nil
 }
 
 func (n inNode) eval(item map[string]any, names map[string]string, values map[string]any) (any, bool, error) {
@@ -781,10 +840,105 @@ func (n functionNode) eval(item map[string]any, names map[string]string, values 
 		if err != nil || !rightOK {
 			return false, true, err
 		}
-		return strings.HasPrefix(attributeScalarString(left), attributeScalarString(right)), true, nil
+		lk, ls := scalarOrder(left)
+		rk, rs := scalarOrder(right)
+		return lk == rk && (lk == "S" || lk == "B") && strings.HasPrefix(ls, rs), true, nil
+	case "contains":
+		if len(n.args) != 2 {
+			return nil, false, validationError("contains expects two arguments")
+		}
+		left, leftOK, err := n.args[0].eval(item, names, values)
+		if err != nil || !leftOK {
+			return false, true, err
+		}
+		right, rightOK, err := n.args[1].eval(item, names, values)
+		if err != nil || !rightOK {
+			return false, true, err
+		}
+		return containsValue(left, right), true, nil
+	case "attribute_type":
+		if len(n.args) != 2 {
+			return nil, false, validationError("attribute_type expects two arguments")
+		}
+		left, leftOK, err := n.args[0].eval(item, names, values)
+		if err != nil || !leftOK {
+			return false, true, err
+		}
+		want, _, err := n.args[1].eval(item, names, values)
+		if err != nil {
+			return nil, false, err
+		}
+		kind, ok := want.(map[string]any)["S"].(string)
+		if !ok {
+			return nil, false, validationError("Invalid ConditionExpression: Incorrect operand type for operator or function; operator or function: attribute_type")
+		}
+		return attributeKind(left) == kind, true, nil
 	default:
 		return nil, false, validationError("Unsupported function: %s", n.name)
 	}
+}
+
+type sizeNode struct {
+	arg exprNode
+}
+
+// eval returns the size of a string, binary, set, list or map as a number.
+func (n sizeNode) eval(item map[string]any, names map[string]string, values map[string]any) (any, bool, error) {
+	value, ok, err := n.arg.eval(item, names, values)
+	if err != nil || !ok {
+		return nil, false, err
+	}
+	attr, _ := value.(map[string]any)
+	size := -1
+	for kind, raw := range attr {
+		switch kind {
+		case "S":
+			size = len(raw.(string))
+		case "B":
+			_, s := scalarOrder(value)
+			size = len(s)
+		case "SS", "NS", "BS", "L":
+			list, _ := raw.([]any)
+			size = len(list)
+		case "M":
+			m, _ := raw.(map[string]any)
+			size = len(m)
+		}
+	}
+	if size < 0 {
+		return nil, false, nil
+	}
+	return map[string]any{"N": strconv.Itoa(size)}, true, nil
+}
+
+// containsValue is DynamoDB's contains(): a substring of a string or binary,
+// or a member of a set or list.
+func containsValue(container, operand any) bool {
+	attr, _ := container.(map[string]any)
+	for kind, raw := range attr {
+		switch kind {
+		case "S", "B":
+			ok, cs := scalarOrder(container)
+			ok2, os := scalarOrder(operand)
+			return ok == ok2 && strings.Contains(cs, os)
+		case "SS", "NS", "BS":
+			list, _ := raw.([]any)
+			member := kind[:1]
+			for _, entry := range list {
+				if attributeValueEqual(map[string]any{member: entry}, operand) {
+					return true
+				}
+			}
+		case "L":
+			list, _ := raw.([]any)
+			for _, entry := range list {
+				if attributeValueEqual(entry, operand) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func resolvePath(raw string, names map[string]string) ([]pathSegment, error) {
@@ -1021,23 +1175,6 @@ func removePathValue(item map[string]any, path []pathSegment) {
 			return
 		}
 		delete(attr, last.name)
-	}
-}
-
-func attributeScalarString(value any) string {
-	attr, ok := value.(map[string]any)
-	if !ok || len(attr) != 1 {
-		return fmt.Sprint(value)
-	}
-	switch {
-	case attr["S"] != nil:
-		return fmt.Sprint(attr["S"])
-	case attr["N"] != nil:
-		return fmt.Sprint(attr["N"])
-	case attr["B"] != nil:
-		return fmt.Sprint(attr["B"])
-	default:
-		return fmt.Sprint(value)
 	}
 }
 

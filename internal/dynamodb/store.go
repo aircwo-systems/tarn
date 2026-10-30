@@ -42,7 +42,14 @@ type Store struct {
 	// re-reading the stream on a timer. Guarded by mu, alongside the records
 	// it reports about, and never persisted.
 	wakes map[string]chan struct{}
+
+	// stopTTL stops the TTL sweeper started by Init.
+	stopTTL func()
 }
+
+// ttlSweepInterval is how often expired items are deleted. DynamoDB takes up
+// to a few days; a local emulator should be prompt.
+const ttlSweepInterval = 5 * time.Second
 
 type tableState struct {
 	Table               *types.DynamoDBTable                `json:"table"`
@@ -102,34 +109,6 @@ type cachedAttributeOrder struct {
 	encoded string
 }
 
-type putItemResult struct {
-	Attributes map[string]any
-}
-
-type getItemResult struct {
-	Item map[string]any
-}
-
-type updateItemResult struct {
-	Attributes map[string]any
-}
-
-type deleteItemResult struct {
-	Attributes map[string]any
-}
-
-type scanResult struct {
-	Items            []map[string]any
-	Count            int
-	LastEvaluatedKey map[string]any
-}
-
-type queryResult struct {
-	Items            []map[string]any
-	Count            int
-	LastEvaluatedKey map[string]any
-}
-
 func NewStore(cfg *config.Config) *Store {
 	return &Store{
 		cfg:    cfg,
@@ -139,6 +118,7 @@ func NewStore(cfg *config.Config) *Store {
 }
 
 func (s *Store) Init() error {
+	s.stopTTL = s.startTTLSweeper(ttlSweepInterval)
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
 		return nil
 	}
@@ -171,6 +151,8 @@ func (s *Store) Init() error {
 			continue
 		}
 		normalizeTableCompatibility(state.Table)
+		s.prepareIndexes(state.Table)
+		rekeyItems(state)
 		s.tables[name] = state
 		s.pruneStreamLocked(state, time.Now().UTC())
 	}
@@ -192,7 +174,33 @@ func (s *Store) Flush() {
 }
 
 // Close stops the background flusher after writing any pending state.
-func (s *Store) Close() { s.flusher.Close() }
+func (s *Store) Close() {
+	if s.stopTTL != nil {
+		s.stopTTL()
+	}
+	s.flusher.Close()
+}
+
+// rekeyItems canonicalises items saved before numbers were normalised, so
+// "1.0" and "1" stored under separate keys become the one item DynamoDB has.
+func rekeyItems(state *tableState) {
+	items := make(map[string]itemState, len(state.Items))
+	for _, stored := range state.Items {
+		item, err := canonicalizeItem(stored.Item)
+		if err != nil {
+			item = stored.Item
+		}
+		key, err := buildKeyMap(item, state.Table.KeySchema)
+		if err != nil {
+			continue
+		}
+		if id, err := serializeKey(key, state.Table.KeySchema); err == nil {
+			items[id] = itemState{Item: item}
+		}
+	}
+	state.Items = items
+	state.Table.ItemCount = int64(len(items))
+}
 
 func (s *Store) flushToDisk() {
 	if s.cfg == nil || !s.cfg.PersistenceEnabled {
@@ -238,19 +246,8 @@ func (s *Store) CreateTable(input *types.DynamoDBTable) (*types.DynamoDBTable, e
 	if len(input.KeySchema) == 0 {
 		return nil, validationError("KeySchema is required")
 	}
-	attrTypes := attributeTypeMap(input.AttributeDefinitions)
-	if err := validateKeySchema(input.KeySchema, attrTypes); err != nil {
+	if err := validateTableDefinition(input); err != nil {
 		return nil, err
-	}
-	for _, idx := range input.LocalSecondaryIndexes {
-		if err := validateKeySchema(idx.KeySchema, attrTypes); err != nil {
-			return nil, err
-		}
-	}
-	for _, idx := range input.GlobalSecondaryIndexes {
-		if err := validateKeySchema(idx.KeySchema, attrTypes); err != nil {
-			return nil, err
-		}
 	}
 
 	now := time.Now().UTC()
@@ -272,6 +269,7 @@ func (s *Store) CreateTable(input *types.DynamoDBTable) (*types.DynamoDBTable, e
 		table.ProvisionedThroughput = &types.DynamoDBProvisionedThroughput{}
 	}
 	normalizeTableCompatibility(table)
+	s.prepareIndexes(table)
 
 	if table.StreamSpecification != nil && table.StreamSpecification.StreamEnabled {
 		table.LatestStreamLabel = now.Format("2006-01-02T15:04:05.000")
@@ -294,27 +292,27 @@ func (s *Store) CreateTable(input *types.DynamoDBTable) (*types.DynamoDBTable, e
 	s.mu.Lock()
 	if _, exists := s.tables[table.TableName]; exists {
 		s.mu.Unlock()
-		return nil, validationError("Table already exists: %s", table.TableName)
+		return nil, resourceInUseError("Table already exists: %s", table.TableName)
 	}
 	s.tables[table.TableName] = state
+	created := describeLocked(state)
 	s.mu.Unlock()
 
 	if err := s.persist(); err != nil {
 		return nil, internalError("failed to persist table: %v", err)
 	}
-	return cloneTable(table), nil
+	return created, nil
 }
 
 func (s *Store) DescribeTable(name string) (*types.DynamoDBTable, error) {
 	var out *types.DynamoDBTable
 	err := s.readTable(name, func(state *tableState) error {
-		out = cloneTable(state.Table)
+		out = describeLocked(state)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	normalizeTableCompatibility(out)
 	return out, nil
 }
 
@@ -360,10 +358,12 @@ func (s *Store) DeleteTable(name string) (*types.DynamoDBTable, error) {
 		s.mu.Unlock()
 		return nil, err
 	}
-	deleted := cloneTable(state.Table)
-	if deleted != nil {
-		deleted.TableStatus = types.DynamoDBTableStatusDeleting
+	if state.Table.DeletionProtectionEnabled {
+		s.mu.Unlock()
+		return nil, validationError("Resource cannot be deleted as it is currently protected against deletion. Disable deletion protection first.")
 	}
+	deleted := describeLocked(state)
+	deleted.TableStatus = types.DynamoDBTableStatusDeleting
 	if state.Stream != nil {
 		// A mapping waiting on this stream would otherwise sleep until its
 		// deadline before finding the table is gone.
@@ -376,41 +376,6 @@ func (s *Store) DeleteTable(name string) (*types.DynamoDBTable, error) {
 		return nil, internalError("failed to persist table delete: %v", err)
 	}
 	return deleted, nil
-}
-
-func (s *Store) UpdateTableDefinition(name string, streamSpec *types.DynamoDBStreamSpecification) (*types.DynamoDBTable, error) {
-	if strings.TrimSpace(name) == "" {
-		return nil, validationError("TableName is required")
-	}
-
-	s.mu.Lock()
-	_, state, err := s.getTableLocked(name)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-
-	if streamSpec != nil {
-		previousARN := ""
-		if state.Stream != nil {
-			previousARN = state.Stream.ARN
-		}
-		applyTableStreamUpdateLocked(s.cfg, state, streamSpec, time.Now().UTC())
-		// Disabling the stream, or changing its view type, retires the old ARN.
-		// Wake anything parked on it so it re-reads and reports it missing.
-		if previousARN != "" && (state.Stream == nil || state.Stream.ARN != previousARN) {
-			s.signalStreamLocked(previousARN)
-		}
-	}
-	normalizeTableCompatibility(state.Table)
-
-	updated := cloneTable(state.Table)
-	s.mu.Unlock()
-
-	if err := s.persist(); err != nil {
-		return nil, internalError("failed to persist table update: %v", err)
-	}
-	return updated, nil
 }
 
 func (s *Store) TagResource(resource string, tags []types.DynamoDBTag) error {
@@ -643,408 +608,6 @@ func (s *Store) DisableKinesisStreamingDestination(name, streamArn string) (map[
 	return out, nil
 }
 
-func (s *Store) PutItem(
-	tableName string,
-	item map[string]any,
-	condition string,
-	names map[string]string,
-	values map[string]any,
-	returnValues string,
-) (*putItemResult, error) {
-	now := time.Now().UTC()
-
-	s.mu.Lock()
-	_, state, err := s.getTableLocked(tableName)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	s.pruneStreamLocked(state, now)
-
-	if err := validateItemAgainstTable(state.Table, item); err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	key, err := buildKeyMap(item, state.Table.KeySchema)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	keyID, err := serializeKey(key, state.Table.KeySchema)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	oldItem, exists := state.Items[keyID]
-	if condition != "" {
-		ok, evalErr := evaluateConditionExpression(condition, oldItem.Item, names, values)
-		if evalErr != nil {
-			s.mu.Unlock()
-			return nil, evalErr
-		}
-		if !ok {
-			s.mu.Unlock()
-			return nil, conditionalCheckFailed("The conditional request failed")
-		}
-	}
-
-	clonedItem := cloneItem(item)
-	state.Items[keyID] = itemState{Item: clonedItem}
-	state.Table.ItemCount = int64(len(state.Items))
-	eventName := "INSERT"
-	if exists {
-		eventName = "MODIFY"
-	}
-	s.appendStreamRecordLocked(state, eventName, key, oldItem.Item, clonedItem, now)
-	result := &putItemResult{}
-	switch strings.ToUpper(strings.TrimSpace(returnValues)) {
-	case "ALL_OLD":
-		result.Attributes = cloneItem(oldItem.Item)
-	}
-	s.mu.Unlock()
-	if err := s.persist(); err != nil {
-		return nil, internalError("failed to persist item: %v", err)
-	}
-	return result, nil
-}
-
-func (s *Store) GetItem(
-	tableName string,
-	key map[string]any,
-	projection string,
-	names map[string]string,
-) (*getItemResult, error) {
-	var out map[string]any
-	err := s.readTable(tableName, func(state *tableState) error {
-		keyID, err := serializeKey(key, state.Table.KeySchema)
-		if err != nil {
-			return err
-		}
-		if item, ok := state.Items[keyID]; ok {
-			out = cloneItem(item.Item)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	if out == nil {
-		return &getItemResult{}, nil
-	}
-	if projection != "" {
-		out, err = applyProjectionExpression(out, projection, names)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return &getItemResult{Item: out}, nil
-}
-
-func (s *Store) DeleteItem(
-	tableName string,
-	key map[string]any,
-	condition string,
-	names map[string]string,
-	values map[string]any,
-	returnValues string,
-) (*deleteItemResult, error) {
-	now := time.Now().UTC()
-
-	s.mu.Lock()
-	_, state, err := s.getTableLocked(tableName)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	keyID, err := serializeKey(key, state.Table.KeySchema)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	item, exists := state.Items[keyID]
-	if condition != "" {
-		ok, evalErr := evaluateConditionExpression(condition, item.Item, names, values)
-		if evalErr != nil {
-			s.mu.Unlock()
-			return nil, evalErr
-		}
-		if !ok {
-			s.mu.Unlock()
-			return nil, conditionalCheckFailed("The conditional request failed")
-		}
-	}
-	if !exists {
-		s.mu.Unlock()
-		return &deleteItemResult{}, nil
-	}
-	delete(state.Items, keyID)
-	state.Table.ItemCount = int64(len(state.Items))
-	s.appendStreamRecordLocked(state, "REMOVE", key, item.Item, nil, now)
-	result := &deleteItemResult{}
-	if strings.ToUpper(strings.TrimSpace(returnValues)) == "ALL_OLD" {
-		result.Attributes = cloneItem(item.Item)
-	}
-	s.mu.Unlock()
-	if err := s.persist(); err != nil {
-		return nil, internalError("failed to persist item delete: %v", err)
-	}
-	return result, nil
-}
-
-func (s *Store) UpdateItem(
-	tableName string,
-	key map[string]any,
-	updateExpr string,
-	condition string,
-	names map[string]string,
-	values map[string]any,
-	returnValues string,
-) (*updateItemResult, error) {
-	now := time.Now().UTC()
-
-	s.mu.Lock()
-	_, state, err := s.getTableLocked(tableName)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	s.pruneStreamLocked(state, now)
-	keyID, err := serializeKey(key, state.Table.KeySchema)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	current := cloneItem(state.Items[keyID].Item)
-	if current == nil {
-		current = cloneItem(key)
-	}
-	if err := validateItemAgainstTable(state.Table, current); err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	if condition != "" {
-		ok, evalErr := evaluateConditionExpression(condition, state.Items[keyID].Item, names, values)
-		if evalErr != nil {
-			s.mu.Unlock()
-			return nil, evalErr
-		}
-		if !ok {
-			s.mu.Unlock()
-			return nil, conditionalCheckFailed("The conditional request failed")
-		}
-	}
-	oldItem := cloneItem(state.Items[keyID].Item)
-	if err := applyUpdateExpression(current, updateExpr, names, values); err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	for keyName, av := range key {
-		current[keyName] = cloneAny(av)
-	}
-	if err := validateItemAgainstTable(state.Table, current); err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	newKey, err := buildKeyMap(current, state.Table.KeySchema)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	newKeyID, err := serializeKey(newKey, state.Table.KeySchema)
-	if err != nil {
-		s.mu.Unlock()
-		return nil, err
-	}
-	if newKeyID != keyID {
-		s.mu.Unlock()
-		return nil, validationError("The document path provided in the update expression is invalid for update")
-	}
-	state.Items[keyID] = itemState{Item: current}
-	state.Table.ItemCount = int64(len(state.Items))
-	eventName := "MODIFY"
-	if oldItem == nil {
-		eventName = "INSERT"
-	}
-	s.appendStreamRecordLocked(state, eventName, newKey, oldItem, current, now)
-	result := &updateItemResult{}
-	switch strings.ToUpper(strings.TrimSpace(returnValues)) {
-	case "ALL_NEW":
-		result.Attributes = cloneItem(current)
-	case "ALL_OLD":
-		result.Attributes = cloneItem(oldItem)
-	case "UPDATED_NEW":
-		updated := diffItemAttributes(oldItem, current)
-		result.Attributes = updated
-	case "UPDATED_OLD":
-		result.Attributes = diffItemAttributes(current, oldItem)
-	}
-	s.mu.Unlock()
-	if err := s.persist(); err != nil {
-		return nil, internalError("failed to persist item update: %v", err)
-	}
-	return result, nil
-}
-
-func (s *Store) Scan(
-	tableName string,
-	indexName string,
-	filterExpr string,
-	projection string,
-	names map[string]string,
-	values map[string]any,
-	limit int,
-	exclusiveStartKey map[string]any,
-) (*scanResult, error) {
-	var (
-		keySchema      []types.DynamoDBKeySchemaElement
-		projectionKeys []types.DynamoDBKeySchemaElement
-		projectionDef  *types.DynamoDBProjection
-		views          []itemView
-	)
-	err := s.readTable(tableName, func(state *tableState) error {
-		keySchema = slices.Clone(state.Table.KeySchema)
-		if indexName != "" {
-			indexSchema, idxProj, err := lookupIndex(state.Table, indexName)
-			if err != nil {
-				return err
-			}
-			projectionDef = idxProj
-			projectionKeys = unionKeySchema(keySchema, indexSchema)
-		}
-		var err error
-		views, err = s.collectSortedItems(state, indexName, false)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	start := findExclusiveStart(views, keySchema, exclusiveStartKey)
-	items := make([]map[string]any, 0)
-	count := 0
-	var lastKey map[string]any
-	if limit <= 0 {
-		limit = len(views)
-	}
-	for i := start; i < len(views); i++ {
-		view := views[i]
-		ok := true
-		if filterExpr != "" {
-			ok, err = evaluateConditionExpression(filterExpr, view.item, names, values)
-			if err != nil {
-				return nil, err
-			}
-		}
-		if !ok {
-			continue
-		}
-		count++
-		item := cloneItem(view.item)
-		if projectionDef != nil {
-			item = applyIndexProjection(item, *projectionDef, projectionKeys)
-		}
-		if projection != "" {
-			item, err = applyProjectionExpression(item, projection, names)
-			if err != nil {
-				return nil, err
-			}
-		}
-		items = append(items, item)
-		lastKey = cloneItem(view.key)
-		if len(items) >= limit {
-			if i+1 < len(views) {
-				break
-			}
-		}
-	}
-	if len(items) == 0 || len(items) < limit || start+count >= len(views) {
-		lastKey = nil
-	}
-	return &scanResult{Items: items, Count: len(items), LastEvaluatedKey: lastKey}, nil
-}
-
-func (s *Store) Query(
-	tableName string,
-	indexName string,
-	keyCondition string,
-	filterExpr string,
-	projection string,
-	names map[string]string,
-	values map[string]any,
-	limit int,
-	exclusiveStartKey map[string]any,
-	scanIndexForward bool,
-) (*queryResult, error) {
-	if strings.TrimSpace(keyCondition) == "" {
-		return nil, validationError("Query condition missed key schema element")
-	}
-	var (
-		keySchema      []types.DynamoDBKeySchemaElement
-		projectionKeys []types.DynamoDBKeySchemaElement
-		projectionDef  *types.DynamoDBProjection
-		views          []itemView
-	)
-	err := s.readTable(tableName, func(state *tableState) error {
-		keySchema = slices.Clone(state.Table.KeySchema)
-		var err error
-		var indexSchema []types.DynamoDBKeySchemaElement
-		if indexSchema, projectionDef, err = lookupIndex(state.Table, indexName); err != nil {
-			return err
-		}
-		projectionKeys = unionKeySchema(keySchema, indexSchema)
-		views, err = s.collectSortedItems(state, indexName, !scanIndexForward)
-		return err
-	})
-	if err != nil {
-		return nil, err
-	}
-	start := findExclusiveStart(views, keySchema, exclusiveStartKey)
-	items := make([]map[string]any, 0)
-	var lastKey map[string]any
-	if limit <= 0 {
-		limit = len(views)
-	}
-	for i := start; i < len(views); i++ {
-		view := views[i]
-		match, evalErr := evaluateConditionExpression(keyCondition, view.item, names, values)
-		if evalErr != nil {
-			return nil, evalErr
-		}
-		if !match {
-			continue
-		}
-		if filterExpr != "" {
-			match, evalErr = evaluateConditionExpression(filterExpr, view.item, names, values)
-			if evalErr != nil {
-				return nil, evalErr
-			}
-			if !match {
-				continue
-			}
-		}
-		item := cloneItem(view.item)
-		if projectionDef != nil {
-			item = applyIndexProjection(item, *projectionDef, projectionKeys)
-		}
-		if projection != "" {
-			item, err = applyProjectionExpression(item, projection, names)
-			if err != nil {
-				return nil, err
-			}
-		}
-		items = append(items, item)
-		lastKey = cloneItem(view.key)
-		if len(items) >= limit {
-			if i+1 < len(views) {
-				break
-			}
-		}
-	}
-	if len(items) == 0 || len(items) < limit {
-		lastKey = nil
-	}
-	return &queryResult{Items: items, Count: len(items), LastEvaluatedKey: lastKey}, nil
-}
-
 func (s *Store) ListStreams(tableName string, limit int, exclusiveStartArn string) ([]map[string]any, string, error) {
 	filterName := normalizeTableIdentifier(tableName)
 
@@ -1160,7 +723,7 @@ func (s *Store) GetShardIterator(streamArn, shardID, iteratorType, sequenceNumbe
 	return encodeShardIterator(streamArn, startSeq), nil
 }
 
-func (s *Store) GetRecords(iterator string, limit int) ([]map[string]any, string, error) {
+func (s *Store) GetRecords(iterator string, limit int) ([]*types.StreamRecord, string, error) {
 	streamArn, startSeq, err := decodeShardIterator(iterator)
 	if err != nil {
 		return nil, "", validationError("Invalid ShardIterator")
@@ -1177,10 +740,10 @@ func (s *Store) GetRecords(iterator string, limit int) ([]map[string]any, string
 		return nil, "", err
 	}
 
-	out := make([]map[string]any, 0, len(records))
+	out := make([]*types.StreamRecord, 0, len(records))
 	nextSeq := startSeq
 	for _, record := range records {
-		out = append(out, streamRecordShape(record))
+		out = append(out, cloneStreamRecord(record))
 		nextSeq = streamRecordSeq(record) + 1
 	}
 	return out, encodeShardIterator(streamArn, nextSeq), nil
@@ -1381,16 +944,12 @@ func (s *Store) findStreamLocked(streamArn string) (*tableState, error) {
 }
 
 func (s *Store) collectSortedItems(state *tableState, indexName string, reverse bool) ([]itemView, error) {
-	keySchema := state.Table.KeySchema
-	if indexName != "" {
-		indexSchema, _, err := lookupIndex(state.Table, indexName)
-		if err != nil {
-			return nil, err
-		}
-		keySchema = indexSchema
+	keySchema, _, err := lookupIndex(state.Table, indexName)
+	if err != nil {
+		return nil, err
 	}
-	// Index keys determine order, with base-table keys breaking ties. Cache
-	// their comparison values once instead of encoding them during every comparison.
+	// Index keys determine order, with base-table keys breaking ties. Items
+	// missing an index key are not in the index.
 	combinedSchema := unionKeySchema(state.Table.KeySchema, keySchema)
 	views := make([]itemView, 0, len(state.Items))
 	for _, item := range state.Items {
@@ -1398,28 +957,10 @@ func (s *Store) collectSortedItems(state *tableState, indexName string, reverse 
 		if err != nil {
 			continue
 		}
-		cloned := cloneItem(item.Item)
-		order := make([]cachedAttributeOrder, len(combinedSchema))
-		for i, part := range combinedSchema {
-			value := cloned[part.AttributeName]
-			number, _ := asNumber(value)
-			order[i] = cachedAttributeOrder{number: number, encoded: attributeSortValue(value)}
-		}
-		views = append(views, itemView{item: cloned, key: key, order: order})
+		views = append(views, itemView{item: cloneItem(item.Item), key: key, order: keyOrder(key, combinedSchema)})
 	}
 	sort.Slice(views, func(i, j int) bool {
-		cmp := 0
-		for k, left := range views[i].order {
-			right := views[j].order[k]
-			if left.number != nil && right.number != nil {
-				cmp = left.number.Cmp(right.number)
-			} else {
-				cmp = strings.Compare(left.encoded, right.encoded)
-			}
-			if cmp != 0 {
-				break
-			}
-		}
+		cmp := compareKeyOrder(views[i].order, views[j].order)
 		if reverse {
 			return cmp > 0
 		}
@@ -1428,12 +969,62 @@ func (s *Store) collectSortedItems(state *tableState, indexName string, reverse 
 	return views, nil
 }
 
-func (s *Store) appendStreamRecordLocked(state *tableState, eventName string, key, oldImage, newImage map[string]any, now time.Time) {
+// keyOrder caches a key's comparison values in schema order.
+func keyOrder(key map[string]any, schema []types.DynamoDBKeySchemaElement) []cachedAttributeOrder {
+	order := make([]cachedAttributeOrder, len(schema))
+	for i, part := range schema {
+		value := key[part.AttributeName]
+		number, _ := asNumber(value)
+		_, raw := scalarOrder(value)
+		order[i] = cachedAttributeOrder{number: number, encoded: raw}
+	}
+	return order
+}
+
+func compareKeyOrder(a, b []cachedAttributeOrder) int {
+	for k := range a {
+		var cmp int
+		if a[k].number != nil && b[k].number != nil {
+			cmp = a[k].number.Cmp(b[k].number)
+		} else {
+			cmp = strings.Compare(a[k].encoded, b[k].encoded)
+		}
+		if cmp != 0 {
+			return cmp
+		}
+	}
+	return 0
+}
+
+// findExclusiveStart returns the index of the first view after startKey in
+// walk order. The start key need not exist, so a page boundary survives the
+// item being deleted between pages.
+func findExclusiveStart(views []itemView, schema []types.DynamoDBKeySchemaElement, startKey map[string]any, reverse bool) (int, error) {
+	if len(startKey) == 0 {
+		return 0, nil
+	}
+	canonical, err := canonicalizeItem(startKey)
+	if err != nil {
+		return 0, err
+	}
+	for _, part := range schema {
+		if _, ok := canonical[part.AttributeName]; !ok {
+			return 0, validationError("The provided starting key is invalid: The provided key element does not match the schema")
+		}
+	}
+	start := keyOrder(canonical, schema)
+	return sort.Search(len(views), func(i int) bool {
+		cmp := compareKeyOrder(views[i].order, start)
+		if reverse {
+			return cmp < 0
+		}
+		return cmp > 0
+	}), nil
+}
+
+func (s *Store) appendStreamRecordLocked(state *tableState, eventName string, key, oldImage, newImage map[string]any, now time.Time, identity *types.StreamUserIdentity) {
 	if state == nil || state.Stream == nil {
 		return
-	}
-	if eventName == "INSERT" && oldImage != nil {
-		eventName = "MODIFY"
 	}
 	state.Stream.NextSeq++
 	seq := strconv.FormatInt(state.Stream.NextSeq, 10)
@@ -1448,9 +1039,9 @@ func (s *Store) appendStreamRecordLocked(state *tableState, eventName string, ke
 			ApproximateCreationDateTime: float64(now.Unix()),
 			Keys:                        cloneItem(key),
 			SequenceNumber:              seq,
-			SizeBytes:                   int64(len(mustJSON(cloneItem(newImage)))),
 			StreamViewType:              state.Stream.ViewType,
 		},
+		UserIdentity: identity,
 	}
 	switch state.Stream.ViewType {
 	case "KEYS_ONLY":
@@ -1462,6 +1053,8 @@ func (s *Store) appendStreamRecordLocked(state *tableState, eventName string, ke
 		record.Dynamodb.NewImage = cloneItem(newImage)
 		record.Dynamodb.OldImage = cloneItem(oldImage)
 	}
+	d := &record.Dynamodb
+	d.SizeBytes = int64(itemSize(d.Keys) + itemSize(d.NewImage) + itemSize(d.OldImage))
 	state.Stream.Records = append(state.Stream.Records, record)
 	s.evictOldStreamRecordsLocked(state)
 	// A reader parked on this stream has something to read now. Signalling
@@ -1613,19 +1206,6 @@ func sortedAttrNames(m map[string]string) []string {
 	return out
 }
 
-func validateItemAgainstTable(table *types.DynamoDBTable, item map[string]any) error {
-	if table == nil {
-		return validationError("Table does not exist")
-	}
-	for _, keyPart := range table.KeySchema {
-		value, ok := item[keyPart.AttributeName]
-		if !ok || value == nil {
-			return validationError("One or more parameter values were invalid: Missing the key %s in the item", keyPart.AttributeName)
-		}
-	}
-	return nil
-}
-
 func buildKeyMap(item map[string]any, schema []types.DynamoDBKeySchemaElement) (map[string]any, error) {
 	out := make(map[string]any, len(schema))
 	for _, part := range schema {
@@ -1652,23 +1232,6 @@ func serializeKey(key map[string]any, schema []types.DynamoDBKeySchemaElement) (
 		parts = append(parts, part.AttributeName+"="+string(data))
 	}
 	return strings.Join(parts, "|"), nil
-}
-
-func findExclusiveStart(items []itemView, schema []types.DynamoDBKeySchemaElement, startKey map[string]any) int {
-	if len(startKey) == 0 {
-		return 0
-	}
-	startID, err := serializeKey(startKey, schema)
-	if err != nil {
-		return 0
-	}
-	for i, item := range items {
-		id, err := serializeKey(item.key, schema)
-		if err == nil && id == startID {
-			return i + 1
-		}
-	}
-	return 0
 }
 
 func lookupIndex(table *types.DynamoDBTable, name string) ([]types.DynamoDBKeySchemaElement, *types.DynamoDBProjection, error) {
@@ -2045,31 +1608,20 @@ func diffItemAttributes(base, target map[string]any) map[string]any {
 	return out
 }
 
+// compareAttributeValues orders numbers numerically and other scalars by
+// their bytes. Use compareScalars where mismatched types must compare false.
 func compareAttributeValues(left, right any) int {
 	ln, lok := asNumber(left)
 	rn, rok := asNumber(right)
 	if lok && rok {
 		return ln.Cmp(rn)
 	}
-	ls := attributeSortValue(left)
-	rs := attributeSortValue(right)
-	switch {
-	case ls < rs:
-		return -1
-	case ls > rs:
-		return 1
-	default:
-		return 0
+	lk, ls := scalarOrder(left)
+	rk, rs := scalarOrder(right)
+	if c := strings.Compare(lk, rk); c != 0 {
+		return c
 	}
-}
-
-func attributeSortValue(value any) string {
-	data, _ := json.Marshal(normalizeAny(value))
-	return string(data)
-}
-
-func attributeValueEqual(left, right any) bool {
-	return compareAttributeValues(left, right) == 0
+	return strings.Compare(ls, rs)
 }
 
 func asNumber(value any) (*big.Float, bool) {
@@ -2090,11 +1642,6 @@ func asNumber(value any) (*big.Float, bool) {
 		return nil, false
 	}
 	return out, true
-}
-
-func mustJSON(value any) []byte {
-	data, _ := json.Marshal(value)
-	return data
 }
 
 func encodeShardIterator(streamArn string, startSeq int64) string {
@@ -2121,27 +1668,4 @@ func decodeShardIterator(token string) (string, int64, error) {
 		payload.StartSeq = 1
 	}
 	return payload.StreamARN, payload.StartSeq, nil
-}
-
-func streamRecordShape(record *types.StreamRecord) map[string]any {
-	if record == nil {
-		return nil
-	}
-	return map[string]any{
-		"eventID":        record.EventID,
-		"eventName":      record.EventName,
-		"eventVersion":   record.EventVersion,
-		"eventSource":    record.EventSource,
-		"awsRegion":      record.AwsRegion,
-		"eventSourceARN": record.EventSourceARN,
-		"dynamodb": map[string]any{
-			"ApproximateCreationDateTime": record.Dynamodb.ApproximateCreationDateTime,
-			"Keys":                        cloneItem(record.Dynamodb.Keys),
-			"NewImage":                    cloneItem(record.Dynamodb.NewImage),
-			"OldImage":                    cloneItem(record.Dynamodb.OldImage),
-			"SequenceNumber":              record.Dynamodb.SequenceNumber,
-			"SizeBytes":                   record.Dynamodb.SizeBytes,
-			"StreamViewType":              record.Dynamodb.StreamViewType,
-		},
-	}
 }

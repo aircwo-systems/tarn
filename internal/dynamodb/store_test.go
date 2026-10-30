@@ -1,6 +1,7 @@
 package dynamodb
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -100,10 +101,10 @@ func TestStoreCRUDQueryAndStreams(t *testing.T) {
 	}
 
 	firstItem := testItem("acct#1", "order#1", "PENDING", 1, "1")
-	if _, err := store.PutItem("orders", firstItem, "", nil, nil, "NONE"); err != nil {
+	if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: firstItem}); err != nil {
 		t.Fatalf("put item: %v", err)
 	}
-	if _, err := store.PutItem("orders", testItem("acct#1", "order#2", "COMPLETE", 2, "2"), "", nil, nil, "NONE"); err != nil {
+	if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: testItem("acct#1", "order#2", "COMPLETE", 2, "2")}); err != nil {
 		t.Fatalf("put item 2: %v", err)
 	}
 
@@ -114,48 +115,29 @@ func TestStoreCRUDQueryAndStreams(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get item: %v", err)
 	}
-	if getOut.Item["status"] == nil || getOut.Item["pk"] == nil {
-		t.Fatalf("projected item = %#v", getOut.Item)
+	if getOut["status"] == nil || getOut["pk"] == nil {
+		t.Fatalf("projected item = %#v", getOut)
 	}
 
-	updateOut, err := store.UpdateItem(
-		"orders",
-		map[string]any{"pk": map[string]any{"S": "acct#1"}, "sk": map[string]any{"S": "order#1"}},
-		"SET status = :next, meta.#flag = :flag ADD count :inc DELETE tags :remove",
-		"attribute_exists(pk) AND status = :current",
-		map[string]string{"#flag": "flag"},
-		map[string]any{
-			":next":    map[string]any{"S": "COMPLETE"},
-			":current": map[string]any{"S": "PENDING"},
-			":flag":    map[string]any{"BOOL": true},
-			":inc":     map[string]any{"N": "2"},
-			":remove":  map[string]any{"SS": []any{"one"}},
-		},
-		"ALL_NEW",
-	)
+	updateOut, err := store.UpdateItem(&WriteInput{TableName: "orders", Key: map[string]any{"pk": map[string]any{"S": "acct#1"}, "sk": map[string]any{"S": "order#1"}}, UpdateExpression: "SET status = :next, meta.#flag = :flag ADD count :inc DELETE tags :remove", ConditionExpression: "attribute_exists(pk) AND status = :current", ExpressionAttributeNames: map[string]string{"#flag": "flag"}, ExpressionAttributeValues: map[string]any{
+		":next":    map[string]any{"S": "COMPLETE"},
+		":current": map[string]any{"S": "PENDING"},
+		":flag":    map[string]any{"BOOL": true},
+		":inc":     map[string]any{"N": "2"},
+		":remove":  map[string]any{"SS": []any{"one"}},
+	}, ReturnValues: "ALL_NEW"})
 	if err != nil {
 		t.Fatalf("update item: %v", err)
 	}
-	if updateOut.Attributes["status"] == nil {
-		t.Fatalf("updated attributes = %#v", updateOut.Attributes)
+	if updateOut["status"] == nil {
+		t.Fatalf("updated attributes = %#v", updateOut)
 	}
 
-	queryOut, err := store.Query(
-		"orders",
-		"",
-		"pk = :pk AND begins_with(sk, :prefix)",
-		"status = :status",
-		"",
-		nil,
-		map[string]any{
-			":pk":     map[string]any{"S": "acct#1"},
-			":prefix": map[string]any{"S": "order#"},
-			":status": map[string]any{"S": "COMPLETE"},
-		},
-		10,
-		nil,
-		true,
-	)
+	queryOut, err := store.Query(&ReadInput{TableName: "orders", KeyConditionExpression: "pk = :pk AND begins_with(sk, :prefix)", FilterExpression: "status = :status", ExpressionAttributeValues: map[string]any{
+		":pk":     map[string]any{"S": "acct#1"},
+		":prefix": map[string]any{"S": "order#"},
+		":status": map[string]any{"S": "COMPLETE"},
+	}, Limit: 10})
 	if err != nil {
 		t.Fatalf("query table: %v", err)
 	}
@@ -163,21 +145,10 @@ func TestStoreCRUDQueryAndStreams(t *testing.T) {
 		t.Fatalf("query items len = %d, want 2", len(queryOut.Items))
 	}
 
-	indexOut, err := store.Query(
-		"orders",
-		"gsi-type",
-		"gsi_pk = :pk AND gsi_sk >= :min",
-		"",
-		"pk,status,gsi_sk",
-		nil,
-		map[string]any{
-			":pk":  map[string]any{"S": "type#COMPLETE"},
-			":min": map[string]any{"N": "1"},
-		},
-		10,
-		nil,
-		true,
-	)
+	indexOut, err := store.Query(&ReadInput{TableName: "orders", IndexName: "gsi-type", KeyConditionExpression: "gsi_pk = :pk AND gsi_sk >= :min", ProjectionExpression: "pk,status,gsi_sk", ExpressionAttributeValues: map[string]any{
+		":pk":  map[string]any{"S": "type#COMPLETE"},
+		":min": map[string]any{"N": "1"},
+	}, Limit: 10})
 	if err != nil {
 		t.Fatalf("query gsi: %v", err)
 	}
@@ -185,16 +156,7 @@ func TestStoreCRUDQueryAndStreams(t *testing.T) {
 		t.Fatalf("gsi query len = %d, want 1", len(indexOut.Items))
 	}
 
-	scanOut, err := store.Scan(
-		"orders",
-		"lsi-status",
-		"status = :status",
-		"pk,status",
-		nil,
-		map[string]any{":status": map[string]any{"S": "COMPLETE"}},
-		10,
-		nil,
-	)
+	scanOut, err := store.Scan(&ReadInput{TableName: "orders", IndexName: "lsi-status", FilterExpression: "status = :status", ProjectionExpression: "pk,status", ExpressionAttributeValues: map[string]any{":status": map[string]any{"S": "COMPLETE"}}, Limit: 10})
 	if err != nil {
 		t.Fatalf("scan: %v", err)
 	}
@@ -202,19 +164,12 @@ func TestStoreCRUDQueryAndStreams(t *testing.T) {
 		t.Fatalf("scan len = %d, want 2", len(scanOut.Items))
 	}
 
-	deleteOut, err := store.DeleteItem(
-		"orders",
-		map[string]any{"pk": map[string]any{"S": "acct#1"}, "sk": map[string]any{"S": "order#2"}},
-		"attribute_exists(pk)",
-		nil,
-		nil,
-		"ALL_OLD",
-	)
+	deleteOut, err := store.DeleteItem(&WriteInput{TableName: "orders", Key: map[string]any{"pk": map[string]any{"S": "acct#1"}, "sk": map[string]any{"S": "order#2"}}, ConditionExpression: "attribute_exists(pk)", ReturnValues: "ALL_OLD"})
 	if err != nil {
 		t.Fatalf("delete item: %v", err)
 	}
-	if deleteOut.Attributes["pk"] == nil {
-		t.Fatalf("deleted old attributes = %#v", deleteOut.Attributes)
+	if deleteOut["pk"] == nil {
+		t.Fatalf("deleted old attributes = %#v", deleteOut)
 	}
 
 	streams, lastStream, err := store.ListStreams("orders", 10, "")
@@ -302,32 +257,17 @@ func TestStoreMutationsPersistWithoutDeadlock(t *testing.T) {
 	}
 
 	run("put item", func() error {
-		_, err := store.PutItem("orders", testItem("acct#1", "order#1", "PENDING", 1, "1"), "", nil, nil, "NONE")
+		_, err := store.PutItem(&WriteInput{TableName: "orders", Item: testItem("acct#1", "order#1", "PENDING", 1, "1")})
 		return err
 	})
 
 	run("update item", func() error {
-		_, err := store.UpdateItem(
-			"orders",
-			map[string]any{"pk": map[string]any{"S": "acct#1"}, "sk": map[string]any{"S": "order#1"}},
-			"SET status = :next",
-			"",
-			nil,
-			map[string]any{":next": map[string]any{"S": "COMPLETE"}},
-			"NONE",
-		)
+		_, err := store.UpdateItem(&WriteInput{TableName: "orders", Key: map[string]any{"pk": map[string]any{"S": "acct#1"}, "sk": map[string]any{"S": "order#1"}}, UpdateExpression: "SET status = :next", ExpressionAttributeValues: map[string]any{":next": map[string]any{"S": "COMPLETE"}}})
 		return err
 	})
 
 	run("delete item", func() error {
-		_, err := store.DeleteItem(
-			"orders",
-			map[string]any{"pk": map[string]any{"S": "acct#1"}, "sk": map[string]any{"S": "order#1"}},
-			"",
-			nil,
-			nil,
-			"NONE",
-		)
+		_, err := store.DeleteItem(&WriteInput{TableName: "orders", Key: map[string]any{"pk": map[string]any{"S": "acct#1"}, "sk": map[string]any{"S": "order#1"}}})
 		return err
 	})
 
@@ -349,7 +289,7 @@ func TestStoreSupportsTableARNIdentifiers(t *testing.T) {
 	}
 
 	item := testItem("acct#1", "order#1", "PENDING", 1, "1")
-	if _, err := store.PutItem(table.TableArn, item, "", nil, nil, "NONE"); err != nil {
+	if _, err := store.PutItem(&WriteInput{TableName: table.TableArn, Item: item}); err != nil {
 		t.Fatalf("put item by arn: %v", err)
 	}
 
@@ -362,8 +302,8 @@ func TestStoreSupportsTableARNIdentifiers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get item by arn: %v", err)
 	}
-	if got.Item["status"] == nil {
-		t.Fatalf("get item by arn = %#v", got.Item)
+	if got["status"] == nil {
+		t.Fatalf("get item by arn = %#v", got)
 	}
 
 	streams, _, err := store.ListStreams(table.TableArn, 10, "")
@@ -396,10 +336,10 @@ func TestStoreUpdateTableStreamSpecification(t *testing.T) {
 		t.Fatalf("expected no stream arn on create, got %q", table.LatestStreamArn)
 	}
 
-	updated, err := store.UpdateTableDefinition(table.TableName, &types.DynamoDBStreamSpecification{
+	updated, err := store.UpdateTable(&UpdateTableInput{TableName: table.TableName, StreamSpecification: &types.DynamoDBStreamSpecification{
 		StreamEnabled:  true,
 		StreamViewType: "NEW_AND_OLD_IMAGES",
-	})
+	}})
 	if err != nil {
 		t.Fatalf("enable stream: %v", err)
 	}
@@ -418,9 +358,9 @@ func TestStoreUpdateTableStreamSpecification(t *testing.T) {
 		t.Fatalf("streams after enable len = %d, want 1", len(streams))
 	}
 
-	updated, err = store.UpdateTableDefinition(table.TableName, &types.DynamoDBStreamSpecification{
+	updated, err = store.UpdateTable(&UpdateTableInput{TableName: table.TableName, StreamSpecification: &types.DynamoDBStreamSpecification{
 		StreamEnabled: false,
-	})
+	}})
 	if err != nil {
 		t.Fatalf("disable stream: %v", err)
 	}
@@ -571,7 +511,7 @@ func TestStreamRecordsAreCappedAndCheckpointsBisect(t *testing.T) {
 	// One write past the cap, so the oldest record is evicted.
 	for i := 0; i <= maxStreamRecords; i++ {
 		item := testItem("acct#1", fmt.Sprintf("order#%d", i), "PENDING", i, "1")
-		if _, err := store.PutItem("orders", item, "", nil, nil, "NONE"); err != nil {
+		if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: item}); err != nil {
 			t.Fatalf("put item %d: %v", i, err)
 		}
 	}
@@ -633,7 +573,7 @@ func TestStreamRecordsAreCappedAndCheckpointsBisect(t *testing.T) {
 	if len(records) != 5 {
 		t.Fatalf("get records len = %d, want 5", len(records))
 	}
-	if got := records[0]["dynamodb"].(map[string]any)["SequenceNumber"]; got != "2" {
+	if got := records[0].Dynamodb.SequenceNumber; got != "2" {
 		t.Fatalf("first record sequence = %v, want 2", got)
 	}
 }
@@ -691,7 +631,7 @@ func BenchmarkStreamBatchIdlePoll(b *testing.B) {
 	}
 	for i := 0; i < maxStreamRecords; i++ {
 		item := testItem("acct#1", fmt.Sprintf("order#%d", i), "PENDING", i, "1")
-		if _, err := store.PutItem("orders", item, "", nil, nil, "NONE"); err != nil {
+		if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: item}); err != nil {
 			b.Fatalf("put item %d: %v", i, err)
 		}
 	}
@@ -725,7 +665,7 @@ func TestStoreReadsAreSafeDuringConcurrentWrites(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < 40; i++ {
 				item := testItem("acct#1", fmt.Sprintf("order#%d-%d", w, i), "PENDING", i, "1")
-				if _, err := store.PutItem("orders", item, "", nil, nil, "NONE"); err != nil {
+				if _, err := store.PutItem(&WriteInput{TableName: "orders", Item: item}); err != nil {
 					t.Errorf("put item: %v", err)
 					return
 				}
@@ -744,11 +684,11 @@ func TestStoreReadsAreSafeDuringConcurrentWrites(t *testing.T) {
 				return
 			}
 			for i := 0; i < 40; i++ {
-				if _, err := store.Query("orders", "", "pk = :pk", "", "", nil, map[string]any{":pk": map[string]any{"S": "acct#1"}}, 10, nil, true); err != nil {
+				if _, err := store.Query(&ReadInput{TableName: "orders", KeyConditionExpression: "pk = :pk", ExpressionAttributeValues: map[string]any{":pk": map[string]any{"S": "acct#1"}}, Limit: 10}); err != nil {
 					t.Errorf("query: %v", err)
 					return
 				}
-				if _, err := store.Scan("orders", "", "", "", nil, nil, 10, nil); err != nil {
+				if _, err := store.Scan(&ReadInput{TableName: "orders", Limit: 10}); err != nil {
 					t.Errorf("scan: %v", err)
 					return
 				}
@@ -772,4 +712,55 @@ func TestStoreReadsAreSafeDuringConcurrentWrites(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// State saved before numbers were canonicalised keyed "1" and "1.0" as two
+// items. Loading it must leave the one item DynamoDB would hold, findable by
+// either spelling.
+func TestInitRekeysItemsSavedWithUncanonicalNumbers(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	cfg.PersistenceEnabled = true
+	table := &types.DynamoDBTable{
+		TableName:            "counters",
+		AttributeDefinitions: []types.DynamoDBAttributeDefinition{{AttributeName: "id", AttributeType: "N"}},
+		KeySchema:            []types.DynamoDBKeySchemaElement{{AttributeName: "id", KeyType: "HASH"}},
+	}
+	item := func(id, v string) itemState {
+		return itemState{Item: map[string]any{"id": map[string]any{"N": id}, "v": map[string]any{"N": v}}}
+	}
+	snapshot := tableSnapshot{Tables: map[string]*tableState{"counters": {
+		Table: table,
+		Items: map[string]itemState{`id={"N":"1"}`: item("1", "10"), `id={"N":"1.0"}`: item("1.0", "010")},
+	}}}
+	data, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(cfg.DynamoDBDir(), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg.DynamoDBStatePath(), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewStore(cfg)
+	if err := store.Init(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(store.Close)
+	out, err := store.Scan(&ReadInput{TableName: "counters"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Count != 1 {
+		t.Fatalf("items after load = %d, want 1", out.Count)
+	}
+	got, err := store.GetItem("counters", map[string]any{"id": map[string]any{"N": "1.00"}}, "", nil)
+	if err != nil || got == nil {
+		t.Fatalf("get by other spelling = %v, %v", got, err)
+	}
+	if got["v"].(map[string]any)["N"] != "10" {
+		t.Fatalf("v = %v, want canonical 10", got["v"])
+	}
 }

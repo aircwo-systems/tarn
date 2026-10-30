@@ -3,7 +3,6 @@ package dynamodb
 import (
 	"encoding/json"
 	"io"
-	"log"
 	"net/http"
 	"strings"
 
@@ -29,6 +28,232 @@ func IsDynamoDBRequest(r *http.Request) bool {
 	return strings.HasPrefix(target, dynamoPrefix) || strings.HasPrefix(target, dynamoStreamPrefix)
 }
 
+// operation decodes a request body and returns the response payload.
+type operation func(svc *dynamodbsvc.Service, body []byte) (any, error)
+
+// op adapts a typed handler to an operation, so each action is one line in
+// the tables below.
+func op[T any](fn func(svc *dynamodbsvc.Service, req *T) (any, error)) operation {
+	return func(svc *dynamodbsvc.Service, body []byte) (any, error) {
+		req := new(T)
+		if len(body) > 0 {
+			if err := json.Unmarshal(body, req); err != nil {
+				return nil, &dynamodbsvc.ServiceError{Code: "SerializationException", Message: err.Error()}
+			}
+		}
+		return fn(svc, req)
+	}
+}
+
+type tableName struct {
+	TableName string `json:"TableName"`
+}
+
+type resourceArn struct {
+	ResourceArn string              `json:"ResourceArn"`
+	Tags        []types.DynamoDBTag `json:"Tags"`
+	TagKeys     []string            `json:"TagKeys"`
+}
+
+type kinesisDestination struct {
+	TableName string `json:"TableName"`
+	StreamArn string `json:"StreamArn"`
+}
+
+type contributorInsights struct {
+	TableName                 string `json:"TableName"`
+	IndexName                 string `json:"IndexName"`
+	ContributorInsightsAction string `json:"ContributorInsightsAction"`
+}
+
+var tableOps = map[string]operation{
+	"CreateTable": func(svc *dynamodbsvc.Service, body []byte) (any, error) {
+		table, err := decodeCreateTable(body)
+		if err != nil {
+			return nil, err
+		}
+		out, err := svc.CreateTable(table)
+		return tableDescription(out), err
+	},
+	"UpdateTable": op(func(svc *dynamodbsvc.Service, req *dynamodbsvc.UpdateTableInput) (any, error) {
+		out, err := svc.UpdateTable(req)
+		return tableDescription(out), err
+	}),
+	"DeleteTable": op(func(svc *dynamodbsvc.Service, req *tableName) (any, error) {
+		out, err := svc.DeleteTable(req.TableName)
+		return tableDescription(out), err
+	}),
+	"DescribeTable": op(func(svc *dynamodbsvc.Service, req *tableName) (any, error) {
+		out, err := svc.DescribeTable(req.TableName)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"Table": tableOutput(out)}, nil
+	}),
+	"ListTables": op(func(svc *dynamodbsvc.Service, req *struct {
+		ExclusiveStartTableName string `json:"ExclusiveStartTableName"`
+		Limit                   int    `json:"Limit"`
+	}) (any, error) {
+		tables, last, err := svc.ListTables(req.Limit, req.ExclusiveStartTableName)
+		resp := map[string]any{"TableNames": tables}
+		if last != "" {
+			resp["LastEvaluatedTableName"] = last
+		}
+		return resp, err
+	}),
+	"TagResource": op(func(svc *dynamodbsvc.Service, req *resourceArn) (any, error) {
+		return struct{}{}, svc.TagResource(req.ResourceArn, req.Tags)
+	}),
+	"UntagResource": op(func(svc *dynamodbsvc.Service, req *resourceArn) (any, error) {
+		return struct{}{}, svc.UntagResource(req.ResourceArn, req.TagKeys)
+	}),
+	"ListTagsOfResource": op(func(svc *dynamodbsvc.Service, req *resourceArn) (any, error) {
+		tags, err := svc.ListTagsOfResource(req.ResourceArn)
+		return map[string]any{"Tags": tags}, err
+	}),
+	"DescribeTimeToLive": op(func(svc *dynamodbsvc.Service, req *tableName) (any, error) {
+		return svc.DescribeTimeToLive(req.TableName)
+	}),
+	"UpdateTimeToLive": op(func(svc *dynamodbsvc.Service, req *struct {
+		TableName               string `json:"TableName"`
+		TimeToLiveSpecification struct {
+			AttributeName string `json:"AttributeName"`
+			Enabled       bool   `json:"Enabled"`
+		} `json:"TimeToLiveSpecification"`
+	}) (any, error) {
+		return svc.UpdateTimeToLive(req.TableName, req.TimeToLiveSpecification.AttributeName, req.TimeToLiveSpecification.Enabled)
+	}),
+	"DescribeContinuousBackups": op(func(svc *dynamodbsvc.Service, req *tableName) (any, error) {
+		return svc.DescribeContinuousBackups(req.TableName)
+	}),
+	"UpdateContinuousBackups": op(func(svc *dynamodbsvc.Service, req *struct {
+		TableName                        string `json:"TableName"`
+		PointInTimeRecoverySpecification struct {
+			PointInTimeRecoveryEnabled bool `json:"PointInTimeRecoveryEnabled"`
+		} `json:"PointInTimeRecoverySpecification"`
+	}) (any, error) {
+		return svc.UpdateContinuousBackups(req.TableName, req.PointInTimeRecoverySpecification.PointInTimeRecoveryEnabled)
+	}),
+	"DescribeContributorInsights": op(func(svc *dynamodbsvc.Service, req *contributorInsights) (any, error) {
+		return svc.DescribeContributorInsights(req.TableName, req.IndexName)
+	}),
+	"UpdateContributorInsights": op(func(svc *dynamodbsvc.Service, req *contributorInsights) (any, error) {
+		return svc.UpdateContributorInsights(req.TableName, req.IndexName, req.ContributorInsightsAction)
+	}),
+	"DescribeKinesisStreamingDestination": op(func(svc *dynamodbsvc.Service, req *tableName) (any, error) {
+		return svc.DescribeKinesisStreamingDestination(req.TableName)
+	}),
+	"EnableKinesisStreamingDestination": op(func(svc *dynamodbsvc.Service, req *kinesisDestination) (any, error) {
+		return svc.EnableKinesisStreamingDestination(req.TableName, req.StreamArn)
+	}),
+	"DisableKinesisStreamingDestination": op(func(svc *dynamodbsvc.Service, req *kinesisDestination) (any, error) {
+		return svc.DisableKinesisStreamingDestination(req.TableName, req.StreamArn)
+	}),
+	"PutItem": op(func(svc *dynamodbsvc.Service, req *dynamodbsvc.WriteInput) (any, error) {
+		return attributes(svc.PutItem(req))
+	}),
+	"UpdateItem": op(func(svc *dynamodbsvc.Service, req *dynamodbsvc.WriteInput) (any, error) {
+		return attributes(svc.UpdateItem(req))
+	}),
+	"DeleteItem": op(func(svc *dynamodbsvc.Service, req *dynamodbsvc.WriteInput) (any, error) {
+		return attributes(svc.DeleteItem(req))
+	}),
+	"GetItem": op(func(svc *dynamodbsvc.Service, req *struct {
+		TableName                string            `json:"TableName"`
+		Key                      map[string]any    `json:"Key"`
+		ProjectionExpression     string            `json:"ProjectionExpression"`
+		ExpressionAttributeNames map[string]string `json:"ExpressionAttributeNames"`
+	}) (any, error) {
+		item, err := svc.GetItem(req.TableName, req.Key, req.ProjectionExpression, req.ExpressionAttributeNames)
+		if item == nil {
+			return struct{}{}, err
+		}
+		return map[string]any{"Item": item}, err
+	}),
+	"Scan": op(func(svc *dynamodbsvc.Service, req *dynamodbsvc.ReadInput) (any, error) {
+		return page(svc.Scan(req))
+	}),
+	"Query": op(func(svc *dynamodbsvc.Service, req *dynamodbsvc.ReadInput) (any, error) {
+		return page(svc.Query(req))
+	}),
+	"BatchWriteItem": op(func(svc *dynamodbsvc.Service, req *struct {
+		RequestItems map[string][]dynamodbsvc.BatchWriteRequest `json:"RequestItems"`
+	}) (any, error) {
+		if err := svc.BatchWriteItem(req.RequestItems); err != nil {
+			return nil, err
+		}
+		return map[string]any{"UnprocessedItems": map[string]any{}}, nil
+	}),
+	"BatchGetItem": op(func(svc *dynamodbsvc.Service, req *struct {
+		RequestItems map[string]dynamodbsvc.KeysAndAttributes `json:"RequestItems"`
+	}) (any, error) {
+		out, err := svc.BatchGetItem(req.RequestItems)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"Responses": out, "UnprocessedKeys": map[string]any{}}, nil
+	}),
+	"TransactWriteItems": op(func(svc *dynamodbsvc.Service, req *struct {
+		TransactItems []dynamodbsvc.TransactWriteItem `json:"TransactItems"`
+	}) (any, error) {
+		return struct{}{}, svc.TransactWriteItems(req.TransactItems)
+	}),
+	"TransactGetItems": op(func(svc *dynamodbsvc.Service, req *struct {
+		TransactItems []dynamodbsvc.TransactGetItem `json:"TransactItems"`
+	}) (any, error) {
+		items, err := svc.TransactGetItems(req.TransactItems)
+		if err != nil {
+			return nil, err
+		}
+		responses := make([]map[string]any, len(items))
+		for i, item := range items {
+			responses[i] = map[string]any{}
+			if item != nil {
+				responses[i]["Item"] = item
+			}
+		}
+		return map[string]any{"Responses": responses}, nil
+	}),
+}
+
+var streamOps = map[string]operation{
+	"ListStreams": op(func(svc *dynamodbsvc.Service, req *struct {
+		TableName               string `json:"TableName"`
+		Limit                   int    `json:"Limit"`
+		ExclusiveStartStreamArn string `json:"ExclusiveStartStreamArn"`
+	}) (any, error) {
+		streams, last, err := svc.ListStreams(req.TableName, req.Limit, req.ExclusiveStartStreamArn)
+		resp := map[string]any{"Streams": streams}
+		if last != "" {
+			resp["LastEvaluatedStreamArn"] = last
+		}
+		return resp, err
+	}),
+	"DescribeStream": op(func(svc *dynamodbsvc.Service, req *struct {
+		StreamArn             string `json:"StreamArn"`
+		Limit                 int    `json:"Limit"`
+		ExclusiveStartShardId string `json:"ExclusiveStartShardId"`
+	}) (any, error) {
+		return svc.DescribeStream(req.StreamArn, req.Limit, req.ExclusiveStartShardId)
+	}),
+	"GetShardIterator": op(func(svc *dynamodbsvc.Service, req *struct {
+		StreamArn         string `json:"StreamArn"`
+		ShardId           string `json:"ShardId"`
+		ShardIteratorType string `json:"ShardIteratorType"`
+		SequenceNumber    string `json:"SequenceNumber"`
+	}) (any, error) {
+		iterator, err := svc.GetShardIterator(req.StreamArn, req.ShardId, req.ShardIteratorType, req.SequenceNumber)
+		return map[string]any{"ShardIterator": iterator}, err
+	}),
+	"GetRecords": op(func(svc *dynamodbsvc.Service, req *struct {
+		ShardIterator string `json:"ShardIterator"`
+		Limit         int    `json:"Limit"`
+	}) (any, error) {
+		records, next, err := svc.GetRecords(req.ShardIterator, req.Limit)
+		return map[string]any{"Records": records, "NextShardIterator": next}, err
+	}),
+}
+
 func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 	target := strings.TrimSpace(r.Header.Get("X-Amz-Target"))
 	body, err := io.ReadAll(r.Body)
@@ -37,217 +262,19 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch {
-	case strings.HasPrefix(target, dynamoPrefix):
-		h.dispatchTables(w, strings.TrimPrefix(target, dynamoPrefix), body)
-	case strings.HasPrefix(target, dynamoStreamPrefix):
-		h.dispatchStreams(w, strings.TrimPrefix(target, dynamoStreamPrefix), body)
-	default:
-		writeError(w, http.StatusBadRequest, "ValidationException", "Invalid X-Amz-Target for DynamoDB")
+	var fn operation
+	if action, ok := strings.CutPrefix(target, dynamoPrefix); ok {
+		fn = tableOps[action]
+	} else if action, ok := strings.CutPrefix(target, dynamoStreamPrefix); ok {
+		fn = streamOps[action]
 	}
-}
-
-func (h *Handler) dispatchTables(w http.ResponseWriter, action string, body []byte) {
-	switch action {
-	case "CreateTable":
-		h.createTable(w, body)
-	case "UpdateTable":
-		h.updateTable(w, body)
-	case "TagResource":
-		h.tagResource(w, body)
-	case "UntagResource":
-		h.untagResource(w, body)
-	case "ListTagsOfResource":
-		h.listTagsOfResource(w, body)
-	case "DescribeTimeToLive":
-		h.describeTimeToLive(w, body)
-	case "UpdateTimeToLive":
-		h.updateTimeToLive(w, body)
-	case "DescribeContinuousBackups":
-		h.describeContinuousBackups(w, body)
-	case "UpdateContinuousBackups":
-		h.updateContinuousBackups(w, body)
-	case "DescribeContributorInsights":
-		h.describeContributorInsights(w, body)
-	case "UpdateContributorInsights":
-		h.updateContributorInsights(w, body)
-	case "DescribeKinesisStreamingDestination":
-		h.describeKinesisStreamingDestination(w, body)
-	case "EnableKinesisStreamingDestination":
-		h.enableKinesisStreamingDestination(w, body)
-	case "DisableKinesisStreamingDestination":
-		h.disableKinesisStreamingDestination(w, body)
-	case "DeleteTable":
-		h.deleteTable(w, body)
-	case "DescribeTable":
-		h.describeTable(w, body)
-	case "ListTables":
-		h.listTables(w, body)
-	case "PutItem":
-		h.putItem(w, body)
-	case "GetItem":
-		h.getItem(w, body)
-	case "UpdateItem":
-		h.updateItem(w, body)
-	case "DeleteItem":
-		h.deleteItem(w, body)
-	case "Scan":
-		h.scan(w, body)
-	case "Query":
-		h.query(w, body)
-	default:
-		log.Printf("[dynamodb] unhandled action (returning empty OK): %s", action)
-		writeJSON(w, http.StatusOK, map[string]any{})
-	}
-}
-
-func (h *Handler) dispatchStreams(w http.ResponseWriter, action string, body []byte) {
-	switch action {
-	case "ListStreams":
-		h.listStreams(w, body)
-	case "DescribeStream":
-		h.describeStream(w, body)
-	case "GetShardIterator":
-		h.getShardIterator(w, body)
-	case "GetRecords":
-		h.getRecords(w, body)
-	default:
-		log.Printf("[dynamodbstreams] unhandled action (returning empty OK): %s", action)
-		writeJSON(w, http.StatusOK, map[string]any{})
-	}
-}
-
-func (h *Handler) createTable(w http.ResponseWriter, body []byte) {
-	var req types.DynamoDBTable
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
+	if fn == nil {
+		// Answering an unknown action with success would let a client believe
+		// writes landed that never happened.
+		writeError(w, http.StatusBadRequest, "UnknownOperationException", "Operation not supported: "+target)
 		return
 	}
-	table, err := h.svc.CreateTable(&req)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"TableDescription": tableOutput(table)})
-}
-
-func (h *Handler) describeTable(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName string `json:"TableName"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	table, err := h.svc.DescribeTable(req.TableName)
-	if err != nil {
-		log.Printf("[dynamodb] DescribeTable table=%q error=%v", req.TableName, err)
-		writeSvcError(w, err)
-		return
-	}
-	log.Printf(
-		"[dynamodb] DescribeTable table=%q resolved=%q status=%q arn=%q stream_arn=%q stream_label=%q billing=%q",
-		req.TableName,
-		table.TableName,
-		table.TableStatus,
-		table.TableArn,
-		table.LatestStreamArn,
-		table.LatestStreamLabel,
-		billingModeOf(table),
-	)
-	writeJSON(w, http.StatusOK, map[string]any{"Table": tableOutput(table)})
-}
-
-func (h *Handler) deleteTable(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName string `json:"TableName"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	table, err := h.svc.DeleteTable(req.TableName)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"TableDescription": tableOutput(table)})
-}
-
-func (h *Handler) updateTable(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName           string                             `json:"TableName"`
-		StreamSpecification *types.DynamoDBStreamSpecification `json:"StreamSpecification"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	table, err := h.svc.UpdateTable(req.TableName, req.StreamSpecification)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"TableDescription": tableOutput(table)})
-}
-
-func (h *Handler) tagResource(w http.ResponseWriter, body []byte) {
-	var req struct {
-		ResourceArn string              `json:"ResourceArn"`
-		Tags        []types.DynamoDBTag `json:"Tags"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	if err := h.svc.TagResource(req.ResourceArn, req.Tags); err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{})
-}
-
-func (h *Handler) untagResource(w http.ResponseWriter, body []byte) {
-	var req struct {
-		ResourceArn string   `json:"ResourceArn"`
-		TagKeys     []string `json:"TagKeys"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	if err := h.svc.UntagResource(req.ResourceArn, req.TagKeys); err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{})
-}
-
-func (h *Handler) listTagsOfResource(w http.ResponseWriter, body []byte) {
-	var req struct {
-		ResourceArn string `json:"ResourceArn"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	tags, err := h.svc.ListTagsOfResource(req.ResourceArn)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"Tags": tags})
-}
-
-func (h *Handler) describeTimeToLive(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName string `json:"TableName"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	out, err := h.svc.DescribeTimeToLive(req.TableName)
+	out, err := fn(h.svc, body)
 	if err != nil {
 		writeSvcError(w, err)
 		return
@@ -255,404 +282,52 @@ func (h *Handler) describeTimeToLive(w http.ResponseWriter, body []byte) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-func (h *Handler) updateTimeToLive(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName               string `json:"TableName"`
-		TimeToLiveSpecification struct {
-			AttributeName string `json:"AttributeName"`
-			Enabled       bool   `json:"Enabled"`
-		} `json:"TimeToLiveSpecification"`
+// decodeCreateTable reads CreateTable's request-only fields alongside the
+// table definition, which shares DescribeTable's shape.
+func decodeCreateTable(body []byte) (*types.DynamoDBTable, error) {
+	var table types.DynamoDBTable
+	var extra struct {
+		BillingMode               string `json:"BillingMode"`
+		TableClass                string `json:"TableClass"`
+		DeletionProtectionEnabled bool   `json:"DeletionProtectionEnabled"`
 	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
+	if err := json.Unmarshal(body, &table); err != nil {
+		return nil, &dynamodbsvc.ServiceError{Code: "SerializationException", Message: err.Error()}
 	}
-	out, err := h.svc.UpdateTimeToLive(req.TableName, req.TimeToLiveSpecification.AttributeName, req.TimeToLiveSpecification.Enabled)
-	if err != nil {
-		writeSvcError(w, err)
-		return
+	_ = json.Unmarshal(body, &extra)
+	if extra.BillingMode != "" {
+		table.BillingModeSummary = &types.DynamoDBBillingModeSummary{BillingMode: extra.BillingMode}
 	}
-	writeJSON(w, http.StatusOK, out)
+	if extra.TableClass != "" {
+		table.TableClassSummary = &types.DynamoDBTableClassSummary{TableClass: extra.TableClass}
+	}
+	table.DeletionProtectionEnabled = extra.DeletionProtectionEnabled
+	return &table, nil
 }
 
-func (h *Handler) describeContinuousBackups(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName string `json:"TableName"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	out, err := h.svc.DescribeContinuousBackups(req.TableName)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
+func tableDescription(table *types.DynamoDBTable) any {
+	return map[string]any{"TableDescription": tableOutput(table)}
 }
 
-func (h *Handler) updateContinuousBackups(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName                        string `json:"TableName"`
-		PointInTimeRecoverySpecification struct {
-			PointInTimeRecoveryEnabled bool `json:"PointInTimeRecoveryEnabled"`
-		} `json:"PointInTimeRecoverySpecification"`
+func attributes(item map[string]any, err error) (any, error) {
+	if item == nil {
+		return struct{}{}, err
 	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	out, err := h.svc.UpdateContinuousBackups(req.TableName, req.PointInTimeRecoverySpecification.PointInTimeRecoveryEnabled)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
+	return map[string]any{"Attributes": item}, err
 }
 
-func (h *Handler) describeContributorInsights(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName string `json:"TableName"`
-		IndexName string `json:"IndexName"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	out, err := h.svc.DescribeContributorInsights(req.TableName, req.IndexName)
+func page(out *dynamodbsvc.ReadResult, err error) (any, error) {
 	if err != nil {
-		writeSvcError(w, err)
-		return
+		return nil, err
 	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (h *Handler) updateContributorInsights(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName                 string `json:"TableName"`
-		IndexName                 string `json:"IndexName"`
-		ContributorInsightsAction string `json:"ContributorInsightsAction"`
+	resp := map[string]any{"Count": out.Count, "ScannedCount": out.ScannedCount}
+	if out.Items != nil {
+		resp["Items"] = out.Items
 	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	out, err := h.svc.UpdateContributorInsights(req.TableName, req.IndexName, req.ContributorInsightsAction)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (h *Handler) describeKinesisStreamingDestination(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName string `json:"TableName"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	out, err := h.svc.DescribeKinesisStreamingDestination(req.TableName)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (h *Handler) enableKinesisStreamingDestination(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName string `json:"TableName"`
-		StreamArn string `json:"StreamArn"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	out, err := h.svc.EnableKinesisStreamingDestination(req.TableName, req.StreamArn)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (h *Handler) disableKinesisStreamingDestination(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName string `json:"TableName"`
-		StreamArn string `json:"StreamArn"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	out, err := h.svc.DisableKinesisStreamingDestination(req.TableName, req.StreamArn)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (h *Handler) listTables(w http.ResponseWriter, body []byte) {
-	var req struct {
-		ExclusiveStartTableName string `json:"ExclusiveStartTableName"`
-		Limit                   int    `json:"Limit"`
-	}
-	_ = decodeJSON(body, &req)
-	tables, last, err := h.svc.ListTables(req.Limit, req.ExclusiveStartTableName)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	resp := map[string]any{"TableNames": tables}
-	if last != "" {
-		resp["LastEvaluatedTableName"] = last
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func (h *Handler) putItem(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName                 string            `json:"TableName"`
-		Item                      map[string]any    `json:"Item"`
-		ConditionExpression       string            `json:"ConditionExpression"`
-		ExpressionAttributeNames  map[string]string `json:"ExpressionAttributeNames"`
-		ExpressionAttributeValues map[string]any    `json:"ExpressionAttributeValues"`
-		ReturnValues              string            `json:"ReturnValues"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	out, err := h.svc.PutItem(req.TableName, req.Item, req.ConditionExpression, req.ExpressionAttributeNames, req.ExpressionAttributeValues, req.ReturnValues)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	resp := map[string]any{}
-	if out != nil && out.Attributes != nil {
-		resp["Attributes"] = out.Attributes
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func (h *Handler) getItem(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName                string            `json:"TableName"`
-		Key                      map[string]any    `json:"Key"`
-		ProjectionExpression     string            `json:"ProjectionExpression"`
-		ExpressionAttributeNames map[string]string `json:"ExpressionAttributeNames"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	out, err := h.svc.GetItem(req.TableName, req.Key, req.ProjectionExpression, req.ExpressionAttributeNames)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	resp := map[string]any{}
-	if out != nil && out.Item != nil {
-		resp["Item"] = out.Item
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func (h *Handler) updateItem(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName                 string            `json:"TableName"`
-		Key                       map[string]any    `json:"Key"`
-		UpdateExpression          string            `json:"UpdateExpression"`
-		ConditionExpression       string            `json:"ConditionExpression"`
-		ExpressionAttributeNames  map[string]string `json:"ExpressionAttributeNames"`
-		ExpressionAttributeValues map[string]any    `json:"ExpressionAttributeValues"`
-		ReturnValues              string            `json:"ReturnValues"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	out, err := h.svc.UpdateItem(req.TableName, req.Key, req.UpdateExpression, req.ConditionExpression, req.ExpressionAttributeNames, req.ExpressionAttributeValues, req.ReturnValues)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	resp := map[string]any{}
-	if out != nil && out.Attributes != nil {
-		resp["Attributes"] = out.Attributes
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func (h *Handler) deleteItem(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName                 string            `json:"TableName"`
-		Key                       map[string]any    `json:"Key"`
-		ConditionExpression       string            `json:"ConditionExpression"`
-		ExpressionAttributeNames  map[string]string `json:"ExpressionAttributeNames"`
-		ExpressionAttributeValues map[string]any    `json:"ExpressionAttributeValues"`
-		ReturnValues              string            `json:"ReturnValues"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	out, err := h.svc.DeleteItem(req.TableName, req.Key, req.ConditionExpression, req.ExpressionAttributeNames, req.ExpressionAttributeValues, req.ReturnValues)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	resp := map[string]any{}
-	if out != nil && out.Attributes != nil {
-		resp["Attributes"] = out.Attributes
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func (h *Handler) scan(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName                 string            `json:"TableName"`
-		IndexName                 string            `json:"IndexName"`
-		FilterExpression          string            `json:"FilterExpression"`
-		ProjectionExpression      string            `json:"ProjectionExpression"`
-		ExpressionAttributeNames  map[string]string `json:"ExpressionAttributeNames"`
-		ExpressionAttributeValues map[string]any    `json:"ExpressionAttributeValues"`
-		Limit                     int               `json:"Limit"`
-		ExclusiveStartKey         map[string]any    `json:"ExclusiveStartKey"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	out, err := h.svc.Scan(req.TableName, req.IndexName, req.FilterExpression, req.ProjectionExpression, req.ExpressionAttributeNames, req.ExpressionAttributeValues, req.Limit, req.ExclusiveStartKey)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	resp := map[string]any{"Items": out.Items, "Count": out.Count, "ScannedCount": out.Count}
 	if out.LastEvaluatedKey != nil {
 		resp["LastEvaluatedKey"] = out.LastEvaluatedKey
 	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func (h *Handler) query(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName                 string            `json:"TableName"`
-		IndexName                 string            `json:"IndexName"`
-		KeyConditionExpression    string            `json:"KeyConditionExpression"`
-		FilterExpression          string            `json:"FilterExpression"`
-		ProjectionExpression      string            `json:"ProjectionExpression"`
-		ExpressionAttributeNames  map[string]string `json:"ExpressionAttributeNames"`
-		ExpressionAttributeValues map[string]any    `json:"ExpressionAttributeValues"`
-		Limit                     int               `json:"Limit"`
-		ExclusiveStartKey         map[string]any    `json:"ExclusiveStartKey"`
-		ScanIndexForward          *bool             `json:"ScanIndexForward"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	scanForward := true
-	if req.ScanIndexForward != nil {
-		scanForward = *req.ScanIndexForward
-	}
-	out, err := h.svc.Query(req.TableName, req.IndexName, req.KeyConditionExpression, req.FilterExpression, req.ProjectionExpression, req.ExpressionAttributeNames, req.ExpressionAttributeValues, req.Limit, req.ExclusiveStartKey, scanForward)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	resp := map[string]any{"Items": out.Items, "Count": out.Count, "ScannedCount": out.Count}
-	if out.LastEvaluatedKey != nil {
-		resp["LastEvaluatedKey"] = out.LastEvaluatedKey
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func (h *Handler) listStreams(w http.ResponseWriter, body []byte) {
-	var req struct {
-		TableName               string `json:"TableName"`
-		Limit                   int    `json:"Limit"`
-		ExclusiveStartStreamArn string `json:"ExclusiveStartStreamArn"`
-	}
-	_ = decodeJSON(body, &req)
-	streams, last, err := h.svc.ListStreams(req.TableName, req.Limit, req.ExclusiveStartStreamArn)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	resp := map[string]any{"Streams": streams}
-	if last != "" {
-		resp["LastEvaluatedStreamArn"] = last
-	}
-	writeJSON(w, http.StatusOK, resp)
-}
-
-func (h *Handler) describeStream(w http.ResponseWriter, body []byte) {
-	var req struct {
-		StreamArn             string `json:"StreamArn"`
-		Limit                 int    `json:"Limit"`
-		ExclusiveStartShardId string `json:"ExclusiveStartShardId"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	out, err := h.svc.DescribeStream(req.StreamArn, req.Limit, req.ExclusiveStartShardId)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (h *Handler) getShardIterator(w http.ResponseWriter, body []byte) {
-	var req struct {
-		StreamArn         string `json:"StreamArn"`
-		ShardId           string `json:"ShardId"`
-		ShardIteratorType string `json:"ShardIteratorType"`
-		SequenceNumber    string `json:"SequenceNumber"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	iterator, err := h.svc.GetShardIterator(req.StreamArn, req.ShardId, req.ShardIteratorType, req.SequenceNumber)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ShardIterator": iterator})
-}
-
-func (h *Handler) getRecords(w http.ResponseWriter, body []byte) {
-	var req struct {
-		ShardIterator string `json:"ShardIterator"`
-		Limit         int    `json:"Limit"`
-	}
-	if err := decodeJSON(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
-		return
-	}
-	records, next, err := h.svc.GetRecords(req.ShardIterator, req.Limit)
-	if err != nil {
-		writeSvcError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"Records": records, "NextShardIterator": next})
-}
-
-func decodeJSON(body []byte, dst any) error {
-	if len(body) == 0 {
-		return nil
-	}
-	if err := json.Unmarshal(body, dst); err != nil {
-		return err
-	}
-	return nil
+	return resp, nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
@@ -666,18 +341,19 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 }
 
 func writeSvcError(w http.ResponseWriter, err error) {
-	if svcErr, ok := err.(*dynamodbsvc.ServiceError); ok {
-		writeError(w, svcErr.StatusCode(), svcErr.Code, svcErr.Message)
+	svcErr, ok := err.(*dynamodbsvc.ServiceError)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "InternalServerError", err.Error())
 		return
 	}
-	writeError(w, http.StatusInternalServerError, "InternalServerError", err.Error())
-}
-
-func billingModeOf(table *types.DynamoDBTable) string {
-	if table == nil || table.BillingModeSummary == nil {
-		return ""
+	body := map[string]any{"__type": svcErr.Code, "message": svcErr.Message}
+	if svcErr.Item != nil {
+		body["Item"] = svcErr.Item
 	}
-	return table.BillingModeSummary.BillingMode
+	if svcErr.CancellationReasons != nil {
+		body["CancellationReasons"] = svcErr.CancellationReasons
+	}
+	writeJSON(w, svcErr.StatusCode(), body)
 }
 
 func tableOutput(table *types.DynamoDBTable) *types.DynamoDBTable {
