@@ -141,7 +141,7 @@ func TestPutItemGSIKeyTypeMismatchNamesIndex(t *testing.T) {
 func TestPutItemEmptyKeyStringIsValidation(t *testing.T) {
 	store := newWriteTestStore(t)
 	_, err := store.PutItem(&WriteInput{TableName: "orders", Item: writeTestKey("", "b")})
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 }
 
 func TestGetItemKeyShapeErrors(t *testing.T) {
@@ -150,17 +150,17 @@ func TestGetItemKeyShapeErrors(t *testing.T) {
 
 	missingSK := map[string]any{"pk": map[string]any{"S": "a"}}
 	_, err := store.GetItem("orders", missingSK, "", nil)
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 
 	extra := writeTestKey("a", "b")
 	extra["status"] = map[string]any{"S": "x"}
 	_, err = store.GetItem("orders", extra, "", nil)
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 
 	_, err = store.DeleteItem(&WriteInput{TableName: "orders", Key: missingSK})
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 	_, err = store.DeleteItem(&WriteInput{TableName: "orders", Key: extra})
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 }
 
 func TestBatchWriteItemApply(t *testing.T) {
@@ -201,7 +201,7 @@ func TestBatchWriteItemDuplicateKeyRejected(t *testing.T) {
 		}{Item: writeTestKey("dup", sk)}}
 	}
 	err := store.BatchWriteItem(map[string][]BatchWriteRequest{"orders": {put("1"), put("1")}})
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 	if got, _ := store.GetItem("orders", writeTestKey("dup", "1"), "", nil); got != nil {
 		t.Errorf("batch with duplicate key partially applied")
 	}
@@ -216,10 +216,10 @@ func TestBatchWriteItemLimitAndEmpty(t *testing.T) {
 		}{Item: writeTestKey("many", fmt.Sprint(i))}})
 	}
 	err := store.BatchWriteItem(map[string][]BatchWriteRequest{"orders": many})
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 
 	err = store.BatchWriteItem(map[string][]BatchWriteRequest{})
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 }
 
 func TestBatchGetItemExistingMissingDuplicatesProjection(t *testing.T) {
@@ -242,7 +242,7 @@ func TestBatchGetItemExistingMissingDuplicatesProjection(t *testing.T) {
 	_, err = store.BatchGetItem(map[string]KeysAndAttributes{
 		"orders": {Keys: []map[string]any{writeTestKey("g", "1"), writeTestKey("g", "1")}},
 	})
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 
 	out, err = store.BatchGetItem(map[string]KeysAndAttributes{
 		"orders": {
@@ -341,7 +341,7 @@ func TestTransactWriteItemsSameKeyRejected(t *testing.T) {
 			ExpressionAttributeValues: map[string]any{":s": map[string]any{"S": "x"}},
 		}},
 	})
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 	if got, _ := store.GetItem("orders", writeTestKey("same", "1"), "", nil); got != nil {
 		t.Error("rejected transaction applied its put")
 	}
@@ -354,7 +354,7 @@ func TestTransactWriteItemsPutAndDeleteSameKeyRejected(t *testing.T) {
 		{Put: &WriteInput{TableName: "orders", Item: testItem("pd", "1", "closed", 1, "1")}},
 		{Delete: &WriteInput{TableName: "orders", Key: writeTestKey("pd", "1")}},
 	})
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 	if got, _ := store.GetItem("orders", writeTestKey("pd", "1"), "", nil); got == nil {
 		t.Error("rejected transaction deleted the item")
 	}
@@ -477,7 +477,7 @@ func TestPutItemReturnValuesAllNewRejected(t *testing.T) {
 		Item:         testItem("rv", "1", "open", 1, "1"),
 		ReturnValues: "ALL_NEW",
 	})
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 }
 
 func TestUpdateItemReturnValuesUpdatedNewOnlyChanged(t *testing.T) {
@@ -553,13 +553,13 @@ func TestScanLimitSelectCountAndSegments(t *testing.T) {
 
 	zero := 0
 	_, err = store.Scan(&ReadInput{TableName: "orders", Segment: &zero})
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 }
 
 func TestQueryWithoutKeyConditionRejected(t *testing.T) {
 	store := newWriteTestStore(t)
 	_, err := store.Query(&ReadInput{TableName: "orders"})
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 }
 
 func TestScanPaginationSurvivesDeletedStartItem(t *testing.T) {
@@ -665,7 +665,7 @@ func TestDeletionProtectionBlocksDeleteTable(t *testing.T) {
 		t.Fatalf("UpdateTable protection: %v", err)
 	}
 	_, err := store.DeleteTable("orders")
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 	if _, err := store.DescribeTable("orders"); err != nil {
 		t.Errorf("table gone despite deletion protection: %v", err)
 	}
@@ -674,7 +674,7 @@ func TestDeletionProtectionBlocksDeleteTable(t *testing.T) {
 func TestCreateTableDuplicateResourceInUse(t *testing.T) {
 	store := newWriteTestStore(t)
 	_, err := store.CreateTable(testTableDefinition())
-	requireServiceCode(t, err, "ResourceInUseException")
+	_ = requireServiceCode(t, err, "ResourceInUseException")
 }
 
 func TestCreateTableUnusedAttributeDefinitionRejected(t *testing.T) {
@@ -683,5 +683,5 @@ func TestCreateTableUnusedAttributeDefinitionRejected(t *testing.T) {
 	def.TableName = "unused"
 	def.AttributeDefinitions = append(def.AttributeDefinitions, types.DynamoDBAttributeDefinition{AttributeName: "extra", AttributeType: "S"})
 	_, err := store.CreateTable(def)
-	requireServiceCode(t, err, "ValidationException")
+	_ = requireServiceCode(t, err, "ValidationException")
 }
