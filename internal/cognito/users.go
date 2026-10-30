@@ -254,7 +254,7 @@ func (s *Service) AdminCreateUser(in *AdminCreateUserInput) (*AdminCreateUserOut
 		if u.Status != StatusForceChangePassword {
 			return nil, newError("UnsupportedUserStateException", "Resend not possible. %s status is not FORCE_CHANGE_PASSWORD", u.Username)
 		}
-		if err := s.setTemporaryPassword(p, u, in.TemporaryPassword, in.MessageAction); err != nil {
+		if err := s.setTemporaryPassword(p, u, in.TemporaryPassword, in.MessageAction, in.ClientMetadata); err != nil {
 			return nil, err
 		}
 		return &AdminCreateUserOutput{User: u.userType(nil)}, nil
@@ -278,7 +278,7 @@ func (s *Service) AdminCreateUser(in *AdminCreateUserInput) (*AdminCreateUserOut
 		return nil, err
 	}
 	u := s.newUser(username, sub, attrs, StatusForceChangePassword)
-	if err := s.setTemporaryPassword(p, u, in.TemporaryPassword, in.MessageAction); err != nil {
+	if err := s.setTemporaryPassword(p, u, in.TemporaryPassword, in.MessageAction, in.ClientMetadata); err != nil {
 		return nil, err
 	}
 	p.Users[p.userKey(username)] = u
@@ -288,7 +288,7 @@ func (s *Service) AdminCreateUser(in *AdminCreateUserInput) (*AdminCreateUserOut
 
 // setTemporaryPassword sets (or generates) a temporary password and, unless
 // the message is suppressed, records it as an invite code.
-func (s *Service) setTemporaryPassword(p *pool, u *user, pw, messageAction string) error {
+func (s *Service) setTemporaryPassword(p *pool, u *user, pw, messageAction string, meta map[string]string) error {
 	if pw == "" {
 		pw = generateTemporaryPassword(p.passwordPolicy())
 	}
@@ -301,6 +301,7 @@ func (s *Service) setTemporaryPassword(p *pool, u *user, pw, messageAction strin
 			attr = "phone_number"
 		}
 		s.storeCode(p, u, purposeInvite, attr, pw, u.TempExpires.Sub(s.now()))
+		s.sendCustom(p, u, attr, pw, codeEvent{"AdminCreateUser", "", meta})
 	}
 	return nil
 }
@@ -526,7 +527,7 @@ func (s *Service) AdminResetUserPassword(in *AdminResetUserPasswordInput) (struc
 	}
 	u.Status = StatusResetRequired
 	p.revokeSessions(u, "")
-	s.issueCode(p, u, purposeReset, attr)
+	s.issueCode(p, u, purposeReset, attr, codeEvent{"ForgotPassword", "", in.ClientMetadata})
 	u.Modified = s.now()
 	s.markDirty()
 	return struct{}{}, nil

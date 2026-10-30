@@ -79,7 +79,7 @@ func (s *Service) SignUp(in *SignUpInput) (*SignUpOutput, error) {
 
 	out := &SignUpOutput{UserSub: sub, UserConfirmed: u.Status == StatusConfirmed}
 	if attr := autoVerifyAttribute(p, u); attr != "" && !out.UserConfirmed {
-		s.issueCode(p, u, purposeSignUp, attr)
+		s.issueCode(p, u, purposeSignUp, attr, codeEvent{"SignUp", c.ClientId, in.ClientMetadata})
 		out.CodeDeliveryDetails = deliveryDetails(u, attr)
 	}
 	return out, nil
@@ -229,7 +229,7 @@ func (s *Service) ResendConfirmationCode(in *ClientUserInput) (*CodeDeliveryOutp
 	if attr == "" {
 		return nil, invalidParameter("Auto verification not turned on.")
 	}
-	s.issueCode(p, u, purposeSignUp, attr)
+	s.issueCode(p, u, purposeSignUp, attr, codeEvent{"ResendCode", in.ClientId, in.ClientMetadata})
 	return &CodeDeliveryOutput{CodeDeliveryDetails: deliveryDetails(u, attr)}, nil
 }
 
@@ -247,7 +247,7 @@ func (s *Service) ForgotPassword(in *ClientUserInput) (*CodeDeliveryOutput, erro
 	if attr == "" {
 		return nil, invalidParameter("Cannot reset password for the user as there is no registered/verified email or phone_number")
 	}
-	s.issueCode(p, u, purposeReset, attr)
+	s.issueCode(p, u, purposeReset, attr, codeEvent{"ForgotPassword", in.ClientId, in.ClientMetadata})
 	return &CodeDeliveryOutput{CodeDeliveryDetails: deliveryDetails(u, attr)}, nil
 }
 
@@ -353,7 +353,7 @@ func (s *Service) UpdateUserAttributes(in *UpdateUserAttributesInput) (*UpdateUs
 	for _, attr := range ac.user.applyAttributes(in.UserAttributes) {
 		if slices.Contains(ac.pool.Config.AutoVerifiedAttributes, attr) {
 			ac.user.Attributes[attr+"_verified"] = "false"
-			s.issueCode(ac.pool, ac.user, "verify:"+attr, attr)
+			s.issueCode(ac.pool, ac.user, "verify:"+attr, attr, codeEvent{"UpdateUserAttribute", ac.client.ClientId, in.ClientMetadata})
 			if d := deliveryDetails(ac.user, attr); d != nil {
 				out.CodeDeliveryDetailsList = append(out.CodeDeliveryDetailsList, *d)
 			}
@@ -466,7 +466,7 @@ func (s *Service) GetUserAttributeVerificationCode(in *AttributeVerificationInpu
 	if (in.AttributeName != "email" && in.AttributeName != "phone_number") || ac.user.Attributes[in.AttributeName] == "" {
 		return nil, invalidParameter("Invalid attribute name or the attribute has no value: %s", in.AttributeName)
 	}
-	s.issueCode(ac.pool, ac.user, "verify:"+in.AttributeName, in.AttributeName)
+	s.issueCode(ac.pool, ac.user, "verify:"+in.AttributeName, in.AttributeName, codeEvent{"VerifyUserAttribute", ac.client.ClientId, in.ClientMetadata})
 	return &CodeDeliveryOutput{CodeDeliveryDetails: deliveryDetails(ac.user, in.AttributeName)}, nil
 }
 

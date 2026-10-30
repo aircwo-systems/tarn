@@ -135,6 +135,9 @@ type LambdaConfigType struct {
 		LambdaArn     string `json:"LambdaArn"`
 		LambdaVersion string `json:"LambdaVersion"`
 	} `json:"PreTokenGenerationConfig,omitempty"`
+	CustomEmailSender *CustomSenderConfigType `json:"CustomEmailSender,omitempty"`
+	CustomSMSSender   *CustomSenderConfigType `json:"CustomSMSSender,omitempty"`
+	KMSKeyID          string                  `json:"KMSKeyID,omitempty"`
 }
 
 // UserPoolSettings holds the settings shared by CreateUserPool, UpdateUserPool

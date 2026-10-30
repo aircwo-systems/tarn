@@ -30,10 +30,12 @@ type Sealer interface {
 
 // Service holds one account's user pools.
 type Service struct {
-	cfg     *config.Config
-	index   *Index
-	vault   Sealer
-	invoker TriggerInvoker
+	cfg       *config.Config
+	index     *Index
+	vault     Sealer
+	invoker   TriggerInvoker
+	encrypter MessageEncrypter
+	senders   sync.WaitGroup // custom sender triggers in flight
 
 	mu         sync.RWMutex
 	pools      map[string]*pool
@@ -180,9 +182,10 @@ func (s *Service) Flush() {
 	s.flushToDisk()
 }
 
-// Close writes pending state, stops the flusher and drops this account's pools
-// from the shared index.
+// Close waits for custom sender triggers in flight, writes pending state,
+// stops the flusher and drops this account's pools from the shared index.
 func (s *Service) Close() {
+	s.senders.Wait()
 	s.flusher.Close()
 	if s.cfg != nil {
 		s.index.RemoveAccount(s.cfg.AccountID)

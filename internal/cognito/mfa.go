@@ -91,7 +91,7 @@ func (s *Service) mfaChallenge(p *pool, c *UserPoolClientType, u *user) *AuthOut
 	if typ == mfaEmail {
 		attr = "email"
 	}
-	s.issueCode(p, u, purposeMFA, attr)
+	s.issueCode(p, u, purposeMFA, attr, codeEvent{"Authentication", c.ClientId, nil})
 	d := deliveryDetails(u, attr)
 	return s.challenge(p, c, u, typ, nil, map[string]string{
 		"CODE_DELIVERY_DELIVERY_MEDIUM": d.DeliveryMedium,

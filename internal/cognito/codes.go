@@ -33,13 +33,15 @@ func codeTTL(purpose string) time.Duration {
 	return time.Hour
 }
 
-// issueCode stores and logs a new code for u.
-func (s *Service) issueCode(p *pool, u *user, purpose, attribute string) string {
+// issueCode stores and logs a new code for u, and hands it to the pool's
+// custom sender trigger when one is configured.
+func (s *Service) issueCode(p *pool, u *user, purpose, attribute string, ev codeEvent) string {
 	code := newCode()
 	if s.cfg.CognitoFixedCode != "" {
 		code = s.cfg.CognitoFixedCode
 	}
 	s.storeCode(p, u, purpose, attribute, code, codeTTL(purpose))
+	s.sendCustom(p, u, attribute, code, ev)
 	return code
 }
 

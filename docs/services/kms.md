@@ -37,6 +37,10 @@ const keyring = new KmsKeyringNode({ keyIds: [process.env.KEY_ARN] });
 const { plaintext } = await decrypt(keyring, Buffer.from(ciphertext, 'base64'));
 ```
 
+### Cognito custom senders
+
+A user pool's `KMSKeyID` names the key that encrypts codes for `CustomEmailSender` and `CustomSMSSender` triggers. See [Custom sender triggers](/services/cognito#custom-sender-triggers).
+
 ### Keys
 
 Key IDs resolve as a key ID, key ARN, alias name or alias ARN. ARNs must use Tarn's account and region. Each account has its own keys.

@@ -217,6 +217,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	if err := kmsSvc.Init(); err != nil {
 		return nil, fmt.Errorf("kms store: %w", err)
 	}
+	cognitoSvc.SetMessageEncrypter(kmsSvc.EncryptMessage)
 
 	// DynamoDB
 	dynamoSvc := dynamodb.NewService(acctCfg)

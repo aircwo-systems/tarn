@@ -80,8 +80,26 @@ Triggers in the pool's `LambdaConfig` run through Tarn's Lambda service:
 | `PreAuthentication` | Before a sign-in succeeds |
 | `PostAuthentication` | After a sign-in succeeds |
 | `PreTokenGeneration` | Before tokens are issued. Version 1 events change the ID token only. `V2_0` events can also change the access token and its scopes |
+| `CustomEmailSender`, `CustomSMSSender` | Whenever Cognito would send a code or temporary password. See [Custom sender triggers](#custom-sender-triggers) |
 
 A trigger that fails returns `UserLambdaValidationException`. Trigger and token signing calls run outside the service lock, so a cold start does not block other requests.
+
+### Custom sender triggers
+
+With `CustomEmailSender` or `CustomSMSSender` and a `KMSKeyID` in `LambdaConfig`, Tarn encrypts each code with the AWS Encryption SDK under that [KMS](/services/kms) key and invokes the function, as Cognito does. Email codes go to `CustomEmailSender`, phone number codes to `CustomSMSSender`.
+
+```json
+"LambdaConfig": {
+  "KMSKeyID": "arn:aws:kms:eu-west-2:000000000000:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+  "CustomEmailSender": { "LambdaArn": "arn:aws:lambda:eu-west-2:000000000000:function:email-sender", "LambdaVersion": "V1_0" }
+}
+```
+
+- Trigger sources: `_SignUp`, `_ResendCode`, `_ForgotPassword`, `_UpdateUserAttribute`, `_VerifyUserAttribute`, `_AdminCreateUser` and `_Authentication` (email and SMS MFA codes).
+- The encryption context is `{"userpool-id": "<pool ID>"}`. Decrypt with `CommitmentPolicy.REQUIRE_ENCRYPT_ALLOW_DECRYPT`, as in the AWS sample. The function's KMS calls reach Tarn through `AWS_ENDPOINT_URL`.
+- Senders run asynchronously, as in AWS. A failing sender is logged and does not fail the API call.
+- Temporary passwords are HTML-escaped. `MessageAction: SUPPRESS` sends nothing.
+- Codes are still logged and listed under [Reading codes](#reading-codes).
 
 ## Browser apps
 
@@ -188,7 +206,7 @@ With `--persist`, pools, clients, users, groups and refresh sessions survive a r
 - **Federation** with SAML, OIDC and social providers is not implemented.
 - **TOTP MFA** is not implemented. SMS and email MFA run when the pool's MFA is `ON` or `OPTIONAL`, with codes exposed locally.
 - **Custom auth** Lambda triggers are not implemented.
-- **Advanced security**, risk scoring, import jobs and passwordless flows are not emulated.
+- **Advanced security**, risk scoring, import jobs and passwordless flows are not emulated, so there is no `CustomEmailSender_AccountTakeOverNotification`.
 
 ## See Also
 
