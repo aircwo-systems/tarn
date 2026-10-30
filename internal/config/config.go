@@ -349,6 +349,11 @@ func (c *Config) CognitoStatePath() string {
 	return filepath.Join(c.CognitoDir(), "state.json")
 }
 
+// KMSStatePath returns the path to the KMS keys and aliases snapshot.
+func (c *Config) KMSStatePath() string {
+	return filepath.Join(c.DataDir, "kms", "state.json")
+}
+
 // PIDFilePath returns the path of the tarn server PID file.
 func (c *Config) PIDFilePath() string {
 	return filepath.Join(c.DataDir, "tarn.pid")

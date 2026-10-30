@@ -18,6 +18,7 @@ import (
 	eventbridgehandler "github.com/aircwo-systems/tarn/internal/api/eventbridge"
 	eventsourcehandler "github.com/aircwo-systems/tarn/internal/api/eventsource"
 	iamhandler "github.com/aircwo-systems/tarn/internal/api/iam"
+	kmshandler "github.com/aircwo-systems/tarn/internal/api/kms"
 	lambdahandler "github.com/aircwo-systems/tarn/internal/api/lambda"
 	s3handler "github.com/aircwo-systems/tarn/internal/api/s3"
 	secretshandler "github.com/aircwo-systems/tarn/internal/api/secrets"
@@ -30,6 +31,7 @@ import (
 	"github.com/aircwo-systems/tarn/internal/eventbridge"
 	"github.com/aircwo-systems/tarn/internal/eventsource"
 	"github.com/aircwo-systems/tarn/internal/infrastructure"
+	"github.com/aircwo-systems/tarn/internal/kms"
 	"github.com/aircwo-systems/tarn/internal/lambda"
 	"github.com/aircwo-systems/tarn/internal/logs"
 	s3store "github.com/aircwo-systems/tarn/internal/s3"
@@ -87,6 +89,7 @@ func newTestBundleWithTraces(t *testing.T, cfg *config.Config, traceStore *trace
 		EventSource:  eventsourcehandler.NewHandler(esmSvc),
 		EventBridge:  eventbridgehandler.NewHandler(ebSvc),
 		IAM:          iamhandler.NewHandler(cfg.AccountID),
+		KMS:          kmshandler.NewHandler(kms.NewService(cfg)),
 		Admin:        adminhandler.NewHandler(cfg, gatewaySvc, gatewayV1Svc, lambdaSvc, logsSvc, sqsSvc, snsSvc, dynamoSvc, secretsSvc, infraSvc, s3Svc, esmSvc, ebSvc, nil, traceStore),
 		Logs:         logsSvc,
 	}
@@ -291,31 +294,34 @@ func TestEventBridgeProtocolDispatchSupportsNonRootPath(t *testing.T) {
 	}
 }
 
-// TestKMSRequestsGetJSONError guards Lambdas calling KMS through
-// AWS_ENDPOINT_URL: without a KMS branch the call fell through to the SQS
-// query handler and returned XML the SDK could not parse.
-func TestKMSRequestsGetJSONError(t *testing.T) {
+// TestKMSProtocolDispatch guards Lambdas calling KMS through AWS_ENDPOINT_URL,
+// which may use a non-root path. Before KMS existed these calls fell through
+// to the SQS query handler and returned XML the SDK could not parse.
+func TestKMSProtocolDispatch(t *testing.T) {
 	handler := newTestServerForEB(t)
 
-	for _, path := range []string{"/", "/kms"} {
-		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"CiphertextBlob":"AAAA"}`))
+	for _, tc := range []struct{ path, target, body, wantType string }{
+		{"/", "TrentService.Decrypt", `{"CiphertextBlob":"AAAA"}`, "InvalidCiphertextException"},
+		{"/kms", "TrentService.Decrypt", `{"CiphertextBlob":"AAAA"}`, "InvalidCiphertextException"},
+		{"/", "TrentService.Sign", `{}`, "UnsupportedOperationException"},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
 		req.Header.Set("Content-Type", "application/x-amz-json-1.1")
-		req.Header.Set("X-Amz-Target", "TrentService.Decrypt")
+		req.Header.Set("X-Amz-Target", tc.target)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
 		if rec.Code != http.StatusBadRequest {
-			t.Fatalf("POST %s: status=%d body=%s", path, rec.Code, rec.Body.String())
+			t.Fatalf("%s %s: status=%d body=%s", tc.target, tc.path, rec.Code, rec.Body.String())
 		}
 		var resp struct {
-			Type    string `json:"__type"`
-			Message string `json:"message"`
+			Type string `json:"__type"`
 		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
-			t.Fatalf("POST %s: decode: %v (body=%s)", path, err, rec.Body.String())
+			t.Fatalf("%s %s: decode: %v (body=%s)", tc.target, tc.path, err, rec.Body.String())
 		}
-		if resp.Type != "UnknownOperationException" || !strings.Contains(resp.Message, "Decrypt") {
-			t.Fatalf("POST %s: unexpected error %+v", path, resp)
+		if resp.Type != tc.wantType {
+			t.Fatalf("%s %s: __type = %q, want %q", tc.target, tc.path, resp.Type, tc.wantType)
 		}
 	}
 }

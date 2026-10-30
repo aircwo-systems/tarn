@@ -22,6 +22,7 @@ docs/
 │   ├── sqs.md                  # SQS
 │   ├── sns.md                  # SNS
 │   ├── secrets-manager.md      # Secrets Manager
+│   ├── kms.md                  # KMS
 │   ├── eventbridge.md          # EventBridge
 │   └── iam.md                  # IAM stubs
 └── reference/

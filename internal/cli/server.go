@@ -26,6 +26,7 @@ import (
 	eventbridgehandler "github.com/aircwo-systems/tarn/internal/api/eventbridge"
 	eventsourcehandler "github.com/aircwo-systems/tarn/internal/api/eventsource"
 	iamhandler "github.com/aircwo-systems/tarn/internal/api/iam"
+	kmshandler "github.com/aircwo-systems/tarn/internal/api/kms"
 	lambdahandler "github.com/aircwo-systems/tarn/internal/api/lambda"
 	s3handler "github.com/aircwo-systems/tarn/internal/api/s3"
 	secretshandler "github.com/aircwo-systems/tarn/internal/api/secrets"
@@ -44,6 +45,7 @@ import (
 	"github.com/aircwo-systems/tarn/internal/eventbridge"
 	"github.com/aircwo-systems/tarn/internal/eventsource"
 	"github.com/aircwo-systems/tarn/internal/infrastructure"
+	"github.com/aircwo-systems/tarn/internal/kms"
 	"github.com/aircwo-systems/tarn/internal/lambda"
 	"github.com/aircwo-systems/tarn/internal/logs"
 	s3store "github.com/aircwo-systems/tarn/internal/s3"
@@ -206,6 +208,15 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 		return nil, fmt.Errorf("cognito store: %w", err)
 	}
 	cognitoSvc.SetTriggerInvoker(cognitoTriggerInvoker(lambdaSvc))
+
+	// KMS
+	kmsSvc := kms.NewService(acctCfg)
+	if shared.vault != nil {
+		kmsSvc.SetVault(shared.vault)
+	}
+	if err := kmsSvc.Init(); err != nil {
+		return nil, fmt.Errorf("kms store: %w", err)
+	}
 
 	// DynamoDB
 	dynamoSvc := dynamodb.NewService(acctCfg)
@@ -377,6 +388,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 		StepFunctions: stepfunctionshandler.NewHandler(stepFunctionsSvc),
 		IAM:           iamhandler.NewHandler(acctCfg.AccountID),
 		Cognito:       cognitohandler.NewHandler(cognitoSvc),
+		KMS:           kmshandler.NewHandler(kmsSvc),
 		Admin:         adminHandler,
 		Logs:          logsSvc,
 	}
@@ -398,7 +410,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 		// flushers have not written yet.
 		for _, c := range []interface{ Close() }{
 			sqsSvc, snsSvc, dynamoSvc, secretsSvc, gatewaySvc, gatewayV1Svc,
-			esmSvc, eventbridgeSvc, stepFunctionsSvc, ecsSvc, cognitoSvc,
+			esmSvc, eventbridgeSvc, stepFunctionsSvc, ecsSvc, cognitoSvc, kmsSvc,
 		} {
 			c.Close()
 		}

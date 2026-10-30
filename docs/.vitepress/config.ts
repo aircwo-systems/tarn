@@ -95,6 +95,7 @@ export default defineConfig({
             { text: 'SQS', link: '/services/sqs' },
             { text: 'SNS', link: '/services/sns' },
             { text: 'Secrets Manager', link: '/services/secrets-manager' },
+            { text: 'KMS', link: '/services/kms' },
             { text: 'Cognito', link: '/services/cognito' },
             { text: 'EventBridge', link: '/services/eventbridge' },
             { text: 'IAM', link: '/services/iam' },

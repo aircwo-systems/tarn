@@ -24,6 +24,7 @@ import (
 	eventbridgehandler "github.com/aircwo-systems/tarn/internal/api/eventbridge"
 	eventsourcehandler "github.com/aircwo-systems/tarn/internal/api/eventsource"
 	iamhandler "github.com/aircwo-systems/tarn/internal/api/iam"
+	kmshandler "github.com/aircwo-systems/tarn/internal/api/kms"
 	lambdahandler "github.com/aircwo-systems/tarn/internal/api/lambda"
 	s3handler "github.com/aircwo-systems/tarn/internal/api/s3"
 	secretshandler "github.com/aircwo-systems/tarn/internal/api/secrets"
@@ -52,6 +53,7 @@ type HandlerSet struct {
 	StepFunctions *stepfunctionshandler.Handler
 	IAM           *iamhandler.Handler
 	Cognito       *cognitohandler.Handler
+	KMS           *kmshandler.Handler
 	Admin         *adminhandler.Handler
 	// Logs is this account's CloudWatch-style logs service. It is per-account so
 	// log groups (e.g. /aws/lambda/<fn>) and the account's API request log do not
@@ -826,7 +828,7 @@ func (s *Server) telemetryDBHandler(w http.ResponseWriter, r *http.Request) {
 func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","sns","dynamodb","secretsmanager","eventsource","eventbridge","ecs","stepfunctions","cognito-idp"]}`)
+	fmt.Fprint(w, `{"status":"running","services":["apigateway","apigatewayv2","lambda","s3","sqs","sns","dynamodb","secretsmanager","eventsource","eventbridge","ecs","stepfunctions","cognito-idp","kms"]}`)
 }
 
 func (s *Server) withLogging(next http.Handler) http.Handler {
@@ -904,19 +906,6 @@ func writeECSUnconfigured(w http.ResponseWriter) {
 	})
 }
 
-// writeKMSUnsupported answers KMS calls, which Lambdas reach through the
-// injected AWS_ENDPOINT_URL, with an error the SDK can parse. Without it they
-// fall through to the SQS query handler and come back as XML. A 4xx keeps the
-// SDK from retrying.
-func writeKMSUnsupported(w http.ResponseWriter, target string) {
-	w.Header().Set("Content-Type", "application/x-amz-json-1.1")
-	w.WriteHeader(http.StatusBadRequest)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"__type":  "UnknownOperationException",
-		"message": "KMS is not supported by Tarn yet: " + strings.TrimPrefix(target, "TrentService."),
-	})
-}
-
 // dispatchProtocolRequest routes AWS protocol requests based on headers/query
 // independent of URL path. Returns true when a request was dispatched.
 func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request) bool {
@@ -965,8 +954,8 @@ func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request)
 		hs.SQS.Dispatch(w, r)
 		return true
 	}
-	if strings.HasPrefix(target, "TrentService.") {
-		writeKMSUnsupported(w, target)
+	if kmshandler.IsKMSRequest(r) {
+		hs.KMS.Dispatch(w, r)
 		return true
 	}
 

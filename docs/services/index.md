@@ -72,6 +72,12 @@ Pick a service below to get started:
   <small>Fully Supported</small>
 </a>
 
+<a href="/services/kms" class="service-card">
+  <h3>KMS</h3>
+  <p>Symmetric keys and aliases. Encrypt, Decrypt and data keys for the AWS Encryption SDK.</p>
+  <small>Partial Support</small>
+</a>
+
 <a href="/services/cognito" class="service-card">
   <h3>Cognito</h3>
   <p>User pools. Sign-up, sign-in, signed JWTs, groups, and Lambda triggers.</p>

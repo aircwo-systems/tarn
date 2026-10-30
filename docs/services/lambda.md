@@ -319,7 +319,7 @@ Other functions run without the extra process.
 - No weighted alias routing or account-wide concurrency quota enforcement
 - Resource policies are stored for tooling; IAM authorization is not enforced
 - Asynchronous retry and dead-letter policies are not emulated; acquisition waits are bounded
-- `KMSKeyArn` is stored and returned, but environment variables are not encrypted. KMS API calls from a function get an `UnknownOperationException`
+- `KMSKeyArn` is stored and returned, but environment variables are not encrypted with it
 
 ## See Also
 
