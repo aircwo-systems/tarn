@@ -221,6 +221,11 @@ func TestFunctionLayersVersionsUpdatesAndConcurrencyE2E(t *testing.T) {
 	}
 }
 
+// pinnedImageTag is the tag Tarn keeps on an image a deployment is pinned to.
+func pinnedImageTag(imageID string) string {
+	return "tarn/pinned:" + strings.Replace(imageID, ":", "-", 1)
+}
+
 func TestImageFunctionAndPublishedImageVersionE2E(t *testing.T) {
 	name := fmt.Sprintf("e2e-fn-image-%d", time.Now().UnixNano())
 	image := "tarn-test-lambda-" + name + ":latest"
@@ -236,6 +241,9 @@ func TestImageFunctionAndPublishedImageVersionE2E(t *testing.T) {
 				break
 			}
 			time.Sleep(20 * time.Millisecond)
+		}
+		for _, id := range imageIDs {
+			_ = exec.Command("docker", "image", "rm", pinnedImageTag(id)).Run()
 		}
 		for _, ref := range append([]string{image}, imageIDs...) {
 			_ = exec.Command("docker", "image", "rm", "--force", ref).Run()
@@ -278,6 +286,11 @@ func TestImageFunctionAndPublishedImageVersionE2E(t *testing.T) {
 	second := decodeFunctionResult(t, functionHTTP(t, http.MethodPost, path+"/invocations", map[string]any{}, 200))
 	if second["value"] != "second" {
 		t.Fatalf("image update ignored: %+v", second)
+	}
+	// Tarn holds a tag on each pinned image, so version 1 keeps its image
+	// after the tag moves, whichever image store the daemon uses.
+	if err := exec.Command("docker", "image", "inspect", pinnedImageTag(firstID)).Run(); err != nil {
+		t.Fatalf("published image %s is not pinned: %v", firstID, err)
 	}
 	for range 2 {
 		first = decodeFunctionResult(t, functionHTTP(t, http.MethodPost, path+"/invocations?Qualifier=1", map[string]any{}, 200))
