@@ -27,6 +27,7 @@ type PoolSummary struct {
 	PendingCodes int               `json:"pendingCodes"`
 	MfaMode      string            `json:"mfaMode"`
 	Triggers     []string          `json:"triggers,omitempty"`
+	KMSKeyID     string            `json:"kmsKeyId,omitempty"` // encrypts codes for the custom sender triggers
 	Domain       string            `json:"domain,omitempty"`
 	Tags         map[string]string `json:"tags,omitempty"`
 	Created      time.Time         `json:"created"`
@@ -53,6 +54,12 @@ func (p *pool) lambdaTriggers() map[string]string {
 	add("UserMigration", lc.UserMigration)
 	if cfg := lc.PreTokenGenerationConfig; cfg != nil && cfg.LambdaArn != "" {
 		out["PreTokenGeneration"] = cfg.LambdaArn
+	}
+	if lc.CustomEmailSender != nil {
+		add("CustomEmailSender", lc.CustomEmailSender.LambdaArn)
+	}
+	if lc.CustomSMSSender != nil {
+		add("CustomSMSSender", lc.CustomSMSSender.LambdaArn)
 	}
 	return out
 }
@@ -88,6 +95,7 @@ func (s *Service) summary(p *pool) PoolSummary {
 		PendingCodes: s.pendingCodeCount(p),
 		MfaMode:      p.mfaMode(),
 		Triggers:     triggers,
+		KMSKeyID:     p.lambdaConfig().KMSKeyID,
 		Domain:       domain,
 		Tags:         cloneJSON(p.Config.UserPoolTags),
 		Created:      p.Config.CreationDate.Time(),

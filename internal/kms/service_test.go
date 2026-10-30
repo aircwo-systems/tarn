@@ -329,3 +329,33 @@ func TestListAliasesDropsAliasesOfExpiredKeys(t *testing.T) {
 		t.Fatalf("ListAliases = %+v, %v", list, err)
 	}
 }
+
+func TestUsageCountsOperationsAndFailures(t *testing.T) {
+	s := newTestService(t)
+	m := createKey(t, s)
+	enc, _ := s.Encrypt(&EncryptInput{KeyId: m.KeyId, Plaintext: []byte("x"), EncryptionContext: map[string]string{"k": "v"}})
+	if _, err := s.Decrypt(&DecryptInput{CiphertextBlob: enc.CiphertextBlob, EncryptionContext: map[string]string{"k": "v"}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.EncryptMessage(m.KeyId, []byte("123456"), nil); err != nil {
+		t.Fatal(err)
+	}
+	// A context mismatch is attributed to the key the blob names.
+	_, err := s.Decrypt(&DecryptInput{CiphertextBlob: enc.CiphertextBlob})
+	wantCode(t, err, "InvalidCiphertextException")
+
+	sums := s.KeySummaries()
+	if len(sums) != 1 {
+		t.Fatalf("summaries = %+v", sums)
+	}
+	u := sums[0].Usage
+	if u.Encrypt != 1 || u.Decrypt != 1 || u.DataKeys != 1 || u.Failures != 1 || u.LastError != "InvalidCiphertextException" || u.LastUsed == nil {
+		t.Fatalf("usage = %+v", u)
+	}
+	if _, ok := s.LookupKeyID("alias/aws/lambda"); ok {
+		t.Fatal("LookupKeyID resolved a managed alias that does not exist")
+	}
+	if n := s.KeyCount(); n != 1 {
+		t.Fatalf("LookupKeyID created a key: %d keys", n)
+	}
+}

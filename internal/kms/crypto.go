@@ -81,7 +81,8 @@ func (s *Service) seal(k *key, plaintext []byte, ctx map[string]string) ([]byte,
 }
 
 // openLocked decrypts a blob, returning the key that made it. keyID, when
-// set, must name that same key.
+// set, must name that same key. The key is returned with the error too once
+// the blob has identified it, so failures can be counted against it.
 func (s *Service) openLocked(blob []byte, keyID string, ctx map[string]string) (*key, []byte, error) {
 	if len(blob) < blobHeader+tagLen || blob[0] != blobVersion {
 		return nil, nil, errInvalidCiphertext
@@ -97,19 +98,19 @@ func (s *Service) openLocked(blob []byte, keyID string, ctx map[string]string) (
 			return nil, nil, err
 		}
 		if named.ID != k.ID {
-			return nil, nil, errIncorrectKey
+			return k, nil, errIncorrectKey
 		}
 	}
 	if err := s.checkUsable(k); err != nil {
-		return nil, nil, err
+		return k, nil, err
 	}
 	gcm, err := newGCM(k.material)
 	if err != nil {
-		return nil, nil, err
+		return k, nil, err
 	}
 	plaintext, err := gcm.Open(nil, blob[1+keyIDLen:blobHeader], blob[blobHeader:], blobAAD(k.ID, ctx))
 	if err != nil {
-		return nil, nil, errInvalidCiphertext
+		return k, nil, errInvalidCiphertext
 	}
 	return k, plaintext, nil
 }
@@ -133,9 +134,11 @@ func (s *Service) Encrypt(in *EncryptInput) (*EncryptOutput, error) {
 	defer s.mu.Unlock()
 	k, err := s.usableLocked(in.KeyId)
 	if err != nil {
+		s.recordLocked(k, "encrypt", err)
 		return nil, err
 	}
 	blob, err := s.seal(k, in.Plaintext, in.EncryptionContext)
+	s.recordLocked(k, "encrypt", err)
 	if err != nil {
 		return nil, err
 	}
@@ -151,6 +154,7 @@ func (s *Service) Decrypt(in *DecryptInput) (*DecryptOutput, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	k, plaintext, err := s.openLocked(in.CiphertextBlob, in.KeyId, in.EncryptionContext)
+	s.recordLocked(k, "decrypt", err)
 	if err != nil {
 		return nil, err
 	}
@@ -164,13 +168,19 @@ func (s *Service) ReEncrypt(in *ReEncryptInput) (*ReEncryptOutput, error) {
 	defer s.mu.Unlock()
 	src, plaintext, err := s.openLocked(in.CiphertextBlob, in.SourceKeyId, in.SourceEncryptionContext)
 	if err != nil {
+		s.recordLocked(src, "reEncrypt", err)
 		return nil, err
 	}
 	dst, err := s.usableLocked(in.DestinationKeyId)
 	if err != nil {
+		s.recordLocked(dst, "reEncrypt", err)
 		return nil, err
 	}
 	blob, err := s.seal(dst, plaintext, in.DestinationEncryptionContext)
+	s.recordLocked(src, "reEncrypt", err)
+	if src != dst {
+		s.recordLocked(dst, "reEncrypt", err)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -194,6 +204,7 @@ func (s *Service) GenerateDataKey(in *GenerateDataKeyInput) (*GenerateDataKeyOut
 	defer s.mu.Unlock()
 	k, err := s.usableLocked(in.KeyId)
 	if err != nil {
+		s.recordLocked(k, "dataKey", err)
 		return nil, err
 	}
 	plaintext := make([]byte, size)
@@ -201,6 +212,7 @@ func (s *Service) GenerateDataKey(in *GenerateDataKeyInput) (*GenerateDataKeyOut
 		return nil, err
 	}
 	blob, err := s.seal(k, plaintext, in.EncryptionContext)
+	s.recordLocked(k, "dataKey", err)
 	if err != nil {
 		return nil, err
 	}

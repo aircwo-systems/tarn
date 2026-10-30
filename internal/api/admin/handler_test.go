@@ -20,6 +20,7 @@ import (
 	apigatewayv1svc "github.com/aircwo-systems/tarn/internal/apigatewayv1"
 	"github.com/aircwo-systems/tarn/internal/config"
 	dynamodbsvc "github.com/aircwo-systems/tarn/internal/dynamodb"
+	kmssvc "github.com/aircwo-systems/tarn/internal/kms"
 	ecssvc "github.com/aircwo-systems/tarn/internal/ecs"
 	eventbridgesvc "github.com/aircwo-systems/tarn/internal/eventbridge"
 	eventsourcesvc "github.com/aircwo-systems/tarn/internal/eventsource"
@@ -775,6 +776,69 @@ func TestOverviewIncludesKMSKeys(t *testing.T) {
 	}
 	if len(payload.Secrets) != 1 || payload.Secrets[0].KmsKeyID != "alias/app" {
 		t.Fatalf("unexpected secrets: %+v", payload.Secrets)
+	}
+}
+
+func TestOverviewListsKMSKeysWithTheirReferences(t *testing.T) {
+	h := newTestHandler(t)
+	kms := kmssvc.NewService(h.cfg)
+	h.SetKMSService(kms)
+	key, err := kms.CreateKey(&kmssvc.CreateKeyInput{Description: "app"})
+	if err != nil {
+		t.Fatalf("CreateKey: %v", err)
+	}
+	if _, err := kms.CreateAlias(&kmssvc.AliasInput{AliasName: "alias/app", TargetKeyId: key.KeyMetadata.KeyId}); err != nil {
+		t.Fatalf("CreateAlias: %v", err)
+	}
+	if _, err := h.lambda.CreateFunction(context.Background(), &types.FunctionConfig{
+		FunctionName: "sender", Runtime: types.RuntimeNodeJS20, Handler: "index.handler",
+		Role: "arn:aws:iam::000000000000:role/lambda-role", KMSKeyArn: "arn:aws:kms:us-east-1:000000000000:alias/app",
+	}, nil); err != nil {
+		t.Fatalf("create function: %v", err)
+	}
+	secret, err := h.secrets.CreateSecret("db", "", "value", nil, nil)
+	if err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+	if err := h.secrets.SetKmsKeyID(secret.ARN, "alias/app"); err != nil {
+		t.Fatalf("set kms key: %v", err)
+	}
+	// An AWS managed alias Tarn has not created yet resolves to nothing, and
+	// the overview must not create it.
+	if _, err := h.sqs.CreateQueue("jobs", map[string]string{"KmsMasterKeyId": "alias/aws/sqs"}, nil); err != nil {
+		t.Fatalf("create queue: %v", err)
+	}
+
+	for range 2 {
+		rec := httptest.NewRecorder()
+		h.Overview(rec, httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d", rec.Code)
+		}
+		var payload struct {
+			Counts  overviewCounts  `json:"counts"`
+			KMSKeys []kmsKeySummary `json:"kmsKeys"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if payload.Counts.KMSKeys != 1 || len(payload.KMSKeys) != 1 {
+			t.Fatalf("kms keys = %d / %+v", payload.Counts.KMSKeys, payload.KMSKeys)
+		}
+		k := payload.KMSKeys[0]
+		if k.ID != key.KeyMetadata.KeyId || len(k.Aliases) != 1 || k.Aliases[0] != "alias/app" || k.Policy == "" {
+			t.Fatalf("key summary %+v", k.KeySummary)
+		}
+		want := []kmsKeyReference{
+			{Kind: "function", Name: "sender", Field: "KMSKeyArn", Tab: "functions"},
+			{Kind: "secret", Name: "db", Field: "KmsKeyId", Tab: "secrets"},
+		}
+		if !reflect.DeepEqual(k.UsedBy, want) {
+			t.Fatalf("usedBy = %+v, want %+v", k.UsedBy, want)
+		}
+	}
+	if n := kms.KeyCount(); n != 1 {
+		t.Fatalf("overview created keys: %d keys", n)
 	}
 }
 

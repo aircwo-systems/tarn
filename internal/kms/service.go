@@ -49,8 +49,9 @@ type Service struct {
 	vault Sealer
 
 	mu      sync.Mutex
-	keys    map[string]*key   // by key ID (UUID)
-	aliases map[string]*alias // by alias name, "alias/..."
+	keys    map[string]*key      // by key ID (UUID)
+	aliases map[string]*alias    // by alias name, "alias/..."
+	usage   map[string]*keyUsage // by key ID, in memory only
 
 	dirty   persist.Dirty
 	flusher *persist.Flusher
@@ -87,6 +88,7 @@ func NewService(cfg *config.Config) *Service {
 		cfg:     cfg,
 		keys:    make(map[string]*key),
 		aliases: make(map[string]*alias),
+		usage:   make(map[string]*keyUsage),
 		now:     time.Now,
 	}
 }

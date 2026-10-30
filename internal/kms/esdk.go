@@ -35,6 +35,7 @@ func (s *Service) EncryptMessage(keyID string, plaintext []byte, ctx map[string]
 	s.mu.Lock()
 	k, err := s.usableLocked(keyID)
 	if err != nil {
+		s.recordLocked(k, "dataKey", err)
 		s.mu.Unlock()
 		return nil, err
 	}
@@ -44,6 +45,7 @@ func (s *Service) EncryptMessage(keyID string, plaintext []byte, ctx map[string]
 		return nil, err
 	}
 	edk, err := s.seal(k, dataKey, ctx)
+	s.recordLocked(k, "dataKey", err)
 	keyARN := s.keyARN(k.ID)
 	s.mu.Unlock()
 	if err != nil {

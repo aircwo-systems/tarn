@@ -372,6 +372,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	)
 	adminHandler.SetECSService(ecsSvc)
 	adminHandler.SetCognitoService(cognitoSvc)
+	adminHandler.SetKMSService(kmsSvc)
 	adminHandler.SetECSTaskRunner(ecsRunner)
 
 	hs := &api.HandlerSet{

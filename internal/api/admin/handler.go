@@ -30,6 +30,7 @@ import (
 	eventbridgesvc "github.com/aircwo-systems/tarn/internal/eventbridge"
 	eventsourcesvc "github.com/aircwo-systems/tarn/internal/eventsource"
 	infrasvc "github.com/aircwo-systems/tarn/internal/infrastructure"
+	kmssvc "github.com/aircwo-systems/tarn/internal/kms"
 	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	logssvc "github.com/aircwo-systems/tarn/internal/logs"
 	"github.com/aircwo-systems/tarn/internal/openapi"
@@ -56,6 +57,7 @@ type Handler struct {
 	dynamodb      *dynamodbsvc.Service
 	secrets       *secretssvc.Service
 	cognito       *cognitosvc.Service
+	kms           *kmssvc.Service
 	infra         *infrasvc.Service
 	esm           *eventsourcesvc.Service
 	eventbridge   *eventbridgesvc.Service
@@ -110,6 +112,11 @@ func (h *Handler) SetCognitoService(svc *cognitosvc.Service) {
 	h.cognito = svc
 }
 
+// SetKMSService attaches the account's KMS service to the overview.
+func (h *Handler) SetKMSService(svc *kmssvc.Service) {
+	h.kms = svc
+}
+
 // SetECSTaskRunner wires the account-local ECS task runner used by the
 // dashboard's run-task trigger. Mirrors SetECSService: until called,
 // RunECSTask reports 503 instead of reaching a nil runner.
@@ -136,6 +143,7 @@ type overviewResponse struct {
 	EventBridgeRules    []eventBridgeRuleSummary `json:"eventBridgeRules,omitempty"`
 	StateMachines       []stateMachineSummary    `json:"stateMachines,omitempty"`
 	CognitoPools        []cognitosvc.PoolSummary `json:"cognitoPools,omitempty"`
+	KMSKeys             []kmsKeySummary          `json:"kmsKeys,omitempty"`
 	ECS                 *ecsOverview             `json:"ecs,omitempty"`
 	Infrastructure      []infrasvc.ProbeResult   `json:"infrastructure"`
 	Connections         []infraConnection        `json:"connections,omitempty"`
@@ -247,6 +255,24 @@ type overviewCounts struct {
 	EventBridgeRules    int `json:"eventBridgeRules"`
 	StateMachines       int `json:"stateMachines"`
 	CognitoPools        int `json:"cognitoPools"`
+	KMSKeys             int `json:"kmsKeys"`
+}
+
+// kmsKeySummary is a KMS key with the resources that name it.
+type kmsKeySummary struct {
+	kmssvc.KeySummary
+	UsedBy []kmsKeyReference `json:"usedBy"`
+}
+
+// kmsKeyReference is a resource whose configuration names a KMS key. Tab is
+// the dashboard section that shows it; ID is set where that section selects
+// by something other than the name.
+type kmsKeyReference struct {
+	Kind  string `json:"kind"`
+	Name  string `json:"name"`
+	ID    string `json:"id,omitempty"`
+	Field string `json:"field"`
+	Tab   string `json:"tab"`
 }
 
 // maxOverviewExecutions bounds how many executions (with full history) are
@@ -785,7 +811,7 @@ func (h *Handler) buildOverview() ([]byte, error) {
 	if h.cognito != nil {
 		cognitoPools = h.cognito.PoolSummaries()
 	}
-	services := []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "sns", "dynamodb", "secretsmanager", "eventsource", "eventbridge", "stepfunctions", "cognito-idp"}
+	services := []string{"apigateway", "apigatewayv2", "lambda", "s3", "sqs", "sns", "dynamodb", "secretsmanager", "eventsource", "eventbridge", "stepfunctions", "cognito-idp", "kms"}
 	if ecsData != nil {
 		services = append(services, "ecs")
 	}
@@ -1202,6 +1228,9 @@ func (h *Handler) buildOverview() ([]byte, error) {
 		})
 	}
 	sort.Slice(resp.Buckets, func(i, j int) bool { return resp.Buckets[i].Name < resp.Buckets[j].Name })
+
+	resp.KMSKeys = h.kmsKeySummaries(functions, secrets, queues, topics, cognitoPools)
+	resp.Counts.KMSKeys = len(resp.KMSKeys)
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(resp); err != nil {
@@ -4125,4 +4154,48 @@ func (h *Handler) TryOperation(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(result)
+}
+
+// kmsKeySummaries lists the account's KMS keys with the resources whose
+// configuration names each one. References are resolved without side
+// effects, so polling never creates AWS managed keys.
+func (h *Handler) kmsKeySummaries(functions []*types.FunctionConfig, secrets []*types.Secret, queues []*types.QueueConfig, topics []*types.SNSTopic, pools []cognitosvc.PoolSummary) []kmsKeySummary {
+	if h.kms == nil {
+		return nil
+	}
+	refs := map[string][]kmsKeyReference{}
+	add := func(keyRef string, ref kmsKeyReference) {
+		if keyRef == "" {
+			return
+		}
+		if id, ok := h.kms.LookupKeyID(keyRef); ok {
+			refs[id] = append(refs[id], ref)
+		}
+	}
+	for _, fn := range functions {
+		add(fn.KMSKeyArn, kmsKeyReference{Kind: "function", Name: fn.FunctionName, Field: "KMSKeyArn", Tab: "functions"})
+	}
+	for _, s := range secrets {
+		add(s.KmsKeyId, kmsKeyReference{Kind: "secret", Name: s.Name, Field: "KmsKeyId", Tab: "secrets"})
+	}
+	for _, q := range queues {
+		add(q.KmsMasterKeyId, kmsKeyReference{Kind: "queue", Name: q.QueueName, Field: "KmsMasterKeyId", Tab: "queues"})
+	}
+	for _, t := range topics {
+		add(t.KmsMasterKeyId, kmsKeyReference{Kind: "topic", Name: t.Name, Field: "KmsMasterKeyId", Tab: "sns"})
+	}
+	for _, p := range pools {
+		add(p.KMSKeyID, kmsKeyReference{Kind: "userpool", Name: p.Name, ID: p.ID, Field: "KMSKeyID", Tab: "cognito"})
+	}
+
+	keys := h.kms.KeySummaries()
+	out := make([]kmsKeySummary, 0, len(keys))
+	for _, k := range keys {
+		used := refs[k.ID]
+		if used == nil {
+			used = []kmsKeyReference{}
+		}
+		out = append(out, kmsKeySummary{KeySummary: k, UsedBy: used})
+	}
+	return out
 }
