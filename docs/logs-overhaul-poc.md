@@ -2,7 +2,7 @@
 
 The selected direction is A's activity pulse with optional group comparison, integrated into the existing LogsSection. The native table, query bar, sort, tail, pins, paging, formatted messages, resizable details and trace links remain the actual components used by the viewer.
 
-Open [the selected log viewer](http://localhost:4173/?logs-poc=1#logs), or run `cd ui && bun run logs:poc`. The development query opens All log groups directly; the same activity component is used by the normal logs section. The old `variant` query no longer chooses a separate table or group-focus layout.
+Open `http://localhost:4173/?logs-poc=1#logs` (the selected log viewer), or run `cd ui && bun run logs:poc`. The development query opens All log groups directly; the same activity component is used by the normal logs section. The old `variant` query no longer chooses a separate table or group-focus layout.
 
 ## Selected design
 

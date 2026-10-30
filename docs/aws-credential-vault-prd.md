@@ -199,11 +199,11 @@ Follow-up PRDs can add more profile provider types, an interactive sign-in flow,
 
 The following are implementation facts at the time of writing:
 
-- [Vault encryption](../internal/secrets/vault.go) provides AES-256-GCM encryption and a local key file.
-- [Secret persistence](../internal/secrets/store.go) encrypts ordinary secrets when Vault is configured, and follows the emulator's persistence setting. The connection store needs mandatory encryption for manual credentials and independent persistence; profile references do not contain credentials.
-- [Secret reveal](../internal/api/admin/handler.go) returns ordinary secret values to the dashboard. It must never resolve connection records.
-- [Server routes](../internal/api/server.go) and [account resolution](../internal/account/account.go) route emulator requests without a human owner session.
-- [Default configuration](../internal/config/config.go) binds the server to `0.0.0.0`. The local-only connection requirement therefore needs an explicit loopback setup and clear UI guidance.
+- [Vault encryption](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/secrets/vault.go) provides AES-256-GCM encryption and a local key file.
+- [Secret persistence](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/secrets/store.go) encrypts ordinary secrets when Vault is configured, and follows the emulator's persistence setting. The connection store needs mandatory encryption for manual credentials and independent persistence; profile references do not contain credentials.
+- [Secret reveal](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/api/admin/handler.go) returns ordinary secret values to the dashboard. It must never resolve connection records.
+- [Server routes](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/api/server.go) and [account resolution](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/account/account.go) route emulator requests without a human owner session.
+- [Default configuration](https://github.com/aircwo-systems/tarn/blob/develop-mvp/internal/config/config.go) binds the server to `0.0.0.0`. The local-only connection requirement therefore needs an explicit loopback setup and clear UI guidance.
 - [Frontend API](../ui/src/lib/api.ts) uses a configured Tarn base URL and placeholder account signatures. Saved AWS credentials do not change that behavior.
 - [AWS GetCallerIdentity](https://docs.aws.amazon.com/STS/latest/APIReference/API_GetCallerIdentity.html) returns account and identity information without establishing service permissions.
 - [AWS SDK for Go v2 configuration](https://docs.aws.amazon.com/sdk-for-go/v2/developer-guide/configure-gosdk.html) documents explicit credential providers, session tokens, profiles and IAM Identity Center support.
