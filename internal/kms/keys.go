@@ -254,6 +254,9 @@ func (s *Service) ListAliases(in *ListAliasesInput) (*ListAliasesOutput, error) 
 	out := &ListAliasesOutput{Aliases: []AliasListEntry{}}
 	for _, name := range sortedIDs(s.aliases) {
 		a := s.aliases[name]
+		if a == nil { // removed with an expired key earlier in this loop
+			continue
+		}
 		if k := s.keys[a.TargetID]; k == nil || s.expiredLocked(k) {
 			continue
 		}

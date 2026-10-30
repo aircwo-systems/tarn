@@ -309,3 +309,23 @@ func TestSerializeEncryptionContextMatchesESDKExample(t *testing.T) {
 		t.Fatal("empty context must serialize to no bytes")
 	}
 }
+
+func TestListAliasesDropsAliasesOfExpiredKeys(t *testing.T) {
+	s := newTestService(t)
+	now := time.Date(2026, 10, 30, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	m := createKey(t, s)
+	for _, name := range []string{"alias/a", "alias/b"} {
+		if _, err := s.CreateAlias(&AliasInput{AliasName: name, TargetKeyId: m.KeyId}); err != nil {
+			t.Fatalf("CreateAlias: %v", err)
+		}
+	}
+	if _, err := s.ScheduleKeyDeletion(&ScheduleKeyDeletionInput{KeyId: m.KeyId, PendingWindowInDays: 7}); err != nil {
+		t.Fatalf("ScheduleKeyDeletion: %v", err)
+	}
+	now = now.Add(8 * 24 * time.Hour)
+	list, err := s.ListAliases(&ListAliasesInput{})
+	if err != nil || len(list.Aliases) != 0 {
+		t.Fatalf("ListAliases = %+v, %v", list, err)
+	}
+}
