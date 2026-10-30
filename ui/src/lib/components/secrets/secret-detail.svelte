@@ -7,7 +7,7 @@
   import { fetchSecretValue } from "#lib/api";
   import { formatJSONForViewer } from "#lib/json-format";
   import type { SecretSummary, SecretValueResult } from "#lib/types";
-  import { formatDate, timeAgo } from "#lib/utils";
+  import { formatDate, kmsKeyItem, timeAgo } from "#lib/utils";
 
   let { secret }: { secret: SecretSummary } = $props();
 
@@ -59,6 +59,7 @@
     { label: "Version", value: secret.versionId || "--", mono: true, dim: true },
     { label: "Created", value: formatDate(secret.createdDate) },
     { label: "Last changed", value: formatDate(secret.lastChangedDate) },
+    kmsKeyItem(secret.kmsKeyId, "aws/secretsmanager"),
   ]);
 </script>
 

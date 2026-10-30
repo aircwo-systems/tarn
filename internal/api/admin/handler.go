@@ -414,6 +414,7 @@ type functionSummary struct {
 	Tags              map[string]string `json:"tags,omitempty"`
 	TagCount          int               `json:"tagCount"`
 	EnvironmentKeys   []string          `json:"environmentKeys"`
+	KMSKeyArn         string            `json:"kmsKeyArn,omitempty"`
 }
 
 type infraConnection struct {
@@ -491,6 +492,7 @@ type secretSummary struct {
 	TagCount        int               `json:"tagCount"`
 	CreatedDate     time.Time         `json:"createdDate"`
 	LastChangedDate time.Time         `json:"lastChangedDate"`
+	KmsKeyID        string            `json:"kmsKeyId,omitempty"`
 }
 
 // pickBodyExample selects the most relevant event file for a given HTTP method
@@ -1018,6 +1020,7 @@ func (h *Handler) buildOverview() ([]byte, error) {
 			Tags:              cloneStringMap(fn.Tags),
 			TagCount:          len(fn.Tags),
 			EnvironmentKeys:   environmentKeys,
+			KMSKeyArn:         fn.KMSKeyArn,
 		})
 	}
 	sort.Slice(resp.Functions, func(i, j int) bool { return resp.Functions[i].Name < resp.Functions[j].Name })
@@ -1181,6 +1184,7 @@ func (h *Handler) buildOverview() ([]byte, error) {
 			TagCount:        len(secret.Tags),
 			CreatedDate:     secret.CreatedDate,
 			LastChangedDate: secret.LastChangedDate,
+			KmsKeyID:        secret.KmsKeyId,
 		})
 	}
 	sort.Slice(resp.Secrets, func(i, j int) bool { return resp.Secrets[i].Name < resp.Secrets[j].Name })

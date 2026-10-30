@@ -244,6 +244,7 @@ export interface FunctionSummary {
   tags?: Record<string, string>;
   tagCount: number;
   environmentKeys?: string[];
+  kmsKeyArn?: string;
 }
 
 export interface FunctionEnvironmentResult {
@@ -371,6 +372,7 @@ export interface SecretSummary {
   tagCount: number;
   createdDate: string;
   lastChangedDate: string;
+  kmsKeyId?: string;
 }
 
 export interface SecretValueResult {

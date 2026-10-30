@@ -51,3 +51,11 @@ export type WithElementRef<T> = T & {
   ref?: Element | null;
   children?: Snippet;
 };
+
+// kmsKeyItem describes a resource's KMS key for a detail panel. Tarn records
+// the key but encrypts nothing with it; without one, AWS uses its managed key.
+export function kmsKeyItem(key: string | undefined, managedAlias: string) {
+  return key
+    ? { label: "KMS key", value: `${key} · recorded only`, mono: true }
+    : { label: "KMS key", value: `${managedAlias} (AWS managed)`, mono: true, dim: true };
+}

@@ -20,7 +20,7 @@
   } from "#lib/function-links";
   import { functionToHcl } from "#lib/function-hcl";
   import { formatMs, spanKindLabel } from "#lib/trace-utils";
-  import { formatBytes, formatDate, timeAgo } from "#lib/utils";
+  import { formatBytes, formatDate, kmsKeyItem, timeAgo } from "#lib/utils";
   import type { FunctionSummary, OverviewResponse } from "#lib/types";
 
   let { fn, data }: { fn: FunctionSummary; data: OverviewResponse | null } = $props();
@@ -97,6 +97,7 @@
     { label: "Layers", value: fn.layers > 0 ? String(fn.layers) : "none", mono: true, dim: fn.layers === 0 },
     { label: "Version", value: fn.version, mono: true },
     { label: "Modified", value: formatDate(fn.lastModified) },
+    kmsKeyItem(fn.kmsKeyArn, "aws/lambda"),
     { label: "ARN", value: fn.arn, mono: true, dim: true },
   ]);
 

@@ -737,6 +737,47 @@ func TestOverviewIncludesResourceTags(t *testing.T) {
 	}
 }
 
+func TestOverviewIncludesKMSKeys(t *testing.T) {
+	h := newTestHandler(t)
+	const keyArn = "arn:aws:kms:us-east-1:000000000000:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+
+	if _, err := h.lambda.CreateFunction(context.Background(), &types.FunctionConfig{
+		FunctionName: "kms-fn",
+		Runtime:      types.RuntimeNodeJS20,
+		Handler:      "index.handler",
+		Role:         "arn:aws:iam::000000000000:role/lambda-role",
+		KMSKeyArn:    keyArn,
+	}, nil); err != nil {
+		t.Fatalf("create function: %v", err)
+	}
+	secret, err := h.secrets.CreateSecret("kms-secret", "", "value", nil, nil)
+	if err != nil {
+		t.Fatalf("create secret: %v", err)
+	}
+	if err := h.secrets.SetKmsKeyID(secret.ARN, "alias/app"); err != nil {
+		t.Fatalf("set kms key: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.Overview(rec, httptest.NewRequest(http.MethodGet, "/_tarn/admin/overview", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	var payload struct {
+		Functions []functionSummary `json:"functions"`
+		Secrets   []secretSummary   `json:"secrets"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(payload.Functions) != 1 || payload.Functions[0].KMSKeyArn != keyArn {
+		t.Fatalf("unexpected functions: %+v", payload.Functions)
+	}
+	if len(payload.Secrets) != 1 || payload.Secrets[0].KmsKeyID != "alias/app" {
+		t.Fatalf("unexpected secrets: %+v", payload.Secrets)
+	}
+}
+
 func TestFunctionEnvironmentIsFetchedOnDemand(t *testing.T) {
 	h := newTestHandler(t)
 	_, err := h.lambda.CreateFunction(context.Background(), &types.FunctionConfig{
