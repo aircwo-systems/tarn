@@ -34,6 +34,7 @@ import (
 	stepfunctionshandler "github.com/aircwo-systems/tarn/internal/api/stepfunctions"
 	"github.com/aircwo-systems/tarn/internal/apigateway"
 	"github.com/aircwo-systems/tarn/internal/apigatewayv1"
+	"github.com/aircwo-systems/tarn/internal/awsconnection"
 	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/aircwo-systems/tarn/internal/cognito"
 	"github.com/aircwo-systems/tarn/internal/config"
@@ -499,13 +500,11 @@ func startServer(cfg *config.Config) error {
 	})
 
 	// Load vault once for all accounts (secrets encryption key is global)
-	var vault *secrets.Vault
-	if cfg.VaultKeyPath != "" {
-		v, err := secrets.LoadOrCreateVault(cfg.VaultKeyPath)
-		if err != nil {
-			return fmt.Errorf("failed to initialize vault: %w", err)
-		}
-		vault = v
+	vault, err := loadServerVault(cfg)
+	if err != nil {
+		return err
+	}
+	if vault != nil {
 		log.Printf("[vault] secrets encryption enabled (key: %s)", cfg.VaultKeyPath)
 	}
 
@@ -601,6 +600,14 @@ func startServer(cfg *config.Config) error {
 	server.SetTraceStore(shared.traceStore)
 	server.SetConnections(conns)
 	server.SetCognitoIndex(shared.cognitoIndex)
+	awsConnections := api.NewAWSConnections(cfg, vault, nil)
+	defer awsConnections.Close()
+	server.SetAWSConnections(awsConnections)
+	if available, reason := awsConnections.Availability(); available {
+		fmt.Fprintln(os.Stderr, "[aws-connections] Run tarn vault unlock in another terminal to unlock AWS connections.")
+	} else {
+		log.Printf("[aws-connections] %s", reason)
+	}
 
 	// Graceful shutdown
 	sigCh := make(chan os.Signal, 1)
@@ -639,6 +646,28 @@ func startServer(cfg *config.Config) error {
 		return nil
 	}
 	return err
+}
+
+func loadServerVault(cfg *config.Config) (*secrets.Vault, error) {
+	if cfg.VaultKeyPath == "" {
+		return nil, nil
+	}
+	// Existing AWS connections must keep their original key. Never generate a
+	// replacement when the key is lost or the connection store cannot be read.
+	requiresVault, storeErr := awsconnection.RequiresVault(cfg.DataDir)
+	if storeErr != nil {
+		return nil, fmt.Errorf("cannot inspect the AWS connection store: %w", storeErr)
+	}
+	if requiresVault {
+		if _, keyErr := os.Stat(cfg.VaultKeyPath); keyErr != nil {
+			return nil, fmt.Errorf("AWS connections exist but their Vault key is unavailable; restore the original key at %s", cfg.VaultKeyPath)
+		}
+	}
+	vault, err := secrets.LoadOrCreateVault(cfg.VaultKeyPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize vault: %w", err)
+	}
+	return vault, nil
 }
 
 func preInitPersistedAccounts(cfg *config.Config, registry *api.HandlerRegistry) error {

@@ -69,6 +69,8 @@ type Config struct {
 	// VaultKeyPath is the path to the AES-256 key used to encrypt secret values at rest.
 	// Defaults to ~/.tarn/vault.key. Set to empty string to disable encryption.
 	VaultKeyPath string
+	// AWSUIOrigin is an optional loopback dashboard origin for development proxying.
+	AWSUIOrigin string
 	// CognitoIssuer selects the `iss` claim in Cognito tokens: "local" (the
 	// Tarn endpoint), "aws" (the cognito-idp.<region>.amazonaws.com form) or
 	// an explicit base URL. The pool ID is appended in every mode.
@@ -205,6 +207,7 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("TARN_VAULT_KEY"); v != "" {
 		c.VaultKeyPath = v
 	}
+	c.AWSUIOrigin = os.Getenv("TARN_AWS_UI_ORIGIN")
 	if v := os.Getenv("TARN_COGNITO_ISSUER"); v != "" {
 		c.CognitoIssuer = v
 	}

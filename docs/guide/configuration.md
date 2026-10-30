@@ -176,6 +176,8 @@ export TARN_INFRA_TARGETS="postgresql:localhost:5432,redis:localhost:6379"
 
 ## Secrets Encryption
 
+For saved real AWS credentials, see [AWS credential vault](./aws-connections.md). AWS connection management requires an authenticated local owner session and a loopback bind address.
+
 Secrets are encrypted at rest by default using an AES-256 vault key stored at `~/.tarn/vault.key`.
 
 Use a custom key path:

@@ -159,15 +159,16 @@ func (r *HandlerRegistry) StopAll() {
 
 // Server is the main Tarn API server.
 type Server struct {
-	cfg        *config.Config
-	httpServer *http.Server
-	registry   *HandlerRegistry
-	logsSvc    *logssvc.Service
-	collector  *tracesvc.Collector
-	traceStore *tracesvc.Store
-	datadog    *http.ServeMux
-	ui         http.Handler
-	conns      *Connections
+	cfg            *config.Config
+	httpServer     *http.Server
+	registry       *HandlerRegistry
+	logsSvc        *logssvc.Service
+	collector      *tracesvc.Collector
+	traceStore     *tracesvc.Store
+	datadog        *http.ServeMux
+	ui             http.Handler
+	conns          *Connections
+	awsConnections *AWSConnections
 	// cognitoIndex maps user pool and client IDs to accounts, for Cognito
 	// calls that carry no SigV4 credentials.
 	cognitoIndex *cognitosvc.Index
@@ -211,6 +212,9 @@ func (s *Server) SetConnections(c *Connections) {
 		s.conns = c
 	}
 }
+
+// SetAWSConnections installs the protected owner API independently of account routing.
+func (s *Server) SetAWSConnections(a *AWSConnections) { s.awsConnections = a }
 
 // SetCognitoIndex attaches the pool and client index shared by every
 // account's Cognito service.
@@ -827,6 +831,12 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Owner APIs never enter AWS protocol dispatch or request telemetry. In
+		// particular, adding X-Amz-Target must not bypass owner authentication.
+		if isAWSConnectionPath(r.URL.Path) {
+			s.awsConnections.ServeHTTP(w, r)
+			return
+		}
 		start := time.Now()
 		accountID := account.FromRequest(r, s.cfg.AccountID)
 		if accountID != s.cfg.AccountID && !isAccountExemptPath(r.URL.Path) && s.registry.IsArchived(accountID) {
