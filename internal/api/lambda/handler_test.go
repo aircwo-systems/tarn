@@ -336,6 +336,66 @@ func TestCreateFunctionDefaultsPackageTypeToZip(t *testing.T) {
 	}
 }
 
+// TestKMSKeyArnRoundTrips guards Terraform's kms_key_arn: Tarn encrypts
+// nothing, but the ARN must read back or every plan shows a diff. An empty
+// KMSKeyArn on update resets to the default key, as in AWS.
+func TestKMSKeyArnRoundTrips(t *testing.T) {
+	h := newLambdaHandler(t)
+	const keyArn = "arn:aws:kms:eu-west-2:000000000000:key/1234abcd-12ab-34cd-56ef-1234567890ab"
+
+	body := `{
+		"FunctionName":"kms-fn",
+		"Runtime":"nodejs20.x",
+		"Handler":"index.handler",
+		"Role":"arn:aws:iam::000000000000:role/test",
+		"KMSKeyArn":"` + keyArn + `"
+	}`
+	rec := httptest.NewRecorder()
+	h.CreateFunction(rec, httptest.NewRequest(http.MethodPost, "/2015-03-31/functions", strings.NewReader(body)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	getKMSKeyArn := func() string {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, "/2015-03-31/functions/kms-fn/configuration", nil)
+		req.SetPathValue("name", "kms-fn")
+		rec := httptest.NewRecorder()
+		h.GetFunctionConfiguration(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GetFunctionConfiguration status=%d body=%s", rec.Code, rec.Body.String())
+		}
+		var resp map[string]any
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		arn, _ := resp["KMSKeyArn"].(string)
+		return arn
+	}
+	if got := getKMSKeyArn(); got != keyArn {
+		t.Fatalf("KMSKeyArn after create = %q, want %q", got, keyArn)
+	}
+
+	update := func(body string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPut, "/2015-03-31/functions/kms-fn/configuration", strings.NewReader(body))
+		req.SetPathValue("name", "kms-fn")
+		rec := httptest.NewRecorder()
+		h.UpdateFunctionConfiguration(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("UpdateFunctionConfiguration status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+	update(`{"Timeout":30}`)
+	if got := getKMSKeyArn(); got != keyArn {
+		t.Fatalf("KMSKeyArn after unrelated update = %q, want %q", got, keyArn)
+	}
+	update(`{"KMSKeyArn":""}`)
+	if got := getKMSKeyArn(); got != "" {
+		t.Fatalf("KMSKeyArn after reset = %q, want empty", got)
+	}
+}
+
 // TestCreateFunctionWithImageUriInfersImagePackageType guards the "Image"
 // half of the default: an explicit Code.ImageUri (no PackageType given)
 // should still report PackageType Image, matching AWS's own inference.

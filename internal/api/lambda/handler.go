@@ -79,6 +79,7 @@ func (h *Handler) CreateFunction(w http.ResponseWriter, r *http.Request) {
 		Layers:           req.Layers,
 		Tags:             req.Tags,
 		DeadLetterConfig: req.DeadLetterConfig,
+		KMSKeyArn:        req.KMSKeyArn,
 		PackageType:      req.PackageType,
 		ImageConfig:      req.ImageConfig,
 		Architectures:    req.Architectures,
@@ -867,6 +868,7 @@ type createFunctionRequest struct {
 	Layers           []string                   `json:"Layers,omitempty"`
 	Tags             map[string]string          `json:"Tags,omitempty"`
 	DeadLetterConfig *types.DeadLetterConfig    `json:"DeadLetterConfig,omitempty"`
+	KMSKeyArn        string                     `json:"KMSKeyArn,omitempty"`
 	PackageType      string                     `json:"PackageType,omitempty"`
 	ImageConfig      *types.FunctionImageConfig `json:"ImageConfig,omitempty"`
 	Publish          bool                       `json:"Publish,omitempty"`
@@ -935,6 +937,9 @@ func toFunctionConfigResponse(fn *types.FunctionConfig) map[string]any {
 	}
 	if fn.DeadLetterConfig != nil {
 		result["DeadLetterConfig"] = fn.DeadLetterConfig
+	}
+	if fn.KMSKeyArn != "" {
+		result["KMSKeyArn"] = fn.KMSKeyArn
 	}
 	if fn.LastUpdateStatus != "" {
 		result["LastUpdateStatus"] = fn.LastUpdateStatus

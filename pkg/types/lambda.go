@@ -98,6 +98,7 @@ type FunctionConfig struct {
 	Layers           []string          `json:"Layers,omitempty"`
 	Tags             map[string]string `json:"Tags,omitempty"`
 	DeadLetterConfig *DeadLetterConfig `json:"DeadLetterConfig,omitempty"`
+	KMSKeyArn        string            `json:"KMSKeyArn,omitempty"`
 	State            FunctionState     `json:"State"`
 	LastUpdateStatus string            `json:"LastUpdateStatus,omitempty"`
 	CodeSHA256       string            `json:"CodeSha256"`
@@ -154,6 +155,7 @@ type FunctionConfigUpdate struct {
 	Environment      *EnvVars             `json:"Environment,omitempty"`
 	Layers           []string             `json:"Layers,omitempty"`
 	DeadLetterConfig *DeadLetterConfig    `json:"DeadLetterConfig,omitempty"`
+	KMSKeyArn        *string              `json:"KMSKeyArn,omitempty"`
 	ImageConfig      *FunctionImageConfig `json:"ImageConfig,omitempty"`
 }
 

@@ -518,6 +518,9 @@ func (s *Service) UpdateFunctionConfiguration(ctx context.Context, reference str
 			value := *update.DeadLetterConfig
 			fn.DeadLetterConfig = &value
 		}
+		if update.KMSKeyArn != nil {
+			fn.KMSKeyArn = *update.KMSKeyArn
+		}
 		if update.ImageConfig != nil {
 			fn.ImageConfig = cloneFunction(&types.FunctionConfig{ImageConfig: update.ImageConfig}).ImageConfig
 		}

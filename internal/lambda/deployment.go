@@ -182,6 +182,7 @@ func executionConfig(fn *types.FunctionConfig) types.FunctionConfig {
 	copy.Description = ""
 	copy.Role = ""
 	copy.DeadLetterConfig = nil
+	copy.KMSKeyArn = ""
 	copy.State = ""
 	copy.LastUpdateStatus = ""
 	copy.LastModified = time.Time{}
