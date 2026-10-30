@@ -291,6 +291,35 @@ func TestEventBridgeProtocolDispatchSupportsNonRootPath(t *testing.T) {
 	}
 }
 
+// TestKMSRequestsGetJSONError guards Lambdas calling KMS through
+// AWS_ENDPOINT_URL: without a KMS branch the call fell through to the SQS
+// query handler and returned XML the SDK could not parse.
+func TestKMSRequestsGetJSONError(t *testing.T) {
+	handler := newTestServerForEB(t)
+
+	for _, path := range []string{"/", "/kms"} {
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"CiphertextBlob":"AAAA"}`))
+		req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+		req.Header.Set("X-Amz-Target", "TrentService.Decrypt")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("POST %s: status=%d body=%s", path, rec.Code, rec.Body.String())
+		}
+		var resp struct {
+			Type    string `json:"__type"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+			t.Fatalf("POST %s: decode: %v (body=%s)", path, err, rec.Body.String())
+		}
+		if resp.Type != "UnknownOperationException" || !strings.Contains(resp.Message, "Decrypt") {
+			t.Fatalf("POST %s: unexpected error %+v", path, resp)
+		}
+	}
+}
+
 func TestRootDispatchServesUIForBrowserRequests(t *testing.T) {
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()

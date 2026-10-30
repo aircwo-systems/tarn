@@ -894,6 +894,19 @@ func writeECSUnconfigured(w http.ResponseWriter) {
 	})
 }
 
+// writeKMSUnsupported answers KMS calls, which Lambdas reach through the
+// injected AWS_ENDPOINT_URL, with an error the SDK can parse. Without it they
+// fall through to the SQS query handler and come back as XML. A 4xx keeps the
+// SDK from retrying.
+func writeKMSUnsupported(w http.ResponseWriter, target string) {
+	w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+	w.WriteHeader(http.StatusBadRequest)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"__type":  "UnknownOperationException",
+		"message": "KMS is not supported by Tarn yet: " + strings.TrimPrefix(target, "TrentService."),
+	})
+}
+
 // dispatchProtocolRequest routes AWS protocol requests based on headers/query
 // independent of URL path. Returns true when a request was dispatched.
 func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request) bool {
@@ -940,6 +953,10 @@ func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request)
 	}
 	if strings.HasPrefix(target, "AmazonSQS.") {
 		hs.SQS.Dispatch(w, r)
+		return true
+	}
+	if strings.HasPrefix(target, "TrentService.") {
+		writeKMSUnsupported(w, target)
 		return true
 	}
 
