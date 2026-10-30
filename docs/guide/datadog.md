@@ -27,13 +27,18 @@ before calling `dd-trace.init()`.
 ## Supported intake
 
 - `GET /info` advertises the supported agent trace protocol.
-- `PUT /v0.4/traces` accepts Datadog v0.4 MessagePack or JSON trace batches.
+- `PUT /v0.4/traces` and `POST /v0.4/traces` accept Datadog v0.4 MessagePack or JSON trace batches. Python's `ddtrace` uses POST.
 - `POST /api/v2/logs` and `POST /v1/input` accept JSON arrays of log records.
 
 All intake bodies may use gzip. Both compressed and decompressed bodies are
 limited to 8 MiB. A trace or log batch can contain at most 10,000 records.
 Other Datadog protocols, metrics, profiling and agent telemetry are not
 implemented. Configure tracers to use v0.4.
+
+For Python, install `ddtrace` and set `DD_TRACE_API_VERSION=v0.4` together with
+`DD_TRACE_AGENT_URL`, `DD_SERVICE`, and `DD_TAGS` above. Instrument supported
+libraries with `import ddtrace.auto` at startup or `ddtrace.patch()`, and use
+`tracer.trace()` for worker or CLI entrypoints that have no web framework span.
 
 The `tarn.account_id` span tag or `ddtags` log tag selects a twelve-digit Tarn
 account. A signed numeric access key or `X-Tarn-Account-Id` header can also

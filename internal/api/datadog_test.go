@@ -131,10 +131,12 @@ func TestDatadogTraceCodecsAndRetry(t *testing.T) {
 				body = compressed.Bytes()
 				headers["Content-Encoding"] = "gzip"
 			}
-			for range 2 {
-				res := datadogRequest(t, s, "PUT", "/v0.4/traces", contentType, body, headers)
-				if res.Code != 200 || !strings.Contains(res.Body.String(), "rate_by_service") {
-					t.Fatalf("response = %d %s", res.Code, res.Body.String())
+			for _, method := range []string{"PUT", "POST"} {
+				for range 2 {
+					res := datadogRequest(t, s, method, "/v0.4/traces", contentType, body, headers)
+					if res.Code != 200 || !strings.Contains(res.Body.String(), "rate_by_service") {
+						t.Fatalf("%s response = %d %s", method, res.Code, res.Body.String())
+					}
 				}
 			}
 			traces := store.Recent(10)

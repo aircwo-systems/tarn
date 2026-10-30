@@ -30,6 +30,7 @@ func (s *Server) newDatadogMux() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /info", s.datadogInfo)
 	mux.HandleFunc("PUT /v0.4/traces", s.datadogTraces)
+	mux.HandleFunc("POST /v0.4/traces", s.datadogTraces)
 	mux.HandleFunc("POST /api/v2/logs", s.datadogLogs)
 	mux.HandleFunc("POST /v1/input", s.datadogLogs)
 	// Tracers poll remote configuration; 404 is the agent's "not enabled" reply.
