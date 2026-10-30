@@ -12,6 +12,7 @@
     HardDriveIcon,
     DatabaseIcon,
     KeyIcon,
+    LockKeyIcon,
     BridgeIcon,
     FlowArrowIcon,
     ScrollIcon,
@@ -27,7 +28,7 @@
   import { timeAgo } from "#lib/utils";
   import type { Component } from "svelte";
 
-  type FilterId = "pages" | "actions" | "functions" | "queues" | "apis" | "tables" | "buckets" | "secrets" | "pools" | "rules" | "machines";
+  type FilterId = "pages" | "actions" | "functions" | "queues" | "apis" | "tables" | "buckets" | "secrets" | "keys" | "pools" | "rules" | "machines";
 
   export interface PaletteItem {
     id: string;
@@ -60,6 +61,7 @@
     { id: "tables",    label: "Tables" },
     { id: "buckets",   label: "Buckets" },
     { id: "secrets",   label: "Secrets" },
+    { id: "keys",      label: "KMS keys" },
     { id: "pools",     label: "User pools" },
     { id: "rules",     label: "Rules" },
     { id: "machines",  label: "State machines" },
@@ -97,6 +99,7 @@
     page("dynamodb",      "DynamoDB",        count(data?.dynamodbTables?.length, "table"), DatabaseIcon, "ddb tables");
     page("storage",       "Storage",         count(data?.buckets?.length, "bucket"),      HardDriveIcon, "s3 buckets");
     page("secrets",       "Secrets",         count(data?.secrets?.length, "secret"),      KeyIcon, "secrets manager");
+    page("kms",           "KMS",             count(data?.kmsKeys?.length, "key"),         LockKeyIcon, "kms keys encryption aliases");
     page("cognito",       "Cognito",         count(data?.cognitoPools?.length, "user pool"), FingerprintIcon, "cognito user pools auth users codes jwt tokens");
     page("eventbridge",   "EventBridge",     count(data?.eventBridgeRules?.length, "rule"), BridgeIcon, "events rules schedule cron");
     page("stepfunctions", "Step Functions",  count(data?.stateMachines?.length, "state machine"), FlowArrowIcon, "sfn states");
@@ -200,6 +203,20 @@
         mono: true,
         icon: KeyIcon,
         action: () => onNavigate(`secrets?secret=${encodeURIComponent(s.name)}`),
+      });
+    }
+
+    for (const k of data?.kmsKeys ?? []) {
+      items.push({
+        id: `kms-${k.id}`,
+        title: k.aliases[0] ?? k.id,
+        subtitle: k.description || (k.manager === "AWS" ? "AWS managed key" : k.id),
+        group: "KMS keys",
+        filter: "keys",
+        keywords: `kms key ${k.id} ${k.aliases.join(" ")}`,
+        mono: true,
+        icon: LockKeyIcon,
+        action: () => onNavigate(`kms?key=${encodeURIComponent(k.id)}`),
       });
     }
 

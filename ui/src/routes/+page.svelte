@@ -6,6 +6,7 @@
     ChatCircleIcon,
     BellIcon,
     KeyIcon,
+    LockKeyIcon,
     HardDriveIcon,
     ArrowsClockwiseIcon,
     ShieldWarningIcon,
@@ -131,6 +132,7 @@
     dynamodb: () => import("#lib/components/sections/dynamodb-section.svelte"),
     sns: () => import("#lib/components/sections/sns-section.svelte"),
     secrets: () => import("#lib/components/sections/secrets-section.svelte"),
+    kms: () => import("#lib/components/sections/kms-section.svelte"),
     cognito: () => import("#lib/components/sections/cognito-section.svelte"),
     triggers: () => import("#lib/components/sections/triggers-section.svelte"),
     eventbridge: () => import("#lib/components/sections/eventbridge-section.svelte"),
@@ -195,6 +197,7 @@
   const countTopics      = $derived((dashboard.data?.topics ?? []).filter(t => matchesResourceFilter("topic", filters.tagFilter, t.tags)).length);
   const countDynamoTables = $derived((dashboard.data?.dynamodbTables ?? []).filter(() => matchesResourceFilter("dynamodb", filters.tagFilter)).length);
   const countSecrets     = $derived((dashboard.data?.secrets ?? []).filter(s => matchesResourceFilter("secret", filters.tagFilter, s.tags)).length);
+  const countKMSKeys     = $derived((dashboard.data?.kmsKeys ?? []).filter(k => matchesResourceFilter("kmskey", filters.tagFilter, k.tags)).length);
   const visiblePools     = $derived((dashboard.data?.cognitoPools ?? []).filter(p => matchesResourceFilter("userpool", filters.tagFilter, p.tags)));
   const countPools       = $derived(visiblePools.length);
   const countBuckets     = $derived((dashboard.data?.buckets ?? []).filter(() => matchesResourceFilter("bucket", filters.tagFilter)).length);
@@ -291,6 +294,7 @@
         { id: "dynamodb",     label: "DynamoDB",       icon: DatabaseIcon,             count: countDynamoTables  },
         { id: "sns",          label: "SNS",            icon: BellIcon,                 count: countTopics        },
         { id: "secrets",      label: "Secrets",        icon: KeyIcon,                  count: countSecrets       },
+        { id: "kms",          label: "KMS",            icon: LockKeyIcon,              count: countKMSKeys       },
         { id: "cognito",      label: "Cognito",        icon: FingerprintIcon,  count: countPools         },
         { id: "triggers",     label: "Triggers",       icon: ArrowsClockwiseIcon,      count: countTriggers      },
         { id: "eventbridge",  label: "EventBridge",    icon: BridgeIcon,               count: countEventBridge   },
@@ -398,6 +402,8 @@
         <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "secrets"}
         <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+      {:else if activeTab === "kms"}
+        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} onNavigate={setTab} />
       {:else if activeTab === "cognito"}
         <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "triggers"}

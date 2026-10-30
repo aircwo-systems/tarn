@@ -25,6 +25,7 @@ export interface OverviewResponse {
     eventBridgeRules: number;
     stateMachines?: number;
     cognitoPools?: number;
+    kmsKeys?: number;
   };
   gateways: GatewaySummary[];
   functions: FunctionSummary[];
@@ -39,6 +40,7 @@ export interface OverviewResponse {
   eventBridgeRules?: EventBridgeRuleSummary[];
   stateMachines?: StateMachineSummary[];
   cognitoPools?: CognitoPoolSummary[];
+  kmsKeys?: KmsKeySummary[];
   ecs?: ECSOverview;
   infrastructure: InfraProbe[];
   connections?: InfraConnection[];
@@ -661,9 +663,49 @@ export interface CognitoPoolSummary {
   pendingCodes: number;
   mfaMode: "OFF" | "OPTIONAL" | "ON" | string;
   triggers?: string[];
+  kmsKeyId?: string;
   domain?: string;
   tags?: Record<string, string>;
   created: string;
+}
+
+export interface KmsKeyUsage {
+  encrypt: number;
+  decrypt: number;
+  dataKeys: number;
+  reEncrypt: number;
+  failures: number;
+  lastUsed?: string;
+  lastError?: string;
+  lastErrorAt?: string;
+}
+
+/** A resource whose configuration names a KMS key. */
+export interface KmsKeyReference {
+  kind: "function" | "secret" | "queue" | "topic" | "userpool" | string;
+  name: string;
+  id?: string;
+  field: string;
+  tab: string;
+}
+
+export interface KmsKeySummary {
+  id: string;
+  arn: string;
+  description?: string;
+  state: "Enabled" | "Disabled" | "PendingDeletion" | string;
+  manager: "CUSTOMER" | "AWS" | string;
+  created: string;
+  deletionDate?: string;
+  aliases: string[];
+  rotationEnabled: boolean;
+  rotationPeriodDays?: number;
+  tags?: Record<string, string>;
+  tagCount: number;
+  policy: string;
+  /** Counted in memory since Tarn started. */
+  usage: KmsKeyUsage;
+  usedBy: KmsKeyReference[];
 }
 
 export interface CognitoClient {

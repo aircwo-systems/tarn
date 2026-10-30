@@ -32,6 +32,7 @@
       : `${s.mfaMode === "ON" ? "Required" : "Optional"} · ${[s.smsMfa && "SMS", s.emailMfa && "email"].filter(Boolean).join(" and ") || "no factor configured"}`,
   );
   const triggers = $derived(Object.entries(pool.lambdaConfig).sort(([a], [b]) => a.localeCompare(b)));
+  const customSender = $derived("CustomEmailSender" in pool.lambdaConfig || "CustomSMSSender" in pool.lambdaConfig);
 </script>
 
 <RcPanel title="Sign-in" {index}>
@@ -57,6 +58,17 @@
         : functionName(arn),
       mono: true,
     }))} />
+    {#if customSender}
+      {#if pool.kmsKeyId}
+        <a class="kms-link" href="#kms?{new URLSearchParams({ key: pool.kmsKeyId })}">
+          <span>Codes are encrypted with</span>
+          <code title={pool.kmsKeyId}>{pool.kmsKeyId}</code>
+          <em>Open in KMS</em>
+        </a>
+      {:else}
+        <p class="note warn">Custom senders are skipped: the pool has no KMSKeyID.</p>
+      {/if}
+    {/if}
   {:else}
     <p class="note">No triggers configured.</p>
   {/if}
@@ -67,7 +79,7 @@
     { label: "Issuer", value: pool.issuer, mono: true },
     { label: "JWKS", value: pool.jwksUrl, mono: true },
     { label: "Issuer mode", value: `${pool.tarn.issuerMode} (TARN_COGNITO_ISSUER)` },
-    { label: "Codes", value: pool.tarn.fixedCode ? "Fixed (TARN_COGNITO_FIXED_CODE)" : "Random 6-digit, never sent" },
+    { label: "Codes", value: `${pool.tarn.fixedCode ? "Fixed (TARN_COGNITO_FIXED_CODE)" : "Random 6-digit"}${customSender && pool.kmsKeyId ? ", sent encrypted to the custom sender" : ", never sent"}` },
     { label: "Token lifetime", value: pool.tarn.tokenTtl ? `${pool.tarn.tokenTtl} for every client (TARN_COGNITO_TOKEN_TTL)` : "Per app client" },
     ...(pool.resourceServerScopes?.length ? [{ label: "Resource scopes", value: pool.resourceServerScopes.join(" "), mono: true }] : []),
     ...(pool.domain ? [{ label: "Domain", value: pool.domain, mono: true }] : []),
@@ -78,4 +90,17 @@
 
 <style>
   .note { padding: 14px 12px; border-radius: 8px; background: var(--bg-app); font-size: 11.5px; color: var(--text-tertiary); }
+  .note.warn { margin-top: 12px; color: var(--accent-amber); }
+  .kms-link {
+    display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 9px 10px; border-radius: 8px;
+    border: 1px solid var(--border-subtle); font-size: 11.5px; color: var(--text-tertiary); min-width: 0;
+    transition: border-color 120ms ease, background 120ms ease;
+  }
+  .kms-link:hover { border-color: var(--border-default); background: var(--bg-element-hover); }
+  .kms-link code {
+    flex: 1; min-width: 0; font: 11px var(--font-mono, ui-monospace, monospace); color: var(--text-primary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .kms-link em { font-style: normal; color: var(--text-secondary); white-space: nowrap; }
+  .kms-link:hover em { color: var(--text-primary); }
 </style>
