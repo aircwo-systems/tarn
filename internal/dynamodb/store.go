@@ -249,6 +249,11 @@ func (s *Store) CreateTable(input *types.DynamoDBTable) (*types.DynamoDBTable, e
 	if err := validateTableDefinition(input); err != nil {
 		return nil, err
 	}
+	sse, err := sseDescription(s.cfg, input.SSESpecification)
+	if err != nil {
+		return nil, err
+	}
+	input.SSEDescription, input.SSESpecification = sse, nil
 
 	now := time.Now().UTC()
 	table := cloneTable(input)

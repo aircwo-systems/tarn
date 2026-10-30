@@ -60,6 +60,14 @@ describe("kms helpers", () => {
         field: "KMSKeyID",
       }),
     ).toBe("cognito?pool=eu-west-2_abc");
+    expect(
+      kmsReferenceTarget({
+        kind: "table",
+        name: "orders",
+        tab: "dynamodb",
+        field: "SSESpecification",
+      }),
+    ).toBe("dynamodb?table=orders");
   });
 
   test("filters by alias, ID, ARN or description", () => {

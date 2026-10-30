@@ -287,9 +287,10 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 func decodeCreateTable(body []byte) (*types.DynamoDBTable, error) {
 	var table types.DynamoDBTable
 	var extra struct {
-		BillingMode               string `json:"BillingMode"`
-		TableClass                string `json:"TableClass"`
-		DeletionProtectionEnabled bool   `json:"DeletionProtectionEnabled"`
+		BillingMode               string                          `json:"BillingMode"`
+		TableClass                string                          `json:"TableClass"`
+		DeletionProtectionEnabled bool                            `json:"DeletionProtectionEnabled"`
+		SSESpecification          *types.DynamoDBSSESpecification `json:"SSESpecification"`
 	}
 	if err := json.Unmarshal(body, &table); err != nil {
 		return nil, &dynamodbsvc.ServiceError{Code: "SerializationException", Message: err.Error()}
@@ -302,6 +303,7 @@ func decodeCreateTable(body []byte) (*types.DynamoDBTable, error) {
 		table.TableClassSummary = &types.DynamoDBTableClassSummary{TableClass: extra.TableClass}
 	}
 	table.DeletionProtectionEnabled = extra.DeletionProtectionEnabled
+	table.SSESpecification = extra.SSESpecification
 	return &table, nil
 }
 

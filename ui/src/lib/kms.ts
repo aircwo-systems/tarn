@@ -32,6 +32,7 @@ const referenceKinds: Record<string, { label: string; param: string }> = {
   secret: { label: "Secret", param: "name" },
   queue: { label: "SQS queue", param: "queue" },
   topic: { label: "SNS topic", param: "topic" },
+  table: { label: "DynamoDB table", param: "table" },
   userpool: { label: "User pool", param: "pool" },
 };
 

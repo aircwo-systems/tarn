@@ -125,6 +125,7 @@ type UpdateTableInput struct {
 	ProvisionedThroughput       *types.DynamoDBProvisionedThroughput `json:"ProvisionedThroughput"`
 	StreamSpecification         *types.DynamoDBStreamSpecification   `json:"StreamSpecification"`
 	DeletionProtectionEnabled   *bool                                `json:"DeletionProtectionEnabled"`
+	SSESpecification            *types.DynamoDBSSESpecification      `json:"SSESpecification"`
 	TableClass                  string                               `json:"TableClass"`
 	GlobalSecondaryIndexUpdates []GlobalSecondaryIndexUpdate         `json:"GlobalSecondaryIndexUpdates"`
 }
@@ -199,6 +200,13 @@ func (s *Store) UpdateTable(in *UpdateTableInput) (*types.DynamoDBTable, error) 
 	}
 	if in.TableClass != "" {
 		next.TableClassSummary = &types.DynamoDBTableClassSummary{TableClass: in.TableClass}
+	}
+	if in.SSESpecification != nil {
+		sse, err := sseDescription(s.cfg, in.SSESpecification)
+		if err != nil {
+			return nil, err
+		}
+		next.SSEDescription = sse
 	}
 	state.Table = next
 

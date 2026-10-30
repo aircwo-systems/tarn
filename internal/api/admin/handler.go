@@ -1229,7 +1229,7 @@ func (h *Handler) buildOverview() ([]byte, error) {
 	}
 	sort.Slice(resp.Buckets, func(i, j int) bool { return resp.Buckets[i].Name < resp.Buckets[j].Name })
 
-	resp.KMSKeys = h.kmsKeySummaries(functions, secrets, queues, topics, cognitoPools)
+	resp.KMSKeys = h.kmsKeySummaries(functions, secrets, queues, topics, dynamoRawTables, cognitoPools)
 	resp.Counts.KMSKeys = len(resp.KMSKeys)
 
 	var buf bytes.Buffer
@@ -4159,7 +4159,7 @@ func (h *Handler) TryOperation(w http.ResponseWriter, r *http.Request) {
 // kmsKeySummaries lists the account's KMS keys with the resources whose
 // configuration names each one. References are resolved without side
 // effects, so polling never creates AWS managed keys.
-func (h *Handler) kmsKeySummaries(functions []*types.FunctionConfig, secrets []*types.Secret, queues []*types.QueueConfig, topics []*types.SNSTopic, pools []cognitosvc.PoolSummary) []kmsKeySummary {
+func (h *Handler) kmsKeySummaries(functions []*types.FunctionConfig, secrets []*types.Secret, queues []*types.QueueConfig, topics []*types.SNSTopic, tables []*types.DynamoDBTable, pools []cognitosvc.PoolSummary) []kmsKeySummary {
 	if h.kms == nil {
 		return nil
 	}
@@ -4183,6 +4183,11 @@ func (h *Handler) kmsKeySummaries(functions []*types.FunctionConfig, secrets []*
 	}
 	for _, t := range topics {
 		add(t.KmsMasterKeyId, kmsKeyReference{Kind: "topic", Name: t.Name, Field: "KmsMasterKeyId", Tab: "sns"})
+	}
+	for _, t := range tables {
+		if t.SSEDescription != nil {
+			add(t.SSEDescription.KMSMasterKeyArn, kmsKeyReference{Kind: "table", Name: t.TableName, Field: "SSESpecification", Tab: "dynamodb"})
+		}
 	}
 	for _, p := range pools {
 		add(p.KMSKeyID, kmsKeyReference{Kind: "userpool", Name: p.Name, ID: p.ID, Field: "KMSKeyID", Tab: "cognito"})

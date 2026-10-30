@@ -682,7 +682,7 @@ export interface KmsKeyUsage {
 
 /** A resource whose configuration names a KMS key. */
 export interface KmsKeyReference {
-  kind: "function" | "secret" | "queue" | "topic" | "userpool" | string;
+  kind: "function" | "secret" | "queue" | "topic" | "table" | "userpool" | string;
   name: string;
   id?: string;
   field: string;

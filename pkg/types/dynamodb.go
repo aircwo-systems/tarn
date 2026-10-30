@@ -91,6 +91,26 @@ type DynamoDBTable struct {
 	WarmThroughput         *DynamoDBWarmThroughput        `json:"WarmThroughput,omitempty"`
 	// DeletionProtectionEnabled makes DeleteTable fail until it is turned off.
 	DeletionProtectionEnabled bool `json:"DeletionProtectionEnabled"`
+	// SSEDescription is set only for tables encrypted with a KMS key.
+	SSEDescription *DynamoDBSSEDescription `json:"SSEDescription,omitempty"`
+	// SSESpecification carries CreateTable's request member to the store,
+	// which turns it into SSEDescription. It is never encoded.
+	SSESpecification *DynamoDBSSESpecification `json:"-"`
+}
+
+// DynamoDBSSESpecification is the SSESpecification request member of
+// CreateTable and UpdateTable.
+type DynamoDBSSESpecification struct {
+	Enabled        *bool  `json:"Enabled"`
+	SSEType        string `json:"SSEType"`
+	KMSMasterKeyId string `json:"KMSMasterKeyId"`
+}
+
+// DynamoDBSSEDescription reports a table's KMS encryption settings.
+type DynamoDBSSEDescription struct {
+	Status          string `json:"Status"`
+	SSEType         string `json:"SSEType"`
+	KMSMasterKeyArn string `json:"KMSMasterKeyArn,omitempty"`
 }
 
 func (t *DynamoDBTable) UnmarshalJSON(data []byte) error {

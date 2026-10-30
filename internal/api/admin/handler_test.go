@@ -20,11 +20,11 @@ import (
 	apigatewayv1svc "github.com/aircwo-systems/tarn/internal/apigatewayv1"
 	"github.com/aircwo-systems/tarn/internal/config"
 	dynamodbsvc "github.com/aircwo-systems/tarn/internal/dynamodb"
-	kmssvc "github.com/aircwo-systems/tarn/internal/kms"
 	ecssvc "github.com/aircwo-systems/tarn/internal/ecs"
 	eventbridgesvc "github.com/aircwo-systems/tarn/internal/eventbridge"
 	eventsourcesvc "github.com/aircwo-systems/tarn/internal/eventsource"
 	infrasvc "github.com/aircwo-systems/tarn/internal/infrastructure"
+	kmssvc "github.com/aircwo-systems/tarn/internal/kms"
 	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	logssvc "github.com/aircwo-systems/tarn/internal/logs"
 	"github.com/aircwo-systems/tarn/internal/openapi"
@@ -803,6 +803,15 @@ func TestOverviewListsKMSKeysWithTheirReferences(t *testing.T) {
 	if err := h.secrets.SetKmsKeyID(secret.ARN, "alias/app"); err != nil {
 		t.Fatalf("set kms key: %v", err)
 	}
+	on := true
+	if _, err := h.dynamodb.CreateTable(&types.DynamoDBTable{
+		TableName:            "orders",
+		AttributeDefinitions: []types.DynamoDBAttributeDefinition{{AttributeName: "pk", AttributeType: "S"}},
+		KeySchema:            []types.DynamoDBKeySchemaElement{{AttributeName: "pk", KeyType: "HASH"}},
+		SSESpecification:     &types.DynamoDBSSESpecification{Enabled: &on, KMSMasterKeyId: "alias/app"},
+	}); err != nil {
+		t.Fatalf("create table: %v", err)
+	}
 	// An AWS managed alias Tarn has not created yet resolves to nothing, and
 	// the overview must not create it.
 	if _, err := h.sqs.CreateQueue("jobs", map[string]string{"KmsMasterKeyId": "alias/aws/sqs"}, nil); err != nil {
@@ -832,6 +841,7 @@ func TestOverviewListsKMSKeysWithTheirReferences(t *testing.T) {
 		want := []kmsKeyReference{
 			{Kind: "function", Name: "sender", Field: "KMSKeyArn", Tab: "functions"},
 			{Kind: "secret", Name: "db", Field: "KmsKeyId", Tab: "secrets"},
+			{Kind: "table", Name: "orders", Field: "SSESpecification", Tab: "dynamodb"},
 		}
 		if !reflect.DeepEqual(k.UsedBy, want) {
 			t.Fatalf("usedBy = %+v, want %+v", k.UsedBy, want)
