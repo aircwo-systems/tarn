@@ -8,11 +8,11 @@ Managed NoSQL tables with DynamoDB Streams support.
 
 | Operation | Status | Notes |
 |-----------|--------|-------|
-| CreateTable | Supported | Tables become `ACTIVE` immediately |
-| DeleteTable | Supported | Tables are removed immediately after returning a `DELETING` description |
+| CreateTable | Supported | Tables become `ACTIVE` immediately. `SSESpecification` is recorded |
+| DeleteTable | Supported | Tables are removed immediately after returning a `DELETING` description. Fails while deletion protection is on |
 | DescribeTable | Supported | Includes key schema, indexes, and stream metadata |
 | ListTables | Supported | |
-| UpdateTable | Supported | Stream configuration updates are applied immediately |
+| UpdateTable | Supported | Streams, GSI create and delete, billing mode, throughput, table class, deletion protection and `SSESpecification`, applied immediately |
 | TagResource | Supported | Table tags are persisted and queryable |
 | UntagResource | Supported | |
 | ListTagsOfResource | Supported | |
@@ -22,8 +22,12 @@ Managed NoSQL tables with DynamoDB Streams support.
 | DeleteItem | Supported | Conditional delete and return values |
 | Scan | Supported | Filters, projection, pagination, index scan |
 | Query | Supported | Table, LSI, and GSI query paths |
-| DescribeTimeToLive | Supported | Compatibility response only |
-| UpdateTimeToLive | Supported | Compatibility response only |
+| BatchGetItem | Supported | |
+| BatchWriteItem | Supported | Put and delete requests |
+| TransactGetItems | Supported | |
+| TransactWriteItems | Supported | All-or-nothing. A cancelled transaction returns `CancellationReasons` |
+| DescribeTimeToLive | Supported | |
+| UpdateTimeToLive | Supported | Expired items are deleted in the background, with a TTL stream record |
 | DescribeContinuousBackups | Supported | Compatibility response only |
 | UpdateContinuousBackups | Supported | Compatibility response only |
 | DescribeContributorInsights | Supported | Compatibility response only |
@@ -72,6 +76,17 @@ DynamoDB and DynamoDB Streams both use Tarn's shared root endpoint:
 ```bash
 awslocal dynamodb list-tables --endpoint-url http://127.0.0.1:4566
 awslocal dynamodbstreams list-streams --endpoint-url http://127.0.0.1:4566
+```
+
+### Encryption at rest
+
+`SSESpecification` on `CreateTable` and `UpdateTable` is recorded and returned as `SSEDescription`, as AWS does: only for KMS encryption, with key IDs and aliases expanded to ARNs. Without a key, the table reports the AWS managed key `alias/aws/dynamodb`. Tarn does not encrypt items with the key. Tables that name a [KMS](/services/kms) key appear in its **Used by** list.
+
+```hcl
+server_side_encryption {
+  enabled     = true
+  kms_key_arn = aws_kms_key.tables.arn
+}
 ```
 
 ## Examples
@@ -135,7 +150,7 @@ provider "aws" {
 
 ## Known Limitations
 
-- No transactions, batch APIs, TTL, backups, restore, global tables, or PartiQL
+- No backups, restore, global tables, or PartiQL
 - Table status transitions are synchronous; throughput settings are stored but not enforced
-- `UpdateTable` support is limited to stream configuration changes
-- TTL, backups, contributor insights, and Kinesis streaming destination APIs are present for compatibility but do not emulate the full AWS feature behavior
+- Server-side encryption settings are recorded only; items are not encrypted with the KMS key
+- Backups, contributor insights, and Kinesis streaming destination APIs are present for compatibility but do not emulate the full AWS feature behavior
