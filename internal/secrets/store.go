@@ -183,6 +183,20 @@ func (s *Store) UpdateSecret(nameOrArn string, secretString string, secretBinary
 	return cloneSecret(secret), nil
 }
 
+// SetKmsKeyID sets a secret's KMS key ID without creating a new version.
+func (s *Store) SetKmsKeyID(nameOrArn, keyID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	secret := s.resolve(nameOrArn)
+	if secret == nil {
+		return fmt.Errorf("secret %s not found", nameOrArn)
+	}
+	secret.KmsKeyId = keyID
+	s.dirty.Store(true)
+	return nil
+}
+
 // DeleteSecret removes a secret by name or ARN.
 func (s *Store) DeleteSecret(nameOrArn string) error {
 	s.mu.Lock()

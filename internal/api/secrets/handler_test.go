@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -61,5 +62,44 @@ func TestUnknownActionReturnsEmptyOK(t *testing.T) {
 	}
 	if strings.TrimSpace(rec.Body.String()) != "{}" {
 		t.Fatalf("expected empty JSON object response, got: %s", rec.Body.String())
+	}
+}
+
+func dispatchSecrets(t *testing.T, h *Handler, target, body string) map[string]any {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set("X-Amz-Target", "secretsmanager."+target)
+	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
+	rec := httptest.NewRecorder()
+	h.Dispatch(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%s status = %d, body: %s", target, rec.Code, rec.Body.String())
+	}
+	var resp map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("%s decode: %v", target, err)
+	}
+	return resp
+}
+
+// TestKmsKeyIdRoundTrips guards Terraform's kms_key_id: Tarn encrypts with
+// its own vault, but the ID must read back or every plan shows a diff.
+func TestKmsKeyIdRoundTrips(t *testing.T) {
+	h := newTestHandler(t)
+
+	dispatchSecrets(t, h, "CreateSecret", `{"Name":"kms-secret","SecretString":"v","KmsKeyId":"alias/app"}`)
+	if got := dispatchSecrets(t, h, "DescribeSecret", `{"SecretId":"kms-secret"}`)["KmsKeyId"]; got != "alias/app" {
+		t.Fatalf("KmsKeyId after create = %v, want alias/app", got)
+	}
+
+	dispatchSecrets(t, h, "UpdateSecret", `{"SecretId":"kms-secret","SecretString":"v2"}`)
+	if got := dispatchSecrets(t, h, "DescribeSecret", `{"SecretId":"kms-secret"}`)["KmsKeyId"]; got != "alias/app" {
+		t.Fatalf("KmsKeyId after value update = %v, want alias/app", got)
+	}
+
+	dispatchSecrets(t, h, "UpdateSecret", `{"SecretId":"kms-secret","KmsKeyId":"alias/other"}`)
+	list := dispatchSecrets(t, h, "ListSecrets", `{}`)["SecretList"].([]any)
+	if got := list[0].(map[string]any)["KmsKeyId"]; got != "alias/other" {
+		t.Fatalf("ListSecrets KmsKeyId = %v, want alias/other", got)
 	}
 }

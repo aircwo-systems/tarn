@@ -126,3 +126,4 @@ The extension forwards requests directly to Tarn Secrets Manager, so SDK-based a
 - No versioning (latest version only)
 - No lambda rotation policies
 - Resource policy reads are compatibility stubs; custom policy management is not implemented
+- `KmsKeyId` is stored and returned; values are encrypted with Tarn's local vault, not KMS

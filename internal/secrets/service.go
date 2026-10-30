@@ -82,6 +82,12 @@ func (s *Service) UpdateSecret(nameOrArn string, secretString string, secretBina
 	return s.store.UpdateSecret(nameOrArn, secretString, secretBinary)
 }
 
+// SetKmsKeyID records the KMS key a secret is encrypted with. Tarn does no KMS
+// encryption; the ID is kept so DescribeSecret round-trips it.
+func (s *Service) SetKmsKeyID(nameOrArn, keyID string) error {
+	return s.store.SetKmsKeyID(nameOrArn, keyID)
+}
+
 // PutSecretValue is an alias for UpdateSecret (matches AWS API).
 func (s *Service) PutSecretValue(nameOrArn string, secretString string, secretBinary []byte) (*types.Secret, error) {
 	return s.store.UpdateSecret(nameOrArn, secretString, secretBinary)

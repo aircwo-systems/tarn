@@ -7,6 +7,7 @@ type Secret struct {
 	ARN              string      `json:"ARN"`
 	Name             string      `json:"Name"`
 	Description      string      `json:"Description,omitempty"`
+	KmsKeyId         string      `json:"KmsKeyId,omitempty"`
 	SecretString     string      `json:"SecretString,omitempty"`
 	SecretBinary     []byte      `json:"SecretBinary,omitempty"`
 	VersionId        string      `json:"VersionId"`

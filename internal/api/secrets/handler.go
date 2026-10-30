@@ -73,6 +73,7 @@ func (h *Handler) createSecret(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Name         string            `json:"Name"`
 		Description  string            `json:"Description"`
+		KmsKeyId     string            `json:"KmsKeyId"`
 		SecretString string            `json:"SecretString"`
 		SecretBinary string            `json:"SecretBinary"` // base64 encoded
 		Tags         []types.SecretTag `json:"Tags"`
@@ -105,6 +106,12 @@ func (h *Handler) createSecret(w http.ResponseWriter, r *http.Request) {
 		}
 		writeError(w, 500, "InternalServiceError", err.Error())
 		return
+	}
+	if req.KmsKeyId != "" {
+		if err := h.svc.SetKmsKeyID(secret.ARN, req.KmsKeyId); err != nil {
+			writeError(w, 500, "InternalServiceError", err.Error())
+			return
+		}
 	}
 
 	writeJSON(w, 200, map[string]interface{}{
@@ -229,16 +236,20 @@ func (h *Handler) describeSecret(w http.ResponseWriter, r *http.Request) {
 		"LastChangedDate":  float64(secret.LastChangedDate.Unix()),
 		"LastAccessedDate": float64(secret.LastAccessedDate.Unix()),
 	}
+	if secret.KmsKeyId != "" {
+		resp["KmsKeyId"] = secret.KmsKeyId
+	}
 
 	writeJSON(w, 200, resp)
 }
 
 func (h *Handler) updateSecret(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		SecretId     string `json:"SecretId"`
-		SecretString string `json:"SecretString"`
-		SecretBinary string `json:"SecretBinary"`
-		Description  string `json:"Description"`
+		SecretId     string  `json:"SecretId"`
+		SecretString string  `json:"SecretString"`
+		SecretBinary string  `json:"SecretBinary"`
+		Description  string  `json:"Description"`
+		KmsKeyId     *string `json:"KmsKeyId"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeError(w, 400, "InvalidParameterException", err.Error())
@@ -259,6 +270,12 @@ func (h *Handler) updateSecret(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, 404, "ResourceNotFoundException", err.Error())
 		return
+	}
+	if req.KmsKeyId != nil {
+		if err := h.svc.SetKmsKeyID(secret.ARN, *req.KmsKeyId); err != nil {
+			writeError(w, 404, "ResourceNotFoundException", err.Error())
+			return
+		}
 	}
 
 	writeJSON(w, 200, map[string]interface{}{
@@ -348,6 +365,9 @@ func (h *Handler) listSecrets(w http.ResponseWriter, r *http.Request) {
 			"CreatedDate":     float64(s.CreatedDate.Unix()),
 			"LastChangedDate": float64(s.LastChangedDate.Unix()),
 			"Tags":            s.Tags,
+		}
+		if s.KmsKeyId != "" {
+			entry["KmsKeyId"] = s.KmsKeyId
 		}
 		secretList = append(secretList, entry)
 	}
