@@ -35,8 +35,12 @@ func (s *Service) SignUp(in *SignUpInput) (*SignUpOutput, error) {
 	sub := uuid.NewString()
 	attrs := attrMap(in.UserAttributes)
 	username, err := p.resolveNewUsername(in.Username, attrs, sub)
+	passwordless := false
 	if err == nil {
-		err = s.checkSignUp(p, c, in, attrs)
+		passwordless, err = p.passwordlessSignUp(in.Password, attrs)
+	}
+	if err == nil {
+		err = s.checkSignUp(p, c, in, attrs, passwordless)
 	}
 	preSignUp := preSignUpCall(p, "PreSignUp_SignUp", username, c.ClientId, attrs, in.ValidationData, in.ClientMetadata)
 	s.mu.RUnlock()
@@ -48,9 +52,14 @@ func (s *Service) SignUp(in *SignUpInput) (*SignUpOutput, error) {
 	if err != nil {
 		return nil, err
 	}
-	creds, err := newCredentials(p.Config.Id, username, in.Password)
-	if err != nil {
-		return nil, err
+	// A passwordless user has no credentials until AdminSetUserPassword or
+	// the confirm-forgot-password flow gives them one.
+	var creds credentials
+	if !passwordless {
+		creds, err = newCredentials(p.Config.Id, username, in.Password)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	s.mu.Lock()
@@ -85,7 +94,28 @@ func (s *Service) SignUp(in *SignUpInput) (*SignUpOutput, error) {
 	return out, nil
 }
 
-func (s *Service) checkSignUp(p *pool, c *UserPoolClientType, in *SignUpInput, attrs map[string]string) error {
+// passwordlessSignUp reports whether a sign-up with no password is allowed, as
+// Cognito does when the pool allows an OTP first factor: the sign-in policy
+// must list EMAIL_OTP or SMS_OTP and the user must supply the matching contact
+// attribute. A pool that lists neither is unaffected, so its password rules
+// apply as before.
+func (p *pool) passwordlessSignUp(password string, attrs map[string]string) (bool, error) {
+	if password != "" || p.Config.Policies == nil || p.Config.Policies.SignInPolicy == nil {
+		return false, nil
+	}
+	factors := p.Config.Policies.SignInPolicy.AllowedFirstAuthFactors
+	email := slices.Contains(factors, "EMAIL_OTP")
+	sms := slices.Contains(factors, "SMS_OTP")
+	switch {
+	case !email && !sms:
+		return false, nil
+	case email && attrs["email"] != "", sms && attrs["phone_number"] != "":
+		return true, nil
+	}
+	return false, invalidParameter("A sign-up without a password needs an email or phone_number attribute that matches an allowed OTP sign-in method.")
+}
+
+func (s *Service) checkSignUp(p *pool, c *UserPoolClientType, in *SignUpInput, attrs map[string]string, passwordless bool) error {
 	if p.Config.AdminCreateUserConfig != nil && p.Config.AdminCreateUserConfig.AllowAdminCreateUserOnly {
 		return notAuthorized("SignUp is not permitted for this user pool")
 	}
@@ -101,6 +131,9 @@ func (s *Service) checkSignUp(p *pool, c *UserPoolClientType, in *SignUpInput, a
 	}
 	if err := p.validateAttributes(list, true); err != nil {
 		return err
+	}
+	if passwordless {
+		return nil
 	}
 	return checkPasswordPolicy(p.passwordPolicy(), in.Password)
 }

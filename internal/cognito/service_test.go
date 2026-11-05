@@ -418,6 +418,62 @@ func TestSignUpValidation(t *testing.T) {
 	wantCode(t, err, "UsernameExistsException")
 }
 
+func TestSignUpPasswordless(t *testing.T) {
+	withFactors := func(factors ...string) func(*CreateUserPoolInput, *CreateUserPoolClientInput) {
+		return func(p *CreateUserPoolInput, _ *CreateUserPoolClientInput) {
+			p.Policies = &UserPoolPolicyType{SignInPolicy: &SignInPolicyType{AllowedFirstAuthFactors: factors}}
+		}
+	}
+	signUp := func(f *fixture, password string, attrs ...AttributeType) (*SignUpOutput, error) {
+		return f.svc.SignUp(&SignUpInput{ClientId: f.client.ClientId, Username: "gina", Password: password, UserAttributes: attrs})
+	}
+	email := AttributeType{Name: "email", Value: "gina@example.com"}
+
+	t.Run("email OTP pool signs up, confirms and takes a password later", func(t *testing.T) {
+		f := newFixture(t, withFactors("PASSWORD", "EMAIL_OTP"))
+		out := must[*SignUpOutput](t)(signUp(f, "", email))
+		if out.UserConfirmed || out.CodeDeliveryDetails == nil {
+			t.Fatalf("want an unconfirmed user with a code sent, got %+v", out)
+		}
+		must[struct{}](t)(f.svc.ConfirmSignUp(&ConfirmSignUpInput{
+			ClientId: f.client.ClientId, Username: "gina", ConfirmationCode: f.code(t, "gina", purposeSignUp),
+		}))
+		// No password yet, so no password sign-in, whatever is guessed.
+		for _, guess := range []string{"", testPassword} {
+			_, err := f.passwordAuth(t, "gina", guess)
+			wantCode(t, err, "NotAuthorizedException")
+		}
+		must[struct{}](t)(f.svc.AdminSetUserPassword(&AdminSetUserPasswordInput{
+			UserPoolId: f.poolID, Username: "gina", Password: testPassword, Permanent: true,
+		}))
+		if got := must[*AuthOutput](t)(f.passwordAuth(t, "gina", testPassword)); got.AuthenticationResult == nil {
+			t.Fatalf("want tokens, got %+v", got)
+		}
+	})
+
+	t.Run("a supplied password is still checked", func(t *testing.T) {
+		f := newFixture(t, withFactors("PASSWORD", "EMAIL_OTP"))
+		_, err := signUp(f, "short", email)
+		wantCode(t, err, "InvalidPasswordException")
+	})
+
+	t.Run("an OTP pool needs the matching contact attribute", func(t *testing.T) {
+		f := newFixture(t, withFactors("PASSWORD", "EMAIL_OTP"))
+		_, err := signUp(f, "")
+		wantCode(t, err, "InvalidParameterException")
+		f = newFixture(t, withFactors("PASSWORD", "SMS_OTP"))
+		_, err = signUp(f, "", email)
+		wantCode(t, err, "InvalidParameterException")
+		must[*SignUpOutput](t)(signUp(f, "", AttributeType{Name: "phone_number", Value: "+447700900123"}))
+	})
+
+	t.Run("a password-only pool still requires a password", func(t *testing.T) {
+		f := newFixture(t, nil)
+		_, err := signUp(f, "", email)
+		wantCode(t, err, "InvalidPasswordException")
+	})
+}
+
 func TestCodeAttemptLimit(t *testing.T) {
 	f := newFixture(t, nil)
 	must[*SignUpOutput](t)(f.svc.SignUp(&SignUpInput{
