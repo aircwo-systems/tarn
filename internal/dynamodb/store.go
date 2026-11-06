@@ -105,7 +105,7 @@ type itemView struct {
 }
 
 type cachedAttributeOrder struct {
-	number  *big.Float
+	number  *big.Rat
 	encoded string
 }
 
@@ -1629,7 +1629,7 @@ func compareAttributeValues(left, right any) int {
 	return strings.Compare(ls, rs)
 }
 
-func asNumber(value any) (*big.Float, bool) {
+func asNumber(value any) (*big.Rat, bool) {
 	attr, ok := value.(map[string]any)
 	if !ok || len(attr) != 1 {
 		return nil, false
@@ -1642,11 +1642,12 @@ func asNumber(value any) (*big.Float, bool) {
 	if !ok {
 		return nil, false
 	}
-	out, _, err := big.ParseFloat(text, 10, 256, big.ToNearestEven)
+	text, err := canonicalNumber(text)
 	if err != nil {
 		return nil, false
 	}
-	return out, true
+	out, ok := new(big.Rat).SetString(text)
+	return out, ok
 }
 
 func encodeShardIterator(streamArn string, startSeq int64) string {

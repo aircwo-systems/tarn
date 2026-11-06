@@ -360,13 +360,16 @@ func arithmeticAttribute(left, right any, op string) (any, error) {
 		return nil, validationError("Arithmetic updates require numeric attribute values")
 	}
 	if op == "+" {
-		ln = new(big.Float).Add(ln, rn)
+		ln = new(big.Rat).Add(ln, rn)
 	} else {
-		ln = new(big.Float).Sub(ln, rn)
+		ln = new(big.Rat).Sub(ln, rn)
 	}
-	text := strings.TrimRight(strings.TrimRight(ln.Text('f', -1), "0"), ".")
-	if text == "" || text == "-" {
-		text = "0"
+	// Sums and differences of finite decimals have finite decimal expansions.
+	// Render exactly, then normalize without removing integer place-value zeroes.
+	precision, _ := ln.FloatPrec()
+	text, err := canonicalNumber(ln.FloatString(precision))
+	if err != nil {
+		return nil, err
 	}
 	return map[string]any{"N": text}, nil
 }

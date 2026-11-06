@@ -115,6 +115,118 @@ func TestPutItemCanonicalisesNumbers(t *testing.T) {
 	}
 }
 
+func TestUpdateItemArithmeticPreservesNumberValue(t *testing.T) {
+	cases := []struct {
+		name, initial, operand, want string
+	}{
+		{"reported_increment", "9000009", "1", "9000010"},
+		{"reported_next_increment", "9000019", "1", "9000020"},
+		{"multiple_integer_zeroes", "999", "1", "1000"},
+		{"negative_integer_zeroes", "-999", "-1", "-1000"},
+		{"fractional_zeroes", "1.25", "0.25", "1.5"},
+		{"exact_decimal", "0.1", "0.2", "0.3"},
+		{"decimal_carry", "0.1", "0.7", "0.8"},
+		{"decimal_exponents", "1e-130", "2e-130", "0." + strings.Repeat("0", 129) + "3"},
+		{"38_digit_integer", "12345678901234567890123456789012345678", "1", "12345678901234567890123456789012345679"},
+		{"38_digit_carry", strings.Repeat("9", 38), "1", "1" + strings.Repeat("0", 38)},
+		{"38_digit_fraction", "0.12345678901234567890123456789012345678", "0.00000000000000000000000000000000000001", "0.12345678901234567890123456789012345679"},
+		{"zero", "1", "-1", "0"},
+	}
+	for _, expr := range []string{"SET #n = #n + :v", "ADD #n :v"} {
+		for _, tc := range cases {
+			t.Run(expr+"/"+tc.name, func(t *testing.T) {
+				store := newWriteTestStore(t)
+				key := writeTestKey("counter", "1")
+				item := cloneItem(key)
+				item["count"] = nAttr(tc.initial)
+				mustPut(t, store, item)
+				out, err := store.UpdateItem(&WriteInput{
+					TableName:                 "orders",
+					Key:                       key,
+					UpdateExpression:          expr,
+					ExpressionAttributeNames:  map[string]string{"#n": "count"},
+					ExpressionAttributeValues: map[string]any{":v": nAttr(tc.operand)},
+					ReturnValues:              "ALL_NEW",
+				})
+				if err != nil {
+					t.Fatalf("UpdateItem: %v", err)
+				}
+				if got := out["count"].(map[string]any)["N"]; got != tc.want {
+					t.Errorf("returned count = %v, want %s", got, tc.want)
+				}
+				stored, err := store.GetItem("orders", key, "", nil)
+				if err != nil {
+					t.Fatalf("GetItem: %v", err)
+				}
+				if got := stored["count"].(map[string]any)["N"]; got != tc.want {
+					t.Errorf("stored count = %v, want %s", got, tc.want)
+				}
+			})
+		}
+	}
+}
+
+func TestUpdateArithmeticExactSubtraction(t *testing.T) {
+	for _, tc := range []struct {
+		left, right, want string
+	}{
+		{"9000011", "1", "9000010"},
+		{"0.3", "0.1", "0.2"},
+		{"1", "0.99999999999999999999999999999999999999", "0.00000000000000000000000000000000000001"},
+		{"1e125", "9e124", "1" + strings.Repeat("0", 124)},
+	} {
+		t.Run(tc.left+"-"+tc.right, func(t *testing.T) {
+			item := map[string]any{"n": nAttr(tc.left)}
+			if err := applyUpdateExpression(item, "SET n = n - :v", nil, map[string]any{":v": nAttr(tc.right)}); err != nil {
+				t.Fatalf("applyUpdateExpression: %v", err)
+			}
+			if got := item["n"].(map[string]any)["N"]; got != tc.want {
+				t.Errorf("result = %v, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestUpdateItemArithmeticRejectsExcessPrecision(t *testing.T) {
+	for _, expr := range []string{"SET #n = #n + :v", "ADD #n :v", "SET #n = #n - :v"} {
+		for _, tc := range []struct {
+			name, initial, operand string
+		}{
+			{"39_digits", "12345678901234567890123456789012345678", "0.1"},
+			{"widely_separated_exponents", "1e125", "1e-130"},
+		} {
+			t.Run(expr+"/"+tc.name, func(t *testing.T) {
+				store := newWriteTestStore(t)
+				key := writeTestKey("counter", "1")
+				item := cloneItem(key)
+				item["count"] = nAttr(tc.initial)
+				mustPut(t, store, item)
+				_, err := store.UpdateItem(&WriteInput{
+					TableName:                 "orders",
+					Key:                       key,
+					UpdateExpression:          expr,
+					ExpressionAttributeNames:  map[string]string{"#n": "count"},
+					ExpressionAttributeValues: map[string]any{":v": nAttr(tc.operand)},
+				})
+				se := requireServiceCode(t, err, "ValidationException")
+				if !strings.Contains(se.Message, "38 significant digits") {
+					t.Errorf("message %q lacks precision limit", se.Message)
+				}
+				stored, err := store.GetItem("orders", key, "", nil)
+				if err != nil {
+					t.Fatalf("GetItem: %v", err)
+				}
+				if !attributeValueEqual(stored["count"], nAttr(tc.initial)) {
+					t.Errorf("failed update changed count: %v", stored["count"])
+				}
+				if counts := countEvents(allStreamRecords(t, store)); counts["MODIFY"] != 0 {
+					t.Errorf("failed update emitted MODIFY: %v", counts)
+				}
+			})
+		}
+	}
+}
+
 func TestPutItemKeyTypeMismatchIsValidation(t *testing.T) {
 	store := newWriteTestStore(t)
 	item := writeTestKey("a", "b")

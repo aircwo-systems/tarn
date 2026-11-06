@@ -18,7 +18,7 @@ var ttlIdentity = &types.StreamUserIdentity{Type: "Service", PrincipalID: "dynam
 // attribute, never expires. Each deletion emits a REMOVE stream record
 // attributed to the DynamoDB service. It returns the number of items deleted.
 func (s *Store) sweepExpired(now time.Time) int {
-	nowValue := new(big.Float).SetInt64(now.Unix())
+	nowValue := new(big.Rat).SetInt64(now.Unix())
 	deleted := 0
 
 	s.mu.Lock()
@@ -48,7 +48,7 @@ func (s *Store) sweepExpired(now time.Time) int {
 }
 
 // ttlExpired reports whether item's ttlAttr is a Number <= nowValue.
-func ttlExpired(item map[string]any, ttlAttr string, nowValue *big.Float) bool {
+func ttlExpired(item map[string]any, ttlAttr string, nowValue *big.Rat) bool {
 	raw, ok := item[ttlAttr]
 	if !ok {
 		return false
