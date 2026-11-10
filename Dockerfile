@@ -1,7 +1,7 @@
 ARG TARN_BUILD_UI=false
 ARG VERSION=0.1.0-dev
 
-FROM golang:1.26-alpine AS go-builder
+FROM golang:1.27.4-alpine AS go-builder
 
 ARG VERSION
 

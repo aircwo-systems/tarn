@@ -13,10 +13,10 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"golang.org/x/sync/semaphore"
 	"io"
 	"log"
 	"math"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"sort"
@@ -27,13 +27,13 @@ import (
 
 	"github.com/aircwo-systems/tarn/pkg/types"
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/api/types/volume"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/docker/go-connections/nat"
 	units "github.com/docker/go-units"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
+	"golang.org/x/sync/semaphore"
 )
 
 // TaskContainerSpec describes a task container to create, independent of
@@ -190,11 +190,11 @@ func (e *Engine) refPullMu(ref string) *semaphore.Weighted {
 // imageRefExists reports whether ref is already present in the local image
 // list, matching any of its RepoTags exactly.
 func (e *Engine) imageRefExists(ctx context.Context, ref string) (bool, error) {
-	images, err := e.client.ImageList(ctx, image.ListOptions{})
+	images, err := e.client.ImageList(ctx, client.ImageListOptions{})
 	if err != nil {
 		return false, err
 	}
-	for _, img := range images {
+	for _, img := range images.Items {
 		if img.ID == ref {
 			return true, nil
 		}
@@ -267,7 +267,7 @@ func (e *Engine) EnsureImagePlatform(ctx context.Context, ref, platform string) 
 	}
 
 	log.Printf("[engine] image %s not found locally, pulling...", ref)
-	reader, err := e.client.ImagePull(ctx, ref, image.PullOptions{Platform: platform})
+	reader, err := e.client.ImagePull(ctx, ref, client.ImagePullOptions{Platforms: pullPlatforms(platform)})
 	if err != nil {
 		return fmt.Errorf("image %s not found locally and pull failed: %w", ref, err)
 	}
@@ -330,17 +330,17 @@ func buildTaskContainerEnv(spec TaskContainerSpec, tarnPort int) []string {
 // ephemeral host port (empty HostPort lets Docker assign one), unless fixed
 // gives that port a non-zero host port, in which case it is bound to that
 // exact host port instead.
-func buildTaskPortBindings(ports []int, fixed map[int]int) (nat.PortSet, nat.PortMap) {
-	exposed := nat.PortSet{}
-	bindings := nat.PortMap{}
+func buildTaskPortBindings(ports []int, fixed map[int]int) (network.PortSet, network.PortMap) {
+	exposed := network.PortSet{}
+	bindings := network.PortMap{}
 	for _, p := range ports {
-		natPort := nat.Port(fmt.Sprintf("%d/tcp", p))
+		natPort := network.MustParsePort(fmt.Sprintf("%d/tcp", p))
 		exposed[natPort] = struct{}{}
 		hostPort := ""
 		if fixed != nil && fixed[p] != 0 {
 			hostPort = strconv.Itoa(fixed[p])
 		}
-		bindings[natPort] = []nat.PortBinding{{HostIP: "127.0.0.1", HostPort: hostPort}}
+		bindings[natPort] = []network.PortBinding{{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: hostPort}}
 	}
 	return exposed, bindings
 }
@@ -349,7 +349,7 @@ func buildTaskPortBindings(ports []int, fixed map[int]int) (nat.PortSet, nat.Por
 // by ContainerInspect) into the wire-shape NetworkBinding list T7 records
 // on TaskContainer.NetworkBindings. Entries with no assigned host port
 // (not yet bound) or an unparsable host port are skipped.
-func decodeNetworkBindings(ports nat.PortMap) []types.NetworkBinding {
+func decodeNetworkBindings(ports network.PortMap) []types.NetworkBinding {
 	var out []types.NetworkBinding
 	for port, bs := range ports {
 		for _, b := range bs {
@@ -358,10 +358,10 @@ func decodeNetworkBindings(ports nat.PortMap) []types.NetworkBinding {
 				continue
 			}
 			out = append(out, types.NetworkBinding{
-				ContainerPort: port.Int(),
+				ContainerPort: int(port.Num()),
 				HostPort:      hostPort,
-				Protocol:      port.Proto(),
-				BindIP:        b.HostIP,
+				Protocol:      string(port.Proto()),
+				BindIP:        b.HostIP.String(),
 			})
 		}
 	}
@@ -508,7 +508,7 @@ func buildTaskHealthCheck(hc *types.ContainerHealthCheck) *container.HealthConfi
 }
 
 func buildTaskContainerConfig(spec TaskContainerSpec, tarnPort int) (*container.Config, *container.HostConfig, error) {
-	network, err := resolveTaskNetworkMode(spec.NetworkMode, len(spec.Ports) > 0)
+	netConfig, err := resolveTaskNetworkMode(spec.NetworkMode, len(spec.Ports) > 0)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -517,13 +517,26 @@ func buildTaskContainerConfig(spec TaskContainerSpec, tarnPort int) (*container.
 		return nil, nil, err
 	}
 
-	var exposedPorts nat.PortSet
-	var portBindings nat.PortMap
-	if network.publishPorts {
+	dnsServers := make([]netip.Addr, 0, len(spec.DNSServers))
+	for _, server := range spec.DNSServers {
+		addr, err := netip.ParseAddr(server)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid DNS server %q: %w", server, err)
+		}
+		dnsServers = append(dnsServers, addr)
+	}
+	for _, port := range spec.Ports {
+		if port < 1 || port > 65535 {
+			return nil, nil, fmt.Errorf("invalid container port %d", port)
+		}
+	}
+	var exposedPorts network.PortSet
+	var portBindings network.PortMap
+	if netConfig.publishPorts {
 		exposedPorts, portBindings = buildTaskPortBindings(spec.Ports, spec.FixedHostPorts)
 	} else {
-		exposedPorts = nat.PortSet{}
-		portBindings = nat.PortMap{}
+		exposedPorts = network.PortSet{}
+		portBindings = network.PortMap{}
 	}
 
 	containerCfg := &container.Config{
@@ -546,12 +559,12 @@ func buildTaskContainerConfig(spec TaskContainerSpec, tarnPort int) (*container.
 	}
 
 	hostCfg := &container.HostConfig{
-		NetworkMode:    network.dockerMode,
+		NetworkMode:    netConfig.dockerMode,
 		PortBindings:   portBindings,
 		Resources:      resources,
 		ReadonlyRootfs: spec.ReadonlyRootFilesystem,
 		Privileged:     spec.Privileged,
-		DNS:            spec.DNSServers,
+		DNS:            dnsServers,
 		VolumesFrom:    spec.VolumesFrom,
 		ShmSize:        spec.ShmSize,
 		// Tarn follows task output into its own log store, so Docker's copy
@@ -591,7 +604,7 @@ func buildTaskContainerConfig(spec TaskContainerSpec, tarnPort int) (*container.
 	}
 
 	extraHosts := []string{}
-	if network.hostGateway {
+	if netConfig.hostGateway {
 		extraHosts = append(extraHosts, taskHostGateway)
 	}
 	extraHosts = append(extraHosts, spec.ExtraHosts...)
@@ -665,13 +678,13 @@ func (e *Engine) CreateAndStartTaskContainer(ctx context.Context, spec TaskConta
 		name = fmt.Sprintf("tarn-task-%d", time.Now().UnixNano())
 	}
 
-	resp, err := e.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, nil, name)
+	resp, err := e.client.ContainerCreate(ctx, client.ContainerCreateOptions{Config: containerCfg, HostConfig: hostCfg, Name: name})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create task container: %w", err)
 	}
 
-	if err := e.client.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		_ = e.client.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
+	if _, err := e.client.ContainerStart(ctx, resp.ID, client.ContainerStartOptions{}); err != nil {
+		_, _ = e.client.ContainerRemove(context.Background(), resp.ID, client.ContainerRemoveOptions{Force: true})
 		return nil, fmt.Errorf("failed to start task container: %w", err)
 	}
 
@@ -682,16 +695,16 @@ func (e *Engine) CreateAndStartTaskContainer(ctx context.Context, spec TaskConta
 		// local Docker the mapping is usually present on the first inspect.
 		backoff := 10 * time.Millisecond
 		for attempt := 0; attempt < 10; attempt++ {
-			inspect, ierr := e.client.ContainerInspect(ctx, resp.ID)
+			inspect, ierr := e.client.ContainerInspect(ctx, resp.ID, client.ContainerInspectOptions{})
 			if ierr != nil {
-				_ = e.client.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
+				_, _ = e.client.ContainerRemove(context.Background(), resp.ID, client.ContainerRemoveOptions{Force: true})
 				return nil, fmt.Errorf("failed to inspect task container: %w", ierr)
 			}
-			if inspect.State != nil && inspect.State.Status == "exited" {
-				_ = e.client.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
-				return nil, fmt.Errorf("task container exited immediately (exit code %d)", inspect.State.ExitCode)
+			if inspect.Container.State != nil && inspect.Container.State.Status == "exited" {
+				_, _ = e.client.ContainerRemove(context.Background(), resp.ID, client.ContainerRemoveOptions{Force: true})
+				return nil, fmt.Errorf("task container exited immediately (exit code %d)", inspect.Container.State.ExitCode)
 			}
-			bindings = decodeNetworkBindings(inspect.NetworkSettings.Ports)
+			bindings = decodeNetworkBindings(inspect.Container.NetworkSettings.Ports)
 			if len(bindings) >= len(spec.Ports) {
 				break
 			}
@@ -753,7 +766,8 @@ func (e *Engine) writeTaskPayload(payload []byte) (string, func(), error) {
 // exit must be distinguished from ctx being cancelled out from under the
 // wait (which returns ctx.Err(), not a misleading exit code of 0).
 func (e *Engine) WaitTaskContainer(ctx context.Context, containerID string) (int64, error) {
-	statusCh, errCh := e.client.ContainerWait(ctx, containerID, container.WaitConditionNotRunning)
+	wait := e.client.ContainerWait(ctx, containerID, client.ContainerWaitOptions{Condition: container.WaitConditionNotRunning})
+	statusCh, errCh := wait.Result, wait.Error
 	select {
 	case <-ctx.Done():
 		return 0, ctx.Err()
@@ -775,14 +789,14 @@ func (e *Engine) WaitTaskContainer(ctx context.Context, containerID string) (int
 // HealthCheck (see buildTaskHealthCheck), or "" for one with none — inspect
 // omits State.Health entirely in that case.
 func (e *Engine) InspectContainerHealth(ctx context.Context, containerID string) (string, error) {
-	inspect, err := e.client.ContainerInspect(ctx, containerID)
+	inspect, err := e.client.ContainerInspect(ctx, containerID, client.ContainerInspectOptions{})
 	if err != nil {
 		return "", err
 	}
-	if inspect.State == nil || inspect.State.Health == nil {
+	if inspect.Container.State == nil || inspect.Container.State.Health == nil {
 		return "", nil
 	}
-	return inspect.State.Health.Status, nil
+	return string(inspect.Container.State.Health.Status), nil
 }
 
 // scanDemuxedLines decodes a Docker-multiplexed stdout/stderr stream and
@@ -843,7 +857,7 @@ func scanDemuxedLines(muxed io.Reader, onLine func(line string, stderr bool)) er
 // entire log. It does not format, classify or parse lines — T7 decides where
 // they go (CreateLogGroup/PutLogEvents per the design doc).
 func (e *Engine) FollowContainerLogs(ctx context.Context, containerID string, since time.Time, onLine func(line string, stderr bool)) error {
-	opts := container.LogsOptions{
+	opts := client.ContainerLogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     true,
@@ -870,10 +884,10 @@ func (e *Engine) FollowContainerLogs(ctx context.Context, containerID string, si
 	}
 }
 
-// buildLabelFilterArgs builds the Docker filters.Args for matching
+// buildLabelFilterArgs builds the Docker client.Filters for matching
 // containers on an exact label selector (key=value for every entry).
-func buildLabelFilterArgs(selector map[string]string) filters.Args {
-	f := filters.NewArgs()
+func buildLabelFilterArgs(selector map[string]string) client.Filters {
+	f := make(client.Filters)
 	for k, v := range selector {
 		f.Add("label", fmt.Sprintf("%s=%s", k, v))
 	}
@@ -885,7 +899,7 @@ func buildLabelFilterArgs(selector map[string]string) filters.Args {
 // reconcile a service's running task count and to reap orphaned task
 // containers left over from a previous run at startup.
 func (e *Engine) ListContainersByLabel(ctx context.Context, selector map[string]string) ([]TaskContainerSummary, error) {
-	summaries, err := e.client.ContainerList(ctx, container.ListOptions{
+	summaries, err := e.client.ContainerList(ctx, client.ContainerListOptions{
 		All:     true,
 		Filters: buildLabelFilterArgs(selector),
 	})
@@ -893,12 +907,12 @@ func (e *Engine) ListContainersByLabel(ctx context.Context, selector map[string]
 		return nil, fmt.Errorf("failed to list containers by label: %w", err)
 	}
 
-	out := make([]TaskContainerSummary, 0, len(summaries))
-	for _, c := range summaries {
+	out := make([]TaskContainerSummary, 0, len(summaries.Items))
+	for _, c := range summaries.Items {
 		out = append(out, TaskContainerSummary{
 			ID:     c.ID,
 			Names:  c.Names,
-			State:  c.State,
+			State:  string(c.State),
 			Status: c.Status,
 			Labels: c.Labels,
 		})
@@ -914,7 +928,8 @@ func (e *Engine) ListContainersByLabel(ctx context.Context, selector map[string]
 // before the container is gone.
 func (e *Engine) RemoveTaskContainer(ctx context.Context, containerID string) error {
 	defer e.removeTaskPayloadFile(containerID)
-	return e.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
+	_, err := e.client.ContainerRemove(ctx, containerID, client.ContainerRemoveOptions{Force: true})
+	return err
 }
 
 func (e *Engine) removeTaskPayloadFile(containerID string) {
@@ -930,7 +945,7 @@ func (e *Engine) removeTaskPayloadFile(containerID string) {
 // exactly the "create if missing, otherwise reuse" semantics ECS volume
 // scoping needs.
 func (e *Engine) EnsureTaskVolume(ctx context.Context, name, driver string, driverOpts, labels map[string]string) error {
-	_, err := e.client.VolumeCreate(ctx, volume.CreateOptions{
+	_, err := e.client.VolumeCreate(ctx, client.VolumeCreateOptions{
 		Name:       name,
 		Driver:     driver,
 		DriverOpts: driverOpts,
@@ -947,7 +962,7 @@ func (e *Engine) EnsureTaskVolume(ctx context.Context, name, driver string, driv
 // for a "shared" scope volume: a task referencing one that doesn't already
 // exist must fail to launch rather than silently create it.
 func (e *Engine) TaskVolumeExists(ctx context.Context, name string) (bool, error) {
-	_, err := e.client.VolumeInspect(ctx, name)
+	_, err := e.client.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
 	if err != nil {
 		if cerrdefs.IsNotFound(err) {
 			return false, nil
@@ -962,7 +977,7 @@ func (e *Engine) TaskVolumeExists(ctx context.Context, name string) (bool, error
 // or one that is already gone, must never block a task from being recorded
 // STOPPED.
 func (e *Engine) RemoveTaskVolume(ctx context.Context, name string) error {
-	if err := e.client.VolumeRemove(ctx, name, false); err != nil {
+	if _, err := e.client.VolumeRemove(ctx, name, client.VolumeRemoveOptions{}); err != nil {
 		return fmt.Errorf("remove volume %s: %w", name, err)
 	}
 	return nil
@@ -981,15 +996,21 @@ type TaskVolumeSummary struct {
 // ListContainersByLabel. Used at startup recovery to find task-scoped
 // volumes left behind by tasks that no longer exist in the store.
 func (e *Engine) ListTaskVolumesByLabel(ctx context.Context, selector map[string]string) ([]TaskVolumeSummary, error) {
-	resp, err := e.client.VolumeList(ctx, volume.ListOptions{Filters: buildLabelFilterArgs(selector)})
+	resp, err := e.client.VolumeList(ctx, client.VolumeListOptions{Filters: buildLabelFilterArgs(selector)})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list volumes by label: %w", err)
 	}
-	out := make([]TaskVolumeSummary, 0, len(resp.Volumes))
-	for _, v := range resp.Volumes {
-		if v != nil {
-			out = append(out, TaskVolumeSummary{Name: v.Name, Labels: v.Labels})
-		}
+	out := make([]TaskVolumeSummary, 0, len(resp.Items))
+	for _, v := range resp.Items {
+		out = append(out, TaskVolumeSummary{Name: v.Name, Labels: v.Labels})
 	}
 	return out, nil
+}
+
+func pullPlatforms(platform string) []ocispec.Platform {
+	if platform == "" {
+		return nil
+	}
+	os, arch, _ := strings.Cut(platform, "/")
+	return []ocispec.Platform{{OS: os, Architecture: arch}}
 }

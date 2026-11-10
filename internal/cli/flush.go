@@ -16,8 +16,8 @@ import (
 	"github.com/aircwo-systems/tarn/internal/cli/common"
 	"github.com/aircwo-systems/tarn/internal/engine"
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -33,13 +33,13 @@ type flushOptions struct {
 }
 
 type flushDockerClient interface {
-	ContainerList(context.Context, container.ListOptions) ([]container.Summary, error)
-	ContainerRemove(context.Context, string, container.RemoveOptions) error
+	ContainerList(context.Context, client.ContainerListOptions) (client.ContainerListResult, error)
+	ContainerRemove(context.Context, string, client.ContainerRemoveOptions) (client.ContainerRemoveResult, error)
 	Close() error
 }
 
 var newFlushDockerClient = func() (flushDockerClient, error) {
-	return client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	return client.New(client.FromEnv)
 }
 
 type ecsFlushCluster struct {
@@ -497,7 +497,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	for _, c := range lambdaContainers {
 		ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 		// Docker rejects removal if this container started after the list call.
-		err := docker.ContainerRemove(ctx, c.ID, container.RemoveOptions{})
+		_, err := docker.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{})
 		cancel()
 		if err != nil && !cerrdefs.IsNotFound(err) {
 			recordFailure("Lambda Docker container", c.Names[0], err)
@@ -516,12 +516,12 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 }
 
 func listStoppedLambdaContainers(ctx context.Context, docker flushDockerClient, group string) ([]container.Summary, error) {
-	all, err := docker.ContainerList(ctx, container.ListOptions{All: true})
+	all, err := docker.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("list Docker containers for Lambda pruning: %w", err)
 	}
 	selected := make([]container.Summary, 0)
-	for _, c := range all {
+	for _, c := range all.Items {
 		if c.State != "exited" && c.State != "dead" && c.State != "created" {
 			continue
 		}

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/docker/client"
+	"github.com/moby/moby/client"
 )
 
 func TestWarmPoolEvictsUnusedContainerDespiteOtherInvokes(t *testing.T) {
@@ -27,7 +27,7 @@ func TestWarmPoolEvictsUnusedContainerDespiteOtherInvokes(t *testing.T) {
 	}))
 	defer docker.Close()
 
-	cli, err := client.NewClientWithOpts(client.WithHost(docker.URL), client.WithVersion("1.44"))
+	cli, err := client.New(client.WithHost(docker.URL), client.WithVersion("1.44"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +132,7 @@ func TestWarmPoolUntracksBeforeRemoving(t *testing.T) {
 	}))
 	defer docker.Close()
 
-	cli, err := client.NewClientWithOpts(client.WithHost(docker.URL), client.WithVersion("1.44"))
+	cli, err := client.New(client.WithHost(docker.URL), client.WithVersion("1.44"))
 	if err != nil {
 		t.Fatal(err)
 	}

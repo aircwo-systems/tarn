@@ -4,15 +4,16 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net/netip"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/aircwo-systems/tarn/pkg/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/pkg/stdcopy"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 )
 
 func TestBuildTaskContainerEnvIncludesEndpointAndSpecEnv(t *testing.T) {
@@ -164,10 +165,10 @@ func TestBuildTaskPortBindingsPublishesEphemeralHostPorts(t *testing.T) {
 	if len(exposed) != 2 {
 		t.Fatalf("expected 2 exposed ports, got %d", len(exposed))
 	}
-	if _, ok := exposed[nat.Port("8080/tcp")]; !ok {
+	if _, ok := exposed[network.MustParsePort("8080/tcp")]; !ok {
 		t.Fatalf("expected 8080/tcp exposed, got %v", exposed)
 	}
-	if _, ok := exposed[nat.Port("9090/tcp")]; !ok {
+	if _, ok := exposed[network.MustParsePort("9090/tcp")]; !ok {
 		t.Fatalf("expected 9090/tcp exposed, got %v", exposed)
 	}
 
@@ -178,7 +179,7 @@ func TestBuildTaskPortBindingsPublishesEphemeralHostPorts(t *testing.T) {
 		if bs[0].HostPort != "" {
 			t.Fatalf("expected empty HostPort (ephemeral) for %s, got %q", port, bs[0].HostPort)
 		}
-		if bs[0].HostIP != "127.0.0.1" {
+		if bs[0].HostIP.String() != "127.0.0.1" {
 			t.Fatalf("expected HostIP 127.0.0.1 for %s, got %q", port, bs[0].HostIP)
 		}
 	}
@@ -196,18 +197,18 @@ func TestBuildTaskPortBindingsHonorsFixedHostPorts(t *testing.T) {
 		t.Fatalf("expected 2 exposed ports, got %d", len(exposed))
 	}
 
-	fixed := bindings[nat.Port("8080/tcp")]
+	fixed := bindings[network.MustParsePort("8080/tcp")]
 	if len(fixed) != 1 {
 		t.Fatalf("expected one binding for 8080/tcp, got %d", len(fixed))
 	}
 	if fixed[0].HostPort != "9999" {
 		t.Fatalf("expected fixed HostPort 9999 for 8080/tcp, got %q", fixed[0].HostPort)
 	}
-	if fixed[0].HostIP != "127.0.0.1" {
+	if fixed[0].HostIP.String() != "127.0.0.1" {
 		t.Fatalf("expected HostIP 127.0.0.1 for 8080/tcp, got %q", fixed[0].HostIP)
 	}
 
-	ephemeral := bindings[nat.Port("9090/tcp")]
+	ephemeral := bindings[network.MustParsePort("9090/tcp")]
 	if len(ephemeral) != 1 {
 		t.Fatalf("expected one binding for 9090/tcp, got %d", len(ephemeral))
 	}
@@ -315,7 +316,7 @@ func TestBuildTaskContainerConfigMapsDriftAvoidanceFields(t *testing.T) {
 	if hostCfg.Tmpfs["/tmp"] != "rw,size=32m" {
 		t.Fatalf("Tmpfs[/tmp] = %q, want rw,size=32m", hostCfg.Tmpfs["/tmp"])
 	}
-	if len(hostCfg.DNS) != 1 || hostCfg.DNS[0] != "1.1.1.1" {
+	if len(hostCfg.DNS) != 1 || hostCfg.DNS[0].String() != "1.1.1.1" {
 		t.Fatalf("DNS = %v, want [1.1.1.1]", hostCfg.DNS)
 	}
 	if len(hostCfg.VolumesFrom) != 1 || hostCfg.VolumesFrom[0] != "tarn-ecs-abc-sidecar:ro" {
@@ -420,6 +421,8 @@ func TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations(t *testing.T)
 		{name: "unsupported mode", spec: TaskContainerSpec{Image: "example/task:latest", NetworkMode: "overlay"}},
 		{name: "host publishes ports", spec: TaskContainerSpec{Image: "example/task:latest", NetworkMode: "host", Ports: []int{8080}}},
 		{name: "none publishes ports", spec: TaskContainerSpec{Image: "example/task:latest", NetworkMode: "none", Ports: []int{8080}}},
+		{name: "invalid DNS", spec: TaskContainerSpec{Image: "example/task:latest", DNSServers: []string{"invalid"}}},
+		{name: "invalid port", spec: TaskContainerSpec{Image: "example/task:latest", Ports: []int{65536}}},
 		{name: "negative cpu", spec: TaskContainerSpec{Image: "example/task:latest", CPU: -1}},
 		{name: "negative memory", spec: TaskContainerSpec{Image: "example/task:latest", Memory: -1}},
 		{name: "reservation above memory", spec: TaskContainerSpec{Image: "example/task:latest", Memory: 128, MemoryReservation: 256}},
@@ -435,12 +438,12 @@ func TestBuildTaskContainerConfigRejectsInvalidNetworkCombinations(t *testing.T)
 }
 
 func TestDecodeNetworkBindingsReadsAssignedHostPorts(t *testing.T) {
-	ports := nat.PortMap{
-		nat.Port("8080/tcp"): []nat.PortBinding{
-			{HostIP: "127.0.0.1", HostPort: "54321"},
+	ports := network.PortMap{
+		network.MustParsePort("8080/tcp"): []network.PortBinding{
+			{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: "54321"},
 		},
-		nat.Port("9090/tcp"): []nat.PortBinding{
-			{HostIP: "127.0.0.1", HostPort: ""}, // not yet assigned, should be skipped
+		network.MustParsePort("9090/tcp"): []network.PortBinding{
+			{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: ""}, // not yet assigned, should be skipped
 		},
 	}
 
@@ -461,7 +464,10 @@ func TestBuildLabelFilterArgsMatchesEveryPair(t *testing.T) {
 		"tarn.cluster": "default",
 	})
 
-	got := args.Get("label")
+	got := make([]string, 0, len(args["label"]))
+	for label := range args["label"] {
+		got = append(got, label)
+	}
 	sort.Strings(got)
 	want := []string{"tarn.account=acct-1", "tarn.cluster=default"}
 	sort.Strings(want)
@@ -478,8 +484,8 @@ func TestBuildLabelFilterArgsMatchesEveryPair(t *testing.T) {
 
 func TestScanDemuxedLinesDeliversStdoutAndStderrLines(t *testing.T) {
 	var mux bytes.Buffer
-	stdout := stdcopy.NewStdWriter(&mux, stdcopy.Stdout)
-	stderr := stdcopy.NewStdWriter(&mux, stdcopy.Stderr)
+	stdout := newDockerStreamWriter(&mux, stdcopy.Stdout)
+	stderr := newDockerStreamWriter(&mux, stdcopy.Stderr)
 
 	if _, err := stdout.Write([]byte("hello stdout\n")); err != nil {
 		t.Fatalf("write stdout: %v", err)

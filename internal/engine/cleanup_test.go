@@ -16,10 +16,9 @@ import (
 
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/pkg/types"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/client"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 )
 
 // fakeDocker is a minimal Docker Engine API server that records the calls
@@ -27,7 +26,7 @@ import (
 type fakeDocker struct {
 	mu        sync.Mutex
 	listed    []container.Summary
-	listQuery filters.Args
+	listQuery client.Filters
 	platform  string
 	created   container.Config
 	host      container.HostConfig
@@ -49,7 +48,7 @@ func (f *fakeDocker) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.Method == http.MethodGet && path == "/containers/json":
-		f.listQuery, _ = filters.FromJSON(r.URL.Query().Get("filters"))
+		_ = json.Unmarshal([]byte(r.URL.Query().Get("filters")), &f.listQuery)
 		_ = json.NewEncoder(w).Encode(f.listed)
 	case r.Method == http.MethodPost && path == "/containers/create":
 		f.platform = r.URL.Query().Get("platform")
@@ -66,7 +65,7 @@ func (f *fakeDocker) handler(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodGet && strings.HasSuffix(path, "/logs"):
 		since := r.URL.Query().Get("since")
 		f.logSince = append(f.logSince, since)
-		out := stdcopy.NewStdWriter(w, stdcopy.Stdout)
+		out := newDockerStreamWriter(w, stdcopy.Stdout)
 		for _, line := range f.logLines {
 			stamp, _, _ := strings.Cut(line, " ")
 			ts, _ := time.Parse(time.RFC3339Nano, stamp)
@@ -107,7 +106,7 @@ func newFakeEngine(t *testing.T, port int) (*Engine, *fakeDocker) {
 	fake := &fakeDocker{}
 	srv := httptest.NewServer(http.HandlerFunc(fake.handler))
 	t.Cleanup(srv.Close)
-	cli, err := client.NewClientWithOpts(
+	cli, err := client.New(
 		client.WithHost("tcp://"+strings.TrimPrefix(srv.URL, "http://")),
 		client.WithVersion("1.45"),
 		client.WithHTTPClient(srv.Client()),
@@ -173,10 +172,10 @@ func TestSweepOrphanedLambdaContainersRemovesOnlyUnownedContainers(t *testing.T)
 	}
 	// The port is now decided per container rather than filtered on, so an
 	// orphan from a run on another port is found too.
-	if !fake.listQuery.ExactMatch("label", labelManaged+"="+labelManagedLambda) {
+	if !fake.listQuery["label"][labelManaged+"="+labelManagedLambda] {
 		t.Fatalf("list must filter on the managed label, got %v", fake.listQuery)
 	}
-	if fake.listQuery.ExactMatch("label", labelPort+"=4566") {
+	if fake.listQuery["label"][labelPort+"=4566"] {
 		t.Fatalf("list must not filter on this instance's port, got %v", fake.listQuery)
 	}
 	if strings.Join(fake.removed, ",") != "orphan-running,orphan-exited,orphan-other-port,no-port-label" {

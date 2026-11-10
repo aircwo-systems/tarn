@@ -20,7 +20,7 @@
   });
 </script>
 
-<svelte:head><link rel="icon" href={asset("/favicon.svg")} /></svelte:head>
+<svelte:head><link rel="icon" href={asset("favicon.svg")} /></svelte:head>
 <svelte:window
   onkeydown={(event) => {
     if (

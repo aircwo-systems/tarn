@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/aircwo-systems/tarn/pkg/types"
-	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/moby/moby/api/pkg/stdcopy"
 )
 
 // TestBuildLambdaContainerEnvUsesAccountID verifies the owning function's
@@ -64,8 +64,8 @@ func TestBuildLambdaContainerEnvUserOverrideWinsForAccessKey(t *testing.T) {
 
 func TestReadContainerLogStreamPreservesInterleaving(t *testing.T) {
 	var mux bytes.Buffer
-	stdout := stdcopy.NewStdWriter(&mux, stdcopy.Stdout)
-	stderr := stdcopy.NewStdWriter(&mux, stdcopy.Stderr)
+	stdout := newDockerStreamWriter(&mux, stdcopy.Stdout)
+	stderr := newDockerStreamWriter(&mux, stdcopy.Stderr)
 
 	records := []struct {
 		writer io.Writer

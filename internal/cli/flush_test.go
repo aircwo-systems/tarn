@@ -9,7 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/docker/docker/api/types/container"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/client"
 	"github.com/spf13/cobra"
 )
 
@@ -18,19 +19,19 @@ type fakeFlushDocker struct {
 	removed    []string
 }
 
-func (d *fakeFlushDocker) ContainerList(_ context.Context, opts container.ListOptions) ([]container.Summary, error) {
+func (d *fakeFlushDocker) ContainerList(_ context.Context, opts client.ContainerListOptions) (client.ContainerListResult, error) {
 	if !opts.All {
 		panic("flush must list stopped Docker containers")
 	}
-	return d.containers, nil
+	return client.ContainerListResult{Items: d.containers}, nil
 }
 
-func (d *fakeFlushDocker) ContainerRemove(_ context.Context, id string, opts container.RemoveOptions) error {
+func (d *fakeFlushDocker) ContainerRemove(_ context.Context, id string, opts client.ContainerRemoveOptions) (client.ContainerRemoveResult, error) {
 	if opts.Force {
 		panic("flush must not force-remove a container that may have started")
 	}
 	d.removed = append(d.removed, id)
-	return nil
+	return client.ContainerRemoveResult{}, nil
 }
 
 func (d *fakeFlushDocker) Close() error { return nil }

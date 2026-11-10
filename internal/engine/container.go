@@ -5,10 +5,10 @@ import (
 	"context"
 	"encoding/binary"
 	"fmt"
-	"golang.org/x/sync/semaphore"
 	"io"
 	"log"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -20,10 +20,10 @@ import (
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/pkg/types"
 	cerrdefs "github.com/containerd/errdefs"
-	"github.com/docker/docker/api/types/container"
-	"github.com/docker/docker/api/types/image"
-	"github.com/docker/docker/client"
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
+	"github.com/moby/moby/client"
+	"golang.org/x/sync/semaphore"
 )
 
 const rieContainerPort = "8080/tcp"
@@ -172,7 +172,7 @@ type Engine struct {
 
 // New creates a new container engine.
 func New(cfg *config.Config) (*Engine, error) {
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	cli, err := client.New(client.FromEnv)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Docker client: %w", err)
 	}
@@ -186,7 +186,7 @@ func New(cfg *config.Config) (*Engine, error) {
 
 // Ping checks if the Docker daemon is reachable.
 func (e *Engine) Ping(ctx context.Context) error {
-	_, err := e.client.Ping(ctx)
+	_, err := e.client.Ping(ctx, client.PingOptions{})
 	if err != nil {
 		return fmt.Errorf("docker daemon unreachable: %w", err)
 	}
@@ -201,7 +201,7 @@ func (e *Engine) PullImage(ctx context.Context, runtime types.Runtime) error {
 	}
 
 	log.Printf("[engine] pulling image %s...", img)
-	reader, err := e.client.ImagePull(ctx, img, image.PullOptions{})
+	reader, err := e.client.ImagePull(ctx, img, client.ImagePullOptions{})
 	if err != nil {
 		return fmt.Errorf("failed to pull image %s: %w", img, err)
 	}
@@ -221,12 +221,12 @@ func (e *Engine) ImageExists(ctx context.Context, runtime types.Runtime) (bool, 
 		return false, fmt.Errorf("unsupported runtime: %s", runtime)
 	}
 
-	images, err := e.client.ImageList(ctx, image.ListOptions{})
+	images, err := e.client.ImageList(ctx, client.ImageListOptions{})
 	if err != nil {
 		return false, err
 	}
 
-	for _, i := range images {
+	for _, i := range images.Items {
 		for _, tag := range i.RepoTags {
 			if tag == img {
 				return true, nil
@@ -402,8 +402,8 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 
 	memoryBytes := int64(fn.MemorySize) * 1024 * 1024
 
-	exposedPorts := nat.PortSet{
-		nat.Port(rieContainerPort): struct{}{},
+	exposedPorts := network.PortSet{
+		network.MustParsePort(rieContainerPort): struct{}{},
 	}
 
 	containerCfg := &container.Config{
@@ -433,9 +433,9 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 		Resources: container.Resources{
 			Memory: memoryBytes,
 		},
-		PortBindings: nat.PortMap{
-			nat.Port(rieContainerPort): []nat.PortBinding{
-				{HostIP: "127.0.0.1", HostPort: ""}, // let Docker assign a free port
+		PortBindings: network.PortMap{
+			network.MustParsePort(rieContainerPort): []network.PortBinding{
+				{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: ""}, // let Docker assign a free port
 			},
 		},
 		// Lambda permits executing binaries extracted into /tmp, including
@@ -455,7 +455,7 @@ func (e *Engine) CreateContainer(ctx context.Context, fn *types.FunctionConfig, 
 
 	name := fmt.Sprintf("tarn-lambda-%s-%d", sanitizeName(fn.FunctionName), time.Now().UnixMilli())
 
-	resp, err := e.client.ContainerCreate(ctx, containerCfg, hostCfg, nil, lambdaPlatform(fn.Architectures), name)
+	resp, err := e.client.ContainerCreate(ctx, client.ContainerCreateOptions{Config: containerCfg, HostConfig: hostCfg, Platform: lambdaPlatform(fn.Architectures), Name: name})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create container: %w", err)
 	}
@@ -548,7 +548,7 @@ func (e *Engine) CountContainers(accountID, functionName string) int {
 
 // StartContainer starts a container and resolves its mapped host port.
 func (e *Engine) StartContainer(ctx context.Context, info *ContainerInfo) error {
-	if err := e.client.ContainerStart(ctx, info.ID, container.StartOptions{}); err != nil {
+	if _, err := e.client.ContainerStart(ctx, info.ID, client.ContainerStartOptions{}); err != nil {
 		return fmt.Errorf("failed to start container: %w", err)
 	}
 
@@ -558,19 +558,19 @@ func (e *Engine) StartContainer(ctx context.Context, info *ContainerInfo) error 
 	var hostPort string
 	backoff := 10 * time.Millisecond
 	for attempt := 0; attempt < 10; attempt++ {
-		inspect, err := e.client.ContainerInspect(ctx, info.ID)
+		inspect, err := e.client.ContainerInspect(ctx, info.ID, client.ContainerInspectOptions{})
 		if err != nil {
 			return fmt.Errorf("failed to inspect container: %w", err)
 		}
 
 		// Check if the container exited
-		if inspect.State != nil && inspect.State.Status == "exited" {
-			return fmt.Errorf("container exited immediately (exit code %d)", inspect.State.ExitCode)
+		if inspect.Container.State != nil && inspect.Container.State.Status == "exited" {
+			return fmt.Errorf("container exited immediately (exit code %d)", inspect.Container.State.ExitCode)
 		}
 
 		// Try to find the port mapping under any key containing "8080"
-		for port, bindings := range inspect.NetworkSettings.Ports {
-			if strings.Contains(string(port), "8080") && len(bindings) > 0 {
+		for port, bindings := range inspect.Container.NetworkSettings.Ports {
+			if strings.Contains(port.String(), "8080") && len(bindings) > 0 {
 				hostPort = bindings[0].HostPort
 				break
 			}
@@ -615,7 +615,8 @@ func ResolveStopTimeoutSec(v int) int {
 // SIGTERM before SIGKILL. A non-positive timeoutSec selects the default.
 func (e *Engine) StopContainer(ctx context.Context, containerID string, timeoutSec int) error {
 	timeout := ResolveStopTimeoutSec(timeoutSec)
-	return e.client.ContainerStop(ctx, containerID, container.StopOptions{Timeout: &timeout})
+	_, err := e.client.ContainerStop(ctx, containerID, client.ContainerStopOptions{Timeout: &timeout})
+	return err
 }
 
 // RemoveContainer removes a single container (by ID) and drops it from its
@@ -629,7 +630,7 @@ func (e *Engine) RemoveContainer(ctx context.Context, containerID string) error 
 
 	removeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), containerRemoveTimeout)
 	defer cancel()
-	err := e.client.ContainerRemove(removeCtx, containerID, container.RemoveOptions{Force: true})
+	_, err := e.client.ContainerRemove(removeCtx, containerID, client.ContainerRemoveOptions{Force: true})
 	if info != nil && (err == nil || cerrdefs.IsNotFound(err)) {
 		info.releaseDeployment()
 	}
@@ -659,7 +660,7 @@ func (e *Engine) SweepOrphanedLambdaContainers(ctx context.Context) (int, error)
 		if state == ownerUnattributable {
 			log.Printf("[engine] removing Lambda container %s: its %s label is %q, so no Tarn can be holding it", shortID(c.ID), labelPort, c.Labels[labelPort])
 		}
-		if err := e.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+		if _, err := e.client.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 			log.Printf("[engine] failed to remove orphaned Lambda container %s: %v", shortID(c.ID), err)
 			continue
 		}
@@ -731,17 +732,17 @@ func (e *Engine) tarnListening(port int) bool {
 // without labels they may belong to another Tarn instance still using them.
 // Returns the names of the containers removed.
 func (e *Engine) SweepLegacyLambdaContainers(ctx context.Context) ([]string, error) {
-	all, err := e.client.ContainerList(ctx, container.ListOptions{All: true})
+	all, err := e.client.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list containers: %w", err)
 	}
 	var removed []string
-	for _, c := range all {
+	for _, c := range all.Items {
 		name, ok := legacyStoppedLambdaName(c)
 		if !ok {
 			continue
 		}
-		if err := e.client.ContainerRemove(ctx, c.ID, container.RemoveOptions{}); err != nil && !cerrdefs.IsNotFound(err) {
+		if _, err := e.client.ContainerRemove(ctx, c.ID, client.ContainerRemoveOptions{}); err != nil && !cerrdefs.IsNotFound(err) {
 			log.Printf("[engine] failed to remove stopped Lambda container %s: %v", name, err)
 			continue
 		}
@@ -816,7 +817,7 @@ func (e *Engine) forceRemoveAll(pool []*ContainerInfo) {
 			id := info.ID
 			ctx, cancel := context.WithTimeout(context.Background(), containerRemoveTimeout)
 			defer cancel()
-			if err := e.client.ContainerRemove(ctx, id, container.RemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
+			if _, err := e.client.ContainerRemove(ctx, id, client.ContainerRemoveOptions{Force: true}); err != nil && !cerrdefs.IsNotFound(err) {
 				log.Printf("[engine] failed to remove Lambda container %s: %v", shortID(id), err)
 			} else {
 				info.releaseDeployment()
@@ -832,7 +833,7 @@ func (e *Engine) forceRemoveAll(pool []*ContainerInfo) {
 // call reads only new output, so each read costs the new output rather than
 // the container's whole log history.
 func (e *Engine) ContainerLogsSince(ctx context.Context, containerID string, since time.Time) (string, time.Time, error) {
-	opts := container.LogsOptions{ShowStdout: true, ShowStderr: true, Timestamps: true}
+	opts := client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Timestamps: true}
 	if !since.IsZero() {
 		opts.Since = since.Format(time.RFC3339Nano)
 	}

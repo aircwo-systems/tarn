@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/moby/moby/client"
 )
 
 // pinnedImageRepository holds a tag on every image a deployment is pinned to.
@@ -31,7 +33,7 @@ func (e *Engine) ResolveImageReference(ctx context.Context, reference string, ar
 	if err != nil {
 		return "", err
 	}
-	if err := e.client.ImageTag(ctx, image.ID, PinnedImageTag(image.ID)); err != nil {
+	if _, err := e.client.ImageTag(ctx, client.ImageTagOptions{Source: image.ID, Target: PinnedImageTag(image.ID)}); err != nil {
 		return "", fmt.Errorf("pin image %s: %w", reference, err)
 	}
 	return image.ID, nil
