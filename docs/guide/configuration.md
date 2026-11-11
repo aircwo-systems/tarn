@@ -81,6 +81,13 @@ Account routing uses the SigV4 `Authorization` header. If the `Credential` field
 Authorization: AWS4-HMAC-SHA256 Credential=111111111111/...
 ```
 
+A request with any other access key still finds resources by their owner when the identifier is unambiguous, so an application can use dummy credentials against infrastructure created under a 12-digit key:
+
+- **Cognito**: a `ClientId`, access token or `UserPoolId` resolves to the account that owns the pool.
+- **DynamoDB**: when the default account lacks a named table and exactly one other account holds every table the request names, the request goes there. `CreateTable` and `ListTables` always use the default account.
+
+A 12-digit key is never redirected, so isolation between numbered accounts is unchanged.
+
 ### Data Layout
 
 Each non-default account gets its own subdirectory under `data-dir`:

@@ -147,6 +147,21 @@ func (r *HandlerRegistry) get(accountID string) *HandlerSet {
 	return b.handlers
 }
 
+// owners returns the loaded accounts whose handlers satisfy match. Every
+// persisted, non-archived account is loaded at startup, so this covers all
+// accounts that hold data.
+func (r *HandlerRegistry) owners(match func(*HandlerSet) bool) []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var ids []string
+	for id, b := range r.bundles {
+		if b.handlers != nil && match(b.handlers) {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 // StopAll stops all background workers across every registered account.
 func (r *HandlerRegistry) StopAll() {
 	r.mu.RLock()
@@ -281,6 +296,36 @@ func (s *Server) cognitoAdminHS(r *http.Request) *HandlerSet {
 		return hs
 	}
 	return s.hs(r)
+}
+
+// dynamoHS resolves the HandlerSet for a DynamoDB request. A 12-digit access
+// key names the account. Any other key (such as "dummy" from a local client)
+// goes to the default account unless the tables it names are missing there
+// and exactly one other account holds them all, so a client need not copy the
+// infrastructure's access key to reach its tables.
+func (s *Server) dynamoHS(r *http.Request) *HandlerSet {
+	hs := s.hs(r)
+	if account.FromRequest(r, "") != "" {
+		return hs
+	}
+	body, err := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	if err != nil {
+		return hs
+	}
+	names := dynamodbhandler.TableNames(r.Header.Get("X-Amz-Target"), body)
+	if len(names) == 0 || (hs != nil && hs.DynamoDB != nil && hs.DynamoDB.HasTables(names)) {
+		return hs
+	}
+	owners := s.registry.owners(func(h *HandlerSet) bool {
+		return h.DynamoDB != nil && h.DynamoDB.HasTables(names)
+	})
+	if len(owners) == 1 {
+		if owner := s.registry.get(owners[0]); owner != nil {
+			return owner
+		}
+	}
+	return hs
 }
 
 // hs resolves the per-account HandlerSet for the incoming request.
@@ -764,7 +809,7 @@ func (s *Server) postRootDispatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if dynamodbhandler.IsDynamoDBRequest(r) {
-		hs.DynamoDB.Dispatch(w, r)
+		s.dynamoHS(r).DynamoDB.Dispatch(w, r)
 		return
 	}
 	if strings.HasPrefix(r.Header.Get("X-Amz-Target"), "Logs_20140328.") {
@@ -933,7 +978,7 @@ func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request)
 		return true
 	}
 	if dynamodbhandler.IsDynamoDBRequest(r) {
-		hs.DynamoDB.Dispatch(w, r)
+		s.dynamoHS(r).DynamoDB.Dispatch(w, r)
 		return true
 	}
 
