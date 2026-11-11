@@ -45,14 +45,44 @@ Any other action returns `NotImplementedException` and logs `[cognito] unhandled
 
 | Flow | Notes |
 |------|-------|
+| `USER_AUTH` | Choice-based email/SMS OTP, password and SRP; requires `ALLOW_USER_AUTH` and Essentials/Plus |
 | `USER_PASSWORD_AUTH` | Requires `ALLOW_USER_PASSWORD_AUTH` on the app client |
 | `ADMIN_USER_PASSWORD_AUTH` | Also accepted as `ADMIN_NO_SRP_AUTH`. Requires `ALLOW_ADMIN_USER_PASSWORD_AUTH` |
 | `USER_SRP_AUTH` | Compatible with `amazon-cognito-identity-js` and Amplify |
 | `REFRESH_TOKEN_AUTH` | Also accepted as `REFRESH_TOKEN` |
 
-The challenges `NEW_PASSWORD_REQUIRED`, `PASSWORD_VERIFIER`, `SMS_MFA` and `EMAIL_OTP` are supported. `CUSTOM_AUTH` is accepted but returns an error, because the custom auth Lambda triggers are not implemented.
+The challenges `SELECT_CHALLENGE`, `PASSWORD`, `PASSWORD_SRP`, `NEW_PASSWORD_REQUIRED`, `PASSWORD_VERIFIER`, `SMS_MFA`, `SMS_OTP` and `EMAIL_OTP` are supported. `CUSTOM_AUTH` is accepted but returns an error, because the custom auth Lambda triggers are not implemented.
 
 An app client that lists no `ALLOW_*` flows allows SRP and refresh, as the AWS defaults do.
+
+## Passwordless sign-in
+
+Enable `EMAIL_OTP`, `SMS_OTP`, or both in the pool's `Policies.SignInPolicy.AllowedFirstAuthFactors` and enable `ALLOW_USER_AUTH` on the app client. Use the `ESSENTIALS` or `PLUS` tier. Include `PASSWORD` in the pool policy to offer password and SRP choices to users who have a password. The `ALLOW_USER_AUTH` flag permits those choices without enabling the separate password/SRP auth flows.
+
+```json
+{
+  "Policies": {
+    "SignInPolicy": {
+      "AllowedFirstAuthFactors": ["PASSWORD", "EMAIL_OTP", "SMS_OTP"]
+    }
+  },
+  "UserPoolTier": "ESSENTIALS",
+  "MfaConfiguration": "OFF"
+}
+```
+
+Call `InitiateAuth` or `AdminInitiateAuth` with `AuthFlow: USER_AUTH` and `AuthParameters: {"USERNAME":"alice","PREFERRED_CHALLENGE":"EMAIL_OTP"}`. An eligible preferred factor returns an `EMAIL_OTP` or `SMS_OTP` challenge. Without a preference, or when it is unavailable, Tarn returns `SELECT_CHALLENGE` with `AvailableChallenges`. Respond with `ANSWER` naming an offered factor and the latest `Session`. Password/SRP credentials can accompany that selection.
+
+For an OTP challenge, read the code from the dashboard or [codes route](#reading-codes). Its purpose is `auth:<Session>`. Respond to the challenge with the latest session, `USERNAME`, and `EMAIL_OTP_CODE` or `SMS_OTP_CODE`. Secret clients also require `SECRET_HASH`. The successful response contains the usual signed tokens and refresh token. These request fields follow [AWS's challenge API](https://docs.aws.amazon.com/cognito-user-identity-pools/latest/APIReference/API_RespondToAuthChallenge.html).
+
+- Sign-up can omit `Password` when the user supplies a contact matching an enabled OTP factor. OTP sign-in verifies that contact and confirms an unconfirmed user.
+- `AdminCreateUser` with omitted/blank `TemporaryPassword` creates a confirmed passwordless user in an OTP-enabled pool. It requires matching contact information and all required attributes. Supply a temporary password explicitly to retain the password-change flow.
+- `SignUp` can return a `Session` for `ConfirmSignUp`. A successful confirmation can return a new session; pass it to `USER_AUTH` for immediate sign-in without another code. It is a single-use proof, and the auth parameters are ignored for this handoff, as in [AWS's automatic sign-in flow](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-authentication-flow-methods.html).
+- A signed-in user with no password can set their first password through `ChangePassword` without `PreviousPassword`.
+- Required MFA cannot be combined with OTP first factors. With optional MFA, users who have enabled MFA use password/SRP instead. OTP sign-in does not add another MFA challenge.
+- OTP challenges are bound to the pool, client, user and contact. They expire with `AuthSessionValidity`, which accepts 3–15 minutes and defaults to 3. Outstanding proofs do not survive restart. Unknown users with existence suppression enabled receive simulated challenges that never send codes or authenticate.
+
+The implementation follows the documented AWS protocol; it has not been compared against a live AWS pool. Exact OTP code format, retry limits, concurrent-code invalidation and simulated-challenge randomization remain unverified. Native OTP currently uses Tarn's six-digit code generator, permits wrong-code retries until session expiry and isolates concurrent attempts by session. `TARN_COGNITO_FIXED_CODE` also applies. Passwordless admin invitations do not generate a temporary-password code or invoke an invitation sender. Passkeys and custom Lambda authentication remain unsupported.
 
 ## Tokens
 
@@ -206,7 +236,7 @@ With `--persist`, pools, clients, users, groups and refresh sessions survive a r
 - **Federation** with SAML, OIDC and social providers is not implemented.
 - **TOTP MFA** is not implemented. SMS and email MFA run when the pool's MFA is `ON` or `OPTIONAL`, with codes exposed locally.
 - **Custom auth** Lambda triggers are not implemented.
-- **Advanced security**, risk scoring, import jobs and passwordless flows are not emulated, so there is no `CustomEmailSender_AccountTakeOverNotification`.
+- **Advanced security**, risk scoring, import jobs and passkey flows are not emulated, so there is no `CustomEmailSender_AccountTakeOverNotification`.
 
 ## See Also
 

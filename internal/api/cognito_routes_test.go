@@ -321,3 +321,37 @@ func TestOverviewIncludesCognitoPools(t *testing.T) {
 		t.Fatalf("summary %v", p)
 	}
 }
+
+func TestCognitoPasswordlessAuthAcrossAccountRoutes(t *testing.T) {
+	h := newCognitoTestServer(t)
+	poolID := mustCognito(t, h, "CreateUserPool", otherAccountAuth, map[string]any{
+		"PoolName": "passwordless", "Policies": map[string]any{"SignInPolicy": map[string]any{"AllowedFirstAuthFactors": []string{"EMAIL_OTP"}}},
+	})["UserPool"].(map[string]any)["Id"].(string)
+	clientID := mustCognito(t, h, "CreateUserPoolClient", otherAccountAuth, map[string]any{
+		"UserPoolId": poolID, "ClientName": "web", "ExplicitAuthFlows": []string{"ALLOW_USER_AUTH"},
+	})["UserPoolClient"].(map[string]any)["ClientId"].(string)
+	mustCognito(t, h, "SignUp", "", map[string]any{"ClientId": clientID, "Username": "alice", "UserAttributes": []map[string]string{{"Name": "email", "Value": "alice@example.com"}}})
+	choices := mustCognito(t, h, "InitiateAuth", "", map[string]any{"ClientId": clientID, "AuthFlow": "USER_AUTH", "AuthParameters": map[string]string{"USERNAME": "alice"}})
+	if choices["ChallengeName"] != "SELECT_CHALLENGE" {
+		t.Fatalf("choices %v", choices)
+	}
+	ch := mustCognito(t, h, "RespondToAuthChallenge", "", map[string]any{"ClientId": clientID, "Session": choices["Session"], "ChallengeName": "SELECT_CHALLENGE", "ChallengeResponses": map[string]string{"USERNAME": "alice", "ANSWER": "EMAIL_OTP"}})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/_tarn/admin/cognito/pools/"+poolID+"/users/alice/codes", nil))
+	var pending struct {
+		Codes []cognito.PendingCode `json:"codes"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &pending); err != nil || rec.Code != http.StatusOK || len(pending.Codes) != 1 {
+		t.Fatalf("codes %d %s", rec.Code, rec.Body.String())
+	}
+	proof := map[string]any{"ClientId": clientID, "UserPoolId": poolID, "Session": ch["Session"], "ChallengeName": "EMAIL_OTP", "ChallengeResponses": map[string]string{"USERNAME": "alice", "EMAIL_OTP_CODE": pending.Codes[0].Code}}
+	done := mustCognito(t, h, "AdminRespondToAuthChallenge", otherAccountAuth, proof)
+	tokens := done["AuthenticationResult"].(map[string]any)
+	user := mustCognito(t, h, "GetUser", "", map[string]any{"AccessToken": tokens["AccessToken"]})
+	if user["Username"] != "alice" {
+		t.Fatalf("user %v", user)
+	}
+	if status, out := cognitoCall(t, h, "RespondToAuthChallenge", "", proof); status != http.StatusBadRequest || out["__type"] != "NotAuthorizedException" {
+		t.Fatalf("replay %d %v", status, out)
+	}
+}

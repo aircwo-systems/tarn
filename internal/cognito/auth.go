@@ -15,11 +15,13 @@ type authChallenge struct {
 	poolID   string
 	clientID string
 	userKey  string
+	choice   *choiceState
 	srp      *srpServerState
 	expires  time.Time
 }
 
 type InitiateAuthInput struct {
+	Session        string            `json:"Session"`
 	UserPoolId     string            `json:"UserPoolId"` // AdminInitiateAuth only
 	ClientId       string            `json:"ClientId"`
 	AuthFlow       string            `json:"AuthFlow"`
@@ -28,6 +30,7 @@ type InitiateAuthInput struct {
 }
 
 type AuthOutput struct {
+	AvailableChallenges  []string                  `json:"AvailableChallenges,omitempty"`
 	ChallengeName        string                    `json:"ChallengeName,omitempty"`
 	Session              string                    `json:"Session,omitempty"`
 	ChallengeParameters  map[string]string         `json:"ChallengeParameters"`
@@ -36,7 +39,7 @@ type AuthOutput struct {
 
 func (s *Service) InitiateAuth(in *InitiateAuthInput) (*AuthOutput, error) {
 	switch in.AuthFlow {
-	case "USER_PASSWORD_AUTH", "USER_SRP_AUTH", "REFRESH_TOKEN_AUTH", "REFRESH_TOKEN", "CUSTOM_AUTH":
+	case "USER_AUTH", "USER_PASSWORD_AUTH", "USER_SRP_AUTH", "REFRESH_TOKEN_AUTH", "REFRESH_TOKEN", "CUSTOM_AUTH":
 	default:
 		return nil, invalidParameter("Initiate Auth method not supported.")
 	}
@@ -63,7 +66,7 @@ func snapshot(c *UserPoolClientType) *UserPoolClientType {
 
 func (s *Service) AdminInitiateAuth(in *InitiateAuthInput) (*AuthOutput, error) {
 	switch in.AuthFlow {
-	case "ADMIN_USER_PASSWORD_AUTH", "ADMIN_NO_SRP_AUTH", "USER_SRP_AUTH", "REFRESH_TOKEN_AUTH", "REFRESH_TOKEN", "CUSTOM_AUTH":
+	case "USER_AUTH", "ADMIN_USER_PASSWORD_AUTH", "ADMIN_NO_SRP_AUTH", "USER_SRP_AUTH", "REFRESH_TOKEN_AUTH", "REFRESH_TOKEN", "CUSTOM_AUTH":
 	default:
 		return nil, invalidParameter("Initiate Auth method not supported.")
 	}
@@ -83,6 +86,8 @@ func (s *Service) initiateAuth(p *pool, c *UserPoolClientType, in *InitiateAuthI
 	}
 	params := in.AuthParameters
 	switch in.AuthFlow {
+	case "USER_AUTH":
+		return s.userAuth(p, c, in)
 	case "USER_PASSWORD_AUTH", "ADMIN_USER_PASSWORD_AUTH", "ADMIN_NO_SRP_AUTH":
 		return s.passwordAuth(p, c, params["USERNAME"], params["PASSWORD"], params["SECRET_HASH"], in.ClientMetadata)
 	case "USER_SRP_AUTH":
@@ -350,6 +355,13 @@ func (s *Service) AdminRespondToAuthChallenge(in *RespondToAuthChallengeInput) (
 }
 
 func (s *Service) respond(p *pool, c *UserPoolClientType, in *RespondToAuthChallengeInput) (*AuthOutput, error) {
+	s.mu.RLock()
+	ch := s.challenges[in.Session]
+	native := ch != nil && ch.choice != nil
+	s.mu.RUnlock()
+	if native {
+		return s.respondChoice(p, c, in)
+	}
 	// NEW_PASSWORD_REQUIRED hashes a password; do it before locking.
 	var creds credentials
 	newPassword := in.ChallengeResponses["NEW_PASSWORD"]

@@ -157,6 +157,17 @@ func (s *Service) PendingCodes(poolID, username string) ([]PendingCode, error) {
 			})
 		}
 	}
+	for id, ch := range s.challenges {
+		if ch.poolID != poolID || !now.Before(ch.expires) || ch.choice == nil || ch.choice.simulated || ch.choice.code == nil {
+			continue
+		}
+		u := p.Users[ch.userKey]
+		if u == nil || u.Sub != ch.choice.sub || !u.Enabled || u.Attributes[ch.choice.attribute] != ch.choice.destination || username != "" && p.findUser(username) != u {
+			continue
+		}
+		pc := ch.choice.code
+		out = append(out, PendingCode{PoolID: poolID, Username: u.Username, Purpose: authCodePurpose(id), Code: pc.Code, Attribute: pc.Attribute, Created: pc.Created, Expires: pc.Expires})
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
 	return out, nil
 }

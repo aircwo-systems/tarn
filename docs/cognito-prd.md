@@ -1,6 +1,7 @@
 # Cognito User Pools PRD
 
-Status: Proposed  
+Status: Historical proposal. See [current Cognito support](services/cognito.md) and the [passwordless scope](cognito-passwordless-scope.md) for implemented behavior.
+
 Target: Post-MVP service addition  
 Primary area: New `internal/cognito` service module, API Gateway authorizers, dashboard
 

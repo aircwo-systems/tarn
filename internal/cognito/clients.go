@@ -99,6 +99,8 @@ func allowsFlow(c *UserPoolClientType, flow string) bool {
 		return false
 	}
 	switch flow {
+	case "USER_AUTH":
+		return has("ALLOW_USER_AUTH")
 	case "USER_PASSWORD_AUTH":
 		return has("ALLOW_USER_PASSWORD_AUTH", "USER_PASSWORD_AUTH")
 	case "ADMIN_USER_PASSWORD_AUTH", "ADMIN_NO_SRP_AUTH":
@@ -147,6 +149,9 @@ func (s *Service) CreateUserPoolClient(in *CreateUserPoolClientInput) (*UserPool
 	}
 	settings := in.UserPoolClientSettings
 	applyClientDefaults(&settings)
+	if err := validateChoiceClient(p, &settings); err != nil {
+		return nil, err
+	}
 	now := EpochTime(s.now())
 	c := &UserPoolClientType{
 		UserPoolId:             in.UserPoolId,
@@ -214,6 +219,9 @@ func (s *Service) UpdateUserPoolClient(in *UpdateUserPoolClientInput) (*UserPool
 		settings.ClientName = c.ClientName
 	}
 	applyClientDefaults(&settings)
+	if err := validateChoiceClient(p, &settings); err != nil {
+		return nil, err
+	}
 	c.UserPoolClientSettings = settings
 	c.LastModifiedDate = EpochTime(s.now())
 	s.markDirty()

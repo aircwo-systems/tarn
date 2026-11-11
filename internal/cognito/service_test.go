@@ -99,7 +99,7 @@ func (f *fixture) signUpConfirmed(t *testing.T, username, email string) string {
 		ClientId: f.client.ClientId, Username: username, Password: testPassword,
 		UserAttributes: []AttributeType{{Name: "email", Value: email}},
 	}))
-	must[struct{}](t)(f.svc.ConfirmSignUp(&ConfirmSignUpInput{
+	must[*ConfirmSignUpOutput](t)(f.svc.ConfirmSignUp(&ConfirmSignUpInput{
 		ClientId: f.client.ClientId, Username: username, ConfirmationCode: f.code(t, username, purposeSignUp),
 	}))
 	return out.UserSub
@@ -255,7 +255,7 @@ func TestSignUpConfirmSignInRefreshSignOut(t *testing.T) {
 
 	_, err = f.svc.ConfirmSignUp(&ConfirmSignUpInput{ClientId: f.client.ClientId, Username: "alice", ConfirmationCode: "000000"})
 	wantCode(t, err, "CodeMismatchException")
-	must[struct{}](t)(f.svc.ConfirmSignUp(&ConfirmSignUpInput{
+	must[*ConfirmSignUpOutput](t)(f.svc.ConfirmSignUp(&ConfirmSignUpInput{
 		ClientId: f.client.ClientId, Username: "alice", ConfirmationCode: f.code(t, "alice", purposeSignUp),
 	}))
 
@@ -435,7 +435,7 @@ func TestSignUpPasswordless(t *testing.T) {
 		if out.UserConfirmed || out.CodeDeliveryDetails == nil {
 			t.Fatalf("want an unconfirmed user with a code sent, got %+v", out)
 		}
-		must[struct{}](t)(f.svc.ConfirmSignUp(&ConfirmSignUpInput{
+		must[*ConfirmSignUpOutput](t)(f.svc.ConfirmSignUp(&ConfirmSignUpInput{
 			ClientId: f.client.ClientId, Username: "gina", ConfirmationCode: f.code(t, "gina", purposeSignUp),
 		}))
 		// No password yet, so no password sign-in, whatever is guessed.
@@ -495,7 +495,7 @@ func TestFixedCode(t *testing.T) {
 		ClientId: f.client.ClientId, Username: "fred", Password: testPassword,
 		UserAttributes: []AttributeType{{Name: "email", Value: "fred@example.com"}},
 	}))
-	must[struct{}](t)(f.svc.ConfirmSignUp(&ConfirmSignUpInput{ClientId: f.client.ClientId, Username: "fred", ConfirmationCode: "123456"}))
+	must[*ConfirmSignUpOutput](t)(f.svc.ConfirmSignUp(&ConfirmSignUpInput{ClientId: f.client.ClientId, Username: "fred", ConfirmationCode: "123456"}))
 }
 
 func TestAdminCreateUserNewPasswordRequired(t *testing.T) {
@@ -601,7 +601,7 @@ func TestEmailAsUsername(t *testing.T) {
 	_, err = f.svc.SignUp(&SignUpInput{ClientId: f.client.ClientId, Username: "lee@example.com", Password: testPassword})
 	wantCode(t, err, "UsernameExistsException")
 
-	must[struct{}](t)(f.svc.ConfirmSignUp(&ConfirmSignUpInput{
+	must[*ConfirmSignUpOutput](t)(f.svc.ConfirmSignUp(&ConfirmSignUpInput{
 		ClientId: f.client.ClientId, Username: "lee@example.com", ConfirmationCode: f.code(t, out.UserSub, purposeSignUp),
 	}))
 	res := must[*AuthOutput](t)(f.passwordAuth(t, "lee@example.com", testPassword)).AuthenticationResult

@@ -20,6 +20,7 @@ type SignUpInput struct {
 }
 
 type SignUpOutput struct {
+	Session             string                   `json:"Session,omitempty"`
 	UserConfirmed       bool                     `json:"UserConfirmed"`
 	CodeDeliveryDetails *CodeDeliveryDetailsType `json:"CodeDeliveryDetails,omitempty"`
 	UserSub             string                   `json:"UserSub"`
@@ -53,7 +54,7 @@ func (s *Service) SignUp(in *SignUpInput) (*SignUpOutput, error) {
 		return nil, err
 	}
 	// A passwordless user has no credentials until AdminSetUserPassword or
-	// the confirm-forgot-password flow gives them one.
+	// ChangePassword flow gives them one.
 	var creds credentials
 	if !passwordless {
 		creds, err = newCredentials(p.Config.Id, username, in.Password)
@@ -90,6 +91,11 @@ func (s *Service) SignUp(in *SignUpInput) (*SignUpOutput, error) {
 	if attr := autoVerifyAttribute(p, u); attr != "" && !out.UserConfirmed {
 		s.issueCode(p, u, purposeSignUp, attr, codeEvent{"SignUp", c.ClientId, in.ClientMetadata})
 		out.CodeDeliveryDetails = deliveryDetails(u, attr)
+	}
+	if !out.UserConfirmed && allowsFlow(c, "USER_AUTH") {
+		pending := s.challenge(p, c, u, "SIGN_UP", nil, map[string]string{})
+		s.challenges[pending.Session].choice = &choiceState{username: u.Username, sub: u.Sub}
+		out.Session = pending.Session
 	}
 	return out, nil
 }
@@ -150,6 +156,7 @@ func autoVerifyAttribute(p *pool, u *user) string {
 }
 
 type ConfirmSignUpInput struct {
+	Session            string            `json:"Session"`
 	ClientId           string            `json:"ClientId"`
 	SecretHash         string            `json:"SecretHash"`
 	Username           string            `json:"Username"`
@@ -179,17 +186,53 @@ func (s *Service) clientUser(clientID, login, hash string) (*pool, *UserPoolClie
 	return p, c, u, nil
 }
 
-func (s *Service) ConfirmSignUp(in *ConfirmSignUpInput) (struct{}, error) {
+type ConfirmSignUpOutput struct {
+	Session string `json:"Session,omitempty"`
+}
+
+func (s *Service) ConfirmSignUp(in *ConfirmSignUpInput) (*ConfirmSignUpOutput, error) {
 	s.mu.Lock()
+	// Save the verified delivery method before confirmation consumes its code.
+	p, c, u, lookupErr := s.clientUser(in.ClientId, in.Username, in.SecretHash)
+	attr := ""
+	if lookupErr == nil && u.Codes[purposeSignUp] != nil {
+		attr = u.Codes[purposeSignUp].Attribute
+	}
+	if in.Session != "" {
+		if lookupErr != nil {
+			s.mu.Unlock()
+			return nil, lookupErr
+		}
+		ch, owner, sessionErr := s.choiceUser(p, c, in.Session)
+		if sessionErr != nil || owner != u || ch.name != "SIGN_UP" {
+			s.mu.Unlock()
+			return nil, errInvalidSession
+		}
+	}
 	call, err := s.confirmSignUpLocked(in)
+	if err == nil && in.Session != "" {
+		delete(s.challenges, in.Session)
+	}
+	out := &ConfirmSignUpOutput{}
+	if err == nil && attr != "" && allowsFlow(c, "USER_AUTH") {
+		factor := "EMAIL_OTP"
+		if attr == "phone_number" {
+			factor = "SMS_OTP"
+		}
+		if slices.Contains(p.choiceFactors(u), factor) {
+			proof := s.challenge(p, c, u, factor, nil, map[string]string{})
+			s.challenges[proof.Session].choice = &choiceState{username: u.Username, sub: u.Sub, attribute: attr, destination: u.Attributes[attr], confirmation: true}
+			out.Session = proof.Session
+		}
+	}
 	s.mu.Unlock()
 	if err != nil {
-		return struct{}{}, err
+		return nil, err
 	}
-	// AWS runs PostConfirmation after the user is confirmed; a failure is
-	// reported to the caller but the user stays confirmed.
-	_, err = s.invoke(call)
-	return struct{}{}, err
+	if _, err = s.invoke(call); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Service) confirmSignUpLocked(in *ConfirmSignUpInput) (*triggerCall, error) {
@@ -422,7 +465,7 @@ func (s *Service) ChangePassword(in *ChangePasswordInput) (struct{}, error) {
 	if err != nil {
 		return struct{}{}, err
 	}
-	if !passwordMatches(ac.user.PasswordHash, in.PreviousPassword) {
+	if ac.user.PasswordHash != "" && !passwordMatches(ac.user.PasswordHash, in.PreviousPassword) {
 		return struct{}{}, errIncorrectPassword
 	}
 	if err := checkPasswordPolicy(ac.pool.passwordPolicy(), in.ProposedPassword); err != nil {

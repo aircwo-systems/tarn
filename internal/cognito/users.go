@@ -277,6 +277,23 @@ func (s *Service) AdminCreateUser(in *AdminCreateUserInput) (*AdminCreateUserOut
 	if err := p.checkUsernameFree(username, attrs, true); err != nil {
 		return nil, err
 	}
+	passwordless, err := p.passwordlessSignUp(in.TemporaryPassword, attrs)
+	if err != nil {
+		return nil, err
+	}
+	if passwordless {
+		resolvedAttrs := make([]AttributeType, 0, len(attrs))
+		for name, value := range attrs {
+			resolvedAttrs = append(resolvedAttrs, AttributeType{Name: name, Value: value})
+		}
+		if err := p.validateAttributes(resolvedAttrs, true); err != nil {
+			return nil, err
+		}
+		u := s.newUser(username, sub, attrs, StatusConfirmed)
+		p.Users[p.userKey(username)] = u
+		s.markDirty()
+		return &AdminCreateUserOutput{User: u.userType(nil)}, nil
+	}
 	u := s.newUser(username, sub, attrs, StatusForceChangePassword)
 	if err := s.setTemporaryPassword(p, u, in.TemporaryPassword, in.MessageAction, in.ClientMetadata); err != nil {
 		return nil, err

@@ -252,6 +252,9 @@ func (s *Service) CreateUserPool(in *CreateUserPoolInput) (*UserPoolOutput, erro
 
 	settings := in.UserPoolSettings
 	applyPoolDefaults(&settings)
+	if err := validateSignInSettings(&settings); err != nil {
+		return nil, err
+	}
 	usernameCfg := in.UsernameConfiguration
 	if usernameCfg == nil {
 		usernameCfg = &UsernameConfigurationType{CaseSensitive: false}
@@ -325,6 +328,9 @@ func (s *Service) UpdateUserPool(in *UpdateUserPoolInput) (struct{}, error) {
 		settings.MfaConfiguration = p.Config.MfaConfiguration
 	}
 	applyPoolDefaults(&settings)
+	if err := validateSignInSettings(&settings); err != nil {
+		return struct{}{}, err
+	}
 	p.Config.UserPoolSettings = settings
 	p.Mfa.MfaConfiguration = settings.MfaConfiguration
 	p.Config.LastModifiedDate = EpochTime(s.now())
@@ -440,6 +446,11 @@ func (s *Service) SetUserPoolMfaConfig(in *SetUserPoolMfaConfigInput) (*MfaSetti
 	defer s.mu.Unlock()
 	p, err := s.lookupPool(in.UserPoolId)
 	if err != nil {
+		return nil, err
+	}
+	settings := p.Config.UserPoolSettings
+	settings.MfaConfiguration = in.MfaConfiguration
+	if err := validateSignInSettings(&settings); err != nil {
 		return nil, err
 	}
 	p.Mfa = in.MfaSettings
