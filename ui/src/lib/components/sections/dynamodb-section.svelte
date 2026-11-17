@@ -1,39 +1,72 @@
 <script lang="ts">
   import { matchesResourceFilter } from "#lib/filter-utils";
   import { onMount } from "svelte";
-  import { MagnifyingGlassIcon, SidebarSimpleIcon } from "phosphor-svelte";
+  import {
+    ArrowSquareOutIcon,
+    DatabaseIcon,
+    MagnifyingGlassIcon,
+    SidebarSimpleIcon,
+  } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
   import RcListRow from "#lib/components/rack/rc-list-row.svelte";
   import RcResizableAside from "#lib/components/rack/rc-resizable-aside.svelte";
-  import DynamoTableDetail from "#lib/components/dynamodb/dynamodb-table-detail.svelte";
-  import { getDashboard, getDashboardFilters } from "#lib/state.svelte";
+  import DynamoTableDetail, {
+    type DynamoSubTab,
+  } from "#lib/components/dynamodb/dynamodb-table-detail.svelte";
+  import {
+    getAccountSettings,
+    getDashboard,
+    getDashboardFilters,
+  } from "#lib/state.svelte";
 
   let {
     sidebarCollapsed = false,
+    popout = false,
     onToggleSidebar = () => {},
+    onNavigate = (_tab: string) => {},
   }: {
     sidebarCollapsed?: boolean;
+    popout?: boolean;
     onToggleSidebar?: () => void;
+    onNavigate?: (tab: string) => void;
   } = $props();
 
   const dashboard = getDashboard();
   const filters = getDashboardFilters();
-  const tables = $derived((dashboard.data?.dynamodbTables ?? []).filter(() => matchesResourceFilter("dynamodb", filters.tagFilter)));
-  const streams = $derived((dashboard.data?.dynamodbStreams ?? []).filter(() => matchesResourceFilter("dynamodb", filters.tagFilter)));
+  const accountSettings = getAccountSettings();
+  const tables = $derived(
+    (dashboard.data?.dynamodbTables ?? []).filter(() =>
+      matchesResourceFilter("dynamodb", filters.tagFilter),
+    ),
+  );
+  const streams = $derived(
+    (dashboard.data?.dynamodbStreams ?? []).filter(() =>
+      matchesResourceFilter("dynamodb", filters.tagFilter),
+    ),
+  );
   const config = $derived(dashboard.data?.config ?? null);
-  const streamEnabledCount = $derived(tables.filter((table) => table.streamEnabled).length);
-  const totalItems = $derived(tables.reduce((acc, t) => acc + (t.itemCount ?? 0), 0));
+  const streamEnabledCount = $derived(
+    tables.filter((table) => table.streamEnabled).length,
+  );
+  const totalItems = $derived(
+    tables.reduce((acc, t) => acc + (t.itemCount ?? 0), 0),
+  );
 
   let listCollapsed = $state(false);
 
   function toggleListCollapse() {
     listCollapsed = !listCollapsed;
     try {
-      localStorage.setItem("tarn-dynamodb-list-collapsed", String(listCollapsed));
+      localStorage.setItem(
+        "tarn-dynamodb-list-collapsed",
+        String(listCollapsed),
+      );
     } catch {}
   }
 
   let selectedTableName = $state<string | null>(null);
+  let activeSubTab = $state<DynamoSubTab>("overview");
   let query = $state("");
 
   // Keyed by name: polling replaces the objects, so holding one would freeze the detail panel.
@@ -53,69 +86,187 @@
   });
 
   const selectedStreams = $derived(
-    selected ? streams.filter((stream) => stream.tableName === selected.name) : [],
+    selected
+      ? streams.filter((stream) => stream.tableName === selected.name)
+      : [],
   );
+
+  function normalizeSubTab(raw: string | null): DynamoSubTab {
+    if (raw === "items" || raw === "streams" || raw === "integrations") {
+      return raw;
+    }
+    return "overview";
+  }
+
+  function syncHash(name: string | null, tab: DynamoSubTab) {
+    if (!name) return;
+    const qs = new URLSearchParams();
+    qs.set("table", name);
+    if (tab !== "overview") qs.set("tab", tab);
+    history.replaceState(null, "", `#dynamodb?${qs.toString()}`);
+  }
 
   function select(name: string) {
     selectedTableName = name;
-    history.replaceState(null, "", `#dynamodb?table=${encodeURIComponent(name)}`);
+    syncHash(name, activeSubTab);
+  }
+
+  function selectSubTab(tab: DynamoSubTab) {
+    activeSubTab = tab;
+    syncHash(selected?.name ?? selectedTableName, tab);
+  }
+
+  function openPopout() {
+    const params = new URLSearchParams();
+    params.set("popout", "dynamodb");
+    params.set("account", accountSettings.activeAccountId);
+
+    const hashParams = new URLSearchParams();
+    const tableName = selected?.name ?? selectedTableName;
+    if (tableName) hashParams.set("table", tableName);
+    if (activeSubTab !== "overview") hashParams.set("tab", activeSubTab);
+    const hashSuffix = hashParams.toString() ? `?${hashParams.toString()}` : "";
+    const url = `${window.location.pathname}?${params.toString()}#dynamodb${hashSuffix}`;
+
+    const win = window.open(
+      url,
+      `tarn-dynamodb-${accountSettings.activeAccountId}`,
+      "popup=yes,width=1280,height=860,menubar=no,toolbar=no,location=yes,resizable=yes,scrollbars=yes",
+    );
+    win?.focus();
+  }
+
+  function openFullDashboard() {
+    const targetName = selected?.name ?? selectedTableName;
+    const hashParams = new URLSearchParams();
+    if (targetName) hashParams.set("table", targetName);
+    if (activeSubTab !== "overview") hashParams.set("tab", activeSubTab);
+    const hashSuffix = hashParams.toString() ? `?${hashParams.toString()}` : "";
+    onNavigate(`dynamodb${hashSuffix}`);
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (e.key !== "ArrowDown" && e.key !== "ArrowUp" && e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    if (
+      e.key !== "ArrowDown" &&
+      e.key !== "ArrowUp" &&
+      e.key !== "ArrowLeft" &&
+      e.key !== "ArrowRight"
+    )
+      return;
     if (visible.length === 0) return;
     e.preventDefault();
     const idx = visible.findIndex((table) => table.name === selected?.name);
     const forward = e.key === "ArrowDown" || e.key === "ArrowRight";
-    const next = forward ? Math.min(visible.length - 1, idx + 1) : Math.max(0, idx - 1);
+    const next = forward
+      ? Math.min(visible.length - 1, idx + 1)
+      : Math.max(0, idx - 1);
     select(visible[next].name);
   }
 
   function indexLabel(table: { localIndexes: number; globalIndexes: number }) {
     const total = table.localIndexes + table.globalIndexes;
-    return total === 0 ? "no indexes" : `${total} index${total === 1 ? "" : "es"}`;
+    return total === 0
+      ? "no indexes"
+      : `${total} index${total === 1 ? "" : "es"}`;
+  }
+
+  function readRouteFromHash() {
+    const qs = new URLSearchParams(window.location.hash.split("?")[1] ?? "");
+    const table = qs.get("table");
+    if (table) selectedTableName = table;
+    activeSubTab = normalizeSubTab(qs.get("tab"));
   }
 
   onMount(() => {
-    const table = new URLSearchParams(window.location.hash.split("?")[1] ?? "").get("table");
-    if (table) selectedTableName = table;
+    readRouteFromHash();
     try {
       const saved = localStorage.getItem("tarn-dynamodb-list-collapsed");
       if (saved !== null) {
         listCollapsed = saved === "true";
       }
     } catch {}
+    if (popout) {
+      listCollapsed = true;
+    }
+    window.addEventListener("hashchange", readRouteFromHash);
+    return () => {
+      window.removeEventListener("hashchange", readRouteFromHash);
+    };
   });
 </script>
 
-<div class="dynamodb">
-  <SectionHeader
-    title="DynamoDB"
-    description="{tables.length} table{tables.length === 1 ? '' : 's'} · {streams.length} stream{streams.length === 1 ? '' : 's'} · {streamEnabledCount} streaming"
-    {sidebarCollapsed}
-    {onToggleSidebar}
-  >
-    {#snippet actions()}
-      <div class="header-filter">
-        <MagnifyingGlassIcon size={12} />
-        <input
-          placeholder="Filter tables..."
-          bind:value={query}
-          aria-label="Filter tables"
-        />
-        {#if query}
-          <button
-            type="button"
-            class="clear-query-btn"
-            onclick={() => (query = "")}
-            aria-label="Clear filter"
-          >
-            &times;
-          </button>
-        {/if}
+<div class="dynamodb" class:popout>
+  {#if popout}
+    <header class="popout-bar">
+      <div class="popout-brand">
+        <DatabaseIcon size={15} />
+        <span class="popout-title">DynamoDB Viewer</span>
+        <span class="account-badge" title="Active Tarn account">
+          {accountSettings.activeAccountId}
+        </span>
       </div>
-    {/snippet}
-  </SectionHeader>
+
+      <div class="popout-controls">
+        {#if tables.length > 0}
+          <label class="popout-select">
+            <span>Table</span>
+            <select
+              value={selected?.name ?? ""}
+              onchange={(e) => select((e.currentTarget as HTMLSelectElement).value)}
+            >
+              {#each tables as t (t.name)}
+                <option value={t.name}>
+                  {t.name} ({t.itemCount.toLocaleString("en-GB")} items)
+                </option>
+              {/each}
+            </select>
+          </label>
+        {/if}
+
+        <RcButton small variant="ghost" onclick={openFullDashboard}>
+          <ArrowSquareOutIcon size={12} /> Full dashboard
+        </RcButton>
+      </div>
+    </header>
+  {:else}
+    <SectionHeader
+      title="DynamoDB"
+      description="{tables.length} table{tables.length === 1 ? '' : 's'} · {streams.length} stream{streams.length === 1 ? '' : 's'} · {streamEnabledCount} streaming"
+      {sidebarCollapsed}
+      {onToggleSidebar}
+    >
+      {#snippet actions()}
+        <div class="header-actions-row">
+          <div class="header-filter">
+            <MagnifyingGlassIcon size={12} />
+            <input
+              placeholder="Filter tables..."
+              bind:value={query}
+              aria-label="Filter tables"
+            />
+            {#if query}
+              <button
+                type="button"
+                class="clear-query-btn"
+                onclick={() => (query = "")}
+                aria-label="Clear filter"
+              >
+                &times;
+              </button>
+            {/if}
+          </div>
+          <RcButton
+            small
+            onclick={openPopout}
+            title="Open DynamoDB viewer in a pop-out window"
+          >
+            <ArrowSquareOutIcon size={12} />
+            Pop out
+          </RcButton>
+        </div>
+      {/snippet}
+    </SectionHeader>
+  {/if}
 
   {#if dashboard.loading && !dashboard.data}
     <div class="layout">
@@ -129,8 +280,8 @@
       <p>Create one with the AWS SDK, AWS CLI, or your IaC, and it shows up here.</p>
     </div>
   {:else}
-    <div class="layout" class:list-collapsed={listCollapsed}>
-      {#if listCollapsed}
+    <div class="layout" class:list-collapsed={listCollapsed} class:popout-layout={popout}>
+      {#if !popout && listCollapsed}
         <div class="list-toolbar" role="toolbar" aria-label="Tables overview">
           <div class="toolbar-leading">
             <button
@@ -190,7 +341,7 @@
         </div>
       {/if}
 
-      {#if !listCollapsed}
+      {#if !popout && !listCollapsed}
         <RcResizableAside
           storageKey="tarn-dynamodb-list-width"
           collapsible={true}
@@ -254,7 +405,16 @@
 
       {#if selected}
         {#key selected.name}
-          <DynamoTableDetail table={selected} streams={selectedStreams} {config} />
+          <DynamoTableDetail
+            table={selected}
+            streams={selectedStreams}
+            {config}
+            {activeSubTab}
+            {popout}
+            onSelectSubTab={selectSubTab}
+            onPopout={openPopout}
+            {onNavigate}
+          />
         {/key}
       {/if}
     </div>
@@ -263,9 +423,65 @@
 
 <style>
   .dynamodb { display: flex; flex-direction: column; min-height: 100%; }
+  .header-actions-row { display: flex; align-items: center; gap: 8px; }
+
+  .popout-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 0 0 12px;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .popout-brand {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text-primary);
+  }
+  .popout-title {
+    font-size: 13.5px;
+    font-weight: 600;
+  }
+  .account-badge {
+    padding: 2px 7px;
+    border-radius: 5px;
+    background: var(--bg-element);
+    border: 1px solid var(--border-subtle);
+    font: 11px var(--font-mono, ui-monospace, monospace);
+    color: var(--text-secondary);
+  }
+  .popout-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .popout-select {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: var(--text-tertiary);
+  }
+  .popout-select select {
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-element);
+    font: 11.5px var(--font-mono, ui-monospace, monospace);
+    color: var(--text-primary);
+  }
+
   .layout {
     display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 28px; padding: 20px 0 48px;
-    max-width: 1320px; align-items: start;
+    max-width: 1380px; align-items: start;
+  }
+  .layout.popout-layout {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: none;
+    padding-top: 14px;
   }
   @media (max-width: 900px) {
     .layout { grid-template-columns: minmax(0, 1fr); }

@@ -58,8 +58,9 @@
   const uiSettings = getUISettings();
   const accountSettings = getAccountSettings();
 
-  // ── Routing ─────────────────────────────────────────────────────
+  // ── Routing ──────────────────────────────────────────────────────────
   const tabHistory = new TabNavigationHistory();
+  const isDynamoPopout = $derived(page.url.searchParams.get("popout") === "dynamodb");
   let activeTab = $state<DashboardTab>("home");
   let logsInitialGroup = $state("");
   let logsInitialTimestamp = $state("");
@@ -73,6 +74,13 @@
 
   function readHash() {
     void unlockAWSOwnerFromLocation();
+    if (isDynamoPopout) {
+      activeTab = "dynamodb";
+      if (!window.location.hash.startsWith("#dynamodb")) {
+        window.history.replaceState(null, "", "#dynamodb");
+      }
+      return;
+    }
     if (window.location.hash.split("?", 1)[0] === "#overview") {
       window.history.replaceState(null, "", "#home?section=topology");
     }
@@ -112,6 +120,27 @@
     // A caller can pass "settings?section=infra" to deep link inside the tab.
     const qs = tab.replace(/^#/, "").split("?").slice(1).join("?");
     window.location.hash = qs ? `#${nextTab}?${qs}` : tabHistory.destination(nextTab);
+  }
+
+  function navigateFromPopout(target: string) {
+    const clean = target.replace(/^#/, "");
+    if (clean.startsWith("dynamodb")) {
+      window.location.href = `${window.location.pathname}?account=${encodeURIComponent(accountSettings.activeAccountId)}#${clean}`;
+      return;
+    }
+    try {
+      if (window.opener && !window.opener.closed && window.opener.location.origin === window.location.origin) {
+        window.opener.location.hash = `#${clean}`;
+        window.opener.focus();
+        return;
+      }
+    } catch {
+      // Fall through to opening a new dashboard tab.
+    }
+    window.open(
+      `${window.location.pathname}?account=${encodeURIComponent(accountSettings.activeAccountId)}#${clean}`,
+      "_blank",
+    );
   }
 
   function openTrace(traceId: string) {
@@ -343,22 +372,24 @@
   >
     Skip to main content
   </a>
-  <!-- ══════════════════════════════════════════════ SIDEBAR ══ -->
-  <AppSidebar
-    {navSections}
-    {activeTab}
-    bind:sidebarCollapsed
-    collapsedSidebarMode={uiSettings.collapsedSidebarMode}
-    pollingIntervalSeconds={uiSettings.pollingIntervalSeconds}
-    activeAccountId={accountSettings.activeAccountId}
-    activeAccountLabel={accountSettings.knownAccounts.find((account) => account.id === accountSettings.activeAccountId)?.label}
-    onSetTab={setTab}
-    onOpenSettings={() => setTab("settings")}
-    onOpenCommandPalette={() => (commandPaletteOpen = true)}
-    hideSearch={activeTab === "home"}
-  />
+  <!-- ══════════════════════════════════════════════════ SIDEBAR ══ -->
+  {#if !isDynamoPopout}
+    <AppSidebar
+      {navSections}
+      {activeTab}
+      bind:sidebarCollapsed
+      collapsedSidebarMode={uiSettings.collapsedSidebarMode}
+      pollingIntervalSeconds={uiSettings.pollingIntervalSeconds}
+      activeAccountId={accountSettings.activeAccountId}
+      activeAccountLabel={accountSettings.knownAccounts.find((account) => account.id === accountSettings.activeAccountId)?.label}
+      onSetTab={setTab}
+      onOpenSettings={() => setTab("settings")}
+      onOpenCommandPalette={() => (commandPaletteOpen = true)}
+      hideSearch={activeTab === "home"}
+    />
+  {/if}
 
-  <!-- ═══════════════════════════════════════════════════ MAIN ══ -->
+  <!-- ══════════════════════════════════════════════════════ MAIN ══ -->
   {#key `${accountSettings.activeAccountId}:${activeTab}`}
     {#if activeTab === "home"}
     <main id="main-stage-content" tabindex="-1" class="tab-content-view main-stage min-w-0 flex-1 overflow-y-auto outline-none" class:sidebar-collapsed={sidebarCollapsed && uiSettings.collapsedSidebarMode === "hidden"}>
@@ -397,7 +428,12 @@
       {:else if activeTab === "queues"}
         <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "dynamodb"}
-        <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
+        <ActiveSection
+          {sidebarCollapsed}
+          popout={isDynamoPopout}
+          onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
+          onNavigate={isDynamoPopout ? navigateFromPopout : setTab}
+        />
       {:else if activeTab === "sns"}
         <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />
       {:else if activeTab === "secrets"}

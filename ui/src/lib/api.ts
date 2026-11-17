@@ -23,6 +23,11 @@ import type {
   CognitoUserAction,
   CognitoTokens,
   CognitoDecodedToken,
+  DynamoTableDetailResponse,
+  DynamoReadRequest,
+  DynamoReadResponse,
+  DynamoItem,
+  DynamoStreamRecordsResponse,
 } from "#lib/types";
 
 let _activeAccountId = "000000000000";
@@ -1190,3 +1195,140 @@ export function mintCognitoTokens(poolId: string, clientId: string, username: st
 export function decodeCognitoToken(token: string): Promise<CognitoDecodedToken> {
   return cognitoAdmin("/decode", { method: "POST", body: JSON.stringify({ token }) }, "Failed to decode token");
 }
+
+// ── DynamoDB Built-in Viewer ──────────────────────────────────────────
+
+async function dynamoAdmin<T>(path: string, init: RequestInit, fallback: string): Promise<T> {
+  const response = await fetch(endpoint(`/_tarn/admin/dynamodb${path}`), {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...accountHeaders(),
+      ...(init.headers ?? {}),
+    },
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `${fallback}: HTTP ${response.status}`));
+  }
+  return (await response.json()) as T;
+}
+
+export function fetchDynamoTableDetail(
+  tableName: string,
+  signal?: AbortSignal,
+): Promise<DynamoTableDetailResponse> {
+  return dynamoAdmin(
+    `/tables/${encodeURIComponent(tableName)}`,
+    { method: "GET", signal },
+    "Failed to load table detail",
+  );
+}
+
+export function scanDynamoTable(
+  tableName: string,
+  req: DynamoReadRequest = {},
+  signal?: AbortSignal,
+): Promise<DynamoReadResponse> {
+  return dynamoAdmin(
+    `/tables/${encodeURIComponent(tableName)}/scan`,
+    { method: "POST", body: JSON.stringify(req), signal },
+    "DynamoDB scan failed",
+  );
+}
+
+export function queryDynamoTable(
+  tableName: string,
+  req: DynamoReadRequest,
+  signal?: AbortSignal,
+): Promise<DynamoReadResponse> {
+  return dynamoAdmin(
+    `/tables/${encodeURIComponent(tableName)}/query`,
+    { method: "POST", body: JSON.stringify(req), signal },
+    "DynamoDB query failed",
+  );
+}
+
+export function getDynamoItem(
+  tableName: string,
+  key: DynamoItem,
+  signal?: AbortSignal,
+): Promise<{ found: boolean; item: DynamoItem | null }> {
+  return dynamoAdmin(
+    `/tables/${encodeURIComponent(tableName)}/items/get`,
+    { method: "POST", body: JSON.stringify({ key }), signal },
+    "Failed to get item",
+  );
+}
+
+export function putDynamoItem(
+  tableName: string,
+  input: {
+    item: DynamoItem;
+    conditionExpression?: string;
+    expressionAttributeNames?: Record<string, string>;
+    expressionAttributeValues?: DynamoItem;
+  },
+): Promise<{ ok: boolean; attributes?: DynamoItem }> {
+  return dynamoAdmin(
+    `/tables/${encodeURIComponent(tableName)}/items`,
+    { method: "PUT", body: JSON.stringify(input) },
+    "Failed to put item",
+  );
+}
+
+export function updateDynamoItem(
+  tableName: string,
+  input: {
+    key: DynamoItem;
+    updateExpression: string;
+    conditionExpression?: string;
+    expressionAttributeNames?: Record<string, string>;
+    expressionAttributeValues?: DynamoItem;
+    returnValues?: string;
+  },
+): Promise<{ ok: boolean; attributes?: DynamoItem }> {
+  return dynamoAdmin(
+    `/tables/${encodeURIComponent(tableName)}/items`,
+    { method: "PATCH", body: JSON.stringify(input) },
+    "Failed to update item",
+  );
+}
+
+export function deleteDynamoItem(
+  tableName: string,
+  key: DynamoItem,
+  conditionExpression?: string,
+): Promise<{ ok: boolean; attributes?: DynamoItem }> {
+  return dynamoAdmin(
+    `/tables/${encodeURIComponent(tableName)}/items/delete`,
+    { method: "POST", body: JSON.stringify({ key, conditionExpression }) },
+    "Failed to delete item",
+  );
+}
+
+export function fetchDynamoStreamRecords(
+  tableName: string,
+  params: {
+    iteratorType?: "TRIM_HORIZON" | "LATEST" | "AT_SEQUENCE_NUMBER" | "AFTER_SEQUENCE_NUMBER";
+    sequenceNumber?: string;
+    shardId?: string;
+    shardIterator?: string;
+    limit?: number;
+  } = {},
+  signal?: AbortSignal,
+): Promise<DynamoStreamRecordsResponse> {
+  const qs = new URLSearchParams();
+  if (params.iteratorType) qs.set("iteratorType", params.iteratorType);
+  if (params.sequenceNumber) qs.set("sequenceNumber", params.sequenceNumber);
+  if (params.shardId) qs.set("shardId", params.shardId);
+  if (params.shardIterator) qs.set("shardIterator", params.shardIterator);
+  if (params.limit) qs.set("limit", String(params.limit));
+  const suffix = qs.toString();
+  return dynamoAdmin(
+    `/tables/${encodeURIComponent(tableName)}/stream/records${suffix ? `?${suffix}` : ""}`,
+    { method: "GET", signal },
+    "Failed to load stream records",
+  );
+}
+

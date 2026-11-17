@@ -390,6 +390,30 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /_tarn/admin/queues/{name}/redrive", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.RedriveQueueMessages(w, r)
 	})
+	mux.HandleFunc("GET /_tarn/admin/dynamodb/tables/{name}", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.DynamoTableDetail(w, r)
+	})
+	mux.HandleFunc("POST /_tarn/admin/dynamodb/tables/{name}/scan", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.DynamoScan(w, r)
+	})
+	mux.HandleFunc("POST /_tarn/admin/dynamodb/tables/{name}/query", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.DynamoQuery(w, r)
+	})
+	mux.HandleFunc("POST /_tarn/admin/dynamodb/tables/{name}/items/get", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.DynamoGetItem(w, r)
+	})
+	mux.HandleFunc("PUT /_tarn/admin/dynamodb/tables/{name}/items", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.DynamoPutItem(w, r)
+	})
+	mux.HandleFunc("PATCH /_tarn/admin/dynamodb/tables/{name}/items", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.DynamoUpdateItem(w, r)
+	})
+	mux.HandleFunc("POST /_tarn/admin/dynamodb/tables/{name}/items/delete", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.DynamoDeleteItem(w, r)
+	})
+	mux.HandleFunc("GET /_tarn/admin/dynamodb/tables/{name}/stream/records", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.DynamoStreamRecords(w, r)
+	})
 	mux.HandleFunc("GET /_tarn/admin/sqs/disruptor", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.ListDisruptorRules(w, r)
 	})

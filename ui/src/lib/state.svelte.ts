@@ -636,6 +636,13 @@ function initAccountSettings() {
   } catch {
     // ignore corrupt data
   }
+  if (typeof window !== "undefined") {
+    const urlAccount = new URLSearchParams(window.location.search).get("account");
+    if (urlAccount && /^\d{12}$/.test(urlAccount)) {
+      activeAccountId = urlAccount;
+      setApiAccount(activeAccountId);
+    }
+  }
 }
 
 function persistAccountSettings() {

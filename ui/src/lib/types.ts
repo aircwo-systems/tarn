@@ -831,3 +831,222 @@ export interface CognitoDecodedToken {
   expiresAt?: string;
   error?: string;
 }
+
+// ── DynamoDB Built-in Viewer ──────────────────────────────────────────
+
+export interface DynamoAttributeValue {
+  S?: string;
+  N?: string;
+  B?: string;
+  BOOL?: boolean;
+  NULL?: boolean;
+  M?: Record<string, DynamoAttributeValue>;
+  L?: DynamoAttributeValue[];
+  SS?: string[];
+  NS?: string[];
+  BS?: string[];
+}
+
+export type DynamoItem = Record<string, DynamoAttributeValue>;
+
+export interface DynamoKeySchemaItem {
+  attributeName: string;
+  keyType: "HASH" | "RANGE" | string;
+}
+
+export interface DynamoAttributeDefinition {
+  attributeName: string;
+  attributeType: "S" | "N" | "B" | string;
+}
+
+export interface DynamoProjection {
+  projectionType?: string;
+  nonKeyAttributes?: string[];
+}
+
+export interface DynamoThroughput {
+  readCapacityUnits: number;
+  writeCapacityUnits: number;
+  numberOfDecreasesToday?: number;
+}
+
+export interface DynamoLSIDetail {
+  indexName: string;
+  indexArn?: string;
+  keySchema: DynamoKeySchemaItem[];
+  projection: DynamoProjection;
+  itemCount: number;
+  indexSizeBytes: number;
+}
+
+export interface DynamoGSIDetail {
+  indexName: string;
+  indexArn?: string;
+  indexStatus?: string;
+  keySchema: DynamoKeySchemaItem[];
+  projection: DynamoProjection;
+  provisionedThroughput?: DynamoThroughput;
+  itemCount: number;
+  indexSizeBytes: number;
+}
+
+export interface DynamoTriggerIntegration {
+  uuid: string;
+  functionName: string;
+  state: string;
+  batchSize: number;
+  eventSourceArn?: string;
+  lastResult?: string;
+  filterCriteria?: FilterCriteria;
+  logGroup?: string;
+}
+
+export interface DynamoLambdaIntegration {
+  functionName: string;
+  runtime: string;
+  state: string;
+  envKey: string;
+  matchType: string;
+  logGroup?: string;
+}
+
+export interface DynamoECSIntegration {
+  kind: "service" | "task-definition" | string;
+  name: string;
+  arn: string;
+  clusterArn?: string;
+  clusterName?: string;
+  taskDefinitionArn: string;
+  containerName: string;
+  envKey: string;
+  matchType: string;
+  status: string;
+  desiredCount?: number;
+  runningCount?: number;
+  logGroup?: string;
+}
+
+export interface DynamoStepFunctionIntegration {
+  name: string;
+  arn: string;
+  type: string;
+  status: string;
+  matchType: string;
+  stateNames: string[];
+}
+
+export interface DynamoKMSIntegration {
+  keyId: string;
+  arn: string;
+  aliases: string[];
+  description?: string;
+  state: string;
+}
+
+export interface DynamoTableDetailResponse {
+  table: {
+    name: string;
+    arn: string;
+    id: string;
+    status: string;
+    createdDate: string;
+    billingMode?: string;
+    tableClass?: string;
+    itemCount: number;
+    tableSizeBytes: number;
+    deletionProtectionEnabled: boolean;
+    attributeDefinitions: DynamoAttributeDefinition[];
+    keySchema: DynamoKeySchemaItem[];
+    provisionedThroughput?: DynamoThroughput;
+    localSecondaryIndexes: DynamoLSIDetail[];
+    globalSecondaryIndexes: DynamoGSIDetail[];
+    streamEnabled: boolean;
+    streamViewType?: string;
+    latestStreamArn?: string;
+    latestStreamLabel?: string;
+    sseDescription?: {
+      status: string;
+      sseType: string;
+      kmsMasterKeyArn?: string;
+    };
+  };
+  ttl: {
+    attributeName?: string;
+    status: string;
+  };
+  continuousBackups: {
+    status: string;
+    pointInTimeRecoveryStatus: string;
+    earliestRestorableDateTime?: string;
+    latestRestorableDateTime?: string;
+  };
+  kinesisDestinations: {
+    streamArn: string;
+    destinationStatus: string;
+  }[];
+  tags: Record<string, string>;
+  stream?: {
+    arn: string;
+    label?: string;
+    status: string;
+    viewType?: string;
+    shards: {
+      shardId: string;
+      startingSequenceNumber?: string;
+      endingSequenceNumber?: string;
+    }[];
+  };
+  integrations: {
+    triggers: DynamoTriggerIntegration[];
+    lambdas: DynamoLambdaIntegration[];
+    ecs: DynamoECSIntegration[];
+    stepFunctions: DynamoStepFunctionIntegration[];
+    kmsKey?: DynamoKMSIntegration;
+  };
+}
+
+export interface DynamoReadRequest {
+  indexName?: string;
+  keyConditionExpression?: string;
+  filterExpression?: string;
+  projectionExpression?: string;
+  expressionAttributeNames?: Record<string, string>;
+  expressionAttributeValues?: DynamoItem;
+  limit?: number;
+  exclusiveStartKey?: DynamoItem;
+  scanIndexForward?: boolean;
+  select?: string;
+}
+
+export interface DynamoReadResponse {
+  items: DynamoItem[];
+  count: number;
+  scannedCount: number;
+  lastEvaluatedKey?: DynamoItem;
+}
+
+export interface DynamoStreamRecord {
+  eventID: string;
+  eventName: "INSERT" | "MODIFY" | "REMOVE" | string;
+  eventVersion: string;
+  eventSource: string;
+  awsRegion: string;
+  dynamodb: {
+    ApproximateCreationDateTime: number;
+    Keys?: DynamoItem;
+    NewImage?: DynamoItem;
+    OldImage?: DynamoItem;
+    SequenceNumber: string;
+    SizeBytes: number;
+    StreamViewType: string;
+  };
+}
+
+export interface DynamoStreamRecordsResponse {
+  streamArn: string;
+  streamViewType?: string;
+  shardId: string;
+  records: DynamoStreamRecord[];
+  nextShardIterator?: string;
+}
+

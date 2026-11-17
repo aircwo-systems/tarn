@@ -1,41 +1,177 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
-  import { CheckIcon, CopyIcon } from "phosphor-svelte";
+  import { onDestroy, onMount } from "svelte";
+  import {
+    ArrowClockwiseIcon,
+    ArrowSquareOutIcon,
+    CheckIcon,
+    CopyIcon,
+    DatabaseIcon,
+    FlowArrowIcon,
+    LightningIcon,
+    RowsIcon,
+    WarningCircleIcon,
+  } from "phosphor-svelte";
   import RcButton from "#lib/components/rack/rc-button.svelte";
   import RcKv from "#lib/components/rack/rc-kv.svelte";
   import RcPanel from "#lib/components/rack/rc-panel.svelte";
   import RcStat from "#lib/components/rack/rc-stat.svelte";
-  import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
-  import type { DynamoDBStreamSummary, DynamoDBTableSummary, OverviewResponse } from "#lib/types";
+  import RcTonePill from "#lib/components/rack/rc-tone-pill.svelte";
+  import DynamoItemsBrowser from "./dynamodb-items-browser.svelte";
+  import DynamoStreamsTriggers from "./dynamodb-streams-triggers.svelte";
+  import DynamoIntegrations from "./dynamodb-integrations.svelte";
+  import { fetchDynamoTableDetail } from "#lib/api";
+  import { DYNAMO_VIEWER_CHANNEL, dynamoStateTone } from "#lib/dynamodb";
+  import { formatBytes, formatDate } from "#lib/utils";
+  import { refresh as refreshDashboard } from "#lib/state.svelte";
+  import type {
+    DynamoDBStreamSummary,
+    DynamoDBTableSummary,
+    DynamoTableDetailResponse,
+    OverviewResponse,
+  } from "#lib/types";
+
+  export type DynamoSubTab = "overview" | "items" | "streams" | "integrations";
 
   let {
     table,
     streams,
     config,
+    activeSubTab = "overview",
+    popout = false,
+    onSelectSubTab = (_tab: DynamoSubTab) => {},
+    onPopout = () => {},
+    onNavigate = (_target: string) => {},
   }: {
     table: DynamoDBTableSummary;
     streams: DynamoDBStreamSummary[];
     config: OverviewResponse["config"] | null;
+    activeSubTab?: DynamoSubTab;
+    popout?: boolean;
+    onSelectSubTab?: (tab: DynamoSubTab) => void;
+    onPopout?: () => void;
+    onNavigate?: (target: string) => void;
   } = $props();
 
   const numberFormatter = new Intl.NumberFormat("en-GB");
 
-  const indexCount = $derived(table.localIndexes + table.globalIndexes);
-  const shardCount = $derived(streams.reduce((total, stream) => total + stream.shardCount, 0));
-  const tableTone = $derived(stateTone(table.status));
+  let detail = $state<DynamoTableDetailResponse | null>(null);
+  let detailLoading = $state(false);
+  let detailError = $state("");
+  let mutationTick = $state(0);
+
+  let copied = $state<"arn" | "endpoint" | null>(null);
+  let copyTimer: ReturnType<typeof setTimeout> | undefined;
+  let channel: BroadcastChannel | null = null;
+
+  async function loadDetail() {
+    const name = table.name;
+    detailLoading = true;
+    detailError = "";
+    try {
+      const next = await fetchDynamoTableDetail(name);
+      if (table.name === name) {
+        detail = next;
+      }
+    } catch (e) {
+      if (table.name === name) {
+        detailError = e instanceof Error ? e.message : "Failed to load table detail";
+      }
+    } finally {
+      if (table.name === name) {
+        detailLoading = false;
+      }
+    }
+  }
+
+  onMount(() => {
+    void loadDetail();
+    try {
+      channel = new BroadcastChannel(DYNAMO_VIEWER_CHANNEL);
+      channel.onmessage = (ev) => {
+        if (ev.data?.tableName === table.name) {
+          mutationTick += 1;
+          void loadDetail();
+          void refreshDashboard();
+        }
+      };
+    } catch {
+      channel = null;
+    }
+  });
+
+  onDestroy(() => {
+    if (copyTimer) clearTimeout(copyTimer);
+    channel?.close();
+  });
+
+  const resolvedItemCount = $derived(detail?.table.itemCount ?? table.itemCount);
+  const resolvedLSIs = $derived(detail?.table.localSecondaryIndexes ?? []);
+  const resolvedGSIs = $derived(detail?.table.globalSecondaryIndexes ?? []);
+  const indexCount = $derived(
+    detail
+      ? resolvedLSIs.length + resolvedGSIs.length
+      : table.localIndexes + table.globalIndexes,
+  );
+  const shardCount = $derived(
+    detail?.stream?.shards.length ??
+      streams.reduce((total, stream) => total + stream.shardCount, 0),
+  );
+  const tableTone = $derived(dynamoStateTone(detail?.table.status ?? table.status));
   const connectionDetails = $derived(parseEndpoint(config?.endpoint));
 
+  const triggersCount = $derived(detail?.integrations?.triggers?.length ?? 0);
+  const integrationsCount = $derived(
+    detail
+      ? (detail.integrations.triggers?.length ?? 0) +
+          (detail.integrations.lambdas?.length ?? 0) +
+          (detail.integrations.ecs?.length ?? 0) +
+          (detail.integrations.stepFunctions?.length ?? 0) +
+          (detail.integrations.kmsKey ? 1 : 0) +
+          (detail.kinesisDestinations?.length ?? 0)
+      : 0,
+  );
+
   const tableDetails = $derived([
-    { label: "ARN", value: table.arn, mono: true, dim: true },
-    { label: "Created", value: formatDate(table.createdDate) },
-    { label: "Billing mode", value: table.billingMode || "not reported", mono: true },
+    { label: "ARN", value: detail?.table.arn ?? table.arn, mono: true, dim: true },
+    { label: "Created", value: formatDate(detail?.table.createdDate ?? table.createdDate) },
+    {
+      label: "Billing mode",
+      value: detail?.table.billingMode ?? (table.billingMode || "PAY_PER_REQUEST"),
+      mono: true,
+    },
     { label: "Key schema", value: table.keySchema, mono: true },
+    ...(detail?.table.tableClass
+      ? [{ label: "Table class", value: detail.table.tableClass, mono: true }]
+      : []),
+    {
+      label: "Deletion guard",
+      value: detail?.table.deletionProtectionEnabled ? "Enabled" : "Disabled",
+    },
   ]);
 
-  const indexDetails = $derived([
-    { label: "Local indexes", value: numberFormatter.format(table.localIndexes), mono: true },
-    { label: "Global indexes", value: numberFormatter.format(table.globalIndexes), mono: true },
-  ]);
+  const governanceItems = $derived(
+    detail
+      ? [
+          {
+            label: "TTL",
+            value:
+              detail.ttl.status === "ENABLED"
+                ? `Enabled (${detail.ttl.attributeName || "attribute unset"})`
+                : detail.ttl.status || "DISABLED",
+          },
+          {
+            label: "PITR backups",
+            value: detail.continuousBackups.pointInTimeRecoveryStatus || "DISABLED",
+          },
+          {
+            label: "Encryption",
+            value: detail.table.sseDescription
+              ? `${detail.table.sseDescription.sseType || "KMS"} (${detail.table.sseDescription.status})`
+              : "Default AWS owned",
+          },
+        ]
+      : [],
+  );
 
   const connectionItems = $derived([
     { label: "Endpoint", value: connectionDetails.endpoint, mono: true },
@@ -47,42 +183,17 @@
     { label: "Secret key", value: "test", mono: true },
   ]);
 
-  let copied = $state<"arn" | "stream" | "endpoint" | null>(null);
-  let copyTimer: ReturnType<typeof setTimeout> | undefined;
-
-  async function copy(value: string, kind: "arn" | "stream" | "endpoint") {
+  async function copy(value: string, kind: "arn" | "endpoint") {
     try {
       await navigator.clipboard.writeText(value);
       copied = kind;
       if (copyTimer) clearTimeout(copyTimer);
       copyTimer = setTimeout(() => (copied = null), 1600);
-    } catch {
-      // Clipboard access is optional in local or insecure browser contexts.
-    }
-  }
-
-  onDestroy(() => {
-    if (copyTimer) clearTimeout(copyTimer);
-  });
-
-  function stateTone(value: string | undefined): Tone {
-    const state = value?.toLowerCase() ?? "";
-    if (["active", "enabled", "available"].includes(state)) return "green";
-    if (["creating", "updating", "deleting", "archiving"].includes(state)) return "amber";
-    if (["failed", "error", "inactive"].includes(state)) return "red";
-    return "neutral";
-  }
-
-  function formatDate(value?: string | number): string {
-    if (!value) return "--";
-    if (typeof value === "number") return new Date(value * 1000).toLocaleString();
-    const parsed = new Date(value);
-    return Number.isNaN(parsed.valueOf()) ? String(value) : parsed.toLocaleString();
+    } catch {}
   }
 
   function parseEndpoint(endpoint?: string) {
     if (!endpoint) return { endpoint: "--", host: "--", port: "--" };
-
     try {
       const parsed = new URL(endpoint);
       return {
@@ -94,6 +205,11 @@
       return { endpoint, host: "--", port: "--" };
     }
   }
+
+  function handleMutated() {
+    void loadDetail();
+    void refreshDashboard();
+  }
 </script>
 
 <div class="detail">
@@ -101,115 +217,240 @@
     <div class="identity">
       <div class="title-row">
         <h1 title={table.name}>{table.name}</h1>
-        <RcTonePill tone={tableTone}>{table.status.toLowerCase()}</RcTonePill>
+        <RcTonePill tone={tableTone}>{(detail?.table.status ?? table.status).toLowerCase()}</RcTonePill>
       </div>
       <p class="subline">
         <span>DynamoDB table</span><i></i>
-        <span>{numberFormatter.format(table.itemCount)} items</span><i></i>
+        <span>{numberFormatter.format(resolvedItemCount)} items</span><i></i>
         <span>{table.keySchema}</span>
+        {#if detail}
+          <i></i>
+          <span>{formatBytes(detail.table.tableSizeBytes)}</span>
+        {/if}
       </p>
     </div>
+
     <div class="hero-actions">
+      <RcButton small variant="ghost" disabled={detailLoading} onclick={loadDetail}>
+        <ArrowClockwiseIcon size={12} />
+        {detailLoading ? "Syncing..." : "Refresh"}
+      </RcButton>
       <RcButton small onclick={() => copy(table.arn, "arn")}>
         {#if copied === "arn"}<CheckIcon size={11} />Copied{:else}<CopyIcon size={11} />ARN{/if}
       </RcButton>
+      {#if !popout}
+        <RcButton small onclick={onPopout} title="Open DynamoDB viewer in a standalone window">
+          <ArrowSquareOutIcon size={12} />
+          Pop out
+        </RcButton>
+      {/if}
     </div>
   </header>
 
-  <div class="stats">
-    <RcStat label="Items" value={numberFormatter.format(table.itemCount)} sub="reported by table" />
-    <RcStat label="Indexes" value={numberFormatter.format(indexCount)} sub="{table.localIndexes} LSI · {table.globalIndexes} GSI" />
-    <RcStat
-      label="Stream"
-      value={table.streamEnabled ? "On" : "Off"}
-      sub={streams.length ? `${streams.length} channel${streams.length === 1 ? "" : "s"}` : "not configured"}
-      tone={table.streamEnabled ? "green" : undefined}
-    />
-    <RcStat label="Shards" value={streams.length ? numberFormatter.format(shardCount) : "--"} sub="across selected streams" />
-  </div>
+  <nav class="subtabs" aria-label="Table viewer sections">
+    <button
+      type="button"
+      class="subtab"
+      class:active={activeSubTab === "overview"}
+      onclick={() => onSelectSubTab("overview")}
+    >
+      <DatabaseIcon size={13} />
+      <span>Overview</span>
+    </button>
+    <button
+      type="button"
+      class="subtab"
+      class:active={activeSubTab === "items"}
+      onclick={() => onSelectSubTab("items")}
+    >
+      <RowsIcon size={13} />
+      <span>Items</span>
+      <span class="tab-count">{numberFormatter.format(resolvedItemCount)}</span>
+    </button>
+    <button
+      type="button"
+      class="subtab"
+      class:active={activeSubTab === "streams"}
+      onclick={() => onSelectSubTab("streams")}
+    >
+      <LightningIcon size={13} />
+      <span>Streams &amp; Triggers</span>
+      {#if triggersCount > 0}
+        <span class="tab-count">{triggersCount}</span>
+      {:else if table.streamEnabled}
+        <span class="tab-dot"></span>
+      {/if}
+    </button>
+    <button
+      type="button"
+      class="subtab"
+      class:active={activeSubTab === "integrations"}
+      onclick={() => onSelectSubTab("integrations")}
+    >
+      <FlowArrowIcon size={13} />
+      <span>Integrations</span>
+      {#if integrationsCount > 0}
+        <span class="tab-count">{integrationsCount}</span>
+      {/if}
+    </button>
+  </nav>
 
-  <div class="split">
-    <RcPanel title="Table shape" description="Identity, capacity mode, and primary key layout." index={0}>
-      <RcKv items={tableDetails} labelWidth="7rem" />
-    </RcPanel>
+  {#if detailError}
+    <div class="error-banner" role="alert">
+      <WarningCircleIcon size={14} />
+      <span>{detailError}</span>
+    </div>
+  {/if}
 
-    <RcPanel title="Indexes" description="Secondary indexes reported for this table." index={1}>
-      <div class="index-summary">
-        <span class="index-total">{numberFormatter.format(indexCount)}</span>
-        <span><b>configured indexes</b><small>{indexCount ? "query paths beyond the primary key" : "no secondary access paths"}</small></span>
-      </div>
-      <RcKv items={indexDetails} labelWidth="7rem" />
-      {#if indexCount === 0}<p class="note">No local or global secondary indexes are configured.</p>{/if}
-    </RcPanel>
-  </div>
+  {#if activeSubTab === "overview"}
+    <div class="stats">
+      <RcStat
+        label="Items"
+        value={numberFormatter.format(resolvedItemCount)}
+        sub="stored in table"
+      />
+      <RcStat
+        label="Size"
+        value={detail ? formatBytes(detail.table.tableSizeBytes) : "--"}
+        sub={detail?.table.billingMode ?? table.billingMode ?? "PAY_PER_REQUEST"}
+      />
+      <RcStat
+        label="Indexes"
+        value={numberFormatter.format(indexCount)}
+        sub="{detail ? resolvedLSIs.length : table.localIndexes} LSI · {detail ? resolvedGSIs.length : table.globalIndexes} GSI"
+      />
+      <RcStat
+        label="Stream"
+        value={table.streamEnabled ? "On" : "Off"}
+        sub={table.streamEnabled ? `${shardCount || 1} shard${shardCount === 1 ? "" : "s"}` : "not configured"}
+        tone={table.streamEnabled ? "green" : undefined}
+      />
+    </div>
 
-  <RcPanel title="Streams" description="Change data capture channels attached to this table." index={2}>
-    {#snippet actions()}
-      <RcTonePill tone={table.streamEnabled ? "green" : "neutral"}>{table.streamEnabled ? "enabled" : "disabled"}</RcTonePill>
-    {/snippet}
-
-    {#if streams.length === 0 && table.streamEnabled && table.streamArn}
-      <div class="stream-row">
-        <div class="stream-main">
-          <div class="stream-heading">
-            <span class="stream-label">{table.latestStreamLabel || table.streamViewType || "DynamoDB stream"}</span>
-            <RcTonePill tone="neutral">summary</RcTonePill>
+    <div class="split">
+      <RcPanel title="Table shape" description="Identity, capacity mode, and primary key layout." index={0}>
+        <RcKv items={tableDetails} labelWidth="7.5rem" />
+        {#if detail?.table.attributeDefinitions?.length}
+          <div class="attr-defs">
+            <span class="eyebrow">Key &amp; Index Attributes</span>
+            <div class="attr-chips">
+              {#each detail.table.attributeDefinitions as attr (attr.attributeName)}
+                <span class="attr-chip">
+                  <b>{attr.attributeName}</b>
+                  <small>{attr.attributeType}</small>
+                </span>
+              {/each}
+            </div>
           </div>
-          <button type="button" class="stream-arn" title="Copy stream ARN" onclick={() => copy(table.streamArn!, "stream")}>
-            <span>{table.streamArn}</span>
-            {#if copied === "stream"}<CheckIcon size={11} />{:else}<CopyIcon size={11} />{/if}
-          </button>
-        </div>
-        <div class="stream-facts">
-          <span><b>View</b>{table.streamViewType || "--"}</span>
-          <span><b>Shards</b>--</span>
-        </div>
-      </div>
-    {:else if streams.length === 0}
-      <p class="empty">No stream channels are attached to this table.</p>
-    {:else}
-      <div class="stream-list">
-        {#each streams as stream (stream.streamArn)}
-          <div class="stream-row">
-            <div class="stream-main">
-              <div class="stream-heading">
-                <span class="stream-label">{stream.streamLabel || stream.streamViewType || "DynamoDB stream"}</span>
-                <RcTonePill tone={stateTone(stream.streamStatus)}>{stream.streamStatus.toLowerCase()}</RcTonePill>
-              </div>
-              <button type="button" class="stream-arn" title="Copy stream ARN" onclick={() => copy(stream.streamArn, "stream")}>
-                <span>{stream.streamArn}</span>
-                {#if copied === "stream"}<CheckIcon size={11} />{:else}<CopyIcon size={11} />{/if}
+        {/if}
+      </RcPanel>
+
+      <RcPanel title="Governance &amp; Encryption" description="TTL, PITR backups, KMS encryption, and tags." index={1}>
+        {#if detail}
+          <RcKv items={governanceItems} labelWidth="7.5rem" />
+          {#if detail.integrations.kmsKey}
+            <div class="kms-row">
+              <span>KMS Key</span>
+              <button
+                type="button"
+                class="inline-link"
+                onclick={() => onNavigate(`kms?key=${encodeURIComponent(detail!.integrations.kmsKey!.keyId)}`)}
+              >
+                {detail.integrations.kmsKey.aliases?.[0] || detail.integrations.kmsKey.keyId}
               </button>
             </div>
-            <div class="stream-facts">
-              <span><b>View</b>{stream.streamViewType || "--"}</span>
-              <span><b>Shards</b>{numberFormatter.format(stream.shardCount)}</span>
-              <span><b>Created</b>{formatDate(stream.createdDate)}</span>
+          {/if}
+          {#if Object.keys(detail.tags ?? {}).length > 0}
+            <div class="tags-wrap">
+              <span class="eyebrow">Tags</span>
+              <div class="tag-chips">
+                {#each Object.entries(detail.tags) as [k, v] (k)}
+                  <span class="tag-chip">{k}={v}</span>
+                {/each}
+              </div>
             </div>
-          </div>
-        {/each}
-      </div>
-    {/if}
-  </RcPanel>
+          {/if}
+        {:else}
+          <p class="note">Loading table configuration...</p>
+        {/if}
+      </RcPanel>
+    </div>
 
-  <RcPanel title="Connect externally" description="Use any AWS SDK, the AWS CLI, or a DynamoDB-compatible client." index={3}>
-    {#snippet actions()}
-      <RcButton small variant="ghost" onclick={() => copy(connectionDetails.endpoint, "endpoint")}>
-        {#if copied === "endpoint"}<CheckIcon size={11} />Copied{:else}<CopyIcon size={11} />Endpoint{/if}
-      </RcButton>
-    {/snippet}
+    <RcPanel title="Secondary Indexes" description="Global and local secondary access paths." index={2}>
+      {#if indexCount === 0}
+        <p class="empty">No local or global secondary indexes are configured.</p>
+      {:else if detail}
+        <div class="indexes-list">
+          {#each resolvedGSIs as gsi (gsi.indexName)}
+            <div class="index-row">
+              <div class="index-head">
+                <span class="index-kind">GSI</span>
+                <span class="index-name">{gsi.indexName}</span>
+                {#if gsi.indexStatus}
+                  <RcTonePill tone={dynamoStateTone(gsi.indexStatus)}>{gsi.indexStatus.toLowerCase()}</RcTonePill>
+                {/if}
+              </div>
+              <div class="index-meta">
+                <span>Keys: <code>{gsi.keySchema.map((k) => `${k.attributeName} (${k.keyType})`).join(", ")}</code></span>
+                <span>Projection: <code>{gsi.projection?.projectionType || "ALL"}</code></span>
+                <span>{numberFormatter.format(gsi.itemCount)} items · {formatBytes(gsi.indexSizeBytes)}</span>
+              </div>
+            </div>
+          {/each}
+          {#each resolvedLSIs as lsi (lsi.indexName)}
+            <div class="index-row">
+              <div class="index-head">
+                <span class="index-kind">LSI</span>
+                <span class="index-name">{lsi.indexName}</span>
+              </div>
+              <div class="index-meta">
+                <span>Keys: <code>{lsi.keySchema.map((k) => `${k.attributeName} (${k.keyType})`).join(", ")}</code></span>
+                <span>Projection: <code>{lsi.projection?.projectionType || "ALL"}</code></span>
+                <span>{numberFormatter.format(lsi.itemCount)} items · {formatBytes(lsi.indexSizeBytes)}</span>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </RcPanel>
 
-    <div class="connection-grid">
-      <RcKv items={connectionItems} labelWidth="7rem" />
-      <div class="client-note">
-        <span class="eyebrow">Client setup</span>
-        <p>Point your client at the endpoint override and use the local credentials above. Tarn speaks the standard DynamoDB JSON API used by AWS SDKs and CLI tooling.</p>
-        <pre>endpoint_url = "{connectionDetails.endpoint}"
+    <RcPanel title="Connect externally" description="Use any AWS SDK, the AWS CLI, or a DynamoDB-compatible client." index={3}>
+      {#snippet actions()}
+        <RcButton small variant="ghost" onclick={() => copy(connectionDetails.endpoint, "endpoint")}>
+          {#if copied === "endpoint"}<CheckIcon size={11} />Copied{:else}<CopyIcon size={11} />Endpoint{/if}
+        </RcButton>
+      {/snippet}
+
+      <div class="connection-grid">
+        <RcKv items={connectionItems} labelWidth="7rem" />
+        <div class="client-note">
+          <span class="eyebrow">Client setup</span>
+          <p>Point your client at the endpoint override and use the local credentials above. Tarn speaks the standard DynamoDB JSON API used by AWS SDKs and CLI tooling.</p>
+          <pre>endpoint_url = "{connectionDetails.endpoint}"
 region = "{config?.region ?? "--"}"
 access_key_id = "test"</pre>
+        </div>
       </div>
-    </div>
-  </RcPanel>
+    </RcPanel>
+  {:else if activeSubTab === "items"}
+    {#if detail}
+      <DynamoItemsBrowser {detail} externalMutationTick={mutationTick} onMutated={handleMutated} />
+    {:else}
+      <p class="note">Loading table schema...</p>
+    {/if}
+  {:else if activeSubTab === "streams"}
+    {#if detail}
+      <DynamoStreamsTriggers {detail} {onNavigate} />
+    {:else}
+      <p class="note">Loading streams &amp; triggers...</p>
+    {/if}
+  {:else if activeSubTab === "integrations"}
+    {#if detail}
+      <DynamoIntegrations {detail} {onNavigate} />
+    {:else}
+      <p class="note">Loading infrastructure integrations...</p>
+    {/if}
+  {/if}
 </div>
 
 <style>
@@ -224,7 +465,59 @@ access_key_id = "test"</pre>
   }
   .subline { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 4px; font-size: 11.5px; color: var(--text-tertiary); }
   .subline i { width: 3px; height: 3px; border-radius: 1px; background: var(--border-default); }
-  .hero-actions { display: flex; gap: 6px; }
+  .hero-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  .subtabs {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    border-bottom: 1px solid var(--border-subtle);
+    padding-bottom: 1px;
+    overflow-x: auto;
+  }
+  .subtab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 12px;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    transition: color 120ms ease, border-color 120ms ease;
+  }
+  .subtab:hover { color: var(--text-primary); }
+  .subtab.active {
+    color: var(--text-primary);
+    border-bottom-color: var(--text-primary);
+  }
+  .tab-count {
+    padding: 1px 6px;
+    border-radius: 99px;
+    background: var(--bg-element);
+    font: 10.5px var(--font-mono, ui-monospace, monospace);
+    color: var(--text-tertiary);
+  }
+  .tab-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent-green);
+  }
+
+  .error-banner {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid color-mix(in srgb, var(--accent-red) 35%, transparent);
+    background: color-mix(in srgb, var(--accent-red) 10%, transparent);
+    color: var(--accent-red);
+    font-size: 12px;
+  }
 
   .stats {
     display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; padding: 14px 2px 10px;
@@ -236,35 +529,74 @@ access_key_id = "test"</pre>
   .split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
   @media (max-width: 1100px) { .split { grid-template-columns: minmax(0, 1fr); } }
 
-  .index-summary {
-    display: flex; align-items: center; gap: 12px; min-height: 52px; margin-bottom: 14px; padding-bottom: 12px;
-    border-bottom: 1px solid var(--border-subtle);
+  .attr-defs, .tags-wrap {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-subtle);
   }
-  .index-total { font: 600 24px var(--font-mono, ui-monospace, monospace); letter-spacing: -0.04em; color: var(--text-primary); }
-  .index-summary span:last-child { display: flex; flex-direction: column; gap: 2px; }
-  .index-summary b { font-size: 11.5px; font-weight: 500; color: var(--text-secondary); }
-  .index-summary small { font-size: 10.5px; color: var(--text-tertiary); }
+  .attr-chips, .tag-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .attr-chip, .tag-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border-subtle);
+    background: var(--bg-element);
+    font: 11px var(--font-mono, ui-monospace, monospace);
+    color: var(--text-primary);
+  }
+  .attr-chip small { color: var(--text-tertiary); }
+  .kms-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-subtle);
+    font-size: 11.5px;
+    color: var(--text-secondary);
+  }
+  .inline-link {
+    font: 11.5px var(--font-mono, ui-monospace, monospace);
+    color: var(--text-primary);
+    text-decoration: underline;
+  }
 
-  .stream-list { display: flex; flex-direction: column; }
-  .stream-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(13rem, 0.8fr); gap: 18px; padding: 10px 0; border-top: 1px solid var(--border-subtle); }
-  .stream-row:first-child { padding-top: 0; border-top: 0; }
-  .stream-main { min-width: 0; }
-  .stream-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-  .stream-label { font: 12px var(--font-mono, ui-monospace, monospace); color: var(--text-primary); }
-  .stream-arn {
-    display: flex; align-items: center; gap: 6px; max-width: 100%; margin-top: 6px; padding: 2px 4px; margin-left: -4px;
-    border-radius: 6px; text-align: left; font: 10.5px var(--font-mono, ui-monospace, monospace); color: var(--text-tertiary);
-    transition: color 120ms ease, background 120ms ease;
+  .indexes-list { display: flex; flex-direction: column; }
+  .index-row {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    padding: 10px 0;
+    border-top: 1px solid var(--border-subtle);
   }
-  .stream-arn span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .stream-arn:hover { color: var(--text-primary); background: var(--bg-element-hover); }
-  .stream-arn:focus-visible { outline: 1px solid var(--border-focus); outline-offset: 2px; }
-  .stream-facts { display: flex; flex-wrap: wrap; align-content: center; justify-content: flex-end; gap: 6px 14px; font-size: 10.5px; color: var(--text-secondary); }
-  .stream-facts span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-  .stream-facts b { font-size: 9.5px; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-tertiary); }
+  .index-row:first-child { padding-top: 0; border-top: 0; }
+  .index-head { display: flex; align-items: center; gap: 8px; }
+  .index-kind {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: var(--bg-element);
+    border: 1px solid var(--border-subtle);
+    font: 600 10px var(--font-mono, ui-monospace, monospace);
+    color: var(--text-secondary);
+  }
+  .index-name { font: 600 12.5px var(--font-mono, ui-monospace, monospace); color: var(--text-primary); }
+  .index-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 16px;
+    font-size: 11px;
+    color: var(--text-secondary);
+  }
+  .index-meta code { font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-primary); }
 
   .empty, .note { font-size: 11.5px; color: var(--text-tertiary); }
-  .note { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
 
   .connection-grid { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(15rem, 0.9fr); gap: 24px; }
   .client-note { align-self: start; padding: 12px; border-left: 2px solid var(--border-default); background: var(--bg-app); }
@@ -276,8 +608,7 @@ access_key_id = "test"</pre>
   }
 
   @media (max-width: 700px) {
-    .stream-row, .connection-grid { grid-template-columns: minmax(0, 1fr); gap: 10px; }
-    .stream-facts { justify-content: flex-start; }
+    .connection-grid { grid-template-columns: minmax(0, 1fr); gap: 10px; }
   }
   @media (prefers-reduced-motion: reduce) { .stats { animation: none; } }
 </style>
