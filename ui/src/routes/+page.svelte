@@ -45,6 +45,7 @@
     matchesResourceType,
     matchesInfrastructureFilter,
   } from "#lib/filter-utils";
+  import { countECSResources } from "#lib/ecs";
   import {
     TabNavigationHistory,
     logStateFromLocation,
@@ -220,7 +221,7 @@
   const countGateways    = $derived((dashboard.data?.gateways ?? []).filter(g => matchesResourceFilter("gateway", filters.tagFilter, g.tags)).length);
   const visibleFunctions = $derived((dashboard.data?.functions ?? []).filter(f => matchesResourceFilter("function", filters.tagFilter, f.tags)));
   const countFunctions   = $derived(visibleFunctions.length);
-  const countECS         = $derived(!matchesResourceType("ecs", filters.tagFilter) ? 0 : ((dashboard.data?.ecs?.clusters?.length ?? 0) + (dashboard.data?.ecs?.services?.length ?? 0) + (dashboard.data?.ecs?.tasks?.length ?? 0)));
+  const countECS         = $derived(!matchesResourceType("ecs", filters.tagFilter) ? 0 : countECSResources(dashboard.data?.ecs));
   const visibleQueues = $derived((dashboard.data?.queues ?? []).filter(q => matchesResourceFilter("queue", filters.tagFilter, q.tags)));
   const countQueues      = $derived(visibleQueues.length);
   const countTopics      = $derived((dashboard.data?.topics ?? []).filter(t => matchesResourceFilter("topic", filters.tagFilter, t.tags)).length);

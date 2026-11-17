@@ -76,3 +76,16 @@ export function tasksForService(tasks: ECSTaskSummary[], service: ECSServiceSumm
 export function isServiceTask(task: ECSTaskSummary): boolean {
   return task.group?.startsWith("service:") ?? false;
 }
+
+export function isActiveTask(task: ECSTaskSummary): boolean {
+  return task.lastStatus?.trim().toUpperCase() !== "STOPPED";
+}
+
+export function countECSResources(ecs: ECSOverview | null | undefined): number {
+  if (!ecs) return 0;
+  return (
+    (ecs.clusters?.length ?? 0) +
+    (ecs.services?.length ?? 0) +
+    (ecs.tasks ?? []).filter(isActiveTask).length
+  );
+}
