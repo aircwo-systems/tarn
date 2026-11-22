@@ -20,7 +20,7 @@ Create HTTP and REST APIs with Tarn.
 | DeleteRoute | Supported | |
 | CreateIntegration | Supported | Lambda (`AWS_PROXY`) and SQS (`AWS`) |
 | DeleteIntegration | Supported | |
-| CreateStage | Supported | |
+| CreateStage | Supported | Creates an auto-deployed stage with an optional description |
 | DeleteStage | Supported | |
 | GetStage | Supported | |
 | ListStages | Supported | |
@@ -115,6 +115,10 @@ In Tarn:
 ```bash
 curl http://127.0.0.1:4566/_apigateway/{api-id}/{stage}/path
 ```
+
+Tarn creates an HTTP API's `$default` stage with the API. Use `CreateStage` or `aws_apigatewayv2_stage` with `auto_deploy = true` to create a named stage such as `dev`. Every stage serves the API's current routes immediately. Tarn always enables automatic deployment for HTTP API stages. Deleting a stage removes its invoke URL.
+
+HTTP API Lambda proxy responses can set multiple cookies with the payload 2.0 `cookies` array. Tarn sends each entry as a separate `Set-Cookie` header alongside any cookie already in `headers`. Payload 1.0 proxy responses can use `multiValueHeaders` on both HTTP and REST APIs.
 
 ## CORS
 

@@ -505,7 +505,7 @@ func TestColdStartGateCancellation(t *testing.T) {
 			cancel()
 		}
 		done := make(chan error, 1)
-		go func() { _, _, err := svc.acquireContainer(ctx, fn, "", nil, ""); done <- err }()
+		go func() { _, _, err := svc.acquireContainer(ctx, fn, "", nil, "", false); done <- err }()
 		if !preCancelled {
 			time.Sleep(10 * time.Millisecond)
 			cancel()

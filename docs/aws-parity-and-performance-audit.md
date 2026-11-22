@@ -27,7 +27,6 @@ Both versions are core Tarn surfaces, and several gaps break Terraform applies.
 
 | Missing | Why it matters |
 |---|---|
-| `CreateStage`, `DeleteStage` (`POST`/`DELETE /v2/apis/{id}/stages`) | Terraform `aws_apigatewayv2_stage`. Only list, get and patch exist. |
 | Authorizers (`/v2/apis/{id}/authorizers`) | JWT and Lambda authorizers: `aws_apigatewayv2_authorizer`. |
 | Deployments (`/v2/apis/{id}/deployments`) | `aws_apigatewayv2_deployment`. |
 | Route responses, integration responses, models, custom domains and API mappings | Lower priority. |

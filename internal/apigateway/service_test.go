@@ -1,6 +1,8 @@
 package apigateway
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -10,6 +12,60 @@ import (
 	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
+
+type testLambda struct {
+	invoke func(context.Context, *types.InvokeInput) (*types.InvokeOutput, error)
+}
+
+func (l testLambda) Invoke(ctx context.Context, input *types.InvokeInput) (*types.InvokeOutput, error) {
+	return l.invoke(ctx, input)
+}
+
+func (testLambda) GetFunction(name string) (*types.FunctionConfig, error) {
+	return &types.FunctionConfig{FunctionName: name}, nil
+}
+
+func TestLambdaIntegrationDoesNotRetryFailedInvocations(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		output  *types.InvokeOutput
+		err     error
+		wantErr bool
+	}{
+		{name: "invoke rejected", err: errors.New("RIE invocation failed: EOF"), wantErr: true},
+		{name: "runtime exited", output: &types.InvokeOutput{FunctionError: "Unhandled", Payload: []byte(`{"errorType":"Runtime.ExitError"}`)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			svc := NewService(config.Default(), testLambda{invoke: func(context.Context, *types.InvokeInput) (*types.InvokeOutput, error) {
+				calls++
+				return tc.output, tc.err
+			}}, nil)
+			api, err := svc.CreateAPI("orders", "", "HTTP", "", nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			integration, err := svc.CreateIntegration(api.APIID, IntegrationCreateInput{IntegrationURI: "arn:aws:lambda:us-east-1:000000000000:function:orders"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := svc.CreateRoute(api.APIID, RouteCreateInput{RouteKey: "POST /orders", Target: "integrations/" + integration.IntegrationID}); err != nil {
+				t.Fatal(err)
+			}
+			out, err := svc.Invoke(t.Context(), &InvokeInput{APIID: api.APIID, Stage: "$default", Method: http.MethodPost, Path: "/orders"})
+			if calls != 1 {
+				t.Errorf("Lambda invokes = %d, want 1", calls)
+			}
+			if tc.wantErr {
+				if !errors.Is(err, tc.err) {
+					t.Fatalf("got %v, want %v", err, tc.err)
+				}
+			} else if err != nil || out == nil || out.StatusCode != http.StatusBadGateway || string(out.Body) != `{"message":"Internal server error"}` {
+				t.Fatalf("got %+v, error %v, want generic 502 response", out, err)
+			}
+		})
+	}
+}
 
 func TestCreateAPICreatesDefaultStage(t *testing.T) {
 	svc := newTestService(t)
@@ -189,6 +245,7 @@ func TestAPIGatewayStatePersistsToDisk(t *testing.T) {
 	if err := svc.Init(); err != nil {
 		t.Fatalf("init apigateway: %v", err)
 	}
+	t.Cleanup(svc.Close)
 
 	api, err := svc.CreateAPI("persisted-api", "api", "HTTP", "", nil, nil)
 	if err != nil {
@@ -202,12 +259,19 @@ func TestAPIGatewayStatePersistsToDisk(t *testing.T) {
 	if _, err := svc.CreateRoute(api.APIID, RouteCreateInput{RouteKey: "GET /orders/{id}", Target: "integrations/" + integration.IntegrationID}); err != nil {
 		t.Fatalf("create route: %v", err)
 	}
+	if _, err := svc.CreateStage(api.APIID, "preview", "preview traffic"); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.DeleteStage(api.APIID, "$default"); err != nil {
+		t.Fatal(err)
+	}
 	svc.Flush()
 
 	reloaded := NewService(cfg, lambdaSvc, nil)
 	if err := reloaded.Init(); err != nil {
 		t.Fatalf("reload apigateway: %v", err)
 	}
+	t.Cleanup(reloaded.Close)
 
 	apis := reloaded.ListAPIs()
 	if len(apis) != 1 || apis[0].Name != "persisted-api" {
@@ -219,6 +283,10 @@ func TestAPIGatewayStatePersistsToDisk(t *testing.T) {
 	}
 	if len(routes) != 1 || routes[0].RouteKey != "GET /orders/{id}" {
 		t.Fatalf("unexpected routes after reload: %+v", routes)
+	}
+	stages, err := reloaded.ListStages(api.APIID)
+	if err != nil || len(stages) != 1 || stages[0].StageName != "preview" || stages[0].Description != "preview traffic" {
+		t.Fatalf("unexpected stages after reload: %+v, error %v", stages, err)
 	}
 }
 

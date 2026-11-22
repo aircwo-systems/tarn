@@ -192,7 +192,7 @@ func TestInvokerTimeout(t *testing.T) {
 func TestWaitForReady(t *testing.T) {
 	inv := NewInvoker()
 
-	// Start a TCP listener with a delay to simulate container startup
+	// Start an HTTP server with a delay to simulate container startup
 	listener := mustListenLocalhost(t)
 	port := fmt.Sprintf("%d", listener.Addr().(*net.TCPAddr).Port)
 	_ = listener.Close() // close — will reopen after delay
@@ -204,15 +204,8 @@ func TestWaitForReady(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer func() { _ = l.Close() }()
-		// Accept connections to keep the listener alive
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				return
-			}
-			_ = conn.Close()
-		}
+		srv := &http.Server{Handler: http.NotFoundHandler()}
+		_ = srv.Serve(l)
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -221,6 +214,28 @@ func TestWaitForReady(t *testing.T) {
 	err := inv.WaitForReady(ctx, port)
 	if err != nil {
 		t.Fatalf("expected WaitForReady to succeed, got: %v", err)
+	}
+}
+
+// Docker's published port accepts TCP and closes it while the RIE is not yet
+// listening. That must not count as ready.
+func TestWaitForReadyIgnoresAcceptThenCloseProxy(t *testing.T) {
+	listener := mustListenLocalhost(t)
+	defer func() { _ = listener.Close() }()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+	if err := NewInvoker().WaitForReady(ctx, fmt.Sprintf("%d", listener.Addr().(*net.TCPAddr).Port)); err == nil {
+		t.Fatal("accept-then-close listener reported ready")
 	}
 }
 

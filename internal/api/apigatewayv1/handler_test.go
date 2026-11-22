@@ -2,14 +2,70 @@ package apigatewayv1
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 
 	apisvc "github.com/aircwo-systems/tarn/internal/apigatewayv1"
 	"github.com/aircwo-systems/tarn/internal/config"
+	"github.com/aircwo-systems/tarn/pkg/types"
 )
+
+type testLambda struct{ output types.InvokeOutput }
+
+func (l *testLambda) Invoke(context.Context, *types.InvokeInput) (*types.InvokeOutput, error) {
+	return &l.output, nil
+}
+
+func TestRESTLambdaProxyResponsePreservesMultiValueHeaders(t *testing.T) {
+	cfg := config.Default()
+	cfg.DataDir = t.TempDir()
+	lambda := &testLambda{output: types.InvokeOutput{StatusCode: http.StatusOK, Payload: []byte(
+		`{"statusCode":201,"headers":{"set-cookie":"session=abc","x-result":"ok"},"multiValueHeaders":{"Set-Cookie":["session=abc","theme=dark"],"x-result":["saved"]},"body":"created"}`,
+	)}}
+	svc := apisvc.NewService(cfg, lambda, nil)
+	api, err := svc.CreateAPI("sessions", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.PutMethod(api.ID, api.RootResourceID, http.MethodPost, "NONE", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.PutIntegration(api.ID, api.RootResourceID, http.MethodPost, "AWS_PROXY", http.MethodPost,
+		"arn:aws:apigateway:us-east-1:lambda:path/2015-03-31/functions/arn:aws:lambda:us-east-1:000000000000:function:sessions/invocations", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.CreateDeployment(api.ID, "", "dev"); err != nil {
+		t.Fatal(err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /_aws/execute-api/{apiId}/{stage}", NewHandler(svc).Invoke)
+	invoke := func() *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/_aws/execute-api/"+api.ID+"/dev", nil))
+		return response
+	}
+
+	response := invoke()
+	if response.Code != http.StatusCreated || response.Body.String() != "created" {
+		t.Fatalf("got %d %q, want 201 created", response.Code, response.Body)
+	}
+	if got := response.Result().Header.Values("Set-Cookie"); !slices.Equal(got, []string{"session=abc", "theme=dark"}) {
+		t.Errorf("Set-Cookie = %q, want both cookies once", got)
+	}
+	if got := response.Result().Header.Values("X-Result"); !slices.Equal(got, []string{"saved", "ok"}) {
+		t.Errorf("X-Result = %q, want both distinct values", got)
+	}
+
+	lambda.output = types.InvokeOutput{StatusCode: http.StatusOK, FunctionError: "Unhandled", Payload: []byte(`{"errorType":"Runtime.ExitError"}`)}
+	response = invoke()
+	if response.Code != http.StatusBadGateway || response.Body.String() != `{"message":"Internal server error"}` {
+		t.Fatalf("runtime exit got %d %q, want generic 502 response", response.Code, response.Body)
+	}
+}
 
 func TestRestAPIReportsAvailableToTerraform(t *testing.T) {
 	cfg := config.Default()

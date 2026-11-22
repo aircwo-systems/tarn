@@ -4,17 +4,19 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/semaphore"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -159,6 +161,13 @@ func (s *Service) CreateFunction(ctx context.Context, fn *types.FunctionConfig, 
 	if s.logsSvc != nil {
 		s.logsSvc.CreateLogGroup(fmt.Sprintf("/aws/lambda/%s", result.FunctionName))
 		s.logsSvc.LogSystemEvent(logssvc.LevelINFO, fmt.Sprintf("Function created: %s (runtime: %s)", result.FunctionName, result.Runtime))
+	}
+	if runtime.GOARCH == "arm64" && result.Architectures[0] == "x86_64" {
+		warning := fmt.Sprintf("Function %s uses x86_64 emulation on arm64 Docker hosts. Set Architectures to [\"arm64\"] for native execution with arm64-compatible code, layers, and images.", result.FunctionName)
+		log.Printf("[lambda] warning: %s", warning)
+		if s.logsSvc != nil {
+			s.logsSvc.LogSystemEvent(logssvc.LevelWARN, warning)
+		}
 	}
 	if s.engine != nil {
 		config := cloneFunction(result)
@@ -635,7 +644,7 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	for _, arn := range lease.SkippedLayers {
 		s.logFunctionRuntimeEvent(fn.FunctionName, logssvc.LevelWARN, "Skipping unavailable external layer "+arn+"; invocation continues without it")
 	}
-	info, coldStart, err := s.acquireContainer(ctx, fn, codeDir, layerDirs, lease.Revision)
+	info, coldStart, err := s.acquireContainer(ctx, fn, codeDir, layerDirs, lease.Revision, false)
 	if err != nil {
 		return nil, err
 	}
@@ -662,24 +671,11 @@ func (s *Service) Invoke(ctx context.Context, input *types.InvokeInput) (*types.
 	invokeStart := time.Now()
 	s.logInvocationBoundary(logGroup, logStream, fmt.Sprintf("START RequestId: %s Version: %s", requestID, fn.Version))
 
-	output, err := s.invokeWithRetry(invokeCtx, info, input, coldStart)
-	if err != nil && !coldStart && isTransientRIEInvokeError(err) {
-		// The warm container's runtime is gone (JVM crash, OOM kill, Docker
-		// restart). Drop it from the pool so later invokes don't keep hitting
-		// the dead port, then retry once on a fresh environment.
-		output, err = s.recoverDeadWarmContainer(invokeCtx, &info, err, warmRecovery{
-			remove: func(dead *engine.ContainerInfo) {
-				s.ingestContainerLogs(fn.FunctionName, dead)
-				_ = s.engine.RemoveContainer(context.Background(), dead.ID)
-			},
-			reacquire: func() (*engine.ContainerInfo, bool, error) {
-				return s.acquireContainer(invokeCtx, fn, codeDir, layerDirs, lease.Revision)
-			},
-			invoke: func(next *engine.ContainerInfo, cold bool) (*types.InvokeOutput, error) {
-				return s.invokeWithRetry(invokeCtx, next, input, cold)
-			},
+	output, err := s.invokeWithRecovery(invokeCtx, &info, input, coldStart, s.engine.DiscardContainerAsync,
+		func() (*engine.ContainerInfo, error) {
+			next, _, err := s.acquireContainer(invokeCtx, fn, codeDir, layerDirs, lease.Revision, true)
+			return next, err
 		})
-	}
 	if info != nil && shortID(info.ID) != logStream {
 		logStream = shortID(info.ID)
 		s.logInvocationBoundary(logGroup, logStream, fmt.Sprintf("START RequestId: %s Version: %s", requestID, fn.Version))
@@ -726,7 +722,8 @@ func (s *Service) logInvocationBoundary(logGroup, logStream, message string) {
 // free up. Cold starts are serialized per function so the cap is enforced and
 // Docker isn't stampeded, while invocations themselves run concurrently. The
 // returned container is Busy and must be returned via engine.Release.
-func (s *Service) acquireContainer(ctx context.Context, fn *types.FunctionConfig, codeDir string, layerDirs []string, revision string) (*engine.ContainerInfo, bool, error) {
+// A replacement after a failed dial requires a fresh environment.
+func (s *Service) acquireContainer(ctx context.Context, fn *types.FunctionConfig, codeDir string, layerDirs []string, revision string, fresh bool) (*engine.ContainerInfo, bool, error) {
 	acquireCtx, cancel := context.WithTimeout(ctx, containerAcquireTimeout)
 	defer cancel()
 	gate := s.startGate(fn.FunctionName)
@@ -756,8 +753,10 @@ func (s *Service) acquireContainer(ctx context.Context, fn *types.FunctionConfig
 			}
 			return nil, false, fmt.Errorf("%w: reserved concurrency limit reached for %s", ErrTooManyRequests, fn.FunctionName)
 		}
-		if info, ok := s.engine.AcquireIdleRevision(s.cfg.AccountID, fn.FunctionName, revision, limit); ok {
-			return info, false, nil
+		if !fresh {
+			if info, ok := s.engine.AcquireIdleRevision(s.cfg.AccountID, fn.FunctionName, revision, limit); ok {
+				return info, false, nil
+			}
 		}
 		if err := gate.Acquire(acquireCtx, 1); err != nil {
 			if ctx.Err() != nil {
@@ -782,12 +781,18 @@ func (s *Service) acquireContainer(ctx context.Context, fn *types.FunctionConfig
 			return nil, false, fmt.Errorf("%w: reserved concurrency limit reached for %s", ErrTooManyRequests, fn.FunctionName)
 		}
 		available = s.engine.Availability(s.cfg.AccountID, fn.FunctionName)
-		if info, ok := s.engine.AcquireIdleRevision(s.cfg.AccountID, fn.FunctionName, revision, limit); ok {
-			gate.Release(1)
-			return info, false, nil
+		if !fresh {
+			if info, ok := s.engine.AcquireIdleRevision(s.cfg.AccountID, fn.FunctionName, revision, limit); ok {
+				gate.Release(1)
+				return info, false, nil
+			}
 		}
 		if s.engine.CountContainers(s.cfg.AccountID, fn.FunctionName) >= limit {
-			s.engine.DiscardIdleRevision(s.cfg.AccountID, fn.FunctionName, revision)
+			revisionToKeep := revision
+			if fresh {
+				revisionToKeep = ""
+			}
+			s.engine.DiscardIdleRevision(s.cfg.AccountID, fn.FunctionName, revisionToKeep)
 		}
 		if s.engine.CountContainers(s.cfg.AccountID, fn.FunctionName) < limit {
 			info, err := s.coldStart(acquireCtx, fn, codeDir, layerDirs, revision)
@@ -888,18 +893,19 @@ func (s *Service) invokeWithRetry(ctx context.Context, info *engine.ContainerInf
 			return output, nil
 		}
 
-		if !coldStart || !isTransientRIEInvokeError(err) || attempt == attempts {
+		var connectionErr *engine.RIEConnectionError
+		if !coldStart || !errors.As(err, &connectionErr) || !connectionErr.DialFailed || attempt == attempts || ctx.Err() != nil {
 			return nil, err
 		}
 
 		backoff := time.Duration(attempt) * coldStartInvokeRetryBackoff
-		log.Printf("[lambda] transient invoke error for %s (attempt %d/%d): %v; retrying in %s", input.FunctionName, attempt, attempts, err, backoff)
+		log.Printf("[lambda] RIE dial failed for %s (attempt %d/%d): %v; retrying in %s", input.FunctionName, attempt, attempts, err, backoff)
 
 		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, ctx.Err()
+			return nil, err
 		case <-timer.C:
 		}
 	}
@@ -907,35 +913,45 @@ func (s *Service) invokeWithRetry(ctx context.Context, info *engine.ContainerInf
 	return nil, fmt.Errorf("invoke retry loop exhausted for %s", input.FunctionName)
 }
 
-// warmRecovery holds the steps used to replace a dead warm container.
-type warmRecovery struct {
-	remove    func(dead *engine.ContainerInfo)
-	reacquire func() (*engine.ContainerInfo, bool, error)
-	invoke    func(info *engine.ContainerInfo, coldStart bool) (*types.InvokeOutput, error)
-}
+// invokeWithRecovery discards failed environments and only uses a replacement
+// when the first attempt failed to connect to a warm environment.
+func (s *Service) invokeWithRecovery(ctx context.Context, info **engine.ContainerInfo, input *types.InvokeInput, coldStart bool,
+	discard func(*engine.ContainerInfo), replace func() (*engine.ContainerInfo, error),
+) (*types.InvokeOutput, error) {
+	for attempt := 0; ; attempt++ {
+		output, err := s.invokeWithRetry(ctx, *info, input, coldStart && attempt == 0)
+		var connectionErr *engine.RIEConnectionError
+		if !errors.As(err, &connectionErr) {
+			return output, err
+		}
 
-// recoverDeadWarmContainer removes the dead container *info, acquires a
-// replacement (stored back into *info so the caller releases the right one)
-// and retries the invocation once.
-func (s *Service) recoverDeadWarmContainer(ctx context.Context, info **engine.ContainerInfo, cause error, r warmRecovery) (*types.InvokeOutput, error) {
-	dead := *info
-	log.Printf("[lambda] warm container %s for %s unreachable (%v); removing and retrying on a fresh environment", shortID(dead.ID), dead.FunctionName, cause)
-	if s.logsSvc != nil {
-		s.logsSvc.LogSystemEvent(logssvc.LevelWARN, fmt.Sprintf("Removed unreachable container for %s: %v", dead.FunctionName, cause))
+		dead := *info
+		discard(dead)
+		*info = nil
+		message := fmt.Sprintf("Removed unreachable container %s for %s: %v", shortID(dead.ID), dead.FunctionName, err)
+		log.Printf("[lambda] %s", message)
+		if s.logsSvc != nil {
+			s.logsSvc.LogSystemEvent(logssvc.LevelWARN, message)
+		}
+		if !connectionErr.DialFailed {
+			// The runtime may already have run the handler. Report the lost
+			// response as a function error and leave the event alone.
+			payload, _ := json.Marshal(map[string]string{
+				"errorType":    "Runtime.ExitError",
+				"errorMessage": err.Error(),
+			})
+			return &types.InvokeOutput{StatusCode: 200, FunctionError: "Unhandled", Payload: payload}, nil
+		}
+		if coldStart || attempt > 0 || ctx.Err() != nil {
+			return nil, err
+		}
+		log.Printf("[lambda] retrying %s on a fresh environment after a failed dial", dead.FunctionName)
+		next, replaceErr := replace()
+		if replaceErr != nil {
+			return nil, fmt.Errorf("%w (replacement container failed: %v)", err, replaceErr)
+		}
+		*info = next
 	}
-	r.remove(dead)
-	// Nothing left to release for the removed container.
-	*info = nil
-
-	if err := ctx.Err(); err != nil {
-		return nil, cause
-	}
-	next, coldStart, err := r.reacquire()
-	if err != nil {
-		return nil, fmt.Errorf("%w (replacement container failed: %v)", cause, err)
-	}
-	*info = next
-	return r.invoke(next, coldStart)
 }
 
 func shortID(id string) string {
@@ -943,34 +959,6 @@ func shortID(id string) string {
 		return id[:12]
 	}
 	return id
-}
-
-func isTransientRIEInvokeError(err error) bool {
-	if err == nil {
-		return false
-	}
-
-	msg := strings.ToLower(err.Error())
-	if !strings.Contains(msg, "rie invocation failed") {
-		return false
-	}
-
-	transientTokens := []string{
-		"connection refused",
-		"connection reset by peer",
-		"use of closed network connection",
-		"server closed idle connection",
-		"broken pipe",
-		"unexpected eof",
-		" eof",
-	}
-	for _, token := range transientTokens {
-		if strings.Contains(msg, token) {
-			return true
-		}
-	}
-
-	return false
 }
 
 // GetFunctionMetrics returns invocation metrics for the given function.

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aircwo-systems/tarn/internal/apigateway/proxyresponse"
 	"github.com/aircwo-systems/tarn/internal/config"
 	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
@@ -30,6 +31,10 @@ const (
 // groupId and dedupId are required for FIFO queues; pass empty strings for standard queues.
 type SQSSendFunc func(queueName, body string, attrs map[string]*types.MessageAttribute, groupId, dedupId string) (messageID, md5 string, err error)
 
+type lambdaInvoker interface {
+	Invoke(context.Context, *types.InvokeInput) (*types.InvokeOutput, error)
+}
+
 // PatchOp is a single JSON Patch operation (RFC 6902) as used by UpdateIntegration.
 type PatchOp struct {
 	Op    string `json:"op"`
@@ -40,7 +45,7 @@ type PatchOp struct {
 // Service implements API Gateway REST API (v1) behaviour.
 type Service struct {
 	cfg        *config.Config
-	lambda     *lambdasvc.Service
+	lambda     lambdaInvoker
 	sqsSend    SQSSendFunc
 	store      *Store
 	traceStore *tracesvc.Store
@@ -63,12 +68,12 @@ type InvokeInput struct {
 // InvokeOutput captures v1 invoke response data.
 type InvokeOutput struct {
 	StatusCode int
-	Headers    map[string]string
+	Headers    http.Header
 	Body       []byte
 }
 
 // NewService creates a new v1 REST API service.
-func NewService(cfg *config.Config, lambdaSvc *lambdasvc.Service, sqsSend SQSSendFunc) *Service {
+func NewService(cfg *config.Config, lambdaSvc lambdaInvoker, sqsSend SQSSendFunc) *Service {
 	return &Service{
 		cfg:     cfg,
 		lambda:  lambdaSvc,
@@ -677,7 +682,7 @@ func (s *Service) invokeAWSIntegration(ctx context.Context, api *types.RestAPI, 
 		"MessageId":        messageID,
 		"MD5OfMessageBody": md5,
 	})
-	headers := map[string]string{"Content-Type": "application/json"}
+	headers := http.Header{"Content-Type": {"application/json"}}
 	if ir := s.selectIntegrationResponse(integ, http.StatusOK); ir != nil {
 		maps.Copy(headers, integrationResponseHeaders(ir))
 	}
@@ -730,6 +735,17 @@ func (s *Service) invokeLambdaProxyIntegration(ctx context.Context, api *types.R
 	}
 
 	lambdaDurationMs := time.Since(lambdaStart).Milliseconds()
+	if invokeOut.FunctionError != "" {
+		s.recordLambdaTrace(inv, input, api, traceStart, correlationID, http.StatusBadGateway, []tracesvc.Span{
+			{Kind: "gateway", Name: gwName, DurationMs: gatewayDurationMs, Status: "error"},
+			{Kind: "lambda", Name: fnName, DurationMs: lambdaDurationMs, Status: "error"},
+		})
+		return &InvokeOutput{
+			StatusCode: http.StatusBadGateway,
+			Headers:    http.Header{"Content-Type": {"application/json"}},
+			Body:       []byte(`{"message":"Internal server error"}`),
+		}, nil
+	}
 
 	out, mapErr := mapLambdaProxyResponse(invokeOut.Payload)
 	if mapErr != nil {
@@ -1215,22 +1231,21 @@ func buildV1LambdaProxyEvent(input *InvokeInput, resource *types.RestResource, p
 // mapLambdaProxyResponse converts the Lambda response payload to an InvokeOutput.
 func mapLambdaProxyResponse(payload []byte) (*InvokeOutput, error) {
 	if len(payload) == 0 {
-		return &InvokeOutput{StatusCode: http.StatusOK, Headers: map[string]string{}, Body: nil}, nil
+		return &InvokeOutput{StatusCode: http.StatusOK, Headers: http.Header{}}, nil
 	}
 	var resp struct {
-		StatusCode int               `json:"statusCode"`
-		Headers    map[string]string `json:"headers"`
-		Body       json.RawMessage   `json:"body"`
+		StatusCode        int                 `json:"statusCode"`
+		Headers           map[string]string   `json:"headers"`
+		MultiValueHeaders map[string][]string `json:"multiValueHeaders"`
+		Body              json.RawMessage     `json:"body"`
 	}
 	if err := json.Unmarshal(payload, &resp); err != nil {
-		return &InvokeOutput{StatusCode: http.StatusOK, Headers: map[string]string{"Content-Type": "application/json"}, Body: payload}, nil
+		return &InvokeOutput{StatusCode: http.StatusOK, Headers: http.Header{"Content-Type": {"application/json"}}, Body: payload}, nil
 	}
 	if resp.StatusCode == 0 {
 		resp.StatusCode = http.StatusOK
 	}
-	if resp.Headers == nil {
-		resp.Headers = map[string]string{}
-	}
+	headers := proxyresponse.Headers(resp.Headers, resp.MultiValueHeaders)
 	var body []byte
 	if len(resp.Body) > 0 && string(resp.Body) != "null" {
 		if resp.Body[0] == '"' {
@@ -1240,12 +1255,12 @@ func mapLambdaProxyResponse(payload []byte) (*InvokeOutput, error) {
 			}
 		} else {
 			body = resp.Body
-			if _, ok := resp.Headers["Content-Type"]; !ok {
-				resp.Headers["Content-Type"] = "application/json"
+			if _, ok := headers["Content-Type"]; !ok {
+				headers.Set("Content-Type", "application/json")
 			}
 		}
 	}
-	return &InvokeOutput{StatusCode: resp.StatusCode, Headers: resp.Headers, Body: body}, nil
+	return &InvokeOutput{StatusCode: resp.StatusCode, Headers: headers, Body: body}, nil
 }
 
 func parseLambdaIntegrationURI(uri string) (lambdaArn, functionName string, err error) {

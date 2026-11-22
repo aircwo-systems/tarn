@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -8,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	ecshandler "github.com/aircwo-systems/tarn/internal/api/ecs"
 	"github.com/aircwo-systems/tarn/internal/config"
@@ -27,6 +29,7 @@ type ecsProxyFixture struct {
 	ecsSvc    *ecssvc.Service
 	handler   http.Handler
 	cluster   *types.Cluster
+	transport *http.Transport
 }
 
 func newECSProxyFixture(t *testing.T, accountID string) *ecsProxyFixture {
@@ -58,6 +61,7 @@ func newECSProxyFixture(t *testing.T, accountID string) *ecsProxyFixture {
 	})
 
 	s := NewServer(cfg, registry, logs.NewService(cfg), nil)
+	t.Cleanup(s.ecsProxyTransport.CloseIdleConnections)
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
 	// Wrap with withLogging, matching the real server's handler chain
@@ -72,7 +76,7 @@ func newECSProxyFixture(t *testing.T, accountID string) *ecsProxyFixture {
 		t.Fatalf("resolve default cluster: %v", err)
 	}
 
-	return &ecsProxyFixture{t: t, accountID: accountID, ecsSvc: ecsSvc, handler: handler, cluster: cluster}
+	return &ecsProxyFixture{t: t, accountID: accountID, ecsSvc: ecsSvc, handler: handler, cluster: cluster, transport: s.ecsProxyTransport}
 }
 
 // runningTaskWithBackend registers a task definition (one essential
@@ -212,6 +216,47 @@ func TestECSProxyNoTrailingPathRedirects(t *testing.T) {
 	}
 	if loc := rec.Header().Get("Location"); loc != "/_ecs/111111111111/default/some-svc/" {
 		t.Fatalf("Location = %q", loc)
+	}
+}
+
+func TestECSProxyTimesOutWaitingForUpstreamHeaders(t *testing.T) {
+	f := newECSProxyFixture(t, "111111111111")
+	f.transport.ResponseHeaderTimeout = 50 * time.Millisecond
+	reached := make(chan struct{}, 1)
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached <- struct{}{}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(backend.Close)
+	f.runningTaskWithBackend("slow-svc", backend)
+
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/_ecs/111111111111/default/slow-svc/", nil)
+	response := httptest.NewRecorder()
+	f.handler.ServeHTTP(response, req)
+
+	if response.Code != http.StatusGatewayTimeout || ctx.Err() != nil {
+		t.Fatalf("status=%d, caller context error=%v, want proxy to return 504 before caller cancels", response.Code, ctx.Err())
+	}
+	select {
+	case <-reached:
+	default:
+		t.Fatal("upstream did not receive the request")
+	}
+}
+
+func TestECSProxyReturnsBadGatewayWhenUpstreamRefusesConnection(t *testing.T) {
+	f := newECSProxyFixture(t, "111111111111")
+	backend := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	f.runningTaskWithBackend("stopped-svc", backend)
+	backend.Close()
+
+	req := httptest.NewRequest(http.MethodGet, "/_ecs/111111111111/default/stopped-svc/", nil)
+	response := httptest.NewRecorder()
+	f.handler.ServeHTTP(response, req)
+	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "ECS upstream unavailable") {
+		t.Fatalf("got %d %q, want 502 for refused connection", response.Code, response.Body)
 	}
 }
 

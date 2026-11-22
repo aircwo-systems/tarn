@@ -2,6 +2,7 @@ package apigateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,11 @@ import (
 	"github.com/aircwo-systems/tarn/internal/config"
 	"github.com/aircwo-systems/tarn/internal/persist"
 	"github.com/aircwo-systems/tarn/pkg/types"
+)
+
+var (
+	ErrStageNotFound = errors.New("stage or API not found")
+	ErrStageConflict = errors.New("stage already exists")
 )
 
 // Store is an API Gateway store with optional disk-backed persistence.
@@ -329,6 +335,38 @@ func (s *Store) DeleteRoute(apiID, routeID string) error {
 		return fmt.Errorf("route %s not found", routeID)
 	}
 	delete(rec.routes, routeID)
+	s.dirty.Store(true)
+	return nil
+}
+
+func (s *Store) CreateStage(stage *types.APIGatewayStage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rec, ok := s.apis[stage.APIID]
+	if !ok {
+		return fmt.Errorf("%w: API %s", ErrStageNotFound, stage.APIID)
+	}
+	if _, exists := rec.stages[stage.StageName]; exists {
+		return fmt.Errorf("%w: %s", ErrStageConflict, stage.StageName)
+	}
+	rec.stages[stage.StageName] = cloneStage(stage)
+	s.dirty.Store(true)
+	return nil
+}
+
+func (s *Store) DeleteStage(apiID, stageName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rec, ok := s.apis[apiID]
+	if !ok {
+		return fmt.Errorf("%w: API %s", ErrStageNotFound, apiID)
+	}
+	if _, exists := rec.stages[stageName]; !exists {
+		return fmt.Errorf("%w: %s", ErrStageNotFound, stageName)
+	}
+	delete(rec.stages, stageName)
 	s.dirty.Store(true)
 	return nil
 }

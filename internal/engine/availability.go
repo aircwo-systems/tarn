@@ -109,11 +109,12 @@ func (e *Engine) RetireFunctionVersion(accountID, functionName, version string) 
 
 // DiscardIdleRevision frees a slot held by another idle version, preventing a
 // pool full of idle published versions from blocking a new revision forever.
+// An empty revision allows any idle container to be discarded.
 func (e *Engine) DiscardIdleRevision(accountID, functionName, revision string) bool {
 	e.mu.Lock()
 	var discarded *ContainerInfo
 	for _, info := range e.containers[poolKey(e.resolveAccount(accountID), functionName)] {
-		if !info.Busy && info.Revision != revision {
+		if !info.Busy && (revision == "" || info.Revision != revision) {
 			discarded = e.untrackLocked(info.ID)
 			break
 		}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -22,10 +23,22 @@ type Invoker struct {
 	client *http.Client
 }
 
+// RIEConnectionError means the invocation failed to reach the RIE or lost its
+// response. A dial failure is known to have happened before sending the event.
+type RIEConnectionError struct {
+	DialFailed bool
+	err        error
+}
+
+func (e *RIEConnectionError) Error() string { return e.err.Error() }
+func (e *RIEConnectionError) Unwrap() error { return e.err }
+
 // NewInvoker creates an Invoker with appropriate timeout settings.
 func NewInvoker() *Invoker {
 	return &Invoker{
 		client: &http.Client{
+			// Following redirects could send the same event to another endpoint.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 			// Per-request timeouts are set via context, not here.
 			// This transport timeout covers connection setup only.
 			Transport: &http.Transport{
@@ -40,12 +53,19 @@ func NewInvoker() *Invoker {
 	}
 }
 
-// WaitForReady polls the container's RIE until it accepts TCP connections.
-// The AWS RIE queues invocation requests until the runtime is initialized,
-// so TCP readiness is sufficient — the first real invoke will block inside
-// the RIE until the handler is ready.
+// WaitForReady polls the container's RIE until it answers an HTTP request.
+// The AWS RIE queues invocation requests until the runtime is initialized, so
+// any HTTP response is sufficient. A bare TCP connect is not: Docker's
+// published port accepts connections and then closes them (EOF) while nothing
+// is listening in the container yet, which would let the first real invoke
+// fail without ever reaching the RIE.
 func (inv *Invoker) WaitForReady(ctx context.Context, hostPort string) error {
-	addr := fmt.Sprintf("127.0.0.1:%s", hostPort)
+	url := fmt.Sprintf("http://127.0.0.1:%s/", hostPort)
+	probe := &http.Client{
+		Timeout:       500 * time.Millisecond,
+		Transport:     &http.Transport{DisableKeepAlives: true},
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
 
 	deadline := time.After(60 * time.Second)
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -57,9 +77,14 @@ func (inv *Invoker) WaitForReady(ctx context.Context, hostPort string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		conn, err := (&net.Dialer{Timeout: 500 * time.Millisecond}).DialContext(ctx, "tcp", addr)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := probe.Do(req)
 		if err == nil {
-			_ = conn.Close()
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+			_ = resp.Body.Close()
 			log.Printf("[invoker] RIE accepting connections on port %s", hostPort)
 			return nil
 		}
@@ -94,20 +119,24 @@ func (inv *Invoker) Invoke(ctx context.Context, hostPort string, input *types.In
 
 	resp, err := inv.client.Do(req)
 	if err != nil {
-		if ctx.Err() != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return &types.InvokeOutput{
 				StatusCode:    200,
 				Payload:       []byte(fmt.Sprintf(`{"errorMessage":"Task timed out after %s","errorType":"TimeoutError"}`, ctx.Err())),
 				FunctionError: "Unhandled",
 			}, nil
 		}
-		return nil, fmt.Errorf("RIE invocation failed: %w", err)
+		var netErr *net.OpError
+		return nil, &RIEConnectionError{
+			DialFailed: errors.As(err, &netErr) && netErr.Op == "dial",
+			err:        fmt.Errorf("RIE invocation failed: %w", err),
+		}
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read RIE response: %w", err)
+		return nil, &RIEConnectionError{err: fmt.Errorf("failed to read RIE response: %w", err)}
 	}
 
 	output := &types.InvokeOutput{

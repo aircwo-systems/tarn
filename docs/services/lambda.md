@@ -40,6 +40,8 @@ Deploy and invoke serverless functions in Tarn.
 ### Container-Based Execution
 Functions run in Docker containers using AWS Lambda base images and the Runtime Interface Emulator (RIE).
 
+`CreateFunction` defaults `Architectures` to `["x86_64"]`, as AWS does. When Tarn itself runs on `arm64`, it warns at creation for both default and explicitly requested `x86_64` functions. On an arm64 Docker host, these functions run under emulation, which can make the runtime emulator unstable. Set `Architectures: ["arm64"]` for native execution and use arm64-compatible code, layers, and images.
+
 Each execution container has a writable, executable 512 MB `/tmp` directory. Native tools such as Chromium can unpack and run binaries there.
 
 Each function has a pool of containers rather than a single one, so concurrent invokes get an execution environment each. The first container of a function is a baseline kept warm between invocations; any further containers exist to absorb a burst and are released once the burst passes.

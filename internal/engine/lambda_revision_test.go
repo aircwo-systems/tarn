@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"runtime"
 	"strconv"
 	"sync/atomic"
@@ -131,8 +132,10 @@ func TestAlreadyReadyPortDoesNotWaitForPollingTick(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	srv := &http.Server{Handler: http.NotFoundHandler()}
+	go func() { _ = srv.Serve(listener) }()
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 	if err := NewInvoker().WaitForReady(ctx, strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)); err != nil {
 		t.Fatalf("ready port waited for first tick: %v", err)

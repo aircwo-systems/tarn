@@ -2,6 +2,7 @@ package apigateway
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -306,6 +307,38 @@ func (h *Handler) DeleteRoute(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// CreateStage handles POST /v2/apis/{apiId}/stages.
+func (h *Handler) CreateStage(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		StageName   string `json:"stageName"`
+		Description string `json:"description"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
+		return
+	}
+	stage, err := h.svc.CreateStage(r.PathValue("apiId"), req.StageName, req.Description)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusCreated, stage)
+	case errors.Is(err, apisvc.ErrStageNotFound):
+		writeError(w, http.StatusNotFound, "NotFoundException", err.Error())
+	case errors.Is(err, apisvc.ErrStageConflict):
+		writeError(w, http.StatusConflict, "ConflictException", err.Error())
+	default:
+		writeError(w, http.StatusBadRequest, "BadRequestException", err.Error())
+	}
+}
+
+// DeleteStage handles DELETE /v2/apis/{apiId}/stages/{stageName}.
+func (h *Handler) DeleteStage(w http.ResponseWriter, r *http.Request) {
+	if err := h.svc.DeleteStage(r.PathValue("apiId"), r.PathValue("stageName")); err != nil {
+		writeError(w, http.StatusNotFound, "NotFoundException", err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // ListStages handles GET /v2/apis/{apiId}/stages.
 func (h *Handler) ListStages(w http.ResponseWriter, r *http.Request) {
 	apiID := r.PathValue("apiId")
@@ -374,6 +407,10 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 	corsReq, isCrossOrigin := cors.FromHTTP(r.Method, r.Header)
 	if policy != nil && isCrossOrigin {
 		if corsReq.Preflight {
+			if _, err := h.svc.GetStage(apiID, stage); err != nil {
+				writeError(w, http.StatusNotFound, "NotFoundException", err.Error())
+				return
+			}
 			if policy.AllowsPreflight(corsReq) {
 				setHeaders(w.Header(), policy.ResponseHeaders(corsReq))
 			}
@@ -413,11 +450,11 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for key, value := range out.Headers {
+	for key, values := range out.Headers {
 		if policy != nil && cors.IsCORSHeader(key) {
 			continue // integration CORS headers are ignored when the API configures CORS
 		}
-		w.Header().Set(key, value)
+		w.Header()[key] = values
 	}
 	w.WriteHeader(out.StatusCode)
 	if len(out.Body) > 0 {
@@ -453,6 +490,7 @@ func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("X-Amzn-ErrorType", code)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"__type":  code,

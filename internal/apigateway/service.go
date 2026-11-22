@@ -8,11 +8,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/aircwo-systems/tarn/internal/apigateway/proxyresponse"
 	"github.com/aircwo-systems/tarn/internal/config"
 	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
@@ -29,13 +31,20 @@ const (
 	defaultRouteSelectionExpression = "$request.method $request.path"
 )
 
+var stageNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
+
 // SQSSendFunc is a function type for sending SQS messages.
 type SQSSendFunc func(queueName, body string, attrs map[string]*types.MessageAttribute, groupID, dedupID string) (messageID, md5 string, err error)
+
+type lambdaService interface {
+	GetFunction(string) (*types.FunctionConfig, error)
+	Invoke(context.Context, *types.InvokeInput) (*types.InvokeOutput, error)
+}
 
 // Service implements API Gateway HTTP API (v2) behavior.
 type Service struct {
 	cfg        *config.Config
-	lambda     *lambdasvc.Service
+	lambda     lambdaService
 	sqsSend    SQSSendFunc
 	store      *Store
 	traceStore *tracesvc.Store
@@ -108,12 +117,12 @@ type InvokeInput struct {
 // InvokeOutput captures invoke response data.
 type InvokeOutput struct {
 	StatusCode int
-	Headers    map[string]string
+	Headers    http.Header
 	Body       []byte
 }
 
 // NewService creates a new API Gateway service.
-func NewService(cfg *config.Config, lambdaSvc *lambdasvc.Service, sqsSend SQSSendFunc) *Service {
+func NewService(cfg *config.Config, lambdaSvc lambdaService, sqsSend SQSSendFunc) *Service {
 	return &Service{
 		cfg:     cfg,
 		lambda:  lambdaSvc,
@@ -160,17 +169,7 @@ func (s *Service) CreateAPI(name, description, protocolType, routeSelectionExpre
 		CreatedDate:              now,
 	}
 
-	stage := &types.APIGatewayStage{
-		APIID:           apiID,
-		StageName:       "$default",
-		AutoDeploy:      true,
-		InvokeURL:       fmt.Sprintf("%s/_apigateway/%s/$default", s.cfg.Endpoint(), apiID),
-		StageArn:        fmt.Sprintf("arn:aws:apigateway:%s::/apis/%s/stages/$default", s.cfg.Region, apiID),
-		CreatedDate:     now,
-		LastUpdatedDate: now,
-	}
-
-	if err := s.store.CreateAPI(api, stage); err != nil {
+	if err := s.store.CreateAPI(api, s.newStage(apiID, "$default", "", now)); err != nil {
 		return nil, err
 	}
 	return s.store.GetAPI(apiID)
@@ -465,6 +464,36 @@ func (s *Service) DeleteRoute(apiID, routeID string) error {
 	return s.store.DeleteRoute(apiID, routeID)
 }
 
+func (s *Service) newStage(apiID, name, description string, now time.Time) *types.APIGatewayStage {
+	return &types.APIGatewayStage{
+		APIID:           apiID,
+		StageName:       name,
+		Description:     description,
+		AutoDeploy:      true,
+		InvokeURL:       fmt.Sprintf("%s/_apigateway/%s/%s", s.cfg.Endpoint(), apiID, name),
+		StageArn:        fmt.Sprintf("arn:aws:apigateway:%s::/apis/%s/stages/%s", s.cfg.Region, apiID, name),
+		CreatedDate:     now,
+		LastUpdatedDate: now,
+	}
+}
+
+// CreateStage creates an auto-deployed stage for an existing HTTP API.
+func (s *Service) CreateStage(apiID, name, description string) (*types.APIGatewayStage, error) {
+	if name != "$default" && !stageNamePattern.MatchString(name) {
+		return nil, errors.New("stageName must be $default or 1 to 128 letters, digits, hyphens, or underscores")
+	}
+	stage := s.newStage(apiID, name, description, time.Now().UTC())
+	if err := s.store.CreateStage(stage); err != nil {
+		return nil, err
+	}
+	return stage, nil
+}
+
+// DeleteStage removes a stage from an HTTP API.
+func (s *Service) DeleteStage(apiID, stageName string) error {
+	return s.store.DeleteStage(apiID, stageName)
+}
+
 // ListStages returns all stages for an API.
 func (s *Service) ListStages(apiID string) ([]*types.APIGatewayStage, error) {
 	return s.store.ListStages(apiID)
@@ -571,24 +600,22 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 		InvocationType: "RequestResponse",
 	})
 	if err != nil {
-		// Cold starts can intermittently fail with EOF before the runtime is fully ready.
-		// Retry once for transient transport/runtime startup errors.
-		if isTransientInvokeError(err) {
-			time.Sleep(200 * time.Millisecond)
-			invokeOut, err = s.lambda.Invoke(ctx, &types.InvokeInput{
-				FunctionName:   integration.LambdaFunctionName,
-				Payload:        eventPayload,
-				InvocationType: "RequestResponse",
-			})
-		}
-		if err != nil {
-			s.recordLambdaTrace(inv, input, traceStart, correlationID, 500, []tracesvc.Span{
-				{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: time.Since(lambdaStart).Milliseconds(), Status: "error"},
-			})
-			return nil, fmt.Errorf("invoke failed: %w", err)
-		}
+		s.recordLambdaTrace(inv, input, traceStart, correlationID, 500, []tracesvc.Span{
+			{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: time.Since(lambdaStart).Milliseconds(), Status: "error"},
+		})
+		return nil, fmt.Errorf("invoke failed: %w", err)
 	}
 	lambdaDurationMs := time.Since(lambdaStart).Milliseconds()
+	if invokeOut.FunctionError != "" {
+		s.recordLambdaTrace(inv, input, traceStart, correlationID, http.StatusBadGateway, []tracesvc.Span{
+			{Kind: "lambda", Name: integration.LambdaFunctionName, DurationMs: lambdaDurationMs, Status: "error"},
+		})
+		return &InvokeOutput{
+			StatusCode: http.StatusBadGateway,
+			Headers:    http.Header{"Content-Type": {"application/json"}},
+			Body:       []byte(`{"message":"Internal server error"}`),
+		}, nil
+	}
 
 	out, mapErr := mapLambdaProxyResponse(invokeOut.Payload)
 	if mapErr != nil {
@@ -642,22 +669,24 @@ func (s *Service) recordTrace(input *InvokeInput, start, end time.Time, correlat
 }
 
 type lambdaProxyResponse struct {
-	StatusCode      int               `json:"statusCode"`
-	Headers         map[string]string `json:"headers"`
-	Body            json.RawMessage   `json:"body"`
-	IsBase64Encoded bool              `json:"isBase64Encoded"`
+	StatusCode        int                 `json:"statusCode"`
+	Headers           map[string]string   `json:"headers"`
+	MultiValueHeaders map[string][]string `json:"multiValueHeaders"`
+	Cookies           []string            `json:"cookies"`
+	Body              json.RawMessage     `json:"body"`
+	IsBase64Encoded   bool                `json:"isBase64Encoded"`
 }
 
 func mapLambdaProxyResponse(payload []byte) (*InvokeOutput, error) {
 	if len(payload) == 0 {
-		return &InvokeOutput{StatusCode: http.StatusOK, Headers: map[string]string{}, Body: nil}, nil
+		return &InvokeOutput{StatusCode: http.StatusOK, Headers: http.Header{}}, nil
 	}
 
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal(payload, &probe); err != nil {
 		return &InvokeOutput{
 			StatusCode: http.StatusOK,
-			Headers:    map[string]string{"Content-Type": "application/json"},
+			Headers:    http.Header{"Content-Type": {"application/json"}},
 			Body:       payload,
 		}, nil
 	}
@@ -666,10 +695,12 @@ func mapLambdaProxyResponse(payload []byte) (*InvokeOutput, error) {
 	_, hasHeaders := probe["headers"]
 	_, hasBody := probe["body"]
 	_, hasB64 := probe["isBase64Encoded"]
-	if !hasStatus && !hasHeaders && !hasBody && !hasB64 {
+	_, hasCookies := probe["cookies"]
+	_, hasMultiValueHeaders := probe["multiValueHeaders"]
+	if !hasStatus && !hasHeaders && !hasBody && !hasB64 && !hasCookies && !hasMultiValueHeaders {
 		return &InvokeOutput{
 			StatusCode: http.StatusOK,
-			Headers:    map[string]string{"Content-Type": "application/json"},
+			Headers:    http.Header{"Content-Type": {"application/json"}},
 			Body:       payload,
 		}, nil
 	}
@@ -681,8 +712,9 @@ func mapLambdaProxyResponse(payload []byte) (*InvokeOutput, error) {
 	if response.StatusCode == 0 {
 		response.StatusCode = http.StatusOK
 	}
-	if response.Headers == nil {
-		response.Headers = map[string]string{}
+	headers := proxyresponse.Headers(response.Headers, response.MultiValueHeaders)
+	for _, cookie := range response.Cookies {
+		headers.Add("Set-Cookie", cookie)
 	}
 
 	var body []byte
@@ -703,15 +735,15 @@ func mapLambdaProxyResponse(payload []byte) (*InvokeOutput, error) {
 			}
 		} else {
 			body = response.Body
-			if _, ok := response.Headers["Content-Type"]; !ok {
-				response.Headers["Content-Type"] = "application/json"
+			if _, ok := headers["Content-Type"]; !ok {
+				headers.Set("Content-Type", "application/json")
 			}
 		}
 	}
 
 	return &InvokeOutput{
 		StatusCode: response.StatusCode,
-		Headers:    response.Headers,
+		Headers:    headers,
 		Body:       body,
 	}, nil
 }
@@ -1108,7 +1140,7 @@ func (s *Service) invokeSQSIntegration(integration *types.APIGatewayIntegration,
 
 	return &InvokeOutput{
 		StatusCode: http.StatusOK,
-		Headers:    map[string]string{"Content-Type": "application/json"},
+		Headers:    http.Header{"Content-Type": {"application/json"}},
 		Body:       respBody,
 	}, nil
 }
@@ -1187,16 +1219,6 @@ func parseSQSIntegrationURI(uri string) (sqsArn string, queueName string, err er
 		return "", "", fmt.Errorf("invalid SQS ARN in IntegrationUri: %q", uri)
 	}
 	return uri, parts[5], nil
-}
-
-func isTransientInvokeError(err error) bool {
-	if err == nil {
-		return false
-	}
-	s := strings.ToLower(err.Error())
-	return strings.Contains(s, "eof") ||
-		strings.Contains(s, "connection reset") ||
-		strings.Contains(s, "broken pipe")
 }
 
 // Close stops background persistence after writing any pending state.

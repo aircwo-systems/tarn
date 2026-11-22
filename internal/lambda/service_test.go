@@ -154,49 +154,6 @@ func TestInvokePromotesPendingFunctionToActive(t *testing.T) {
 	}
 }
 
-func TestIsTransientRIEInvokeError(t *testing.T) {
-	tests := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{
-			name: "transient eof",
-			err:  fmt.Errorf("RIE invocation failed: Post http://127.0.0.1:12345/2015-03-31/functions/function/invocations: EOF"),
-			want: true,
-		},
-		{
-			name: "transient connection refused",
-			err:  fmt.Errorf("RIE invocation failed: Post http://127.0.0.1:12345/2015-03-31/functions/function/invocations: dial tcp 127.0.0.1:12345: connect: connection refused"),
-			want: true,
-		},
-		{
-			name: "non transient runtime error",
-			err:  fmt.Errorf("RIE invocation failed: runtime exited with status 1"),
-			want: false,
-		},
-		{
-			name: "non rie error",
-			err:  fmt.Errorf("failed to create request: invalid method"),
-			want: false,
-		},
-		{
-			name: "nil error",
-			err:  nil,
-			want: false,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := isTransientRIEInvokeError(tc.err)
-			if got != tc.want {
-				t.Fatalf("isTransientRIEInvokeError(%v)=%v, want %v", tc.err, got, tc.want)
-			}
-		})
-	}
-}
-
 func TestResolveLayerDirsSkipsUnavailableExternalManagedLayer(t *testing.T) {
 	cfg := config.Default()
 	cfg.DataDir = t.TempDir()

@@ -176,16 +176,17 @@ func (r *HandlerRegistry) StopAll() {
 
 // Server is the main Tarn API server.
 type Server struct {
-	cfg            *config.Config
-	httpServer     *http.Server
-	registry       *HandlerRegistry
-	logsSvc        *logssvc.Service
-	collector      *tracesvc.Collector
-	traceStore     *tracesvc.Store
-	datadog        *http.ServeMux
-	ui             http.Handler
-	conns          *Connections
-	awsConnections *AWSConnections
+	cfg               *config.Config
+	httpServer        *http.Server
+	registry          *HandlerRegistry
+	logsSvc           *logssvc.Service
+	collector         *tracesvc.Collector
+	traceStore        *tracesvc.Store
+	datadog           *http.ServeMux
+	ui                http.Handler
+	conns             *Connections
+	awsConnections    *AWSConnections
+	ecsProxyTransport *http.Transport
 	// cognitoIndex maps user pool and client IDs to accounts, for Cognito
 	// calls that carry no SigV4 credentials.
 	cognitoIndex *cognitosvc.Index
@@ -198,11 +199,12 @@ const serverWriteTimeout = 17 * time.Minute
 
 func NewServer(cfg *config.Config, registry *HandlerRegistry, logsSvc *logssvc.Service, collector *tracesvc.Collector) *Server {
 	s := &Server{
-		cfg:       cfg,
-		registry:  registry,
-		logsSvc:   logsSvc,
-		collector: collector,
-		conns:     NewConnections(),
+		cfg:               cfg,
+		registry:          registry,
+		logsSvc:           logsSvc,
+		collector:         collector,
+		conns:             NewConnections(),
+		ecsProxyTransport: newECSProxyTransport(),
 	}
 
 	mux := http.NewServeMux()
@@ -681,9 +683,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /v2/apis/{apiId}/routes/{routeId}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGateway.UpdateRoute(w, r) })
 	mux.HandleFunc("DELETE /v2/apis/{apiId}/routes/{routeId}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGateway.DeleteRoute(w, r) })
 
+	mux.HandleFunc("POST /v2/apis/{apiId}/stages", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGateway.CreateStage(w, r) })
 	mux.HandleFunc("GET /v2/apis/{apiId}/stages", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGateway.ListStages(w, r) })
 	mux.HandleFunc("GET /v2/apis/{apiId}/stages/{stageName}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGateway.GetStage(w, r) })
 	mux.HandleFunc("PATCH /v2/apis/{apiId}/stages/{stageName}", func(w http.ResponseWriter, r *http.Request) { s.hs(r).APIGateway.UpdateStage(w, r) })
+	mux.HandleFunc("DELETE /v2/apis/{apiId}/stages/{stageName}", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).APIGateway.DeleteStage(w, r)
+	})
 
 	// API Gateway invoke surface
 	for _, method := range [...]string{
@@ -778,6 +784,7 @@ func (s *Server) Start() error {
 // stop hook persists final state.
 func (s *Server) Shutdown(ctx context.Context) error {
 	err := s.httpServer.Shutdown(ctx)
+	s.ecsProxyTransport.CloseIdleConnections()
 	s.registry.StopAll()
 	return err
 }

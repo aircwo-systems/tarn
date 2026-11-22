@@ -1,7 +1,10 @@
 package api
 
 import (
+	"errors"
 	"fmt"
+	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"regexp"
@@ -9,10 +12,27 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	ecssvc "github.com/aircwo-systems/tarn/internal/ecs"
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
+
+const (
+	ecsProxyDialTimeout           = 2 * time.Second
+	ecsProxyResponseHeaderTimeout = 10 * time.Second
+	ecsProxySlowLookup            = time.Second
+)
+
+func newECSProxyTransport() *http.Transport {
+	return &http.Transport{
+		// Published ports are local to Tarn. Dial them directly.
+		DialContext:           (&net.Dialer{Timeout: ecsProxyDialTimeout, KeepAlive: 30 * time.Second}).DialContext,
+		ResponseHeaderTimeout: ecsProxyResponseHeaderTimeout,
+		IdleConnTimeout:       90 * time.Second,
+		MaxIdleConns:          100,
+	}
+}
 
 // registerECSProxyRoutes wires /_ecs/{account}/{cluster}/{service}/{rest...},
 // a reverse proxy that lets a caller reach a running ECS service task at a
@@ -56,6 +76,7 @@ var numericAccountID = regexp.MustCompile(`^\d{12}$`)
 var ecsProxyRoundRobin sync.Map // map[string]*uint64
 
 func (s *Server) ecsProxyHandler(w http.ResponseWriter, r *http.Request) {
+	lookupStart := time.Now()
 	account := r.PathValue("account")
 	clusterRef := r.PathValue("cluster")
 	serviceName := r.PathValue("service")
@@ -89,15 +110,31 @@ func (s *Server) ecsProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hostPort, ok := pickTaskHostPort(ecsSvc, cluster.ClusterArn, serviceName, account+"/"+clusterRef+"/"+serviceName)
+	prefix := fmt.Sprintf("/_ecs/%s/%s/%s", account, clusterRef, serviceName)
+	lookupTime := time.Since(lookupStart)
+	if lookupTime >= ecsProxySlowLookup {
+		log.Printf("[ecsproxy] %s %s task lookup took %s (published port found: %t)", r.Method, prefix, lookupTime, ok)
+	}
 	if !ok {
 		writeECSProxyError(w, http.StatusServiceUnavailable, "no running task with a published port for service "+serviceName)
 		return
 	}
 
-	prefix := fmt.Sprintf("/_ecs/%s/%s/%s", account, clusterRef, serviceName)
 	target := fmt.Sprintf("127.0.0.1:%d", hostPort)
+	forwardStart := time.Now()
 
 	proxy := &httputil.ReverseProxy{
+		Transport: s.ecsProxyTransport,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			log.Printf("[ecsproxy] %s %s upstream %s failed after %s (task lookup %s): %v",
+				r.Method, prefix, target, time.Since(forwardStart), lookupTime, err)
+			var netErr net.Error
+			if errors.As(err, &netErr) && netErr.Timeout() {
+				writeECSProxyError(w, http.StatusGatewayTimeout, "ECS upstream timed out")
+				return
+			}
+			writeECSProxyError(w, http.StatusBadGateway, "ECS upstream unavailable")
+		},
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL.Scheme = "http"
 			pr.Out.URL.Host = target

@@ -22,7 +22,7 @@ func (s *Service) invokeMockIntegration(api *types.RestAPI, input *InvokeInput, 
 
 	out := &InvokeOutput{
 		StatusCode: http.StatusInternalServerError,
-		Headers:    map[string]string{"Content-Type": "application/json"},
+		Headers:    http.Header{"Content-Type": {"application/json"}},
 		Body:       []byte(`{"message": "Internal server error"}`),
 	}
 	if ir != nil {
@@ -36,7 +36,7 @@ func (s *Service) invokeMockIntegration(api *types.RestAPI, input *InvokeInput, 
 				noBody := *input
 				noBody.Body = nil
 				out.Body = []byte(evaluateVTL(tmpl, &noBody, pathParams))
-				out.Headers["Content-Type"] = "application/json"
+				out.Headers.Set("Content-Type", "application/json")
 			}
 		}
 	}
@@ -99,14 +99,14 @@ func (s *Service) selectIntegrationResponse(integ *types.RestIntegration, status
 // integrationResponseHeaders returns the static header values an integration
 // response maps onto the method response. Mappings from integration response
 // headers or body are not supported and are skipped.
-func integrationResponseHeaders(ir *types.RestIntegrationResponse) map[string]string {
-	headers := map[string]string{}
+func integrationResponseHeaders(ir *types.RestIntegrationResponse) http.Header {
+	headers := http.Header{}
 	for param, value := range ir.ResponseParameters {
 		name, ok := strings.CutPrefix(param, "method.response.header.")
 		if !ok || len(value) < 2 || value[0] != '\'' || value[len(value)-1] != '\'' {
 			continue
 		}
-		headers[name] = value[1 : len(value)-1]
+		headers.Set(name, value[1:len(value)-1])
 	}
 	return headers
 }

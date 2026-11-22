@@ -496,8 +496,8 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for k, v := range out.Headers {
-		w.Header().Set(k, v)
+	for name, values := range out.Headers {
+		w.Header()[name] = values
 	}
 	w.WriteHeader(out.StatusCode)
 	if len(out.Body) > 0 {

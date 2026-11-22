@@ -92,7 +92,7 @@ func TestMockIntegrationAnswersCORSPreflight(t *testing.T) {
 		"Access-Control-Allow-Methods": "GET,POST,OPTIONS",
 		"Access-Control-Allow-Headers": "content-type,authorization",
 	} {
-		if got := out.Headers[name]; got != want {
+		if got := out.Headers.Get(name); got != want {
 			t.Errorf("%s = %q, want %q", name, got, want)
 		}
 	}
@@ -116,8 +116,8 @@ func TestMockIntegrationSelectsResponseByStatus(t *testing.T) {
 	if out.StatusCode != http.StatusNotFound || string(out.Body) != `{"message":"missing"}` {
 		t.Fatalf("got %d %q, want 404 with the 404 template", out.StatusCode, out.Body)
 	}
-	if out.Headers["Content-Type"] != "application/json" {
-		t.Errorf("Content-Type = %q", out.Headers["Content-Type"])
+	if got := out.Headers.Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q", got)
 	}
 }
 
@@ -156,7 +156,7 @@ func TestAWSIntegrationAppliesIntegrationResponseHeaders(t *testing.T) {
 	if out.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, body: %s", out.StatusCode, out.Body)
 	}
-	if got := out.Headers["Access-Control-Allow-Origin"]; got != "*" {
+	if got := out.Headers.Get("Access-Control-Allow-Origin"); got != "*" {
 		t.Errorf("Allow-Origin = %q, want *", got)
 	}
 	if _, ok := out.Headers["X-From-Integration"]; ok {
