@@ -81,10 +81,25 @@ export function isActiveTask(task: ECSTaskSummary): boolean {
   return task.lastStatus?.trim().toUpperCase() !== "STOPPED";
 }
 
+/**
+ * The implicit "default" cluster always exists (the backend creates it on
+ * ListClusters, as AWS does), so it's only worth counting once something
+ * lives in it.
+ */
+export function isEmptyDefaultCluster(ecs: ECSOverview, cluster: ECSClusterSummary): boolean {
+  if (clusterLabel(cluster) !== "default") return false;
+  if ((cluster.activeServices ?? 0) > 0 || (cluster.runningTasks ?? 0) > 0 || (cluster.pendingTasks ?? 0) > 0) {
+    return false;
+  }
+  const hasService = (ecs.services ?? []).some((s) => s.clusterArn === cluster.arn);
+  const hasTask = (ecs.tasks ?? []).some((t) => t.clusterArn === cluster.arn && isActiveTask(t));
+  return !hasService && !hasTask;
+}
+
 export function countECSResources(ecs: ECSOverview | null | undefined): number {
   if (!ecs) return 0;
   return (
-    (ecs.clusters?.length ?? 0) +
+    (ecs.clusters ?? []).filter((c) => !isEmptyDefaultCluster(ecs, c)).length +
     (ecs.services?.length ?? 0) +
     (ecs.tasks ?? []).filter(isActiveTask).length
   );

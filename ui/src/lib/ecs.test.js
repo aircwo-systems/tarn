@@ -134,6 +134,66 @@ describe("ECS sidebar count helpers", () => {
     ).toBe(3);
   });
 
+  test("does not count the implicit empty default cluster", () => {
+    const defaultCluster = {
+      name: "default",
+      arn: "arn:cluster/default",
+      status: "ACTIVE",
+      runningTasks: 0,
+      pendingTasks: 0,
+      activeServices: 0,
+    };
+    expect(
+      countECSResources({ clusters: [defaultCluster], services: [], tasks: [], taskDefinitions: [] }),
+    ).toBe(0);
+
+    // Only stopped tasks left behind: still empty.
+    expect(
+      countECSResources({
+        clusters: [defaultCluster],
+        services: [],
+        tasks: [
+          {
+            arn: "arn:task/stopped",
+            clusterArn: "arn:cluster/default",
+            taskDefinitionArn: "arn:td/job:1",
+            lastStatus: "STOPPED",
+            desiredStatus: "STOPPED",
+          },
+        ],
+        taskDefinitions: [],
+      }),
+    ).toBe(0);
+
+    // A standalone running task makes the default cluster count.
+    expect(
+      countECSResources({
+        clusters: [{ ...defaultCluster, runningTasks: 1 }],
+        services: [],
+        tasks: [
+          {
+            arn: "arn:task/running",
+            clusterArn: "arn:cluster/default",
+            taskDefinitionArn: "arn:td/job:1",
+            lastStatus: "RUNNING",
+            desiredStatus: "RUNNING",
+          },
+        ],
+        taskDefinitions: [],
+      }),
+    ).toBe(2);
+
+    // Empty user-created clusters still count.
+    expect(
+      countECSResources({
+        clusters: [defaultCluster, { ...defaultCluster, name: "app", arn: "arn:cluster/app" }],
+        services: [],
+        tasks: [],
+        taskDefinitions: [],
+      }),
+    ).toBe(1);
+  });
+
   test("handles empty or missing ECS overview", () => {
     expect(countECSResources(undefined)).toBe(0);
     expect(countECSResources(null)).toBe(0);

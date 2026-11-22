@@ -149,8 +149,15 @@ Switch accounts from the **Settings** dialog (gear icon in the sidebar). Add any
 
 `tarn flush` deletes resources from the running Tarn instance. Use `--dry-run`
 to preview the full deletion plan. Add `--group` to select resources by name,
-`--tag` to select resources by tag, or `--storage` to include S3 buckets and
-objects.
+`--tag` to select resources by tag, or `--storage` to include S3 buckets,
+objects and DynamoDB tables.
+
+Flush deletes Cognito user pools, turning off deletion protection where it is
+on. With `--storage` it does the same for DynamoDB tables. It removes the
+aliases of customer managed KMS keys and schedules the keys for deletion after
+7 days, the shortest window KMS allows. It skips a key that a resource it keeps
+still uses. AWS managed keys and keys already pending deletion are left alone.
+The implicit `default` ECS cluster is never deleted.
 
 Add `--prune-lambda-containers` to also remove stopped Tarn Lambda containers
 from Docker, including containers left by earlier server runs. This option

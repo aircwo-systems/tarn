@@ -155,6 +155,9 @@ type flushOverview struct {
 		Arn  string            `json:"arn"`
 		Tags map[string]string `json:"tags"`
 	} `json:"stateMachines"`
+	CognitoPools       []cognitoFlushPool       `json:"cognitoPools"`
+	DynamoDBTables     []dynamodbFlushTable     `json:"dynamodbTables"`
+	KMSKeys            []kmsFlushKey            `json:"kmsKeys"`
 	ECS                *ecsFlushOverview        `json:"ecs,omitempty"`
 	ECSClusters        []ecsFlushCluster        `json:"ecsClusters"`
 	ECSServices        []ecsFlushService        `json:"ecsServices"`
@@ -168,14 +171,16 @@ func newFlushCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "flush",
 		Short: "Delete provisioned resources from the current Tarn instance",
-		Long: `Flush deletes provisioned API Gateways, Lambda functions, SQS queues, event source mappings, ECS resources, and Secrets Manager secrets
-from the current Tarn instance.
+		Long: `Flush deletes provisioned API Gateways, Lambda functions, SQS queues, SNS topics, event source mappings,
+EventBridge rules, Step Functions state machines, ECS resources, Secrets Manager secrets and Cognito user pools
+from the current Tarn instance. Customer managed KMS keys are scheduled for deletion (7 days) once nothing
+left behind uses them.
 
 Use --tag to scope deletion to a feature slice such as feature=r10.
 Use --group to scope deletion to resources whose NAME matches a prefix/substring
 (e.g. a Terraform name_prefix like cert-delete), independent of tags.
 --tag and --group combine (a resource must match both when both are given).
-Use --storage to also purge S3 bucket contents and delete buckets.
+Use --storage to also purge S3 bucket contents, delete buckets and delete DynamoDB tables.
 Use --prune-lambda-containers to remove stopped Tarn Lambda Docker containers,
 including leftovers from earlier server runs. This option cannot use --tag or
 a non-default --account.`,
@@ -194,7 +199,7 @@ a non-default --account.`,
 	cmd.Flags().StringVar(&opts.TagFilter, "tag", "", "Filter resources by tag query, e.g. feature=r10 or r10")
 	cmd.Flags().StringVar(&opts.Group, "group", "", "Filter resources by name prefix/substring, e.g. cert-delete")
 	cmd.Flags().BoolVar(&opts.DryRun, "dry-run", false, "Print resources that would be deleted without deleting them")
-	cmd.Flags().BoolVar(&opts.Storage, "storage", false, "Also flush S3 buckets and objects")
+	cmd.Flags().BoolVar(&opts.Storage, "storage", false, "Also flush S3 buckets and objects, and DynamoDB tables")
 	cmd.Flags().BoolVar(&opts.PruneLambdaContainers, "prune-lambda-containers", false, "Also remove stopped Tarn Lambda Docker containers")
 	cmd.Flags().StringVar(&opts.AccountID, "account", "", "12-digit account ID to flush (overrides TARN_ACCOUNT_ID)")
 	return cmd
@@ -281,6 +286,33 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	}
 
 	filteredStateMachines := filterStateMachines(overview.StateMachines, opts.TagFilter, opts.Group)
+	filteredCognitoPools := filterCognitoPools(overview.CognitoPools, opts.TagFilter, opts.Group)
+	var filteredDynamoDBTables []dynamodbFlushTable
+	if opts.Storage {
+		filteredDynamoDBTables = filterDynamoDBTables(overview.DynamoDBTables, opts.TagFilter, opts.Group)
+	}
+	flushedKeyUsers := flushedKMSUsers{}
+	for _, fn := range filteredFunctions {
+		flushedKeyUsers.add("function", fn.Name)
+		flushedKeyUsers.add("function", normalizeLambdaRef(fn.Name))
+	}
+	for _, secret := range filteredSecrets {
+		flushedKeyUsers.add("secret", secret.Name)
+	}
+	for _, queue := range filteredQueues {
+		flushedKeyUsers.add("queue", queue.Name)
+	}
+	for _, topic := range filteredTopics {
+		flushedKeyUsers.add("topic", topic.Name)
+	}
+	for _, table := range filteredDynamoDBTables {
+		flushedKeyUsers.add("table", table.Name)
+	}
+	for _, pool := range filteredCognitoPools {
+		flushedKeyUsers.add("userpool", pool.Name)
+		flushedKeyUsers.add("userpool", pool.ID)
+	}
+	filteredKMSKeys := selectKMSFlushKeys(overview.KMSKeys, narrow, opts.TagFilter, opts.Group, flushedKeyUsers)
 	ecsClusters := overview.ECSClusters
 	ecsServices := overview.ECSServices
 	ecsTasks := overview.ECSTasks
@@ -300,6 +332,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		opts.TagFilter,
 		opts.Group,
 	)
+	filteredECSClusters = withoutImplicitDefaultCluster(filteredECSClusters)
 	var docker flushDockerClient
 	var lambdaContainers []container.Summary
 	if opts.PruneLambdaContainers {
@@ -316,7 +349,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		}
 	}
 
-	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredEventBridgeRules) + len(filteredNotificationBuckets) + len(filteredBuckets) + len(filteredStateMachines) + len(filteredECSClusters) + len(filteredECSServices) + len(filteredECSTasks) + len(filteredECSTaskDefinitions) + len(lambdaContainers)
+	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredEventBridgeRules) + len(filteredNotificationBuckets) + len(filteredBuckets) + len(filteredStateMachines) + len(filteredECSClusters) + len(filteredECSServices) + len(filteredECSTasks) + len(filteredECSTaskDefinitions) + len(filteredCognitoPools) + len(filteredDynamoDBTables) + len(filteredKMSKeys) + len(lambdaContainers)
 	selectorDesc := flushSelectorDescription(opts)
 	if total == 0 {
 		if selectorDesc != "" {
@@ -349,6 +382,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	if err := printECSFlushPlan(out, filteredECSClusters, filteredECSServices, filteredECSTasks, filteredECSTaskDefinitions); err != nil {
 		return err
 	}
+	printStoreFlushPlan(out, filteredCognitoPools, filteredDynamoDBTables, filteredKMSKeys)
 	if len(lambdaContainers) > 0 {
 		_, _ = fmt.Fprintln(out, "Stopped Lambda Docker Containers:")
 		for _, c := range lambdaContainers {
@@ -480,6 +514,13 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		}
 		_, _ = fmt.Fprintf(out, "Deleted Secret: %s\n", secret.Name)
 	}
+	for _, pool := range filteredCognitoPools {
+		if err := deleteCognitoPool(endpoint, pool.ID); err != nil {
+			recordFailure("cognito user pool", pool.Name, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Deleted Cognito User Pool: %s (%s)\n", pool.Name, pool.ID)
+	}
 	for _, fn := range filteredFunctions {
 		if err := deleteFunction(endpoint, fn.Name); err != nil {
 			recordFailure("lambda", fn.Name, err)
@@ -493,6 +534,21 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 			continue
 		}
 		_, _ = fmt.Fprintf(out, "Deleted S3 Bucket: %s\n", bucket.Name)
+	}
+	for _, table := range filteredDynamoDBTables {
+		if err := deleteDynamoDBTable(endpoint, table.Name); err != nil {
+			recordFailure("dynamodb table", table.Name, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Deleted DynamoDB Table: %s\n", table.Name)
+	}
+	// Keys go last: everything encrypted with them is gone by now.
+	for _, key := range filteredKMSKeys {
+		if err := scheduleKMSKeyDeletion(endpoint, key); err != nil {
+			recordFailure("kms key", key.ID, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Scheduled KMS Key Deletion: %s\n", kmsKeyLabel(key))
 	}
 	for _, c := range lambdaContainers {
 		ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
@@ -697,6 +753,25 @@ func selectECSFlushResources(
 		}
 	}
 	return selectedClusters, selectedServices, selectedTasks, ecsFlushTaskDefinitions(selectedTaskDefinitions, selectedServices, selectedTasks)
+}
+
+// withoutImplicitDefaultCluster drops the "default" cluster. Tarn recreates it
+// whenever clusters are listed, as AWS does, so deleting it achieves nothing
+// and would make every flush report it again.
+func withoutImplicitDefaultCluster(clusters []ecsFlushCluster) []ecsFlushCluster {
+	out := clusters[:0:0]
+	for _, cluster := range clusters {
+		name := ecsClusterName(cluster)
+		if name == "" {
+			ref := ecsClusterRef(cluster)
+			name = ref[strings.LastIndex(ref, "/")+1:]
+		}
+		if strings.EqualFold(name, "default") {
+			continue
+		}
+		out = append(out, cluster)
+	}
+	return out
 }
 
 func matchesECSResource(query, group string, tags map[string]string, names ...string) bool {
