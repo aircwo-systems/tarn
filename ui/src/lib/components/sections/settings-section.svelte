@@ -4,7 +4,7 @@
   import { fly } from "svelte/transition";
 
   import type { UserService } from "#lib/types";
-  import { fetchAccounts, changeAccount, fetchConnections, type ServerAccount, type TarnConnections, type MCPSession } from "#lib/api";
+  import { fetchAccounts, changeAccount, fetchConnections, saveRedisViewerSettings, type ServerAccount, type TarnConnections, type MCPSession } from "#lib/api";
   import { timeAgo } from "#lib/utils";
   import SectionHeader from "#lib/components/sections/section-header.svelte";
   import AccountDeleteConfirmation from "#lib/components/sections/account-delete-confirmation.svelte";
@@ -13,9 +13,11 @@
   import { TARN_ART, TARN_MUTE } from "#lib/components/home/tarn-art";
   import { BANNER_SCENES, BANNER_STYLES, getBannerPrefs, setBannerScene, setBannerStyle, type BannerScene, type BannerStyle } from "#lib/components/home/banner-prefs.svelte";
   import {
+    getDashboard,
     getUISettings,
     getInfraSettings,
     getAccountSettings,
+    refresh,
     setInfraEnabledKinds,
     setUserServices,
     setLogRetentionMinutes,
@@ -46,9 +48,11 @@
     onNavigate?: (tab: string) => void;
   } = $props();
 
+  const dashboard = getDashboard();
   const uiSettings = getUISettings();
   const infraSettings = getInfraSettings();
   const accountSettings = getAccountSettings();
+  const serverRedisViewerEnabled = $derived(dashboard.data?.config?.redisViewerEnabled ?? false);
 
   const INFRA_KINDS: Array<{ id: InfraProbeKind; label: string; detail: string }> = [
     { id: "docker",     label: "Docker",     detail: "daemon" },
@@ -88,6 +92,7 @@
   let schemaSourceDir = $state(uiSettings.schemaSourceDir);
   let logRetention    = $state(uiSettings.logRetentionMinutes);
   let enabledKinds    = $state<InfraProbeKind[]>([...infraSettings.enabledKinds]);
+  let redisViewer     = $state<boolean>(dashboard.data?.config?.redisViewerEnabled ?? false);
   let services        = $state<UserService[]>(infraSettings.userServices.map((svc) => ({ ...svc })));
   let bannerScene     = $state<BannerScene>(banner.scene);
   let bannerStyle     = $state<BannerStyle>(banner.style);
@@ -104,6 +109,7 @@
     schemaSourceDir = uiSettings.schemaSourceDir;
     logRetention    = uiSettings.logRetentionMinutes;
     enabledKinds    = [...infraSettings.enabledKinds];
+    redisViewer     = serverRedisViewerEnabled;
     services        = infraSettings.userServices.map((svc) => ({ ...svc }));
     bannerScene     = banner.scene;
     bannerStyle     = banner.style;
@@ -112,12 +118,12 @@
 
   const draftKey = () => JSON.stringify([
     pollingInterval, themeMode, collapsedSidebarMode, formatDatadogLogs, sanitizeSchemaSourceDir(schemaSourceDir), logRetention,
-    [...enabledKinds].sort(), services, bannerScene, bannerStyle,
+    [...enabledKinds].sort(), redisViewer, services, bannerScene, bannerStyle,
   ]);
   const storedKey = () => JSON.stringify([
     uiSettings.pollingIntervalSeconds, uiSettings.themeMode, uiSettings.collapsedSidebarMode, uiSettings.formatDatadogLogs,
     uiSettings.schemaSourceDir, uiSettings.logRetentionMinutes,
-    [...infraSettings.enabledKinds].sort(), infraSettings.userServices, banner.scene, banner.style,
+    [...infraSettings.enabledKinds].sort(), serverRedisViewerEnabled, infraSettings.userServices, banner.scene, banner.style,
   ]);
 
   const dirty = $derived(draftKey() !== storedKey());
@@ -147,8 +153,12 @@
       if (JSON.stringify(services) !== JSON.stringify(infraSettings.userServices)) {
         await setUserServices(services);
       }
+      if (redisViewer !== serverRedisViewerEnabled) {
+        await saveRedisViewerSettings(redisViewer);
+        await refresh();
+      }
     } catch (err) {
-      servicesError = err instanceof Error ? err.message : "Could not save services";
+      servicesError = err instanceof Error ? err.message : "Could not save infrastructure settings";
       return false;
     } finally {
       saving = false;
@@ -766,8 +776,20 @@
           {/each}
         </div>
 
+        <div class="setting wrapping-setting">
+          <div class="setting-label">
+            <span>Redis viewer</span>
+            <small>Show the Redis viewer section for probed instances (also available via <code>--redis-viewer</code> / <code>--rv</code>). External and shared across account IDs.</small>
+          </div>
+          <div class="segmented two-options" role="group" aria-label="Redis viewer">
+            <span class="segmented-pill" aria-hidden="true" style="transform: translateX({redisViewer ? 0 : 100}%)"></span>
+            <button type="button" aria-pressed={redisViewer} class:on={redisViewer} onclick={() => (redisViewer = true)}>Enabled</button>
+            <button type="button" aria-pressed={!redisViewer} class:on={!redisViewer} onclick={() => (redisViewer = false)}>Disabled</button>
+          </div>
+        </div>
+
         <div class="subhead">Additional services</div>
-        <p class="hint">APIs and apps your functions call: a port, host:port, LAN IP or full URL (http, https, tcp). Probed by the Tarn server. Services belong to this account unless set to Global. Global services are shared across all accounts.</p>
+        <p class="hint">APIs and apps your functions call: a port, host:port, LAN IP or full URL (http, https, tcp, redis, rediss). Probed by the Tarn server. Services belong to this account unless set to Global. Global services are shared across all accounts.</p>
         {#if services.length > 0}
           <ul class="rows">
             {#each services as target, i (i)}

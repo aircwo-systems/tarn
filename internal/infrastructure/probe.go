@@ -354,6 +354,10 @@ func probe(ctx context.Context, t ProbeTarget) ProbeResult {
 		if v := probePgVersion(conn); v != "" {
 			result.Version = v
 		}
+	case "redis", "rediss":
+		if v := probeRedisVersion(conn); v != "" {
+			result.Version = v
+		}
 	}
 
 	return result
@@ -495,4 +499,29 @@ func probePgVersion(conn net.Conn) string {
 	}
 
 	return ""
+}
+
+// probeRedisVersion sends INFO server over RESP2 to extract the Redis or Valkey version.
+func probeRedisVersion(conn net.Conn) string {
+	_ = conn.SetDeadline(time.Now().Add(1 * time.Second))
+	if _, err := conn.Write([]byte("*2\r\n$4\r\nINFO\r\n$6\r\nserver\r\n")); err != nil {
+		return ""
+	}
+	buf := make([]byte, 4096)
+	n, err := conn.Read(buf)
+	if err != nil || n == 0 {
+		return ""
+	}
+	raw := string(buf[:n])
+	var redisVer string
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if v, ok := strings.CutPrefix(line, "valkey_version:"); ok && v != "" {
+			return "Valkey " + v
+		}
+		if v, ok := strings.CutPrefix(line, "redis_version:"); ok && v != "" {
+			redisVer = v
+		}
+	}
+	return redisVer
 }

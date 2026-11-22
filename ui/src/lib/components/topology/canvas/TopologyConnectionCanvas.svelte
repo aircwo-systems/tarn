@@ -43,6 +43,7 @@
     readTopologyCanvasPalette,
     type TopologyCanvasPalette,
   } from "../topology-canvas-theme";
+  import { getDashboard } from "#lib/state.svelte";
 
   export interface TopologyNodeHoverPayload {
     node: ConnectionNode;
@@ -189,8 +190,16 @@
         )
       : [],
   );
+  const dashboard = getDashboard();
   const contextMenuConfigTab = $derived(
     contextMenuNode ? getTopologyNodeConfigTab(contextMenuNode.kind) : null,
+  );
+  const contextMenuRedisTarget = $derived(
+    (dashboard.data?.config?.redisViewerEnabled ?? false) &&
+      contextMenuNode?.kind === "infra" &&
+      (contextMenuNode.id.startsWith("redis-") || contextMenuNode.id.startsWith("rediss-"))
+      ? contextMenuNode.id
+      : null,
   );
   const contextMenuSupportedSizes = $derived(
     contextMenuNode ? getTopologyNodeSupportedSizes(contextMenuNode.kind) : [],
@@ -1362,6 +1371,13 @@
                 </ContextMenu.RadioGroup>
               </ContextMenu.SubContent>
             </ContextMenu.Sub>
+          {/if}
+
+          {#if contextMenuRedisTarget}
+            <ContextMenu.Separator />
+            <ContextMenu.Item onSelect={() => navigateToConfigTab(`redis?target=${encodeURIComponent(contextMenuRedisTarget)}`)}>
+              Open in Redis Viewer
+            </ContextMenu.Item>
           {/if}
 
           {#if contextMenuConfigTab}

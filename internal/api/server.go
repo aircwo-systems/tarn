@@ -416,6 +416,30 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /_tarn/admin/dynamodb/tables/{name}/stream/records", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.DynamoStreamRecords(w, r)
 	})
+	mux.HandleFunc("GET /_tarn/admin/redis/settings", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.RedisViewerSettings(w, r)
+	})
+	mux.HandleFunc("PUT /_tarn/admin/redis/settings", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.SetRedisViewerSettings(w, r)
+	})
+	mux.HandleFunc("GET /_tarn/admin/redis/targets/{id}", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.RedisTargetDetail(w, r)
+	})
+	mux.HandleFunc("POST /_tarn/admin/redis/targets/{id}/scan", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.RedisScanKeys(w, r)
+	})
+	mux.HandleFunc("POST /_tarn/admin/redis/targets/{id}/keys/get", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.RedisGetKey(w, r)
+	})
+	mux.HandleFunc("PUT /_tarn/admin/redis/targets/{id}/keys", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.RedisSetKey(w, r)
+	})
+	mux.HandleFunc("POST /_tarn/admin/redis/targets/{id}/keys/delete", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.RedisDeleteKeys(w, r)
+	})
+	mux.HandleFunc("POST /_tarn/admin/redis/targets/{id}/command", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.RedisExecCommand(w, r)
+	})
 	mux.HandleFunc("GET /_tarn/admin/sqs/disruptor", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.ListDisruptorRules(w, r)
 	})

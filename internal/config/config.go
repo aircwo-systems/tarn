@@ -41,6 +41,10 @@ type Config struct {
 	AccountID string
 	// UIEnabled enables the built-in dashboard UI.
 	UIEnabled bool
+	// RedisViewerEnabled enables the conditional Redis viewer section and admin endpoints.
+	RedisViewerEnabled bool
+	// RedisViewerExplicit is true when --redis-viewer, --rv, or TARN_REDIS_VIEWER was set explicitly.
+	RedisViewerExplicit bool
 	// Version is the Tarn build version, reported by the admin API.
 	Version string
 	// UIDir is the filesystem path to the built UI assets.
@@ -155,6 +159,12 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("TARN_UI_ENABLED"); v != "" {
 		if enabled, err := strconv.ParseBool(v); err == nil {
 			c.UIEnabled = enabled
+		}
+	}
+	if v := os.Getenv("TARN_REDIS_VIEWER"); v != "" {
+		if enabled, err := strconv.ParseBool(v); err == nil {
+			c.RedisViewerEnabled = enabled
+			c.RedisViewerExplicit = true
 		}
 	}
 	if v := os.Getenv("TARN_UI_DIR"); v != "" {

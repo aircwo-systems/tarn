@@ -8,6 +8,7 @@ export interface OverviewResponse {
     endpoint: string;
     dataDir: string;
     uiEnabled: boolean;
+    redisViewerEnabled?: boolean;
     version?: string;
   };
   counts: {
@@ -1048,5 +1049,189 @@ export interface DynamoStreamRecordsResponse {
   shardId: string;
   records: DynamoStreamRecord[];
   nextShardIterator?: string;
+}
+
+// ── Redis Viewer ──────────────────────────────────────────────────────
+
+export interface RedisAuthOptions {
+  db?: number;
+  username?: string;
+  password?: string;
+  tls?: boolean;
+}
+
+export interface RedisDBKeyspace {
+  db: number;
+  keys: number;
+  expires: number;
+  avgTtlMs: number;
+}
+
+export interface RedisServerInfo {
+  version: string;
+  engine: "redis" | "valkey" | string;
+  mode: string;
+  os: string;
+  role: string;
+  uptimeSeconds: number;
+  connectedClients: number;
+  usedMemoryBytes: number;
+  usedMemoryHuman: string;
+  usedMemoryPeakHuman: string;
+  maxMemoryBytes: number;
+  maxMemoryHuman: string;
+  opsPerSec: number;
+  keyspaceHits: number;
+  keyspaceMisses: number;
+  totalKeys: number;
+  selectedDb: number;
+  selectedDbKeys: number;
+  databases: RedisDBKeyspace[];
+  totalCommandsHandled: number;
+}
+
+export interface RedisTargetSummary {
+  id: string;
+  name: string;
+  kind: string;
+  host: string;
+  port: number;
+  status: string;
+  latencyMs: number;
+  version?: string;
+  error?: string;
+  probedAt: string;
+  source?: string;
+  tls?: boolean;
+}
+
+export interface RedisLambdaIntegration {
+  functionName: string;
+  runtime: string;
+  state: string;
+  evidence: string;
+  source: string;
+  logGroup?: string;
+}
+
+export interface RedisECSIntegration {
+  kind: "service" | "task-definition" | string;
+  name: string;
+  arn: string;
+  clusterArn?: string;
+  clusterName?: string;
+  taskDefinitionArn: string;
+  containerName: string;
+  envKey: string;
+  status: string;
+  logGroup?: string;
+}
+
+export interface RedisSecretIntegration {
+  name: string;
+  arn: string;
+  description?: string;
+}
+
+export interface RedisTraceIntegration {
+  id: string;
+  startedAt: string;
+  durationMs: number;
+  status: number;
+  method?: string;
+  path?: string;
+  reason: "redis-span" | "linked-function" | string;
+}
+
+export interface RedisIntegrations {
+  lambdas: RedisLambdaIntegration[];
+  ecs: RedisECSIntegration[];
+  secrets: RedisSecretIntegration[];
+  traces: RedisTraceIntegration[];
+  logGroups: string[];
+}
+
+export interface RedisTargetDetailResponse {
+  target: RedisTargetSummary;
+  info?: RedisServerInfo;
+  infoError?: string;
+  integrations: RedisIntegrations;
+}
+
+export interface RedisKeySummary {
+  key: string;
+  type: string;
+  ttlMs: number;
+  memoryBytes?: number;
+}
+
+export interface RedisScanRequest extends RedisAuthOptions {
+  pattern?: string;
+  type?: string;
+  cursor?: string;
+  count?: number;
+}
+
+export interface RedisScanResponse {
+  cursor: string;
+  hasMore: boolean;
+  keys: RedisKeySummary[];
+  scannedCount: number;
+  dbSize: number;
+}
+
+export interface RedisHashEntry {
+  field: string;
+  value: string;
+}
+
+export interface RedisZSetMember {
+  member: string;
+  score: number;
+}
+
+export interface RedisStreamEntry {
+  id: string;
+  fields: Record<string, string>;
+}
+
+export interface RedisKeyDetail {
+  found: boolean;
+  key: string;
+  type: string;
+  ttlMs: number;
+  encoding?: string;
+  memoryBytes?: number;
+  length: number;
+  truncated?: boolean;
+  isBinary?: boolean;
+  stringValue?: string;
+  hashEntries?: RedisHashEntry[];
+  listItems?: string[];
+  setMembers?: string[];
+  zsetMembers?: RedisZSetMember[];
+  streamEntries?: RedisStreamEntry[];
+}
+
+export interface RedisSetKeyRequest extends RedisAuthOptions {
+  key: string;
+  type: "string" | "hash" | "list" | "set" | "zset" | "stream";
+  stringValue?: string;
+  hashEntries?: RedisHashEntry[];
+  listItems?: string[];
+  setMembers?: string[];
+  zsetMembers?: RedisZSetMember[];
+  streamFields?: Record<string, string>;
+  streamId?: string;
+  ttlSeconds?: number | null;
+  keepTtl?: boolean;
+}
+
+export interface RedisCommandResult {
+  command: string;
+  resultType: string;
+  result: unknown;
+  formatted: string;
+  durationMs: number;
 }
 

@@ -34,6 +34,7 @@ import (
 	lambdasvc "github.com/aircwo-systems/tarn/internal/lambda"
 	logssvc "github.com/aircwo-systems/tarn/internal/logs"
 	"github.com/aircwo-systems/tarn/internal/openapi"
+	"github.com/aircwo-systems/tarn/internal/redisviewer"
 	s3svc "github.com/aircwo-systems/tarn/internal/s3"
 	secretssvc "github.com/aircwo-systems/tarn/internal/secrets"
 	snssvc "github.com/aircwo-systems/tarn/internal/sns"
@@ -64,6 +65,7 @@ type Handler struct {
 	stepfunctions *stepfunctionssvc.Service
 	ecs           *ecssvc.Service
 	traceStore    *tracesvc.Store
+	redisViewer   *redisviewer.Service
 	// taskRunner launches ECS tasks for the dashboard's run-task trigger.
 	// It is optional: while unset, RunECSTask reports 503 like the AWS
 	// protocol surface does without a runner.
@@ -115,6 +117,11 @@ func (h *Handler) SetCognitoService(svc *cognitosvc.Service) {
 // SetKMSService attaches the account's KMS service to the overview.
 func (h *Handler) SetKMSService(svc *kmssvc.Service) {
 	h.kms = svc
+}
+
+// SetRedisViewer attaches the shared Redis viewer controller.
+func (h *Handler) SetRedisViewer(svc *redisviewer.Service) {
+	h.redisViewer = svc
 }
 
 // SetECSTaskRunner wires the account-local ECS task runner used by the
@@ -232,12 +239,13 @@ type ecsTaskDefinitionSummary struct {
 }
 
 type overviewConfig struct {
-	Region    string `json:"region"`
-	AccountID string `json:"accountId"`
-	Endpoint  string `json:"endpoint"`
-	DataDir   string `json:"dataDir"`
-	UIEnabled bool   `json:"uiEnabled"`
-	Version   string `json:"version"`
+	Region             string `json:"region"`
+	AccountID          string `json:"accountId"`
+	Endpoint           string `json:"endpoint"`
+	DataDir            string `json:"dataDir"`
+	UIEnabled          bool   `json:"uiEnabled"`
+	RedisViewerEnabled bool   `json:"redisViewerEnabled"`
+	Version            string `json:"version"`
 }
 
 type overviewCounts struct {
@@ -821,12 +829,13 @@ func (h *Handler) buildOverview() ([]byte, error) {
 		Timestamp: time.Now().UTC(),
 		Services:  services,
 		Config: overviewConfig{
-			Region:    h.cfg.Region,
-			AccountID: h.cfg.AccountID,
-			Endpoint:  h.cfg.Endpoint(),
-			DataDir:   h.cfg.DataDir,
-			UIEnabled: h.cfg.UIEnabled,
-			Version:   h.cfg.Version,
+			Region:             h.cfg.Region,
+			AccountID:          h.cfg.AccountID,
+			Endpoint:           h.cfg.Endpoint(),
+			DataDir:            h.cfg.DataDir,
+			UIEnabled:          h.cfg.UIEnabled,
+			RedisViewerEnabled: h.redisViewerEnabled(),
+			Version:            h.cfg.Version,
 		},
 		Counts: overviewCounts{
 			Gateways:            len(gateways) + len(v1APIs),

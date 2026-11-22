@@ -2,14 +2,16 @@
   import { matchesInfrastructureFilter } from "#lib/filter-utils";
   import { onMount } from "svelte";
   import { replaceState } from "$app/navigation";
-  import { MagnifyingGlassIcon, PlusIcon, SidebarSimpleIcon } from "phosphor-svelte";
+  import { MagnifyingGlassIcon, PlusIcon, SidebarSimpleIcon, DatabaseIcon } from "phosphor-svelte";
   import SectionHeader from "./section-header.svelte";
+  import RcButton from "#lib/components/rack/rc-button.svelte";
   import RcListRow from "#lib/components/rack/rc-list-row.svelte";
   import RcResizableAside from "#lib/components/rack/rc-resizable-aside.svelte";
   import RcPanel from "#lib/components/rack/rc-panel.svelte";
   import RcKv from "#lib/components/rack/rc-kv.svelte";
   import RcStat from "#lib/components/rack/rc-stat.svelte";
   import RcTonePill, { type Tone } from "#lib/components/rack/rc-tone-pill.svelte";
+  import { isRedisProbeKind } from "#lib/redis";
   import { getDashboard, getDashboardFilters, getVisibleInfra } from "#lib/state.svelte";
   import { infraKindCssVar, normalizeTopologyInfraKind } from "#lib/components/topology/topology-canvas-theme";
   import type { InfraConnection, InfraProbe } from "#lib/types";
@@ -27,6 +29,7 @@
 
   const dashboard = getDashboard();
   const filters = getDashboardFilters();
+  const redisViewerEnabled = $derived(dashboard.data?.config?.redisViewerEnabled ?? false);
 
   const KIND_LABELS: Record<string, string> = {
     docker: "Docker",
@@ -330,7 +333,20 @@
                   <span class="mono">{address(selected)}</span>
                 </div>
               </div>
-              <RcTonePill tone={statusTone(selected.status)}>{selected.status}</RcTonePill>
+              <div class="hero-right">
+                {#if isRedisProbeKind(selected.kind)}
+                  {#if redisViewerEnabled}
+                    <RcButton small onclick={() => onNavigate(`redis?target=${encodeURIComponent(selected.id)}`)}>
+                      <DatabaseIcon size={12} /> Open Redis Viewer
+                    </RcButton>
+                  {:else}
+                    <RcButton small variant="ghost" onclick={() => onNavigate("settings?section=infra")} title="Enable Redis Viewer in Settings or pass --redis-viewer / --rv">
+                      <DatabaseIcon size={12} /> Enable Redis Viewer
+                    </RcButton>
+                  {/if}
+                {/if}
+                <RcTonePill tone={statusTone(selected.status)}>{selected.status}</RcTonePill>
+              </div>
             </header>
 
             <div class="stats">
@@ -392,6 +408,7 @@
 
 <style>
   .services { display: flex; flex-direction: column; min-height: 100%; }
+  .hero-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .mono { font-family: var(--font-mono, ui-monospace, monospace); }
   .layout {
     display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 28px; padding: 20px 0 48px;

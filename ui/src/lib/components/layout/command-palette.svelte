@@ -25,6 +25,7 @@
     FingerprintIcon,
   } from "phosphor-svelte";
   import { getDashboard, refresh } from "#lib/state.svelte";
+  import { isRedisProbeKind, redisProbeId } from "#lib/redis";
   import { timeAgo } from "#lib/utils";
   import type { Component } from "svelte";
 
@@ -97,6 +98,10 @@
     page("queues",        "Queues",          count(data?.queues?.length, "queue"),        ChatCircleIcon, "sqs");
     page("topics",        "Topics",          count(data?.topics?.length, "topic"),        BellIcon, "sns pubsub");
     page("dynamodb",      "DynamoDB",        count(data?.dynamodbTables?.length, "table"), DatabaseIcon, "ddb tables");
+    if (data?.config?.redisViewerEnabled) {
+      const redisCount = (data.infrastructure ?? []).filter((p) => isRedisProbeKind(p.kind)).length;
+      page("redis", "Redis", `${count(redisCount, "instance")} · shared across accounts`, DatabaseIcon, "redis valkey cache keys");
+    }
     page("storage",       "Storage",         count(data?.buckets?.length, "bucket"),      HardDriveIcon, "s3 buckets");
     page("secrets",       "Secrets",         count(data?.secrets?.length, "secret"),      KeyIcon, "secrets manager");
     page("kms",           "KMS",             count(data?.kmsKeys?.length, "key"),         LockKeyIcon, "kms keys encryption aliases");
@@ -176,6 +181,24 @@
         icon: DatabaseIcon,
         action: () => onNavigate(`dynamodb?table=${encodeURIComponent(tbl.name)}`),
       });
+    }
+
+    if (data?.config?.redisViewerEnabled) {
+      for (const probe of data.infrastructure ?? []) {
+        if (!isRedisProbeKind(probe.kind)) continue;
+        const targetId = redisProbeId(probe);
+        items.push({
+          id: `redis-${targetId}`,
+          title: probe.name,
+          subtitle: `${probe.host}:${probe.port} · ${probe.status} · shared across accounts`,
+          group: "Pages",
+          filter: "pages",
+          keywords: `redis valkey cache ${probe.host} ${probe.port}`,
+          mono: true,
+          icon: DatabaseIcon,
+          action: () => onNavigate(`redis?target=${encodeURIComponent(targetId)}`),
+        });
+      }
     }
 
     for (const b of data?.buckets ?? []) {

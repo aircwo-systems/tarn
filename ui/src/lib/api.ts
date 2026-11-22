@@ -28,6 +28,13 @@ import type {
   DynamoReadResponse,
   DynamoItem,
   DynamoStreamRecordsResponse,
+  RedisAuthOptions,
+  RedisTargetDetailResponse,
+  RedisScanRequest,
+  RedisScanResponse,
+  RedisKeyDetail,
+  RedisSetKeyRequest,
+  RedisCommandResult,
 } from "#lib/types";
 
 let _activeAccountId = "000000000000";
@@ -1329,6 +1336,109 @@ export function fetchDynamoStreamRecords(
     `/tables/${encodeURIComponent(tableName)}/stream/records${suffix ? `?${suffix}` : ""}`,
     { method: "GET", signal },
     "Failed to load stream records",
+  );
+}
+
+// ── Redis Built-in Viewer ─────────────────────────────────────────────
+
+async function redisAdmin<T>(path: string, init: RequestInit, fallback: string): Promise<T> {
+  const response = await fetch(endpoint(`/_tarn/admin/redis${path}`), {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...accountHeaders(),
+      ...(init.headers ?? {}),
+    },
+  });
+  if (!response.ok) {
+    throw new Error(await extractJSONError(response, `${fallback}: HTTP ${response.status}`));
+  }
+  return (await response.json()) as T;
+}
+
+export function saveRedisViewerSettings(enabled: boolean): Promise<{ enabled: boolean }> {
+  return redisAdmin(
+    "/settings",
+    { method: "PUT", body: JSON.stringify({ enabled }) },
+    "Failed to update Redis viewer setting",
+  );
+}
+
+export function fetchRedisTargetDetail(
+  targetId: string,
+  auth: RedisAuthOptions = {},
+  signal?: AbortSignal,
+): Promise<RedisTargetDetailResponse> {
+  const qs = new URLSearchParams();
+  if (auth.db && auth.db > 0) qs.set("db", String(auth.db));
+  if (auth.tls) qs.set("tls", "true");
+  const suffix = qs.toString();
+  const headers: Record<string, string> = {};
+  if (auth.username) headers["X-Tarn-Redis-Username"] = auth.username;
+  if (auth.password) headers["X-Tarn-Redis-Password"] = auth.password;
+  return redisAdmin(
+    `/targets/${encodeURIComponent(targetId)}${suffix ? `?${suffix}` : ""}`,
+    { method: "GET", headers, signal },
+    "Failed to load Redis target",
+  );
+}
+
+export function scanRedisKeys(
+  targetId: string,
+  req: RedisScanRequest,
+  signal?: AbortSignal,
+): Promise<RedisScanResponse> {
+  return redisAdmin(
+    `/targets/${encodeURIComponent(targetId)}/scan`,
+    { method: "POST", body: JSON.stringify(req), signal },
+    "Redis scan failed",
+  );
+}
+
+export function getRedisKey(
+  targetId: string,
+  req: RedisAuthOptions & { key: string; limit?: number },
+  signal?: AbortSignal,
+): Promise<RedisKeyDetail> {
+  return redisAdmin(
+    `/targets/${encodeURIComponent(targetId)}/keys/get`,
+    { method: "POST", body: JSON.stringify(req), signal },
+    "Failed to inspect key",
+  );
+}
+
+export function setRedisKey(
+  targetId: string,
+  req: RedisSetKeyRequest,
+): Promise<{ ok: boolean; key: string }> {
+  return redisAdmin(
+    `/targets/${encodeURIComponent(targetId)}/keys`,
+    { method: "PUT", body: JSON.stringify(req) },
+    "Failed to save key",
+  );
+}
+
+export function deleteRedisKeys(
+  targetId: string,
+  req: RedisAuthOptions & { keys: string[] },
+): Promise<{ ok: boolean; deleted: number }> {
+  return redisAdmin(
+    `/targets/${encodeURIComponent(targetId)}/keys/delete`,
+    { method: "POST", body: JSON.stringify(req) },
+    "Failed to delete key",
+  );
+}
+
+export function execRedisCommand(
+  targetId: string,
+  req: RedisAuthOptions & { command: string },
+  signal?: AbortSignal,
+): Promise<RedisCommandResult> {
+  return redisAdmin(
+    `/targets/${encodeURIComponent(targetId)}/command`,
+    { method: "POST", body: JSON.stringify(req), signal },
+    "Redis command failed",
   );
 }
 

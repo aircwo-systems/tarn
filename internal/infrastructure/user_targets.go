@@ -59,6 +59,8 @@ func portForURL(u *url.URL) int {
 		return 443
 	case "http":
 		return 80
+	case "redis", "rediss":
+		return 6379
 	}
 	return 0
 }
@@ -80,13 +82,15 @@ func NormalizeUserTarget(t UserTarget) (UserTarget, error) {
 	u.Scheme = strings.ToLower(u.Scheme)
 	switch u.Scheme {
 	case "http", "https":
+	case "redis", "rediss":
+		u.Path, u.RawQuery, u.Fragment = "", "", ""
 	case "tcp":
 		if u.Port() == "" {
 			return t, fmt.Errorf("tcp url %q needs a port", t.URL)
 		}
 		u.Path, u.RawQuery, u.Fragment = "", "", ""
 	default:
-		return t, fmt.Errorf("unsupported scheme %q (use http, https or tcp)", u.Scheme)
+		return t, fmt.Errorf("unsupported scheme %q (use http, https, tcp, redis or rediss)", u.Scheme)
 	}
 	if u.Hostname() == "" {
 		return t, fmt.Errorf("url %q has no host", t.URL)

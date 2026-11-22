@@ -21,6 +21,8 @@ func TestNormalizeUserTarget(t *testing.T) {
 		{in: UserTarget{URL: "192.168.1.20:8080"}, wantURL: "http://192.168.1.20:8080", wantID: "http-192.168.1.20-8080"},
 		{in: UserTarget{Name: "API", URL: "https://api.lan/health"}, wantURL: "https://api.lan/health", wantID: "https-api.lan-443"},
 		{in: UserTarget{URL: "tcp://10.0.0.7:5432"}, wantURL: "tcp://10.0.0.7:5432", wantID: "tcp-10.0.0.7-5432"},
+		{in: UserTarget{Name: "Cache", URL: "redis://10.0.0.8:6380/0"}, wantURL: "redis://10.0.0.8:6380", wantID: "redis-10.0.0.8-6380"},
+		{in: UserTarget{URL: "rediss://cache.local"}, wantURL: "rediss://cache.local", wantID: "rediss-cache.local-6379"},
 		{in: UserTarget{URL: "tcp://10.0.0.7"}, wantErr: true},
 		{in: UserTarget{URL: "ftp://host"}, wantErr: true},
 		{in: UserTarget{URL: "http://user:pw@host"}, wantErr: true},

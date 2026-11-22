@@ -46,6 +46,7 @@
     matchesInfrastructureFilter,
   } from "#lib/filter-utils";
   import { countECSResources } from "#lib/ecs";
+  import { isRedisProbeKind } from "#lib/redis";
   import {
     TabNavigationHistory,
     logStateFromLocation,
@@ -62,6 +63,8 @@
   // ── Routing ──────────────────────────────────────────────────────────
   const tabHistory = new TabNavigationHistory();
   const isDynamoPopout = $derived(page.url.searchParams.get("popout") === "dynamodb");
+  const isRedisPopout = $derived(page.url.searchParams.get("popout") === "redis");
+  const isPopout = $derived(isDynamoPopout || isRedisPopout);
   let activeTab = $state<DashboardTab>("home");
   let logsInitialGroup = $state("");
   let logsInitialTimestamp = $state("");
@@ -79,6 +82,13 @@
       activeTab = "dynamodb";
       if (!window.location.hash.startsWith("#dynamodb")) {
         window.history.replaceState(null, "", "#dynamodb");
+      }
+      return;
+    }
+    if (isRedisPopout) {
+      activeTab = "redis";
+      if (!window.location.hash.startsWith("#redis")) {
+        window.history.replaceState(null, "", "#redis");
       }
       return;
     }
@@ -125,7 +135,7 @@
 
   function navigateFromPopout(target: string) {
     const clean = target.replace(/^#/, "");
-    if (clean.startsWith("dynamodb")) {
+    if (clean.startsWith("dynamodb") || clean.startsWith("redis")) {
       window.location.href = `${window.location.pathname}?account=${encodeURIComponent(accountSettings.activeAccountId)}#${clean}`;
       return;
     }
@@ -160,6 +170,7 @@
     logs: () => import("#lib/components/sections/logs-section.svelte"),
     queues: () => import("#lib/components/sections/queues-section.svelte"),
     dynamodb: () => import("#lib/components/sections/dynamodb-section.svelte"),
+    redis: () => import("#lib/components/sections/redis-section.svelte"),
     sns: () => import("#lib/components/sections/sns-section.svelte"),
     secrets: () => import("#lib/components/sections/secrets-section.svelte"),
     kms: () => import("#lib/components/sections/kms-section.svelte"),
@@ -239,6 +250,8 @@
   const visibleInfra = $derived(
     getVisibleInfra(dashboard.data?.infrastructure ?? []).filter(p => matchesInfrastructureFilter(normalizeTopologyInfraKind(p.kind), filters.tagFilter)),
   );
+  const redisViewerEnabled = $derived(dashboard.data?.config?.redisViewerEnabled ?? false);
+  const countRedis = $derived(visibleInfra.filter((p) => isRedisProbeKind(p.kind)).length);
   const activeServiceCount = $derived(visibleInfra.length);
   const sidebarServices = $derived(visibleInfra.map((probe) => {
     const id = `${probe.kind}-${probe.host}-${probe.port}`;
@@ -322,6 +335,7 @@
           },
         },
         { id: "dynamodb",     label: "DynamoDB",       icon: DatabaseIcon,             count: countDynamoTables  },
+        ...(redisViewerEnabled ? [{ id: "redis", label: "Redis", icon: DatabaseIcon, count: countRedis }] : []),
         { id: "sns",          label: "SNS",            icon: BellIcon,                 count: countTopics        },
         { id: "secrets",      label: "Secrets",        icon: KeyIcon,                  count: countSecrets       },
         { id: "kms",          label: "KMS",            icon: LockKeyIcon,              count: countKMSKeys       },
@@ -374,7 +388,7 @@
     Skip to main content
   </a>
   <!-- ══════════════════════════════════════════════════ SIDEBAR ══ -->
-  {#if !isDynamoPopout}
+  {#if !isPopout}
     <AppSidebar
       {navSections}
       {activeTab}
@@ -434,6 +448,13 @@
           popout={isDynamoPopout}
           onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
           onNavigate={isDynamoPopout ? navigateFromPopout : setTab}
+        />
+      {:else if activeTab === "redis"}
+        <ActiveSection
+          {sidebarCollapsed}
+          popout={isRedisPopout}
+          onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)}
+          onNavigate={isRedisPopout ? navigateFromPopout : setTab}
         />
       {:else if activeTab === "sns"}
         <ActiveSection {sidebarCollapsed} onToggleSidebar={() => (sidebarCollapsed = !sidebarCollapsed)} />

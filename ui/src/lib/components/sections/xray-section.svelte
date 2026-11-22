@@ -6,6 +6,7 @@
     CaretRightIcon,
     SidebarSimpleIcon,
     ArrowsClockwiseIcon,
+    DatabaseIcon,
     LightningIcon,
     XIcon,
   } from "phosphor-svelte";
@@ -44,6 +45,7 @@
   const dashboard = getDashboard();
   const traces = $derived(dashboard.data?.recentTraces ?? []);
   const eventBridgeRules = $derived(dashboard.data?.eventBridgeRules ?? []);
+  const redisViewerEnabled = $derived(dashboard.data?.config?.redisViewerEnabled ?? false);
 
   interface TraceFlow extends RequestTrace {
     rawTraces: RequestTrace[];
@@ -1242,6 +1244,17 @@
                           Test in Lambda
                         </button>
                       {/if}
+                      {#if span.kind.toLowerCase() === "redis" && redisViewerEnabled}
+                        <button
+                          type="button"
+                          onclick={() => onNavigate("redis")}
+                          class="context-link context-link--badge shrink-0"
+                          title="Inspect Redis keys and stats in Redis Viewer"
+                        >
+                          <DatabaseIcon size={10} />
+                          Redis Viewer
+                        </button>
+                      {/if}
                     </div>
                     {#if openSpan === i}
                       <div class="span-meta" transition:slide={{ duration: 200 }}>
@@ -1276,8 +1289,15 @@
                     <button
                       type="button"
                       class="potential-row"
-                      onclick={() => onNavigate(`services?id=${encodeURIComponent(c.targetId)}`)}
-                      title="Open {c.targetName} in Services"
+                      onclick={() =>
+                        onNavigate(
+                          c.targetKind === "redis" && redisViewerEnabled
+                            ? `redis?target=${encodeURIComponent(c.targetId)}`
+                            : `services?id=${encodeURIComponent(c.targetId)}`,
+                        )}
+                      title={c.targetKind === "redis" && redisViewerEnabled
+                        ? `Open ${c.targetName} in Redis Viewer`
+                        : `Open ${c.targetName} in Services`}
                     >
                       <span class="potential-fn mono">{c.sourceFunction}</span>
                       <span class="potential-arrow">&rarr;</span>

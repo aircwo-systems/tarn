@@ -48,6 +48,7 @@ import (
 	"github.com/aircwo-systems/tarn/internal/kms"
 	"github.com/aircwo-systems/tarn/internal/lambda"
 	"github.com/aircwo-systems/tarn/internal/logs"
+	"github.com/aircwo-systems/tarn/internal/redisviewer"
 	s3store "github.com/aircwo-systems/tarn/internal/s3"
 	"github.com/aircwo-systems/tarn/internal/secrets"
 	"github.com/aircwo-systems/tarn/internal/secretsproxy"
@@ -77,6 +78,18 @@ func buildConfig(cmd *cobra.Command) (*config.Config, error) {
 	if cmd.Flags().Changed("ui") {
 		if v, err := cmd.Flags().GetBool("ui"); err == nil {
 			cfg.UIEnabled = v
+		}
+	}
+	if cmd.Flags().Changed("redis-viewer") {
+		if v, err := cmd.Flags().GetBool("redis-viewer"); err == nil {
+			cfg.RedisViewerEnabled = v
+			cfg.RedisViewerExplicit = true
+		}
+	}
+	if cmd.Flags().Changed("rv") {
+		if v, err := cmd.Flags().GetBool("rv"); err == nil {
+			cfg.RedisViewerEnabled = v
+			cfg.RedisViewerExplicit = true
 		}
 	}
 	if v, _ := cmd.Flags().GetString("ui-dir"); v != "" {
@@ -139,6 +152,7 @@ type sharedDeps struct {
 	traceStore *trace.Store
 	collector  *trace.Collector
 	infraSvc   *infrastructure.Service
+	redisSvc   *redisviewer.Service
 	vault      *secrets.Vault
 	// cognitoIndex maps user pool and client IDs to accounts. Each account's
 	// Cognito service registers its pools as it loads.
@@ -374,6 +388,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	adminHandler.SetCognitoService(cognitoSvc)
 	adminHandler.SetKMSService(kmsSvc)
 	adminHandler.SetECSTaskRunner(ecsRunner)
+	adminHandler.SetRedisViewer(shared.redisSvc)
 
 	hs := &api.HandlerSet{
 		APIGateway:    apigatewayhandler.NewHandler(gatewaySvc),
@@ -522,12 +537,18 @@ func startServer(cfg *config.Config) error {
 		log.Printf("[vault] secrets encryption enabled (key: %s)", cfg.VaultKeyPath)
 	}
 
+	redisSvc := redisviewer.NewService(cfg.RedisViewerEnabled)
+	if err := redisSvc.LoadState(filepath.Join(cfg.DataDir, "redis-viewer.json"), cfg.RedisViewerExplicit); err != nil {
+		log.Printf("[redis-viewer] could not load state: %v", err)
+	}
+
 	shared := &sharedDeps{
 		eng:          eng,
 		pool:         pool,
 		traceStore:   traceStore,
 		collector:    collector,
 		infraSvc:     infraSvc,
+		redisSvc:     redisSvc,
 		vault:        vault,
 		cognitoIndex: cognito.NewIndex(),
 	}

@@ -6,6 +6,7 @@ export const DASHBOARD_TABS = [
   "ecs",
   "queues",
   "dynamodb",
+  "redis",
   "sns",
   "secrets",
   "kms",

@@ -103,6 +103,8 @@ Flush provisioned resources:
 	root.PersistentFlags().String("data-dir", "", "Data directory (default: ~/.tarn/data)")
 	root.PersistentFlags().String("region", "us-east-1", "Emulated AWS region")
 	root.PersistentFlags().Bool("ui", false, "Enable the built-in dashboard UI")
+	root.PersistentFlags().Bool("redis-viewer", false, "Enable the Redis viewer section and endpoints")
+	root.PersistentFlags().Bool("rv", false, "Shorthand alias for --redis-viewer")
 	root.PersistentFlags().String("ui-dir", "", "Path to built dashboard assets (default: ./ui/build)")
 	root.PersistentFlags().Bool("persist", true, "Persist non-Lambda service configuration across Tarn sessions")
 
