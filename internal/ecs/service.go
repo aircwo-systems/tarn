@@ -1163,7 +1163,7 @@ func (s *Service) DeleteService(in *types.DeleteServiceInput) (*types.DeleteServ
 	}
 
 	active := s.serviceTasksToDrainLocked(cluster.ClusterArn, name)
-	if len(active) == 0 && svc.RunningCount == 0 {
+	if len(active) == 0 && svc.RunningCount == 0 && (!in.Force || s.taskDrainer == nil) {
 		if err := s.tombstoneServiceLocked(svc); err != nil {
 			s.mu.Unlock()
 			return nil, err

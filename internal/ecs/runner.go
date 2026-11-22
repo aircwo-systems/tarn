@@ -161,8 +161,10 @@ type runningTask struct {
 }
 
 type launchBackoffState struct {
-	failures  int
-	nextRetry time.Time
+	failures          int
+	nextRetry         time.Time
+	serviceCreatedAt  time.Time
+	taskDefinitionArn string
 }
 
 // serviceGate is the per-service equivalent of the account-wide launchGate.
@@ -515,6 +517,7 @@ func (r *Runner) DrainService(ctx context.Context, cluster *types.Cluster, servi
 	gate := r.serviceGate(key)
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
+	r.recordServiceLaunchSuccess(key)
 
 	group := serviceGroup(serviceName)
 	// DeleteService already marks every active task's DesiredStatus STOPPED
@@ -1987,7 +1990,9 @@ func (r *Runner) reconcileService(ctx context.Context, cluster *types.Cluster, s
 	}
 
 	group := serviceGroup(svc.ServiceName)
-	defer r.recordServiceCounts(cluster, svc.ServiceName, group, running)
+	defer func() {
+		r.recordServiceCounts(cluster, svc.ServiceName, group, running)
+	}()
 
 	tasks := r.serviceTasks(cluster.ClusterArn, group)
 	activeTasks := serviceActiveTasks(tasks)
@@ -2040,10 +2045,18 @@ func (r *Runner) reconcileService(ctx context.Context, cluster *types.Cluster, s
 	}
 	diff := svc.DesiredCount - len(activeTasks)
 	launchKey := serviceKey(cluster.ClusterArn, svc.ServiceName)
+	r.resetStaleLaunchBackoff(launchKey, svc)
+	// Reap any orphaned containers labelled for this service whose task record
+	// no longer exists (e.g. left behind after a crash or pruned history) before
+	// launching replacements so fixed host ports are freed.
+	running -= r.reapOrphanServiceContainers(ctx, svc.ServiceName, summaries, tasks)
+	if running < 0 {
+		running = 0
+	}
 	td, err := r.svc.resolveTaskDefinition(svc.TaskDefinitionArn)
 	if err != nil {
 		log.Printf("[ecs] reconcile: resolve task definition for service %s: %v", svc.ServiceName, err)
-		r.recordServiceLaunchFailure(launchKey, time.Now())
+		r.recordServiceLaunchFailureForService(launchKey, svc, time.Now())
 		return
 	}
 	// PropagateTags on a service is SERVICE, TASK_DEFINITION, or NONE; copy
@@ -2059,16 +2072,72 @@ func (r *Runner) reconcileService(ctx context.Context, cluster *types.Cluster, s
 		if !r.serviceLaunchAllowed(launchKey, time.Now()) {
 			return
 		}
-		if _, err := r.launchTask(ctx, cluster, td, nil, svc.LaunchType, group, svc.ServiceName, launchTags); err != nil {
+		launched, err := r.launchTask(ctx, cluster, td, nil, svc.LaunchType, group, svc.ServiceName, launchTags)
+		if err != nil {
 			log.Printf("[ecs] reconcile: start task for service %s: %v", svc.ServiceName, err)
-			r.recordServiceLaunchFailure(launchKey, time.Now())
+			r.recordServiceLaunchFailureForService(launchKey, svc, time.Now())
 			return
+		}
+		if launched != nil {
+			for _, c := range launched.Containers {
+				if c.LastStatus == types.TaskStatusRunning {
+					running++
+				}
+			}
 		}
 		// Backoff is deliberately not reset here. A container starting
 		// successfully says nothing about whether it stays up; resetting on
 		// start let a service that crashes immediately relaunch every
 		// reconcile tick forever. onContainerFinished resets it once the
 		// task has actually stayed running for serviceStabilityWindow.
+	}
+}
+
+func (r *Runner) reapOrphanServiceContainers(ctx context.Context, serviceName string, summaries []engine.TaskContainerSummary, tasks []*types.Task) int {
+	known := make(map[string]struct{}, len(tasks))
+	for _, t := range tasks {
+		if t != nil && t.TaskArn != "" {
+			known[t.TaskArn] = struct{}{}
+		}
+	}
+	removedRunning := 0
+	for _, summary := range summaries {
+		taskArn := strings.TrimSpace(summary.Labels[labelTaskArn])
+		if taskArn == "" {
+			continue
+		}
+		if _, ok := known[taskArn]; ok {
+			continue
+		}
+		if summary.State == "running" {
+			removedRunning++
+		}
+		if taskContainerSummaryIsLive(summary) {
+			if err := r.eng.StopContainer(ctx, summary.ID, 0); err != nil {
+				log.Printf("[ecs] reconcile: stop orphan container %s for service %s: %v", summary.ID, serviceName, err)
+			}
+		}
+		if err := r.eng.RemoveTaskContainer(ctx, summary.ID); err != nil {
+			log.Printf("[ecs] reconcile: remove orphan container %s for service %s: %v", summary.ID, serviceName, err)
+		}
+	}
+	return removedRunning
+}
+
+func (r *Runner) resetStaleLaunchBackoff(key string, svc *types.ECSService) {
+	if key == "" || svc == nil {
+		return
+	}
+	r.backoffMu.Lock()
+	defer r.backoffMu.Unlock()
+	state, ok := r.launchBackoff[key]
+	if !ok {
+		return
+	}
+	createdChanged := !state.serviceCreatedAt.IsZero() && !state.serviceCreatedAt.Equal(svc.CreatedAt)
+	tdChanged := state.taskDefinitionArn != "" && state.taskDefinitionArn != svc.TaskDefinitionArn
+	if createdChanged || tdChanged {
+		delete(r.launchBackoff, key)
 	}
 }
 
@@ -2080,12 +2149,20 @@ func (r *Runner) serviceLaunchAllowed(key string, now time.Time) bool {
 }
 
 func (r *Runner) recordServiceLaunchFailure(key string, now time.Time) {
+	r.recordServiceLaunchFailureForService(key, nil, now)
+}
+
+func (r *Runner) recordServiceLaunchFailureForService(key string, svc *types.ECSService, now time.Time) {
 	if key == "" {
 		return
 	}
 	r.backoffMu.Lock()
 	defer r.backoffMu.Unlock()
 	state := r.launchBackoff[key]
+	if svc != nil {
+		state.serviceCreatedAt = svc.CreatedAt
+		state.taskDefinitionArn = svc.TaskDefinitionArn
+	}
 	state.failures++
 	delay := serviceLaunchBackoffBase
 	for i := 1; i < state.failures && delay < serviceLaunchBackoffMax; i++ {

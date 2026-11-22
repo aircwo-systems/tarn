@@ -2624,3 +2624,138 @@ func TestLogContainerExit(t *testing.T) {
 		}
 	})
 }
+
+func TestReconcileServiceUpdatesRunningCountImmediatelyAfterLaunch(t *testing.T) {
+	r, svc, _, _ := newTestRunner(t)
+	td := registerSingleContainerTaskDef(t, svc, "immediate-count")
+	cluster, err := svc.ResolveCluster("")
+	if err != nil {
+		t.Fatalf("ResolveCluster: %v", err)
+	}
+	if _, err := svc.CreateService(&types.CreateServiceInput{
+		ServiceName:    "svc-immediate",
+		TaskDefinition: td.Family,
+		DesiredCount:   1,
+	}); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+
+	r.reconcileOnce(context.Background())
+
+	got, err := svc.store.GetService(cluster.ClusterArn, "svc-immediate")
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if got.RunningCount != 1 {
+		t.Fatalf("RunningCount = %d, want 1 immediately after launch pass", got.RunningCount)
+	}
+}
+
+func TestDeleteAndRecreateServiceClearsLaunchBackoff(t *testing.T) {
+	r, svc, eng, _ := newTestRunner(t)
+	td := registerSingleContainerTaskDef(t, svc, "backoff-reset")
+	cluster, err := svc.ResolveCluster("")
+	if err != nil {
+		t.Fatalf("ResolveCluster: %v", err)
+	}
+	if _, err := svc.CreateService(&types.CreateServiceInput{
+		ServiceName:    "svc-backoff",
+		TaskDefinition: td.Family,
+		DesiredCount:   1,
+	}); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+
+	eng.mu.Lock()
+	eng.createErr = fmt.Errorf("bind for 8085 failed: port is already allocated")
+	eng.mu.Unlock()
+	r.reconcileOnce(context.Background())
+
+	key := serviceKey(cluster.ClusterArn, "svc-backoff")
+	if r.serviceLaunchAllowed(key, time.Now()) {
+		t.Fatalf("expected service to be in launch backoff after failed launch")
+	}
+
+	if _, err := svc.DeleteService(&types.DeleteServiceInput{
+		Service: "svc-backoff",
+		Force:   true,
+	}); err != nil {
+		t.Fatalf("DeleteService: %v", err)
+	}
+
+	eng.mu.Lock()
+	eng.createErr = nil
+	eng.mu.Unlock()
+
+	if _, err := svc.CreateService(&types.CreateServiceInput{
+		ServiceName:    "svc-backoff",
+		TaskDefinition: td.Family,
+		DesiredCount:   1,
+	}); err != nil {
+		t.Fatalf("CreateService (recreate): %v", err)
+	}
+
+	r.reconcileOnce(context.Background())
+
+	got, err := svc.store.GetService(cluster.ClusterArn, "svc-backoff")
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if got.RunningCount != 1 {
+		t.Fatalf("RunningCount = %d, want 1 immediately after recreate", got.RunningCount)
+	}
+}
+
+func TestReconcileReapsOrphanServiceContainersBeforeLaunch(t *testing.T) {
+	r, svc, eng, _ := newTestRunner(t)
+	td := registerSingleContainerTaskDef(t, svc, "orphan-reap")
+	cluster, err := svc.ResolveCluster("")
+	if err != nil {
+		t.Fatalf("ResolveCluster: %v", err)
+	}
+	if _, err := svc.CreateService(&types.CreateServiceInput{
+		ServiceName:    "svc-orphan",
+		TaskDefinition: td.Family,
+		DesiredCount:   1,
+	}); err != nil {
+		t.Fatalf("CreateService: %v", err)
+	}
+
+	eng.mu.Lock()
+	eng.listResult = []engine.TaskContainerSummary{
+		{
+			ID:    "orphan-container-8085",
+			State: "running",
+			Labels: taskLabels(
+				"000000000000",
+				cluster.ClusterName,
+				"svc-orphan",
+				"arn:aws:ecs:us-east-1:000000000000:task/default/pruned-orphan",
+			),
+		},
+	}
+	eng.mu.Unlock()
+
+	r.reconcileOnce(context.Background())
+
+	eng.mu.Lock()
+	stopped := eng.stoppedIDs["orphan-container-8085"]
+	var removed bool
+	for _, call := range eng.calls {
+		if call == "remove:orphan-container-8085" {
+			removed = true
+		}
+	}
+	eng.mu.Unlock()
+
+	if !stopped || !removed {
+		t.Fatalf("expected orphan container to be stopped (%v) and removed (%v)", stopped, removed)
+	}
+	got, err := svc.store.GetService(cluster.ClusterArn, "svc-orphan")
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if got.RunningCount != 1 {
+		t.Fatalf("RunningCount = %d, want 1 (replacement only, not orphan)", got.RunningCount)
+	}
+}
