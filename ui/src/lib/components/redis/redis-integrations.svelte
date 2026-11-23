@@ -183,7 +183,7 @@
   .link-btn:hover { color: var(--accent-green); }
   .chip {
     padding: 2px 7px; border-radius: 5px; font-size: 10.5px;
-    background: var(--bg-panel); border: 1px solid var(--border-subtle); color: var(--text-secondary);
+    background: var(--bg-app); border: 1px solid var(--border-subtle); color: var(--text-secondary);
   }
   .mono { font-family: var(--font-mono, ui-monospace, monospace); }
 </style>

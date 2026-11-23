@@ -209,22 +209,21 @@
     }
   }
 
-  function onBackdropKeydown(e: KeyboardEvent) {
+  function onWindowKeydown(e: KeyboardEvent) {
     if (e.key === "Escape") onclose();
   }
 </script>
 
-<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<svelte:window onkeydown={onWindowKeydown} />
+
+<div class="overlay" onclick={onclose} role="presentation"></div>
+
 <div
-  class="drawer-backdrop"
+  class="drawer"
   role="dialog"
   aria-modal="true"
   aria-label={isCreate ? "New Redis key" : `Inspect Redis key ${keyName}`}
-  tabindex="-1"
-  onkeydown={onBackdropKeydown}
-  onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}
 >
-  <aside class="drawer">
     <header class="drawer-head">
       <div class="head-title">
         <h2>{isCreate ? "New Redis Key" : keyName}</h2>
@@ -320,7 +319,7 @@
           </div>
           <div class="kv-list">
             {#each listRows as _, i (i)}
-              <div class="single-row">
+              <div class="single-row indexed">
                 <span class="idx mono">{i}</span>
                 <input class="mono" placeholder="value" bind:value={listRows[i]} />
                 <button type="button" class="del-row" onclick={() => (listRows = listRows.filter((_, j) => j !== i))} aria-label="Remove item">&times;</button>
@@ -417,31 +416,39 @@
         <span></span>
       {/if}
       <div class="foot-right">
-        <button type="button" class="btn ghost" disabled={busy} onclick={onclose}>Cancel</button>
+        <button type="button" class="btn ghost" disabled={busy} onclick={onclose}>Close</button>
         <button type="button" class="btn primary" disabled={busy || loading} onclick={handleSave}>
           <FloppyDiskIcon size={13} />
           {busy ? "Saving..." : keyType === "stream" && !isCreate ? "Append Entry" : "Save Key"}
         </button>
       </div>
     </footer>
-  </aside>
 </div>
 
 <style>
-  .drawer-backdrop {
-    position: fixed; inset: 0; z-index: 60;
-    background: rgba(0, 0, 0, 0.48);
-    display: flex; justify-content: flex-end;
+  .overlay {
+    position: fixed; inset: 0; z-index: 80;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(2px);
   }
   .drawer {
-    width: min(640px, 95vw); height: 100%;
-    background: var(--bg-panel); border-left: 1px solid var(--border-subtle);
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: min(760px, calc(100vw - 24px));
+    max-height: calc(100vh - 32px);
+    background: var(--bg-app);
+    border: 1px solid var(--border-default);
+    border-radius: 10px;
     display: flex; flex-direction: column;
-    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.28);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    z-index: 81;
+    overflow: hidden;
   }
   .drawer-head {
     display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;
-    padding: 16px 20px; border-bottom: 1px solid var(--border-subtle);
+    padding: 13px 16px; border-bottom: 1px solid var(--border-subtle);
+    background: var(--bg-surface, var(--bg-app));
   }
   .head-title { min-width: 0; }
   .head-title h2 {
@@ -492,7 +499,8 @@
   .kv-list { display: flex; flex-direction: column; gap: 6px; }
   .kv-row { display: grid; grid-template-columns: 1fr 1.4fr 26px; gap: 6px; }
   .zset-row { display: grid; grid-template-columns: 110px 1fr 26px; gap: 6px; }
-  .single-row { display: grid; grid-template-columns: auto 1fr 26px; gap: 6px; align-items: center; }
+  .single-row { display: grid; grid-template-columns: 1fr 26px; gap: 6px; align-items: center; }
+  .single-row.indexed { grid-template-columns: 28px 1fr 26px; }
   .idx { font-size: 11px; color: var(--text-tertiary); min-width: 22px; text-align: right; }
   .del-row {
     width: 26px; height: 30px; border-radius: 6px; border: 1px solid var(--border-subtle);
@@ -522,14 +530,16 @@
   .mono { font-family: var(--font-mono, ui-monospace, monospace); }
   .drawer-foot {
     display: flex; align-items: center; justify-content: space-between; gap: 10px;
-    padding: 12px 20px; border-top: 1px solid var(--border-subtle);
+    padding: 11px 16px; border-top: 1px solid var(--border-subtle);
+    background: var(--bg-surface, var(--bg-app));
   }
   .foot-right, .confirm-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-secondary); }
   .btn {
     display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px;
-    border-radius: 7px; border: 1px solid var(--border-subtle); font-size: 12px; cursor: pointer;
+    border-radius: 6px; border: 1px solid var(--border-subtle); font-size: 11.5px; font-weight: 500; cursor: pointer;
   }
-  .btn.primary { background: var(--accent-green); border-color: var(--accent-green); color: #05140d; font-weight: 600; }
+  .btn.primary { background: var(--text-primary); border-color: var(--text-primary); color: var(--bg-app); }
+  .btn.primary:hover:not(:disabled) { opacity: 0.9; }
   .btn.danger { background: var(--accent-red); border-color: var(--accent-red); color: #fff; font-weight: 600; }
   .btn.ghost { background: transparent; color: var(--text-secondary); }
   .btn.ghost:hover { color: var(--text-primary); background: var(--bg-element); }

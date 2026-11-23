@@ -355,7 +355,7 @@
     border: 0; background: transparent; color: var(--text-tertiary);
     padding: 3px 8px; border-radius: 5px; font-size: 11px; cursor: pointer;
   }
-  .view-toggle button.active { background: var(--bg-panel); color: var(--text-primary); }
+  .view-toggle button.active { background: var(--bg-app); color: var(--text-primary); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08); }
   .scan-bar {
     display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;
   }
@@ -401,7 +401,7 @@
     border: 1px solid transparent; background: transparent; color: var(--text-tertiary);
     cursor: pointer; font-size: 11px;
   }
-  .row-btn:hover { background: var(--bg-panel); border-color: var(--border-subtle); color: var(--text-primary); }
+  .row-btn:hover { background: var(--bg-app); border-color: var(--border-subtle); color: var(--text-primary); }
   .row-btn.danger:hover, .row-btn.danger.armed {
     color: var(--accent-red);
     border-color: color-mix(in srgb, var(--accent-red) 45%, transparent);

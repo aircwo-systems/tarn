@@ -426,7 +426,7 @@
   .auth-bar {
     display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap;
     padding: 12px 14px; border-radius: 9px;
-    border: 1px solid var(--border-subtle); background: var(--bg-panel);
+    border: 1px solid var(--border-subtle); background: var(--bg-surface, var(--bg-app));
   }
   .auth-field { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 150px; }
   .auth-field span { font-size: 10.5px; color: var(--text-tertiary); }
@@ -454,7 +454,7 @@
   }
   .tab-count {
     padding: 1px 6px; border-radius: 999px; font: 10.5px var(--font-mono, ui-monospace, monospace);
-    background: var(--bg-panel); border: 1px solid var(--border-subtle); color: var(--text-tertiary);
+    background: var(--bg-app); border: 1px solid var(--border-subtle); color: var(--text-tertiary);
   }
   .error-banner {
     display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 8px;
