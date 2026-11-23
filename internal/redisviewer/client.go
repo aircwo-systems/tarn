@@ -113,6 +113,15 @@ type StreamEntry struct {
 	Fields map[string]string `json:"fields"`
 }
 
+// InspectOptions configures paginated, optionally filtered key inspection.
+type InspectOptions struct {
+	Key    string `json:"key"`
+	Limit  int    `json:"limit,omitempty"`
+	Cursor string `json:"cursor,omitempty"`
+	Offset int64  `json:"offset,omitempty"`
+	Match  string `json:"match,omitempty"`
+}
+
 // KeyDetail holds the full inspected value and metadata for one key.
 type KeyDetail struct {
 	Found         bool          `json:"found"`
@@ -123,6 +132,9 @@ type KeyDetail struct {
 	MemoryBytes   int64         `json:"memoryBytes,omitempty"`
 	Length        int64         `json:"length"`
 	Truncated     bool          `json:"truncated,omitempty"`
+	HasMore       bool          `json:"hasMore,omitempty"`
+	NextCursor    string        `json:"nextCursor,omitempty"`
+	NextOffset    int64         `json:"nextOffset,omitempty"`
 	IsBinary      bool          `json:"isBinary,omitempty"`
 	StringValue   string        `json:"stringValue,omitempty"`
 	HashEntries   []HashEntry   `json:"hashEntries,omitempty"`
@@ -130,6 +142,20 @@ type KeyDetail struct {
 	SetMembers    []string      `json:"setMembers,omitempty"`
 	ZSetMembers   []ZSetMember  `json:"zsetMembers,omitempty"`
 	StreamEntries []StreamEntry `json:"streamEntries,omitempty"`
+}
+
+// MutateKeyRequest applies a targeted, non-destructive item-level or TTL mutation.
+type MutateKeyRequest struct {
+	Key          string            `json:"key"`
+	Action       string            `json:"action"` // ttl, hset, hdel, rpush, lpush, lset, lrem, sadd, srem, zadd, zrem, xadd, xdel
+	Field        string            `json:"field,omitempty"`
+	Value        string            `json:"value,omitempty"`
+	Member       string            `json:"member,omitempty"`
+	Score        float64           `json:"score,omitempty"`
+	Index        int64             `json:"index,omitempty"`
+	StreamID     string            `json:"streamId,omitempty"`
+	StreamFields map[string]string `json:"streamFields,omitempty"`
+	TTLSeconds   *int64            `json:"ttlSeconds,omitempty"`
 }
 
 // SetKeyRequest creates or replaces a Redis key value and optional TTL.
@@ -613,15 +639,28 @@ func ScanKeys(ctx context.Context, cfg ConnConfig, req ScanRequest) (*ScanRespon
 
 // InspectKey fetches metadata and a bounded, type-aware value snapshot for one key.
 func InspectKey(ctx context.Context, cfg ConnConfig, key string, limit int) (*KeyDetail, error) {
+	return InspectKeyPage(ctx, cfg, InspectOptions{Key: key, Limit: limit})
+}
+
+// InspectKeyPage fetches one page of a key's value with cursor/offset pagination and optional MATCH filter.
+func InspectKeyPage(ctx context.Context, cfg ConnConfig, opts InspectOptions) (*KeyDetail, error) {
+	key := opts.Key
 	if key == "" {
 		return nil, errors.New("key is required")
 	}
+	limit := opts.Limit
 	if limit <= 0 {
 		limit = defaultInspectLimit
 	}
 	if limit > maxInspectLimit {
 		limit = maxInspectLimit
 	}
+	cursor := strings.TrimSpace(opts.Cursor)
+	offset := opts.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	match := strings.TrimSpace(opts.Match)
 
 	conn, err := dial(ctx, cfg)
 	if err != nil {
@@ -690,9 +729,18 @@ func InspectKey(ctx context.Context, cfg ConnConfig, key string, limit int) (*Ke
 		}
 
 	case "hash":
+		scanCursor := cursor
+		if scanCursor == "" {
+			scanCursor = "0"
+		}
+		hscan := []string{"HSCAN", key, scanCursor}
+		if match != "" {
+			hscan = append(hscan, "MATCH", match)
+		}
+		hscan = append(hscan, "COUNT", strconv.Itoa(limit))
 		vals, err := conn.pipeline([][]string{
 			{"HLEN", key},
-			{"HSCAN", key, "0", "COUNT", strconv.Itoa(limit)},
+			hscan,
 		})
 		if err != nil {
 			return nil, err
@@ -705,23 +753,24 @@ func InspectKey(ctx context.Context, cfg ConnConfig, key string, limit int) (*Ke
 		}
 		entries := []HashEntry{}
 		if vals[1].kind == respArray && len(vals[1].arr) == 2 {
+			detail.NextCursor = vals[1].arr[0].str
 			pairs := vals[1].arr[1].arr
-			for i := 0; i+1 < len(pairs) && len(entries) < limit; i += 2 {
+			for i := 0; i+1 < len(pairs); i += 2 {
 				entries = append(entries, HashEntry{
 					Field: safeDisplayString(pairs[i].str),
 					Value: safeDisplayString(pairs[i+1].str),
 				})
 			}
-			if vals[1].arr[0].str != "0" || detail.Length > int64(len(entries)) {
-				detail.Truncated = true
-			}
+			detail.HasMore = detail.NextCursor != "" && detail.NextCursor != "0"
+			detail.Truncated = detail.HasMore || (match == "" && detail.Length > int64(len(entries)) && scanCursor == "0")
 		}
 		detail.HashEntries = entries
 
 	case "list":
+		stop := offset + int64(limit) - 1
 		vals, err := conn.pipeline([][]string{
 			{"LLEN", key},
-			{"LRANGE", key, "0", strconv.Itoa(limit - 1)},
+			{"LRANGE", key, strconv.FormatInt(offset, 10), strconv.FormatInt(stop, 10)},
 		})
 		if err != nil {
 			return nil, err
@@ -737,12 +786,23 @@ func InspectKey(ctx context.Context, cfg ConnConfig, key string, limit int) (*Ke
 			items = append(items, safeDisplayString(elem.str))
 		}
 		detail.ListItems = items
-		detail.Truncated = detail.Length > int64(len(items))
+		detail.NextOffset = offset + int64(len(items))
+		detail.HasMore = detail.NextOffset < detail.Length
+		detail.Truncated = detail.HasMore
 
 	case "set":
+		scanCursor := cursor
+		if scanCursor == "" {
+			scanCursor = "0"
+		}
+		sscan := []string{"SSCAN", key, scanCursor}
+		if match != "" {
+			sscan = append(sscan, "MATCH", match)
+		}
+		sscan = append(sscan, "COUNT", strconv.Itoa(limit))
 		vals, err := conn.pipeline([][]string{
 			{"SCARD", key},
-			{"SSCAN", key, "0", "COUNT", strconv.Itoa(limit)},
+			sscan,
 		})
 		if err != nil {
 			return nil, err
@@ -755,47 +815,89 @@ func InspectKey(ctx context.Context, cfg ConnConfig, key string, limit int) (*Ke
 		}
 		members := []string{}
 		if vals[1].kind == respArray && len(vals[1].arr) == 2 {
+			detail.NextCursor = vals[1].arr[0].str
 			for _, elem := range vals[1].arr[1].arr {
-				if len(members) >= limit {
-					break
-				}
 				members = append(members, safeDisplayString(elem.str))
 			}
-			if vals[1].arr[0].str != "0" || detail.Length > int64(len(members)) {
-				detail.Truncated = true
-			}
+			detail.HasMore = detail.NextCursor != "" && detail.NextCursor != "0"
+			detail.Truncated = detail.HasMore || (match == "" && detail.Length > int64(len(members)) && scanCursor == "0")
 		}
 		detail.SetMembers = members
 
 	case "zset":
-		vals, err := conn.pipeline([][]string{
-			{"ZCARD", key},
-			{"ZRANGE", key, "0", strconv.Itoa(limit - 1), "WITHSCORES"},
-		})
-		if err != nil {
-			return nil, err
-		}
-		if vals[0].kind == respInt {
-			detail.Length = vals[0].num
-		}
-		if err := vals[1].err(); err != nil {
-			return nil, err
-		}
-		members := make([]ZSetMember, 0, len(vals[1].arr)/2)
-		for i := 0; i+1 < len(vals[1].arr); i += 2 {
-			score, _ := strconv.ParseFloat(vals[1].arr[i+1].str, 64)
-			members = append(members, ZSetMember{
-				Member: safeDisplayString(vals[1].arr[i].str),
-				Score:  score,
+		if match != "" {
+			scanCursor := cursor
+			if scanCursor == "" {
+				scanCursor = "0"
+			}
+			vals, err := conn.pipeline([][]string{
+				{"ZCARD", key},
+				{"ZSCAN", key, scanCursor, "MATCH", match, "COUNT", strconv.Itoa(limit)},
 			})
+			if err != nil {
+				return nil, err
+			}
+			if vals[0].kind == respInt {
+				detail.Length = vals[0].num
+			}
+			if err := vals[1].err(); err != nil {
+				return nil, err
+			}
+			members := []ZSetMember{}
+			if vals[1].kind == respArray && len(vals[1].arr) == 2 {
+				detail.NextCursor = vals[1].arr[0].str
+				pairs := vals[1].arr[1].arr
+				for i := 0; i+1 < len(pairs); i += 2 {
+					score, _ := strconv.ParseFloat(pairs[i+1].str, 64)
+					members = append(members, ZSetMember{
+						Member: safeDisplayString(pairs[i].str),
+						Score:  score,
+					})
+				}
+				detail.HasMore = detail.NextCursor != "" && detail.NextCursor != "0"
+				detail.Truncated = detail.HasMore
+			}
+			detail.ZSetMembers = members
+		} else {
+			stop := offset + int64(limit) - 1
+			vals, err := conn.pipeline([][]string{
+				{"ZCARD", key},
+				{"ZRANGE", key, strconv.FormatInt(offset, 10), strconv.FormatInt(stop, 10), "WITHSCORES"},
+			})
+			if err != nil {
+				return nil, err
+			}
+			if vals[0].kind == respInt {
+				detail.Length = vals[0].num
+			}
+			if err := vals[1].err(); err != nil {
+				return nil, err
+			}
+			members := make([]ZSetMember, 0, len(vals[1].arr)/2)
+			for i := 0; i+1 < len(vals[1].arr); i += 2 {
+				score, _ := strconv.ParseFloat(vals[1].arr[i+1].str, 64)
+				members = append(members, ZSetMember{
+					Member: safeDisplayString(vals[1].arr[i].str),
+					Score:  score,
+				})
+			}
+			detail.ZSetMembers = members
+			detail.NextOffset = offset + int64(len(members))
+			detail.HasMore = detail.NextOffset < detail.Length
+			detail.Truncated = detail.HasMore
 		}
-		detail.ZSetMembers = members
-		detail.Truncated = detail.Length > int64(len(members))
 
 	case "stream":
+		maxID := "+"
+		fetchCount := limit
+		if cursor != "" {
+			// Compatible with Redis 6.0+: fetch inclusive from cursor and skip the duplicate boundary entry.
+			maxID = cursor
+			fetchCount = limit + 1
+		}
 		vals, err := conn.pipeline([][]string{
 			{"XLEN", key},
-			{"XREVRANGE", key, "+", "-", "COUNT", strconv.Itoa(limit)},
+			{"XREVRANGE", key, maxID, "-", "COUNT", strconv.Itoa(fetchCount)},
 		})
 		if err != nil {
 			return nil, err
@@ -811,21 +913,135 @@ func InspectKey(ctx context.Context, cfg ConnConfig, key string, limit int) (*Ke
 			if entryVal.kind != respArray || len(entryVal.arr) != 2 {
 				continue
 			}
+			id := entryVal.arr[0].str
+			if cursor != "" && id == cursor {
+				continue
+			}
 			fields := map[string]string{}
 			pairArr := entryVal.arr[1].arr
 			for i := 0; i+1 < len(pairArr); i += 2 {
 				fields[safeDisplayString(pairArr[i].str)] = safeDisplayString(pairArr[i+1].str)
 			}
 			entries = append(entries, StreamEntry{
-				ID:     entryVal.arr[0].str,
+				ID:     id,
 				Fields: fields,
 			})
 		}
 		detail.StreamEntries = entries
-		detail.Truncated = detail.Length > int64(len(entries))
+		if len(entries) > 0 {
+			detail.NextCursor = entries[len(entries)-1].ID
+		}
+		detail.HasMore = len(entries) >= limit && detail.Length > int64(len(entries))
+		detail.Truncated = detail.HasMore
 	}
 
 	return detail, nil
+}
+
+// MutateKey performs an incremental, item-level or TTL mutation without replacing the entire key.
+func MutateKey(ctx context.Context, cfg ConnConfig, req MutateKeyRequest) error {
+	if req.Key == "" {
+		return errors.New("key is required")
+	}
+	conn, err := dial(ctx, cfg)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+
+	switch strings.ToLower(strings.TrimSpace(req.Action)) {
+	case "ttl":
+		if req.TTLSeconds != nil && *req.TTLSeconds > 0 {
+			_, err = conn.do("EXPIRE", req.Key, strconv.FormatInt(*req.TTLSeconds, 10))
+		} else {
+			_, err = conn.do("PERSIST", req.Key)
+		}
+		return err
+
+	case "hset":
+		if req.Field == "" {
+			return errors.New("field is required")
+		}
+		_, err = conn.do("HSET", req.Key, req.Field, req.Value)
+		return err
+
+	case "hdel":
+		if req.Field == "" {
+			return errors.New("field is required")
+		}
+		_, err = conn.do("HDEL", req.Key, req.Field)
+		return err
+
+	case "rpush":
+		_, err = conn.do("RPUSH", req.Key, req.Value)
+		return err
+
+	case "lpush":
+		_, err = conn.do("LPUSH", req.Key, req.Value)
+		return err
+
+	case "lset":
+		_, err = conn.do("LSET", req.Key, strconv.FormatInt(req.Index, 10), req.Value)
+		return err
+
+	case "lrem":
+		_, err = conn.do("LREM", req.Key, "1", req.Value)
+		return err
+
+	case "sadd":
+		if req.Member == "" {
+			return errors.New("member is required")
+		}
+		_, err = conn.do("SADD", req.Key, req.Member)
+		return err
+
+	case "srem":
+		if req.Member == "" {
+			return errors.New("member is required")
+		}
+		_, err = conn.do("SREM", req.Key, req.Member)
+		return err
+
+	case "zadd":
+		if req.Member == "" {
+			return errors.New("member is required")
+		}
+		_, err = conn.do("ZADD", req.Key, strconv.FormatFloat(req.Score, 'f', -1, 64), req.Member)
+		return err
+
+	case "zrem":
+		if req.Member == "" {
+			return errors.New("member is required")
+		}
+		_, err = conn.do("ZREM", req.Key, req.Member)
+		return err
+
+	case "xadd":
+		if len(req.StreamFields) == 0 {
+			return errors.New("stream entry requires at least one field")
+		}
+		id := strings.TrimSpace(req.StreamID)
+		if id == "" {
+			id = "*"
+		}
+		args := make([]string, 0, 3+len(req.StreamFields)*2)
+		args = append(args, "XADD", req.Key, id)
+		for k, v := range req.StreamFields {
+			args = append(args, k, v)
+		}
+		_, err = conn.do(args...)
+		return err
+
+	case "xdel":
+		if req.StreamID == "" {
+			return errors.New("stream entry id is required")
+		}
+		_, err = conn.do("XDEL", req.Key, req.StreamID)
+		return err
+
+	default:
+		return fmt.Errorf("unsupported redis mutation action %q", req.Action)
+	}
 }
 
 func safeDisplayString(s string) string {

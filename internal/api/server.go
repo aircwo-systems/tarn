@@ -434,6 +434,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /_tarn/admin/redis/targets/{id}/keys", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.RedisSetKey(w, r)
 	})
+	mux.HandleFunc("POST /_tarn/admin/redis/targets/{id}/keys/mutate", func(w http.ResponseWriter, r *http.Request) {
+		s.hs(r).Admin.RedisMutateKey(w, r)
+	})
 	mux.HandleFunc("POST /_tarn/admin/redis/targets/{id}/keys/delete", func(w http.ResponseWriter, r *http.Request) {
 		s.hs(r).Admin.RedisDeleteKeys(w, r)
 	})

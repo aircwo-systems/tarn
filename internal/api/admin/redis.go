@@ -507,11 +507,14 @@ func (h *Handler) RedisScanKeys(w http.ResponseWriter, r *http.Request) {
 
 type redisGetKeyAPIRequest struct {
 	redisAuthPayload
-	Key   string `json:"key"`
-	Limit int    `json:"limit"`
+	Key    string `json:"key"`
+	Limit  int    `json:"limit"`
+	Cursor string `json:"cursor,omitempty"`
+	Offset int64  `json:"offset,omitempty"`
+	Match  string `json:"match,omitempty"`
 }
 
-// RedisGetKey inspects a single key's metadata and type-aware value.
+// RedisGetKey inspects a single key's metadata and paginated type-aware value.
 func (h *Handler) RedisGetKey(w http.ResponseWriter, r *http.Request) {
 	probe, ok := h.resolveRedisProbe(w, r)
 	if !ok {
@@ -522,12 +525,41 @@ func (h *Handler) RedisGetKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cfg := redisConnFromProbe(probe, req.redisAuthPayload)
-	detail, err := redisviewer.InspectKey(r.Context(), cfg, req.Key, req.Limit)
+	detail, err := redisviewer.InspectKeyPage(r.Context(), cfg, redisviewer.InspectOptions{
+		Key:    req.Key,
+		Limit:  req.Limit,
+		Cursor: req.Cursor,
+		Offset: req.Offset,
+		Match:  req.Match,
+	})
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return
 	}
 	writeAdminJSON(w, http.StatusOK, detail)
+}
+
+type redisMutateKeyAPIRequest struct {
+	redisAuthPayload
+	redisviewer.MutateKeyRequest
+}
+
+// RedisMutateKey applies a targeted item-level or TTL mutation without replacing the entire key.
+func (h *Handler) RedisMutateKey(w http.ResponseWriter, r *http.Request) {
+	probe, ok := h.resolveRedisProbe(w, r)
+	if !ok {
+		return
+	}
+	var req redisMutateKeyAPIRequest
+	if !decodeJSONBody(w, r, &req, false) {
+		return
+	}
+	cfg := redisConnFromProbe(probe, req.redisAuthPayload)
+	if err := redisviewer.MutateKey(r.Context(), cfg, req.MutateKeyRequest); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeAdminJSON(w, http.StatusOK, map[string]any{"ok": true, "key": req.Key, "action": req.Action})
 }
 
 type redisSetKeyAPIRequest struct {

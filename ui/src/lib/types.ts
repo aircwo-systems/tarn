@@ -1204,6 +1204,9 @@ export interface RedisKeyDetail {
   memoryBytes?: number;
   length: number;
   truncated?: boolean;
+  hasMore?: boolean;
+  nextCursor?: string;
+  nextOffset?: number;
   isBinary?: boolean;
   stringValue?: string;
   hashEntries?: RedisHashEntry[];
@@ -1211,6 +1214,19 @@ export interface RedisKeyDetail {
   setMembers?: string[];
   zsetMembers?: RedisZSetMember[];
   streamEntries?: RedisStreamEntry[];
+}
+
+export interface RedisMutateKeyRequest extends RedisAuthOptions {
+  key: string;
+  action: "ttl" | "hset" | "hdel" | "rpush" | "lpush" | "lset" | "lrem" | "sadd" | "srem" | "zadd" | "zrem" | "xadd" | "xdel";
+  field?: string;
+  value?: string;
+  member?: string;
+  score?: number;
+  index?: number;
+  streamId?: string;
+  streamFields?: Record<string, string>;
+  ttlSeconds?: number | null;
 }
 
 export interface RedisSetKeyRequest extends RedisAuthOptions {

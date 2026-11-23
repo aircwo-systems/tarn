@@ -252,14 +252,47 @@ func startFakeRedis(t *testing.T) (string, int) {
 					m[args[i]] = args[i+1]
 				}
 				_, _ = fmt.Fprintf(w, ":%d\r\n", len(m))
+			case "HDEL":
+				delete(hashesStore[args[1]], args[2])
+				_, _ = w.WriteString(":1\r\n")
 			case "LLEN":
 				_, _ = fmt.Fprintf(w, ":%d\r\n", len(listsStore[args[1]]))
 			case "LRANGE":
 				items := listsStore[args[1]]
-				_, _ = fmt.Fprintf(w, "*%d\r\n", len(items))
-				for _, item := range items {
-					writeBulk(w, item)
+				start, _ := strconv.Atoi(args[2])
+				stop, _ := strconv.Atoi(args[3])
+				if start < 0 {
+					start = 0
 				}
+				if stop >= len(items) {
+					stop = len(items) - 1
+				}
+				if start > stop || len(items) == 0 {
+					_, _ = w.WriteString("*0\r\n")
+				} else {
+					slice := items[start : stop+1]
+					_, _ = fmt.Fprintf(w, "*%d\r\n", len(slice))
+					for _, item := range slice {
+						writeBulk(w, item)
+					}
+				}
+			case "LSET":
+				idx, _ := strconv.Atoi(args[2])
+				listsStore[args[1]][idx] = args[3]
+				_, _ = w.WriteString("+OK\r\n")
+			case "LREM":
+				target := args[3]
+				var kept []string
+				removed := false
+				for _, v := range listsStore[args[1]] {
+					if !removed && v == target {
+						removed = true
+						continue
+					}
+					kept = append(kept, v)
+				}
+				listsStore[args[1]] = kept
+				_, _ = w.WriteString(":1\r\n")
 			case "RPUSH":
 				listsStore[args[1]] = append(listsStore[args[1]], args[2:]...)
 				_, _ = fmt.Fprintf(w, ":%d\r\n", len(listsStore[args[1]]))
@@ -275,20 +308,51 @@ func startFakeRedis(t *testing.T) (string, int) {
 			case "SADD":
 				setsStore[args[1]] = append(setsStore[args[1]], args[2:]...)
 				_, _ = fmt.Fprintf(w, ":%d\r\n", len(args[2:]))
+			case "SREM":
+				var kept []string
+				for _, m := range setsStore[args[1]] {
+					if m != args[2] {
+						kept = append(kept, m)
+					}
+				}
+				setsStore[args[1]] = kept
+				_, _ = w.WriteString(":1\r\n")
 			case "ZCARD":
 				_, _ = fmt.Fprintf(w, ":%d\r\n", len(zsetsStore[args[1]]))
 			case "ZRANGE":
 				members := zsetsStore[args[1]]
-				_, _ = fmt.Fprintf(w, "*%d\r\n", len(members)*2)
-				for _, m := range members {
-					writeBulk(w, m.Member)
-					writeBulk(w, strconv.FormatFloat(m.Score, 'f', -1, 64))
+				start, _ := strconv.Atoi(args[2])
+				stop, _ := strconv.Atoi(args[3])
+				if start < 0 {
+					start = 0
+				}
+				if stop >= len(members) {
+					stop = len(members) - 1
+				}
+				if start > stop || len(members) == 0 {
+					_, _ = w.WriteString("*0\r\n")
+				} else {
+					slice := members[start : stop+1]
+					_, _ = fmt.Fprintf(w, "*%d\r\n", len(slice)*2)
+					for _, m := range slice {
+						writeBulk(w, m.Member)
+						writeBulk(w, strconv.FormatFloat(m.Score, 'f', -1, 64))
+					}
 				}
 			case "ZADD":
 				for i := 2; i+1 < len(args); i += 2 {
 					score, _ := strconv.ParseFloat(args[i], 64)
 					zsetsStore[args[1]] = append(zsetsStore[args[1]], ZSetMember{Member: args[i+1], Score: score})
 				}
+				_, _ = w.WriteString(":1\r\n")
+			case "ZREM":
+				var kept []ZSetMember
+				for _, m := range zsetsStore[args[1]] {
+					if m.Member != args[2] {
+						kept = append(kept, m)
+					}
+				}
+				zsetsStore[args[1]] = kept
 				_, _ = w.WriteString(":1\r\n")
 			case "XLEN":
 				_, _ = fmt.Fprintf(w, ":%d\r\n", len(streamsStore[args[1]]))
@@ -315,6 +379,15 @@ func startFakeRedis(t *testing.T) (string, int) {
 				}
 				streamsStore[args[1]] = append(streamsStore[args[1]], StreamEntry{ID: id, Fields: fields})
 				writeBulk(w, id)
+			case "XDEL":
+				var kept []StreamEntry
+				for _, e := range streamsStore[args[1]] {
+					if e.ID != args[2] {
+						kept = append(kept, e)
+					}
+				}
+				streamsStore[args[1]] = kept
+				_, _ = w.WriteString(":1\r\n")
 			default:
 				_, _ = fmt.Fprintf(w, "-ERR unknown command %s\r\n", cmd)
 			}
@@ -417,6 +490,51 @@ func TestRedisViewerClientOperations(t *testing.T) {
 	}
 	if _, err := ExecCommand(ctx, cfg, "CONFIG SET dir /tmp"); err == nil {
 		t.Fatal("expected CONFIG SET to be blocked")
+	}
+
+	// Incremental pagination & item-level mutations
+	page1, err := InspectKeyPage(ctx, cfg, InspectOptions{Key: "jobs:pending", Limit: 1, Offset: 0})
+	if err != nil || !page1.HasMore || page1.NextOffset != 1 || len(page1.ListItems) != 1 || page1.ListItems[0] != "j1" {
+		t.Fatalf("unexpected list page1: %+v, err=%v", page1, err)
+	}
+	page2, err := InspectKeyPage(ctx, cfg, InspectOptions{Key: "jobs:pending", Limit: 1, Offset: page1.NextOffset})
+	if err != nil || page2.HasMore || len(page2.ListItems) != 1 || page2.ListItems[0] != "j2" {
+		t.Fatalf("unexpected list page2: %+v, err=%v", page2, err)
+	}
+
+	if err := MutateKey(ctx, cfg, MutateKeyRequest{Key: "session:abc", Action: "hset", Field: "env", Value: "local"}); err != nil {
+		t.Fatalf("MutateKey hset: %v", err)
+	}
+	if err := MutateKey(ctx, cfg, MutateKeyRequest{Key: "session:abc", Action: "hdel", Field: "tenant"}); err != nil {
+		t.Fatalf("MutateKey hdel: %v", err)
+	}
+	if err := MutateKey(ctx, cfg, MutateKeyRequest{Key: "jobs:pending", Action: "rpush", Value: "j3"}); err != nil {
+		t.Fatalf("MutateKey rpush: %v", err)
+	}
+	if err := MutateKey(ctx, cfg, MutateKeyRequest{Key: "jobs:pending", Action: "lset", Index: 0, Value: "j1-updated"}); err != nil {
+		t.Fatalf("MutateKey lset: %v", err)
+	}
+	if err := MutateKey(ctx, cfg, MutateKeyRequest{Key: "jobs:pending", Action: "lrem", Value: "j2"}); err != nil {
+		t.Fatalf("MutateKey lrem: %v", err)
+	}
+	if err := MutateKey(ctx, cfg, MutateKeyRequest{Key: "tags:live", Action: "sadd", Member: "gamma"}); err != nil {
+		t.Fatalf("MutateKey sadd: %v", err)
+	}
+	if err := MutateKey(ctx, cfg, MutateKeyRequest{Key: "tags:live", Action: "srem", Member: "alpha"}); err != nil {
+		t.Fatalf("MutateKey srem: %v", err)
+	}
+	if err := MutateKey(ctx, cfg, MutateKeyRequest{Key: "scores", Action: "zadd", Member: "charlie", Score: 30}); err != nil {
+		t.Fatalf("MutateKey zadd: %v", err)
+	}
+	if err := MutateKey(ctx, cfg, MutateKeyRequest{Key: "scores", Action: "zrem", Member: "alice"}); err != nil {
+		t.Fatalf("MutateKey zrem: %v", err)
+	}
+	newTTL := int64(300)
+	if err := MutateKey(ctx, cfg, MutateKeyRequest{Key: "user:1", Action: "ttl", TTLSeconds: &newTTL}); err != nil {
+		t.Fatalf("MutateKey ttl: %v", err)
+	}
+	if err := MutateKey(ctx, cfg, MutateKeyRequest{Key: "events:orders", Action: "xdel", StreamID: "1700000000000-0"}); err != nil {
+		t.Fatalf("MutateKey xdel: %v", err)
 	}
 }
 

@@ -34,6 +34,7 @@ import type {
   RedisScanResponse,
   RedisKeyDetail,
   RedisSetKeyRequest,
+  RedisMutateKeyRequest,
   RedisCommandResult,
 } from "#lib/types";
 
@@ -1398,13 +1399,24 @@ export function scanRedisKeys(
 
 export function getRedisKey(
   targetId: string,
-  req: RedisAuthOptions & { key: string; limit?: number },
+  req: RedisAuthOptions & { key: string; limit?: number; cursor?: string; offset?: number; match?: string },
   signal?: AbortSignal,
 ): Promise<RedisKeyDetail> {
   return redisAdmin(
     `/targets/${encodeURIComponent(targetId)}/keys/get`,
     { method: "POST", body: JSON.stringify(req), signal },
     "Failed to inspect key",
+  );
+}
+
+export function mutateRedisKey(
+  targetId: string,
+  req: RedisMutateKeyRequest,
+): Promise<{ ok: boolean; key: string; action: string }> {
+  return redisAdmin(
+    `/targets/${encodeURIComponent(targetId)}/keys/mutate`,
+    { method: "POST", body: JSON.stringify(req) },
+    "Failed to mutate key",
   );
 }
 
