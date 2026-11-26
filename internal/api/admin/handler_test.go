@@ -1877,3 +1877,79 @@ func TestInvokeFunctionEndpointValidation(t *testing.T) {
 		t.Fatalf("expected functionError to be set")
 	}
 }
+
+// TestOverviewListsEventBridgeRulesOnEveryBus pins the overview fields that
+// `tarn flush` reads: rules on custom buses with their bus, the custom buses
+// themselves, and SQS target connections.
+func TestOverviewListsEventBridgeRulesOnEveryBus(t *testing.T) {
+	h := newTestHandler(t)
+	if _, err := h.eventbridge.CreateEventBus("domain-events", "", map[string]string{"feature": "r10"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.eventbridge.PutRule("users", "", `{"source":["app"]}`, "", "", "domain-events"); err != nil {
+		t.Fatal(err)
+	}
+	if failed, err := h.eventbridge.PutTargets("users", "domain-events", []types.EventBridgeTarget{{
+		ID:               "q",
+		Arn:              "arn:aws:sqs:us-east-1:000000000000:signins.fifo",
+		SqsParameters:    &types.SqsParameters{MessageGroupId: "users"},
+		DeadLetterConfig: &types.EventBridgeDeadLetterConfig{Arn: "arn:aws:sqs:us-east-1:000000000000:dlq"},
+	}}); err != nil || len(failed) != 0 {
+		t.Fatalf("PutTargets: %+v %v", failed, err)
+	}
+	if _, err := h.eventbridge.PutRule("users", "", `{"source":["app"]}`, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := h.buildOverview()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overview struct {
+		EventBridgeRules []struct {
+			Name         string `json:"name"`
+			EventBusName string `json:"eventBusName"`
+			Targets      []struct {
+				Arn            string `json:"arn"`
+				MessageGroupID string `json:"messageGroupId"`
+				DeadLetterArn  string `json:"deadLetterArn"`
+			} `json:"targets"`
+		} `json:"eventBridgeRules"`
+		EventBuses []struct {
+			Name string            `json:"name"`
+			Tags map[string]string `json:"tags"`
+		} `json:"eventBuses"`
+		Connections []struct {
+			SourceFunction string `json:"sourceFunction"`
+			TargetID       string `json:"targetId"`
+			TargetKind     string `json:"targetKind"`
+		} `json:"connections"`
+	}
+	if err := json.Unmarshal(raw, &overview); err != nil {
+		t.Fatal(err)
+	}
+	buses := map[string]bool{}
+	for _, rule := range overview.EventBridgeRules {
+		buses[rule.EventBusName] = true
+		if rule.EventBusName == "domain-events" {
+			if len(rule.Targets) != 1 || rule.Targets[0].MessageGroupID != "users" || rule.Targets[0].DeadLetterArn == "" {
+				t.Fatalf("custom-bus rule targets = %+v", rule.Targets)
+			}
+		}
+	}
+	if len(overview.EventBridgeRules) != 2 || !buses["default"] || !buses["domain-events"] {
+		t.Fatalf("rules = %+v", overview.EventBridgeRules)
+	}
+	if len(overview.EventBuses) != 1 || overview.EventBuses[0].Name != "domain-events" || overview.EventBuses[0].Tags["feature"] != "r10" {
+		t.Fatalf("eventBuses = %+v", overview.EventBuses)
+	}
+	found := false
+	for _, conn := range overview.Connections {
+		if conn.TargetKind == "eventbridge-sqs" && conn.SourceFunction == "users" && conn.TargetID == "signins.fifo" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing eventbridge-sqs connection: %+v", overview.Connections)
+	}
+}

@@ -13,20 +13,40 @@ import (
 	"github.com/aircwo-systems/tarn/pkg/types"
 )
 
-// Store is an in-memory rule store with optional JSON persistence.
+// Store is an in-memory rule and event bus store with optional JSON
+// persistence.
 type Store struct {
 	mu      sync.RWMutex
 	dirty   persist.Dirty
 	flusher *persist.Flusher
 	cfg     *config.Config
-	rules   map[string]*types.EventBridgeRule // key: rule name
+	rules   map[string]*types.EventBridgeRule     // key: ruleStoreKey(bus, name)
+	buses   map[string]*types.EventBridgeEventBus // custom buses only; default is implicit
 }
 
 func NewStore(cfg *config.Config) *Store {
 	return &Store{
 		cfg:   cfg,
 		rules: make(map[string]*types.EventBridgeRule),
+		buses: make(map[string]*types.EventBridgeEventBus),
 	}
+}
+
+// ruleStoreKey identifies a rule within the account. Rule names are unique
+// per event bus; default-bus rules keep their bare name as the key so state
+// written before custom buses existed loads unchanged.
+func ruleStoreKey(bus, name string) string {
+	if bus == "" || bus == defaultEventBusName {
+		return name
+	}
+	return bus + "|" + name
+}
+
+func ruleBus(rule *types.EventBridgeRule) string {
+	if rule == nil || rule.EventBusName == "" {
+		return defaultEventBusName
+	}
+	return rule.EventBusName
 }
 
 func (s *Store) Init() error {
@@ -51,7 +71,8 @@ func (s *Store) Init() error {
 	}
 
 	var snapshot struct {
-		Rules []*types.EventBridgeRule `json:"rules"`
+		Rules []*types.EventBridgeRule     `json:"rules"`
+		Buses []*types.EventBridgeEventBus `json:"buses"`
 	}
 	if err := json.NewDecoder(bytes.NewReader(data)).Decode(&snapshot); err != nil {
 		return fmt.Errorf("decode eventbridge state: %w", err)
@@ -64,7 +85,16 @@ func (s *Store) Init() error {
 		if rule == nil || rule.Name == "" {
 			continue
 		}
-		s.rules[rule.Name] = cloneRule(rule)
+		cloned := cloneRule(rule)
+		cloned.EventBusName = ruleBus(cloned)
+		s.rules[ruleStoreKey(cloned.EventBusName, cloned.Name)] = cloned
+	}
+	s.buses = make(map[string]*types.EventBridgeEventBus, len(snapshot.Buses))
+	for _, bus := range snapshot.Buses {
+		if bus == nil || bus.Name == "" || bus.Name == defaultEventBusName {
+			continue
+		}
+		s.buses[bus.Name] = cloneEventBus(bus)
 	}
 	return nil
 }
@@ -73,39 +103,96 @@ func (s *Store) SaveRule(rule *types.EventBridgeRule) error {
 	if rule == nil || rule.Name == "" {
 		return fmt.Errorf("rule name is required")
 	}
+	cloned := cloneRule(rule)
+	cloned.EventBusName = ruleBus(cloned)
 	s.mu.Lock()
-	s.rules[rule.Name] = cloneRule(rule)
+	s.rules[ruleStoreKey(cloned.EventBusName, cloned.Name)] = cloned
 	s.mu.Unlock()
 	return s.persist()
 }
 
-func (s *Store) GetRule(name string) (*types.EventBridgeRule, error) {
+// GetRule returns the named rule on bus ("" means the default bus).
+func (s *Store) GetRule(bus, name string) (*types.EventBridgeRule, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	rule, ok := s.rules[name]
+	rule, ok := s.rules[ruleStoreKey(bus, name)]
 	if !ok {
 		return nil, fmt.Errorf("rule %s not found", name)
 	}
 	return cloneRule(rule), nil
 }
 
-func (s *Store) DeleteRule(name string) error {
+func (s *Store) DeleteRule(bus, name string) error {
+	key := ruleStoreKey(bus, name)
 	s.mu.Lock()
-	if _, ok := s.rules[name]; !ok {
+	if _, ok := s.rules[key]; !ok {
 		s.mu.Unlock()
 		return fmt.Errorf("rule %s not found", name)
 	}
-	delete(s.rules, name)
+	delete(s.rules, key)
 	s.mu.Unlock()
 	return s.persist()
 }
 
+// ListRules returns every rule on every bus, sorted by name then bus.
 func (s *Store) ListRules() []*types.EventBridgeRule {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*types.EventBridgeRule, 0, len(s.rules))
 	for _, rule := range s.rules {
 		out = append(out, cloneRule(rule))
+	}
+	sortRules(out)
+	return out
+}
+
+func sortRules(rules []*types.EventBridgeRule) {
+	sort.Slice(rules, func(i, j int) bool {
+		if rules[i].Name != rules[j].Name {
+			return rules[i].Name < rules[j].Name
+		}
+		return ruleBus(rules[i]) < ruleBus(rules[j])
+	})
+}
+
+func (s *Store) SaveBus(bus *types.EventBridgeEventBus) error {
+	if bus == nil || bus.Name == "" || bus.Name == defaultEventBusName {
+		return fmt.Errorf("custom event bus name is required")
+	}
+	s.mu.Lock()
+	s.buses[bus.Name] = cloneEventBus(bus)
+	s.mu.Unlock()
+	return s.persist()
+}
+
+func (s *Store) GetBus(name string) (*types.EventBridgeEventBus, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	bus, ok := s.buses[name]
+	if !ok {
+		return nil, fmt.Errorf("event bus %s not found", name)
+	}
+	return cloneEventBus(bus), nil
+}
+
+func (s *Store) DeleteBus(name string) error {
+	s.mu.Lock()
+	if _, ok := s.buses[name]; !ok {
+		s.mu.Unlock()
+		return fmt.Errorf("event bus %s not found", name)
+	}
+	delete(s.buses, name)
+	s.mu.Unlock()
+	return s.persist()
+}
+
+// ListBuses returns the custom event buses sorted by name.
+func (s *Store) ListBuses() []*types.EventBridgeEventBus {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*types.EventBridgeEventBus, 0, len(s.buses))
+	for _, bus := range s.buses {
+		out = append(out, cloneEventBus(bus))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
@@ -138,13 +225,19 @@ func (s *Store) flushToDisk() {
 	for _, rule := range s.rules {
 		rules = append(rules, cloneRule(rule))
 	}
+	buses := make([]*types.EventBridgeEventBus, 0, len(s.buses))
+	for _, bus := range s.buses {
+		buses = append(buses, cloneEventBus(bus))
+	}
 	s.mu.RUnlock()
 
-	sort.Slice(rules, func(i, j int) bool { return rules[i].Name < rules[j].Name })
+	sortRules(rules)
+	sort.Slice(buses, func(i, j int) bool { return buses[i].Name < buses[j].Name })
 
 	payload := struct {
-		Rules []*types.EventBridgeRule `json:"rules"`
-	}{Rules: rules}
+		Rules []*types.EventBridgeRule     `json:"rules"`
+		Buses []*types.EventBridgeEventBus `json:"buses,omitempty"`
+	}{Rules: rules, Buses: buses}
 
 	data, err := json.Marshal(payload)
 	if err != nil {
@@ -193,22 +286,18 @@ func cloneRule(src *types.EventBridgeRule) *types.EventBridgeRule {
 	if len(src.Targets) > 0 {
 		dst.Targets = make([]types.EventBridgeTarget, len(src.Targets))
 		for i := range src.Targets {
-			target := src.Targets[i]
-			if target.LastInvokedAt != nil {
-				t := *target.LastInvokedAt
-				target.LastInvokedAt = &t
-			}
-			if target.InputTransformer != nil {
-				cloned := *target.InputTransformer
-				if target.InputTransformer.InputPathsMap != nil {
-					cloned.InputPathsMap = cloneStringMap(target.InputTransformer.InputPathsMap)
-				}
-				target.InputTransformer = &cloned
-			}
-			target.EcsParameters = cloneECSParameters(target.EcsParameters)
-			dst.Targets[i] = target
+			dst.Targets[i] = cloneTarget(src.Targets[i])
 		}
 	}
+	return &dst
+}
+
+func cloneEventBus(src *types.EventBridgeEventBus) *types.EventBridgeEventBus {
+	if src == nil {
+		return nil
+	}
+	dst := *src
+	dst.Tags = cloneStringMap(src.Tags)
 	return &dst
 }
 

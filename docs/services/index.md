@@ -15,7 +15,7 @@ Tarn emulates the following AWS services for local development and testing.
 | **DynamoDB** | <span class="status-badge status-partial">Partial</span> | Core table APIs, Query/Scan, secondary indexes, Streams |
 | **Secrets Manager** | <span class="status-badge status-full">Full</span> | CRUD, tagging, compatibility policy reads, Lambda extension |
 | **Cognito User Pools** | <span class="status-badge status-partial">Partial</span> | Pools, app clients, users, groups, sign-up and sign-in flows, RS256 tokens with JWKS, Lambda triggers |
-| **EventBridge** | <span class="status-badge status-partial">Partial</span> | Scheduled rules, event-pattern rules, and `PutEvents` with Lambda targets |
+| **EventBridge** | <span class="status-badge status-partial">Partial</span> | Scheduled rules, event-pattern rules, custom buses, and `PutEvents` with Lambda, ECS and SQS targets |
 
 ## Service Guides
 
@@ -86,7 +86,7 @@ Pick a service below to get started:
 
 <a href="/services/eventbridge" class="service-card">
   <h3>EventBridge</h3>
-  <p>Scheduled rules and custom events. Rate/cron, event patterns, and Lambda targets.</p>
+  <p>Scheduled rules and custom events. Rate/cron, event patterns, custom buses, and Lambda, ECS and SQS targets.</p>
   <small>Partial Support</small>
 </a>
 

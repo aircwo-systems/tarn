@@ -117,6 +117,8 @@ type Service struct {
 	lambda       LambdaInterface
 	dispatchQ    *asyncqueue.Queue // background PutEvents delivery
 	taskRunner   TaskRunner
+	sqsSender    SQSSender
+	sqsSenderMu  sync.RWMutex
 	traceStore   *tracesvc.Store
 	collector    *tracesvc.Collector
 	taskRunnerMu sync.RWMutex
@@ -215,7 +217,7 @@ func (s *Service) executeDueRules(now time.Time) {
 		if rule.NextRunAt.After(now) {
 			continue
 		}
-		_, _ = s.fireRule(rule.Name, true, nil)
+		_, _ = s.fireRule(ruleBus(rule), rule.Name, true, nil)
 	}
 }
 
@@ -249,9 +251,12 @@ func (s *Service) PutRule(name, scheduleExpression, eventPattern, state, descrip
 		}
 	}
 
-	bus, err := normalizeEventBusName(eventBusName)
+	bus, err := s.resolveEventBus(eventBusName)
 	if err != nil {
 		return nil, err
+	}
+	if hasSchedule && bus != defaultEventBusName {
+		return nil, validationError("ScheduleExpression is supported only on the default event bus.")
 	}
 
 	normalizedState := strings.ToUpper(strings.TrimSpace(state))
@@ -267,7 +272,7 @@ func (s *Service) PutRule(name, scheduleExpression, eventPattern, state, descrip
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	existing, _ := s.store.GetRule(name)
+	existing, _ := s.store.GetRule(bus, name)
 	rule := &types.EventBridgeRule{}
 	if existing != nil {
 		rule = existing
@@ -281,7 +286,7 @@ func (s *Service) PutRule(name, scheduleExpression, eventPattern, state, descrip
 	rule.EventBusName = bus
 	rule.Description = description
 	rule.State = normalizedState
-	rule.Arn = ruleARN(s.cfg, name)
+	rule.Arn = ruleARN(s.cfg, bus, name)
 	rule.LastModifiedAt = now
 
 	if hasSchedule {
@@ -319,19 +324,21 @@ func (s *Service) DescribeRule(name, eventBusName string) (*types.EventBridgeRul
 	if name == "" {
 		return nil, validationError("Parameter Name is required")
 	}
-	if _, err := normalizeEventBusName(eventBusName); err != nil {
+	bus, err := s.resolveEventBus(eventBusName)
+	if err != nil {
 		return nil, err
 	}
 
-	rule, err := s.store.GetRule(name)
+	rule, err := s.store.GetRule(bus, name)
 	if err != nil {
-		return nil, notFoundError("Rule %s does not exist", name)
+		return nil, notFoundError("Rule %s does not exist on EventBus %s.", name, bus)
 	}
 	return rule, nil
 }
 
 func (s *Service) ListRules(namePrefix, eventBusName string, limit int, nextToken string) ([]*types.EventBridgeRule, string, error) {
-	if _, err := normalizeEventBusName(eventBusName); err != nil {
+	bus, err := s.resolveEventBus(eventBusName)
+	if err != nil {
 		return nil, "", err
 	}
 	if limit <= 0 {
@@ -349,6 +356,9 @@ func (s *Service) ListRules(namePrefix, eventBusName string, limit int, nextToke
 	rules := s.store.ListRules()
 	filtered := make([]*types.EventBridgeRule, 0, len(rules))
 	for _, rule := range rules {
+		if ruleBus(rule) != bus {
+			continue
+		}
 		if namePrefix != "" && !strings.HasPrefix(rule.Name, namePrefix) {
 			continue
 		}
@@ -375,22 +385,23 @@ func (s *Service) DeleteRule(name, eventBusName string, force bool) error {
 	if name == "" {
 		return validationError("Parameter Name is required")
 	}
-	if _, err := normalizeEventBusName(eventBusName); err != nil {
+	bus, err := s.resolveEventBus(eventBusName)
+	if err != nil {
 		return err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rule, err := s.store.GetRule(name)
+	rule, err := s.store.GetRule(bus, name)
 	if err != nil {
-		return notFoundError("Rule %s does not exist", name)
+		return notFoundError("Rule %s does not exist on EventBus %s.", name, bus)
 	}
 	if len(rule.Targets) > 0 && !force {
 		return validationError("Rule %s cannot be deleted because it still has targets", name)
 	}
 
-	if err := s.store.DeleteRule(name); err != nil {
+	if err := s.store.DeleteRule(bus, name); err != nil {
 		return internalError("failed to delete rule: %v", err)
 	}
 	return nil
@@ -409,22 +420,23 @@ func (s *Service) setRuleState(name, eventBusName, state string) error {
 	if name == "" {
 		return validationError("Parameter Name is required")
 	}
-	if _, err := normalizeEventBusName(eventBusName); err != nil {
+	bus, err := s.resolveEventBus(eventBusName)
+	if err != nil {
 		return err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rule, err := s.store.GetRule(name)
+	rule, err := s.store.GetRule(bus, name)
 	if err != nil {
-		return notFoundError("Rule %s does not exist", name)
+		return notFoundError("Rule %s does not exist on EventBus %s.", name, bus)
 	}
 
 	now := time.Now().UTC().Truncate(time.Minute)
 	rule.State = state
 	rule.LastModifiedAt = now
-	if state == types.EventBridgeRuleStateEnabled {
+	if state == types.EventBridgeRuleStateEnabled && strings.TrimSpace(rule.ScheduleExpression) != "" {
 		next, nextErr := computeNextRun(rule.ScheduleExpression, rule.ScheduleAnchor, now)
 		if nextErr != nil {
 			return validationError("Parameter ScheduleExpression is not valid: %v", nextErr)
@@ -447,16 +459,17 @@ func (s *Service) PutTargets(ruleName, eventBusName string, targets []types.Even
 	if len(targets) > maxTargetBatchSize {
 		return nil, validationError("Parameter Targets cannot exceed %d entries", maxTargetBatchSize)
 	}
-	if _, err := normalizeEventBusName(eventBusName); err != nil {
+	bus, err := s.resolveEventBus(eventBusName)
+	if err != nil {
 		return nil, err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rule, err := s.store.GetRule(ruleName)
+	rule, err := s.store.GetRule(bus, ruleName)
 	if err != nil {
-		return nil, notFoundError("Rule %s does not exist", ruleName)
+		return nil, notFoundError("Rule %s does not exist on EventBus %s.", ruleName, bus)
 	}
 
 	existingByID := make(map[string]types.EventBridgeTarget, len(rule.Targets))
@@ -484,10 +497,9 @@ func (s *Service) PutTargets(ruleName, eventBusName string, targets []types.Even
 			continue
 		}
 
-		next := target
+		next := cloneTarget(target)
 		next.ID = id
 		next.Arn = canonicalArn
-		next.EcsParameters = cloneECSParameters(target.EcsParameters)
 
 		prev := existingByID[id]
 		next.LastInvokedAt = prev.LastInvokedAt
@@ -511,7 +523,8 @@ func (s *Service) PutTargets(ruleName, eventBusName string, targets []types.Even
 }
 
 func (s *Service) ListTargetsByRule(ruleName, eventBusName string, limit int, nextToken string) ([]types.EventBridgeTarget, string, error) {
-	if _, err := normalizeEventBusName(eventBusName); err != nil {
+	bus, err := s.resolveEventBus(eventBusName)
+	if err != nil {
 		return nil, "", err
 	}
 	if limit <= 0 {
@@ -525,9 +538,9 @@ func (s *Service) ListTargetsByRule(ruleName, eventBusName string, limit int, ne
 		return nil, "", validationError("Parameter NextToken is invalid")
 	}
 
-	rule, getErr := s.store.GetRule(ruleName)
+	rule, getErr := s.store.GetRule(bus, ruleName)
 	if getErr != nil {
-		return nil, "", notFoundError("Rule %s does not exist", ruleName)
+		return nil, "", notFoundError("Rule %s does not exist on EventBus %s.", ruleName, bus)
 	}
 	if offset >= len(rule.Targets) {
 		return []types.EventBridgeTarget{}, "", nil
@@ -540,8 +553,10 @@ func (s *Service) ListTargetsByRule(ruleName, eventBusName string, limit int, ne
 	if end < len(rule.Targets) {
 		next = strconv.Itoa(end)
 	}
-	out := make([]types.EventBridgeTarget, end-offset)
-	copy(out, rule.Targets[offset:end])
+	out := make([]types.EventBridgeTarget, 0, end-offset)
+	for _, target := range rule.Targets[offset:end] {
+		out = append(out, cloneTarget(target))
+	}
 	return out, next, nil
 }
 
@@ -552,16 +567,17 @@ func (s *Service) RemoveTargets(ruleName, eventBusName string, targetIDs []strin
 	if len(targetIDs) > maxTargetBatchSize {
 		return nil, validationError("Parameter Ids cannot exceed %d entries", maxTargetBatchSize)
 	}
-	if _, err := normalizeEventBusName(eventBusName); err != nil {
+	bus, err := s.resolveEventBus(eventBusName)
+	if err != nil {
 		return nil, err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	rule, err := s.store.GetRule(ruleName)
+	rule, err := s.store.GetRule(bus, ruleName)
 	if err != nil {
-		return nil, notFoundError("Rule %s does not exist", ruleName)
+		return nil, notFoundError("Rule %s does not exist on EventBus %s.", ruleName, bus)
 	}
 
 	removeSet := make(map[string]struct{}, len(targetIDs))
@@ -603,7 +619,8 @@ func (s *Service) ListRuleNamesByTarget(targetARN, eventBusName string, limit in
 	if strings.TrimSpace(targetARN) == "" {
 		return nil, "", validationError("Parameter TargetArn is required")
 	}
-	if _, err := normalizeEventBusName(eventBusName); err != nil {
+	bus, err := s.resolveEventBus(eventBusName)
+	if err != nil {
 		return nil, "", err
 	}
 	if limit <= 0 {
@@ -625,6 +642,9 @@ func (s *Service) ListRuleNamesByTarget(targetARN, eventBusName string, limit in
 	rules := s.store.ListRules()
 	names := make([]string, 0)
 	for _, rule := range rules {
+		if ruleBus(rule) != bus {
+			continue
+		}
 		for _, target := range rule.Targets {
 			if target.Arn == canonical {
 				names = append(names, rule.Name)
@@ -649,6 +669,13 @@ func (s *Service) ListRuleNamesByTarget(targetARN, eventBusName string, limit in
 }
 
 func (s *Service) ListTagsForResource(resourceARN string) (map[string]string, error) {
+	if busName, ok := eventBusNameFromResourceARN(resourceARN); ok {
+		bus, err := s.busByName(busName)
+		if err != nil {
+			return nil, err
+		}
+		return cloneTags(bus.Tags), nil
+	}
 	rule, err := s.ruleByResourceARN(resourceARN)
 	if err != nil {
 		return nil, err
@@ -659,6 +686,16 @@ func (s *Service) ListTagsForResource(resourceARN string) (map[string]string, er
 func (s *Service) TagResource(resourceARN string, tags map[string]string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if busName, ok := eventBusNameFromResourceARN(resourceARN); ok {
+		return s.updateBusTags(busName, func(current map[string]string) {
+			for key, value := range tags {
+				if k := strings.TrimSpace(key); k != "" {
+					current[k] = value
+				}
+			}
+		})
+	}
 
 	rule, err := s.ruleByResourceARN(resourceARN)
 	if err != nil {
@@ -685,6 +722,14 @@ func (s *Service) TagResource(resourceARN string, tags map[string]string) error 
 func (s *Service) UntagResource(resourceARN string, tagKeys []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if busName, ok := eventBusNameFromResourceARN(resourceARN); ok {
+		return s.updateBusTags(busName, func(current map[string]string) {
+			for _, key := range tagKeys {
+				delete(current, strings.TrimSpace(key))
+			}
+		})
+	}
 
 	rule, err := s.ruleByResourceARN(resourceARN)
 	if err != nil {
@@ -723,6 +768,7 @@ func (s *Service) PutEvents(entries []types.PutEventsEntry) ([]types.PutEventsRe
 	failedCount := 0
 	type dispatch struct {
 		entry     int
+		bus       string
 		eventJSON []byte
 		event     map[string]any
 	}
@@ -736,6 +782,18 @@ func (s *Service) PutEvents(entries []types.PutEventsEntry) ([]types.PutEventsRe
 				ErrorCode:    "ValidationException",
 				ErrorMessage: "Source and DetailType are required",
 			}
+			failedCount++
+			continue
+		}
+
+		// Each entry routes only to rules on its own bus (default if unset).
+		bus, busErr := s.resolveEventBus(entry.EventBusName)
+		if busErr != nil {
+			code, message := "ValidationException", busErr.Error()
+			if se, ok := busErr.(*ServiceError); ok {
+				code, message = se.Code, se.Message
+			}
+			results[i] = types.PutEventsResultEntry{ErrorCode: code, ErrorMessage: message}
 			failedCount++
 			continue
 		}
@@ -779,7 +837,7 @@ func (s *Service) PutEvents(entries []types.PutEventsEntry) ([]types.PutEventsRe
 		}
 
 		eventJSON, _ := json.Marshal(event)
-		dispatches = append(dispatches, dispatch{entry: i, eventJSON: eventJSON, event: event})
+		dispatches = append(dispatches, dispatch{entry: i, bus: bus, eventJSON: eventJSON, event: event})
 		results[i] = types.PutEventsResultEntry{EventId: eventID}
 	}
 
@@ -791,7 +849,7 @@ func (s *Service) PutEvents(entries []types.PutEventsEntry) ([]types.PutEventsRe
 	// call's rule copies on a single worker.
 	err := s.dispatchQ.Submit(func(context.Context) {
 		for _, d := range dispatches {
-			s.dispatchEvent(rules, d.eventJSON, d.event)
+			s.dispatchEvent(rules, d.bus, d.eventJSON, d.event)
 		}
 	})
 	if err != nil {
@@ -805,10 +863,13 @@ func (s *Service) PutEvents(entries []types.PutEventsEntry) ([]types.PutEventsRe
 	return results, failedCount, nil
 }
 
-// dispatchEvent matches one event against all enabled event-pattern rules
-// and invokes targets for each matching rule.
-func (s *Service) dispatchEvent(rules []*types.EventBridgeRule, eventJSON []byte, event map[string]any) {
+// dispatchEvent matches one event against the enabled event-pattern rules on
+// its bus and invokes targets for each matching rule.
+func (s *Service) dispatchEvent(rules []*types.EventBridgeRule, bus string, eventJSON []byte, event map[string]any) {
 	for _, rule := range rules {
+		if ruleBus(rule) != bus {
+			continue
+		}
 		if strings.ToUpper(rule.State) != types.EventBridgeRuleStateEnabled {
 			continue
 		}
@@ -849,16 +910,24 @@ type targetDispatchOptions struct {
 	// correlationID is the rule-fire's trace correlation ID. dispatchECSTarget
 	// forwards it onto the RunTaskInput so the ECS runner's own trace (RUNNING
 	// and STOPPED) shares it with this EventBridge delivery's trace, instead
-	// of minting an unrelated one.
+	// of minting an unrelated one. SQS targets carry it as a correlationId
+	// message attribute so the consuming event source mapping joins it too.
 	correlationID string
+	// ruleArn is the owning rule's ARN, reported as RULE_ARN on events sent
+	// to a target's dead-letter queue.
+	ruleArn string
 }
 
 // targetKind classifies a target ARN by delivery mechanism. ECS target ARNs
-// point at a cluster; all other non-ECS values retain the Lambda path for
-// backwards compatibility with bare function names.
+// point at a cluster and SQS target ARNs at a queue; all other values retain
+// the Lambda path for backwards compatibility with bare function names.
 func targetKind(arn string) string {
-	if strings.HasPrefix(strings.TrimSpace(arn), "arn:aws:ecs:") {
+	arn = strings.TrimSpace(arn)
+	switch {
+	case strings.HasPrefix(arn, "arn:aws:ecs:"):
 		return "ecs"
+	case strings.HasPrefix(arn, "arn:aws:sqs:"):
+		return "sqs"
 	}
 	return "lambda"
 }
@@ -868,26 +937,44 @@ func targetKind(arn string) string {
 // target.LastResult and target.LastInvokedAt in place; callers are still responsible
 // for persisting the owning rule via s.store.SaveRule. Kind-switching on the target ARN
 // lives here so a new target kind needs no changes at the call sites.
+//
+// When delivery fails and the target has a DeadLetterConfig, the original
+// event is forwarded to that SQS queue with AWS's error message attributes.
 func (s *Service) dispatchTarget(target *types.EventBridgeTarget, eventPayload []byte, opts targetDispatchOptions) (bool, []tracesvc.Span) {
 	if target == nil {
 		return false, nil
 	}
-	if target.EcsParameters != nil {
-		return s.dispatchECSTarget(target, eventPayload, opts)
-	}
 
-	switch targetKind(target.Arn) {
+	var (
+		success bool
+		spans   []tracesvc.Span
+		failure *deliveryFailure
+	)
+	kind := targetKind(target.Arn)
+	if target.EcsParameters != nil {
+		kind = "ecs"
+	}
+	switch kind {
 	case "lambda":
-		return s.dispatchLambdaTarget(target, eventPayload, opts)
+		success, spans, failure = s.dispatchLambdaTarget(target, eventPayload, opts)
 	case "ecs":
-		return s.dispatchECSTarget(target, eventPayload, opts)
+		success, spans, failure = s.dispatchECSTarget(target, eventPayload, opts)
+	case "sqs":
+		success, spans, failure = s.dispatchSQSTarget(target, eventPayload, opts)
 	default:
 		target.LastResult = "ERROR: unsupported target kind"
-		return false, nil
+		failure = &deliveryFailure{code: dlqErrorInvalidParameter, message: "unsupported target kind"}
 	}
+	if failure != nil {
+		spans = append(spans, s.forwardToDeadLetterQueue(target, eventPayload, opts, failure)...)
+	}
+	return success, spans
 }
 
-func (s *Service) dispatchLambdaTarget(target *types.EventBridgeTarget, eventPayload []byte, opts targetDispatchOptions) (bool, []tracesvc.Span) {
+// A handler error (FunctionError) marks the target failed but is not a
+// delivery failure: AWS invokes Lambda targets asynchronously, so a throwing
+// handler never sends the event to the target's dead-letter queue.
+func (s *Service) dispatchLambdaTarget(target *types.EventBridgeTarget, eventPayload []byte, opts targetDispatchOptions) (bool, []tracesvc.Span, *deliveryFailure) {
 	var spans []tracesvc.Span
 
 	functionName, fnErr := lambdaNameFromTarget(target.Arn)
@@ -896,7 +983,7 @@ func (s *Service) dispatchLambdaTarget(target *types.EventBridgeTarget, eventPay
 		if opts.earlyFailureSpans {
 			spans = append(spans, tracesvc.Span{Kind: "lambda", Name: target.Arn, Status: "error"})
 		}
-		return false, spans
+		return false, spans, &deliveryFailure{code: dlqErrorNoResource, message: "invalid target ARN"}
 	}
 
 	payload, payloadErr := buildTargetPayload(eventPayload, target)
@@ -905,7 +992,7 @@ func (s *Service) dispatchLambdaTarget(target *types.EventBridgeTarget, eventPay
 		if opts.earlyFailureSpans {
 			spans = append(spans, tracesvc.Span{Kind: "lambda", Name: functionName, Status: "error", Meta: map[string]string{"targetId": target.ID}})
 		}
-		return false, spans
+		return false, spans, &deliveryFailure{code: dlqErrorInvalidParameter, message: payloadErr.Error()}
 	}
 
 	if s.lambda == nil {
@@ -913,7 +1000,7 @@ func (s *Service) dispatchLambdaTarget(target *types.EventBridgeTarget, eventPay
 		if opts.earlyFailureSpans {
 			spans = append(spans, tracesvc.Span{Kind: "lambda", Name: functionName, Status: "error", Meta: map[string]string{"targetId": target.ID}})
 		}
-		return false, spans
+		return false, spans, &deliveryFailure{code: dlqErrorSDKClient, message: "lambda service unavailable"}
 	}
 
 	invokeStart := time.Now()
@@ -939,6 +1026,10 @@ func (s *Service) dispatchLambdaTarget(target *types.EventBridgeTarget, eventPay
 	success := true
 	spanStatus := "ok"
 	meta := map[string]string{"targetId": target.ID}
+	var failure *deliveryFailure
+	if invokeErr != nil {
+		failure = &deliveryFailure{code: classifyDeliveryError(invokeErr), message: invokeErr.Error()}
+	}
 	if invokeErr != nil || (invokeOut != nil && invokeOut.FunctionError != "") {
 		detail := "invoke failed"
 		if invokeErr != nil {
@@ -959,14 +1050,17 @@ func (s *Service) dispatchLambdaTarget(target *types.EventBridgeTarget, eventPay
 	spans = append(spans, tracesvc.Span{Kind: "lambda", Name: functionName, DurationMs: duration, Status: spanStatus, Meta: meta})
 	spans = append(spans, inv.Wait()...)
 
-	return success, spans
+	return success, spans, failure
 }
 
 // dispatchECSTarget transforms the event and starts one-shot ECS tasks through
 // the injected TaskRunner. RunTask is intentionally bounded to the dispatch
 // call: the runner owns the task's longer container lifecycle, while this
 // method records the EventBridge delivery span and target result.
-func (s *Service) dispatchECSTarget(target *types.EventBridgeTarget, eventPayload []byte, opts targetDispatchOptions) (bool, []tracesvc.Span) {
+//
+// A task that starts and later stops with an error was delivered; only a
+// RunTask that starts nothing is a delivery failure for DLQ purposes.
+func (s *Service) dispatchECSTarget(target *types.EventBridgeTarget, eventPayload []byte, opts targetDispatchOptions) (bool, []tracesvc.Span, *deliveryFailure) {
 	params := target.EcsParameters
 	family := ""
 	if params != nil {
@@ -981,7 +1075,7 @@ func (s *Service) dispatchECSTarget(target *types.EventBridgeTarget, eventPayloa
 		spanMeta["clusterArn"] = target.Arn
 	}
 
-	fail := func(detail string) (bool, []tracesvc.Span) {
+	failWith := func(code, detail string) (bool, []tracesvc.Span, *deliveryFailure) {
 		if detail == "" {
 			detail = "ECS target dispatch failed"
 		}
@@ -992,7 +1086,10 @@ func (s *Service) dispatchECSTarget(target *types.EventBridgeTarget, eventPayloa
 			Name:   family,
 			Status: "error",
 			Meta:   spanMeta,
-		}}
+		}}, &deliveryFailure{code: code, message: detail}
+	}
+	fail := func(detail string) (bool, []tracesvc.Span, *deliveryFailure) {
+		return failWith(dlqErrorInvalidParameter, detail)
 	}
 
 	if params == nil {
@@ -1017,13 +1114,13 @@ func (s *Service) dispatchECSTarget(target *types.EventBridgeTarget, eventPayloa
 		ruleKey = targetRuleKey(target)
 	}
 	if !s.acquireECSRuleSlot(ruleKey) {
-		return fail(fmt.Sprintf("ThrottlingException: ECS target concurrency limit exceeded (limit %d)", s.ecsConcurrencyLimit()))
+		return failWith(dlqErrorThrottling, fmt.Sprintf("ThrottlingException: ECS target concurrency limit exceeded (limit %d)", s.ecsConcurrencyLimit()))
 	}
 	defer s.releaseECSRuleSlot(ruleKey)
 
 	runner := s.getTaskRunner()
 	if runner == nil {
-		return fail("ECS task runner is not configured")
+		return failWith(dlqErrorSDKClient, "ECS task runner is not configured")
 	}
 
 	invokeStart := time.Now()
@@ -1053,14 +1150,19 @@ func (s *Service) dispatchECSTarget(target *types.EventBridgeTarget, eventPayloa
 	success := runErr == nil
 	spanStatus := "ok"
 	detail := ""
+	var failure *deliveryFailure
 	if runErr != nil {
 		detail = runErr.Error()
+		failure = &deliveryFailure{code: classifyDeliveryError(runErr), message: detail}
 	} else if runOut == nil {
 		detail = "RunTask returned no output"
+		failure = &deliveryFailure{code: dlqErrorSDKClient, message: detail}
 	} else if len(runOut.Failures) > 0 {
 		detail = formatECSRunTaskFailures(runOut.Failures)
+		failure = &deliveryFailure{code: dlqErrorSDKClient, message: detail}
 	} else if len(runOut.Tasks) == 0 {
 		detail = "RunTask returned no tasks"
+		failure = &deliveryFailure{code: dlqErrorSDKClient, message: detail}
 	} else if stoppedTaskFailure := stoppedTaskFailure(runOut.Tasks); stoppedTaskFailure != "" {
 		detail = stoppedTaskFailure
 	}
@@ -1079,7 +1181,7 @@ func (s *Service) dispatchECSTarget(target *types.EventBridgeTarget, eventPayloa
 		DurationMs: duration,
 		Status:     spanStatus,
 		Meta:       spanMeta,
-	}}
+	}}, failure
 }
 
 func (s *Service) getTaskRunner() TaskRunner {
@@ -1359,7 +1461,7 @@ func (s *Service) fireTargets(rule *types.EventBridgeRule, eventPayload []byte) 
 	failed := 0
 	for i := range rule.Targets {
 		target := &rule.Targets[i]
-		success, targetSpans := s.dispatchTarget(target, eventPayload, targetDispatchOptions{ruleKey: rule.Name, correlationID: correlationID})
+		success, targetSpans := s.dispatchTarget(target, eventPayload, targetDispatchOptions{ruleKey: rule.Name, ruleArn: rule.Arn, correlationID: correlationID})
 		if !success {
 			failed++
 		}
@@ -1394,8 +1496,35 @@ func (s *Service) fireTargets(rule *types.EventBridgeRule, eventPayload []byte) 
 	}
 }
 
+// FireRuleNow fires the named rule once. A rule on the default bus wins;
+// otherwise the first custom-bus rule with that name is fired.
 func (s *Service) FireRuleNow(ruleName string, sessionMeta map[string]string) (*FireResult, error) {
-	return s.fireRule(ruleName, false, sessionMeta)
+	rule, err := s.findRuleByName(ruleName)
+	if err != nil {
+		return nil, err
+	}
+	return s.fireRule(ruleBus(rule), rule.Name, false, sessionMeta)
+}
+
+// FireRuleNowOnBus fires the named rule on a specific event bus once.
+func (s *Service) FireRuleNowOnBus(eventBusName, ruleName string, sessionMeta map[string]string) (*FireResult, error) {
+	bus, err := s.resolveEventBus(eventBusName)
+	if err != nil {
+		return nil, err
+	}
+	return s.fireRule(bus, ruleName, false, sessionMeta)
+}
+
+func (s *Service) findRuleByName(ruleName string) (*types.EventBridgeRule, error) {
+	if rule, err := s.store.GetRule(defaultEventBusName, ruleName); err == nil {
+		return rule, nil
+	}
+	for _, rule := range s.store.ListRules() {
+		if rule.Name == ruleName {
+			return rule, nil
+		}
+	}
+	return nil, notFoundError("Rule %s does not exist", ruleName)
 }
 
 // saveRuleRunMetadata persists the run results recorded on ran (a snapshot
@@ -1406,7 +1535,7 @@ func (s *Service) saveRuleRunMetadata(ran *types.EventBridgeRule, withNextRun bo
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	current, err := s.store.GetRule(ran.Name)
+	current, err := s.store.GetRule(ruleBus(ran), ran.Name)
 	if err != nil {
 		// Deleted while firing: nothing to record.
 		return nil
@@ -1429,10 +1558,10 @@ func (s *Service) saveRuleRunMetadata(ran *types.EventBridgeRule, withNextRun bo
 	return s.store.SaveRule(current)
 }
 
-func (s *Service) fireRule(ruleName string, scheduled bool, sessionMeta map[string]string) (*FireResult, error) {
-	rule, err := s.store.GetRule(ruleName)
+func (s *Service) fireRule(bus, ruleName string, scheduled bool, sessionMeta map[string]string) (*FireResult, error) {
+	rule, err := s.store.GetRule(bus, ruleName)
 	if err != nil {
-		return nil, notFoundError("Rule %s does not exist", ruleName)
+		return nil, notFoundError("Rule %s does not exist on EventBus %s.", ruleName, bus)
 	}
 
 	started := time.Now().UTC()
@@ -1464,6 +1593,7 @@ func (s *Service) fireRule(ruleName string, scheduled bool, sessionMeta map[stri
 		target := &rule.Targets[i]
 		success, targetSpans := s.dispatchTarget(target, eventPayload, targetDispatchOptions{
 			ruleKey:           rule.Name,
+			ruleArn:           rule.Arn,
 			invokedAt:         &started,
 			earlyFailureSpans: true,
 			errorDetailMeta:   true,
@@ -1525,9 +1655,11 @@ func (s *Service) RunRuleRace(ruleName string, runs, concurrency int) (*RaceResu
 	if concurrency <= 0 || concurrency > 100 {
 		return nil, validationError("Parameter concurrency must be between 1 and 100")
 	}
-	if _, err := s.store.GetRule(ruleName); err != nil {
-		return nil, notFoundError("Rule %s does not exist", ruleName)
+	raceRule, err := s.findRuleByName(ruleName)
+	if err != nil {
+		return nil, err
 	}
+	raceBus := ruleBus(raceRule)
 
 	sessionID := uuid.NewString()[:8]
 	started := time.Now().UTC()
@@ -1551,7 +1683,7 @@ func (s *Service) RunRuleRace(ruleName string, runs, concurrency int) (*RaceResu
 		go func() {
 			defer wg.Done()
 			for n := range jobs {
-				fire, err := s.FireRuleNow(ruleName, map[string]string{
+				fire, err := s.fireRule(raceBus, ruleName, false, map[string]string{
 					"raceSession": sessionID,
 					"raceRun":     strconv.Itoa(n + 1),
 					"raceRuns":    strconv.Itoa(runs),
@@ -1587,15 +1719,52 @@ func (s *Service) RunRuleRace(ruleName string, runs, concurrency int) (*RaceResu
 	return result, nil
 }
 
+// normalizeEventBusName accepts an event bus name or ARN ("" means the
+// default bus) and returns the bus name. It does not check the bus exists.
 func normalizeEventBusName(eventBusName string) (string, error) {
 	n := strings.TrimSpace(eventBusName)
 	if n == "" || n == defaultEventBusName {
 		return defaultEventBusName, nil
 	}
-	if strings.HasSuffix(n, types.EventBridgeDefaultBusARNSuffix) {
-		return defaultEventBusName, nil
+	if strings.HasPrefix(n, "arn:") {
+		const marker = ":event-bus/"
+		idx := strings.Index(n, marker)
+		if !strings.HasPrefix(n, "arn:aws:events:") || idx < 0 {
+			return "", validationError("Parameter EventBusName is not valid: %s", eventBusName)
+		}
+		n = n[idx+len(marker):]
 	}
-	return "", validationError("Only the default event bus is supported")
+	if !validEventBusName(n) {
+		return "", validationError("Parameter EventBusName is not valid: %s", eventBusName)
+	}
+	return n, nil
+}
+
+// resolveEventBus normalizes eventBusName and checks the bus exists.
+func (s *Service) resolveEventBus(eventBusName string) (string, error) {
+	bus, err := normalizeEventBusName(eventBusName)
+	if err != nil {
+		return "", err
+	}
+	if bus == defaultEventBusName {
+		return bus, nil
+	}
+	if _, err := s.store.GetBus(bus); err != nil {
+		return "", notFoundError("Event bus %s does not exist.", bus)
+	}
+	return bus, nil
+}
+
+func validEventBusName(name string) bool {
+	if name == "" || len(name) > 256 {
+		return false
+	}
+	for _, r := range name {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '_' && r != '-' && r != '.' && r != '/' {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Service) ruleByResourceARN(resourceARN string) (*types.EventBridgeRule, error) {
@@ -1605,6 +1774,7 @@ func (s *Service) ruleByResourceARN(resourceARN string) (*types.EventBridgeRule,
 	}
 
 	name := resourceARN
+	bus := defaultEventBusName
 	if strings.HasPrefix(resourceARN, "arn:aws:events:") {
 		const marker = ":rule/"
 		idx := strings.Index(resourceARN, marker)
@@ -1615,22 +1785,36 @@ func (s *Service) ruleByResourceARN(resourceARN string) (*types.EventBridgeRule,
 		if tail == "" {
 			return nil, validationError("Parameter ResourceARN is invalid")
 		}
-		parts := strings.Split(tail, "/")
-		name = strings.TrimSpace(parts[len(parts)-1])
-		if name == "" {
+		// rule/<name> on the default bus, rule/<bus>/<name> on a custom one.
+		if sep := strings.LastIndexByte(tail, '/'); sep >= 0 {
+			bus, name = tail[:sep], tail[sep+1:]
+		} else {
+			name = tail
+		}
+		name = strings.TrimSpace(name)
+		if name == "" || bus == "" {
 			return nil, validationError("Parameter ResourceARN is invalid")
 		}
 	}
 
-	rule, err := s.store.GetRule(name)
+	rule, err := s.store.GetRule(bus, name)
 	if err != nil {
 		return nil, notFoundError("Resource %s does not exist", resourceARN)
 	}
 	return rule, nil
 }
 
-func ruleARN(cfg *config.Config, ruleName string) string {
-	return fmt.Sprintf("arn:aws:events:%s:%s:rule/%s", cfg.Region, cfg.AccountID, ruleName)
+// ruleARN follows AWS: rule/<name> on the default bus and
+// rule/<bus>/<name> on a custom bus.
+func ruleARN(cfg *config.Config, bus, ruleName string) string {
+	if bus == "" || bus == defaultEventBusName {
+		return fmt.Sprintf("arn:aws:events:%s:%s:rule/%s", cfg.Region, cfg.AccountID, ruleName)
+	}
+	return fmt.Sprintf("arn:aws:events:%s:%s:rule/%s/%s", cfg.Region, cfg.AccountID, bus, ruleName)
+}
+
+func eventBusARN(cfg *config.Config, bus string) string {
+	return fmt.Sprintf("arn:aws:events:%s:%s:event-bus/%s", cfg.Region, cfg.AccountID, bus)
 }
 
 func parseNextToken(token string) (int, error) {
@@ -1677,9 +1861,40 @@ func canonicalEventBridgeTargetARN(cfg *config.Config, target *types.EventBridge
 		if err := validateECSInput(target); err != nil {
 			return "", err
 		}
+		if err := validateTargetCommon(target); err != nil {
+			return "", err
+		}
 		return canonical, nil
 	}
-	return canonicalLambdaTargetARN(cfg, target.Arn)
+	if targetKind(target.Arn) == "sqs" {
+		canonical, err := canonicalSQSQueueARN(target.Arn)
+		if err != nil {
+			return "", err
+		}
+		if err := validateSQSTarget(target); err != nil {
+			return "", err
+		}
+		if err := validateTargetCommon(target); err != nil {
+			return "", err
+		}
+		return canonical, nil
+	}
+	canonical, err := canonicalLambdaTargetARN(cfg, target.Arn)
+	if err != nil {
+		return "", err
+	}
+	if err := validateTargetCommon(target); err != nil {
+		return "", err
+	}
+	return canonical, nil
+}
+
+// validateTargetCommon applies the checks shared by every target kind.
+func validateTargetCommon(target *types.EventBridgeTarget) error {
+	if targetKind(target.Arn) != "sqs" && target.SqsParameters != nil {
+		return fmt.Errorf("SqsParameters are only valid for an SQS queue target: %s", target.ID)
+	}
+	return validateTargetDeadLetterConfig(target)
 }
 
 func validateECSInput(target *types.EventBridgeTarget) error {
@@ -1724,8 +1939,11 @@ func validateECSInput(target *types.EventBridgeTarget) error {
 }
 
 func canonicalTargetARNReference(cfg *config.Config, target string) (string, error) {
-	if targetKind(target) == "ecs" {
+	switch targetKind(target) {
+	case "ecs":
 		return canonicalECSClusterARN(target)
+	case "sqs":
+		return canonicalSQSQueueARN(target)
 	}
 	return canonicalLambdaTargetARN(cfg, target)
 }

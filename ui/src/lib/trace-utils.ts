@@ -25,6 +25,7 @@ export function spanColor(kind: string): string {
     case "eventbridge":
       return "var(--color-blue)";
     case "queue":
+    case "sqs":
       return "var(--color-amber)";
     case "topic":
       return "var(--color-primary)";
@@ -64,6 +65,7 @@ export function spanKindLabel(kind: string): string {
     case "eventbridge":
       return "EventBridge";
     case "queue":
+    case "sqs":
       return "SQS";
     case "topic":
       return "SNS";

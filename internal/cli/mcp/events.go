@@ -10,8 +10,9 @@ import (
 
 // FireRuleInput selects a rule to trigger.
 type FireRuleInput struct {
-	Rule    string `json:"rule" jsonschema:"EventBridge rule name."`
-	Account string `json:"account,omitempty" jsonschema:"Twelve-digit account ID. Omit for the default account."`
+	Rule     string `json:"rule" jsonschema:"EventBridge rule name."`
+	EventBus string `json:"eventBus,omitempty" jsonschema:"Event bus name or ARN. Omit to use the default bus, falling back to the first custom bus with a rule of that name."`
+	Account  string `json:"account,omitempty" jsonschema:"Twelve-digit account ID. Omit for the default account."`
 }
 
 // FireRuleOutput reports what the rule dispatched.
@@ -28,8 +29,10 @@ const fireRuleDescription = `Trigger a scheduled EventBridge rule immediately on
 Scheduled rules normally wait for their next interval, so this is how to test
 one without waiting. The rule fires once, against its real targets.
 
-The result counts targets that succeeded and failed but does not say why a
-target failed. Read the target function's output with tarn_get_logs for that.`
+Targets can be Lambda functions, ECS clusters or SQS queues. The result counts
+targets that succeeded and failed but does not say why a target failed. Read
+the target function's output with tarn_get_logs, or the rule's trace with
+tarn_get_traces, for that.`
 
 func addFireRuleTool(s *mcp.Server, c *client) {
 	tool := &mcp.Tool{
@@ -55,8 +58,11 @@ func addFireRuleTool(s *mcp.Server, c *client) {
 			Successful int    `json:"successful"`
 			Failed     int    `json:"failed"`
 		}
-		if err := c.postJSON(ctx, "/_tarn/admin/eventbridge/fire", in.Account,
-			map[string]string{"ruleName": in.Rule}, &result); err != nil {
+		request := map[string]string{"ruleName": in.Rule}
+		if bus := strings.TrimSpace(in.EventBus); bus != "" {
+			request["eventBusName"] = bus
+		}
+		if err := c.postJSON(ctx, "/_tarn/admin/eventbridge/fire", in.Account, request, &result); err != nil {
 			return nil, FireRuleOutput{}, err
 		}
 

@@ -60,7 +60,7 @@
   </div>
 
   <div class="rows">
-    {#each visible as rule (rule.name)}
+    {#each visible as rule (rule.arn)}
       <RcListRow
         mono
         title={rule.name}

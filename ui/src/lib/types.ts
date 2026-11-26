@@ -449,11 +449,14 @@ export interface EventBridgeTargetSummary {
   inputPathsMap?: Record<string, string>;
   inputTemplate?: string;
   taskDefinition?: string;
+  messageGroupId?: string;
+  deadLetterArn?: string;
 }
 
 export interface EventBridgeRuleSummary {
   name: string;
   arn: string;
+  eventBusName?: string;
   scheduleExpression: string;
   eventPattern?: string;
   state: "ENABLED" | "DISABLED" | string;

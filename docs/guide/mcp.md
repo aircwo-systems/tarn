@@ -130,8 +130,9 @@ truncated at 64 KB. Binary objects report size and content type but no contents.
 ### `tarn_fire_rule`
 
 Triggers a scheduled EventBridge rule immediately instead of waiting for its
-next interval. Reports how many targets succeeded and failed, but not why; read
-the target function's logs for that.
+next interval. Pass `eventBus` to pick a rule on a custom bus. Reports how many
+targets succeeded and failed, but not why. Read the target function's logs, or
+the rule's trace, for that.
 
 ## What an assistant sees
 

@@ -98,7 +98,6 @@ Tagging, aliases, versions, layers, permissions and concurrency are present.
 
 | Missing | Why it matters |
 |---|---|
-| `CreateEventBus`, `DescribeEventBus`, `ListEventBuses`, `DeleteEventBus` | Custom buses are standard in event-driven apps. |
 | `TestEventPattern` | Pattern debugging. |
 | Archives and replays, connections and API destinations, `PutPermission` | Lower priority. |
 

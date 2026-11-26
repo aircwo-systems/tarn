@@ -137,14 +137,9 @@ type flushOverview struct {
 		QueueName    string `json:"queueName"`
 		FunctionName string `json:"functionName"`
 	} `json:"eventSourceMappings"`
-	EventBridgeRules []struct {
-		Name    string `json:"name"`
-		Targets []struct {
-			ID  string `json:"id"`
-			Arn string `json:"arn"`
-		} `json:"targets"`
-	} `json:"eventBridgeRules"`
-	Buckets []struct {
+	EventBridgeRules []eventBridgeFlushRule `json:"eventBridgeRules"`
+	EventBuses       []eventBridgeFlushBus  `json:"eventBuses"`
+	Buckets          []struct {
 		Name             string `json:"name"`
 		Objects          int    `json:"objects"`
 		TotalSize        int64  `json:"totalSize"`
@@ -253,7 +248,8 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		allFunctionNames[normalizeLambdaRef(fn.Name)] = struct{}{}
 	}
 	filteredMappings := filterEventSourceMappings(overview.EventSourceMappings, narrow, filteredQueues, filteredFunctions, allQueueNames, allFunctionNames)
-	filteredEventBridgeRules := filterEventBridgeRules(overview.EventBridgeRules, narrow, filteredFunctions)
+	filteredEventBuses := filterEventBuses(overview.EventBuses, narrow, opts.TagFilter, opts.Group)
+	filteredEventBridgeRules := filterEventBridgeRules(overview.EventBridgeRules, narrow, filteredFunctions, filteredQueues, filteredEventBuses)
 	filteredNotificationBuckets := []struct {
 		Name      string
 		Objects   int
@@ -349,7 +345,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		}
 	}
 
-	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredEventBridgeRules) + len(filteredNotificationBuckets) + len(filteredBuckets) + len(filteredStateMachines) + len(filteredECSClusters) + len(filteredECSServices) + len(filteredECSTasks) + len(filteredECSTaskDefinitions) + len(filteredCognitoPools) + len(filteredDynamoDBTables) + len(filteredKMSKeys) + len(lambdaContainers)
+	total := len(filteredGateways) + len(filteredFunctions) + len(filteredQueues) + len(filteredTopics) + len(filteredSubscriptions) + len(filteredSecrets) + len(filteredMappings) + len(filteredEventBridgeRules) + len(filteredEventBuses) + len(filteredNotificationBuckets) + len(filteredBuckets) + len(filteredStateMachines) + len(filteredECSClusters) + len(filteredECSServices) + len(filteredECSTasks) + len(filteredECSTaskDefinitions) + len(filteredCognitoPools) + len(filteredDynamoDBTables) + len(filteredKMSKeys) + len(lambdaContainers)
 	selectorDesc := flushSelectorDescription(opts)
 	if total == 0 {
 		if selectorDesc != "" {
@@ -366,7 +362,7 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 	}
 	_, _ = fmt.Fprintln(out)
 
-	if err := printFlushPlan(out, filteredGateways, filteredFunctions, filteredQueues, filteredTopics, filteredSubscriptions, filteredSecrets, filteredMappings, filteredEventBridgeRules, filteredNotificationBuckets, filteredBuckets); err != nil {
+	if err := printFlushPlan(out, filteredGateways, filteredFunctions, filteredQueues, filteredTopics, filteredSubscriptions, filteredSecrets, filteredMappings, filteredEventBridgeRules, filteredEventBuses, filteredNotificationBuckets, filteredBuckets); err != nil {
 		return err
 	}
 	if len(filteredStateMachines) > 0 {
@@ -462,15 +458,23 @@ func runFlush(cmd *cobra.Command, out io.Writer, opts flushOptions) error {
 		_, _ = fmt.Fprintf(out, "Deleted Trigger: %s (%s -> %s)\n", mapping.UUID, mapping.QueueName, mapping.FunctionName)
 	}
 	for _, rule := range filteredEventBridgeRules {
-		if err := removeEventBridgeTargets(endpoint, rule.Name, rule.Targets); err != nil {
+		if err := removeEventBridgeTargets(endpoint, rule.EventBusName, rule.Name, rule.Targets); err != nil {
 			recordFailure("eventbridge targets", rule.Name, err)
 			continue
 		}
-		if err := deleteEventBridgeRule(endpoint, rule.Name); err != nil {
+		if err := deleteEventBridgeRule(endpoint, rule.EventBusName, rule.Name); err != nil {
 			recordFailure("eventbridge rule", rule.Name, err)
 			continue
 		}
-		_, _ = fmt.Fprintf(out, "Deleted EventBridge Rule: %s\n", rule.Name)
+		_, _ = fmt.Fprintf(out, "Deleted EventBridge Rule: %s\n", eventBridgeRuleLabel(rule))
+	}
+	// Buses go after their rules: DeleteEventBus refuses while rules remain.
+	for _, bus := range filteredEventBuses {
+		if err := deleteEventBus(endpoint, bus.Name); err != nil {
+			recordFailure("eventbridge bus", bus.Name, err)
+			continue
+		}
+		_, _ = fmt.Fprintf(out, "Deleted EventBridge Bus: %s\n", bus.Name)
 	}
 	for _, bucket := range filteredNotificationBuckets {
 		if err := clearS3BucketNotifications(endpoint, bucket.Name); err != nil {
@@ -1003,13 +1007,7 @@ func printFlushPlan(out io.Writer, gateways []struct {
 	UUID         string
 	QueueName    string
 	FunctionName string
-}, eventBridgeRules []struct {
-	Name    string
-	Targets []struct {
-		ID  string
-		Arn string
-	}
-}, notificationBuckets []struct {
+}, eventBridgeRules []eventBridgeFlushRule, eventBuses []eventBridgeFlushBus, notificationBuckets []struct {
 	Name      string
 	Objects   int
 	TotalSize int64
@@ -1093,7 +1091,17 @@ func printFlushPlan(out io.Writer, gateways []struct {
 			return err
 		}
 		for _, rule := range eventBridgeRules {
-			if _, err := fmt.Fprintf(out, "  - %s (%d targets)\n", rule.Name, len(rule.Targets)); err != nil {
+			if _, err := fmt.Fprintf(out, "  - %s (%d targets)\n", eventBridgeRuleLabel(rule), len(rule.Targets)); err != nil {
+				return err
+			}
+		}
+	}
+	if len(eventBuses) > 0 {
+		if _, err := fmt.Fprintln(out, "EventBridge Buses:"); err != nil {
+			return err
+		}
+		for _, bus := range eventBuses {
+			if _, err := fmt.Fprintf(out, "  - %s\n", bus.Name); err != nil {
 				return err
 			}
 		}
@@ -1514,93 +1522,89 @@ func filterEventSourceMappings(items []struct {
 	return out
 }
 
-func filterEventBridgeRules(items []struct {
-	Name    string `json:"name"`
-	Targets []struct {
-		ID  string `json:"id"`
-		Arn string `json:"arn"`
-	} `json:"targets"`
-}, narrow bool, functions []struct {
+type eventBridgeFlushTarget struct {
+	ID  string `json:"id"`
+	Arn string `json:"arn"`
+}
+
+type eventBridgeFlushRule struct {
+	Name         string                   `json:"name"`
+	EventBusName string                   `json:"eventBusName"`
+	Targets      []eventBridgeFlushTarget `json:"targets"`
+}
+
+type eventBridgeFlushBus struct {
+	Name string            `json:"name"`
+	Tags map[string]string `json:"tags"`
+}
+
+func eventBridgeRuleLabel(rule eventBridgeFlushRule) string {
+	if rule.EventBusName == "" || rule.EventBusName == "default" {
+		return rule.Name
+	}
+	return rule.EventBusName + "/" + rule.Name
+}
+
+// filterEventBuses selects custom event buses: all of them without a
+// selector, otherwise those whose tags and name match it.
+func filterEventBuses(items []eventBridgeFlushBus, narrow bool, query, group string) []eventBridgeFlushBus {
+	var out []eventBridgeFlushBus
+	for _, bus := range items {
+		if bus.Name == "" || bus.Name == "default" {
+			continue
+		}
+		if narrow && !(matchesTagSelector(bus.Tags, query) && matchesGroupName(bus.Name, group)) {
+			continue
+		}
+		out = append(out, bus)
+	}
+	return out
+}
+
+func filterEventBridgeRules(items []eventBridgeFlushRule, narrow bool, functions []struct {
 	Name string
 	Tags map[string]string
-}) []struct {
-	Name    string
-	Targets []struct {
-		ID  string
-		Arn string
-	}
-} {
-	var out []struct {
-		Name    string
-		Targets []struct {
-			ID  string
-			Arn string
-		}
-	}
-
+}, queues []struct {
+	Name string
+	URL  string
+	Tags map[string]string
+}, buses []eventBridgeFlushBus) []eventBridgeFlushRule {
 	// Without tag filters, flush all rules.
 	if !narrow {
-		for _, item := range items {
-			targets := make([]struct {
-				ID  string
-				Arn string
-			}, 0, len(item.Targets))
-			for _, target := range item.Targets {
-				targets = append(targets, struct {
-					ID  string
-					Arn string
-				}{ID: target.ID, Arn: target.Arn})
-			}
-			out = append(out, struct {
-				Name    string
-				Targets []struct {
-					ID  string
-					Arn string
-				}
-			}{
-				Name:    item.Name,
-				Targets: targets,
-			})
-		}
-		return out
+		return append([]eventBridgeFlushRule(nil), items...)
 	}
 
-	// With tag filters, EventBridge rules are selected only if at least one target
-	// points to a filtered Lambda function (rules are currently untagged).
+	// With tag filters, EventBridge rules are selected when they live on a
+	// selected event bus, or when at least one target points to a filtered
+	// Lambda function or SQS queue (rules are currently untagged). Matching
+	// queue targets keeps a rule from outliving the queue it delivers to.
 	functionNames := make(map[string]struct{}, len(functions))
 	for _, fn := range functions {
 		functionNames[fn.Name] = struct{}{}
 	}
+	queueNames := make(map[string]struct{}, len(queues))
+	for _, queue := range queues {
+		queueNames[queue.Name] = struct{}{}
+	}
+	busNames := make(map[string]struct{}, len(buses))
+	for _, bus := range buses {
+		busNames[bus.Name] = struct{}{}
+	}
+	var out []eventBridgeFlushRule
 	for _, item := range items {
-		matched := false
+		_, matched := busNames[item.EventBusName]
 		for _, target := range item.Targets {
-			fnName := normalizeLambdaRef(target.Arn)
-			if _, ok := functionNames[fnName]; ok {
-				matched = true
+			if matched {
 				break
 			}
+			if queueName, ok := sqsQueueNameFromTargetARN(target.Arn); ok {
+				_, matched = queueNames[queueName]
+				continue
+			}
+			_, matched = functionNames[normalizeLambdaRef(target.Arn)]
 		}
 		if matched {
-			targets := make([]struct {
-				ID  string
-				Arn string
-			}, 0, len(item.Targets))
-			for _, target := range item.Targets {
-				targets = append(targets, struct {
-					ID  string
-					Arn string
-				}{ID: target.ID, Arn: target.Arn})
-			}
-			out = append(out, struct {
-				Name    string
-				Targets []struct {
-					ID  string
-					Arn string
-				}
-			}{
-				Name:    item.Name,
-				Targets: targets,
-			})
+			out = append(out, item)
 		}
 	}
 	return out
@@ -1868,10 +1872,7 @@ func deleteEventSourceMapping(endpoint, uuid string) error {
 	return nil
 }
 
-func removeEventBridgeTargets(endpoint, ruleName string, targets []struct {
-	ID  string
-	Arn string
-}) error {
+func removeEventBridgeTargets(endpoint, eventBusName, ruleName string, targets []eventBridgeFlushTarget) error {
 	if len(targets) == 0 {
 		return nil
 	}
@@ -1886,10 +1887,14 @@ func removeEventBridgeTargets(endpoint, ruleName string, targets []struct {
 		return nil
 	}
 
-	reqBody, _ := json.Marshal(map[string]any{
+	request := map[string]any{
 		"Rule": ruleName,
 		"Ids":  ids,
-	})
+	}
+	if eventBusName != "" {
+		request["EventBusName"] = eventBusName
+	}
+	reqBody, _ := json.Marshal(request)
 	req, err := http.NewRequest(http.MethodPost, endpoint+"/", bytes.NewReader(reqBody))
 	if err != nil {
 		return err
@@ -1910,16 +1915,26 @@ func removeEventBridgeTargets(endpoint, ruleName string, targets []struct {
 	return nil
 }
 
-func deleteEventBridgeRule(endpoint, ruleName string) error {
-	reqBody, _ := json.Marshal(map[string]any{
-		"Name": ruleName,
-	})
+func deleteEventBridgeRule(endpoint, eventBusName, ruleName string) error {
+	request := map[string]any{"Name": ruleName}
+	if eventBusName != "" {
+		request["EventBusName"] = eventBusName
+	}
+	return postEventBridge(endpoint, "DeleteRule", request)
+}
+
+func deleteEventBus(endpoint, name string) error {
+	return postEventBridge(endpoint, "DeleteEventBus", map[string]any{"Name": name})
+}
+
+func postEventBridge(endpoint, action string, request map[string]any) error {
+	reqBody, _ := json.Marshal(request)
 	req, err := http.NewRequest(http.MethodPost, endpoint+"/", bytes.NewReader(reqBody))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/x-amz-json-1.1")
-	req.Header.Set("X-Amz-Target", "AWSEvents.DeleteRule")
+	req.Header.Set("X-Amz-Target", "AWSEvents."+action)
 
 	resp, err := cliHTTPClient.Do(req)
 	if err != nil {
@@ -2057,6 +2072,16 @@ func isMissingECSResource(status int, body []byte) bool {
 		}
 	}
 	return false
+}
+
+// sqsQueueNameFromTargetARN returns the queue name of an SQS queue ARN
+// (arn:aws:sqs:<region>:<account>:<name>).
+func sqsQueueNameFromTargetARN(arn string) (string, bool) {
+	parts := strings.SplitN(strings.TrimSpace(arn), ":", 6)
+	if len(parts) != 6 || parts[0] != "arn" || parts[2] != "sqs" || parts[5] == "" {
+		return "", false
+	}
+	return parts[5], true
 }
 
 func normalizeLambdaRef(ref string) string {

@@ -25,7 +25,7 @@ features:
   - title: Dashboard UI
     details: Built-in web console to manage resources, view topology, inspect logs, and monitor event flows.
   - title: Event Driven
-    details: SQS and DynamoDB Streams event source mappings, SNS fanout to SQS and Lambda, and EventBridge scheduled or custom-event flows with Lambda targets.
+    details: SQS and DynamoDB Streams event source mappings, SNS fanout to SQS and Lambda, and EventBridge scheduled or custom-event flows with Lambda, ECS and SQS targets.
   - title: Terraform Ready
     details: 200+ API actions implemented. Unknown actions return empty success responses so production .tf files just work.
 ---

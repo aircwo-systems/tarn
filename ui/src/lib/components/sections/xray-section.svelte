@@ -671,7 +671,7 @@
         <div class="race-bar">
           <select bind:value={raceRuleName} class="field min-w-48">
             <option value="">Select EventBridge rule</option>
-            {#each eventBridgeRules as rule (rule.name)}
+            {#each eventBridgeRules as rule (rule.arn)}
               <option value={rule.name}>{rule.name}</option>
             {/each}
           </select>

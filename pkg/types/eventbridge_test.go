@@ -103,3 +103,52 @@ func TestEcsParametersNetworkConfigurationJSONShape(t *testing.T) {
 		t.Fatalf("unexpected network configuration after round trip: %+v", avc)
 	}
 }
+
+func TestEventBridgeTargetSQSParametersAndDeadLetterConfigJSONRoundTrip(t *testing.T) {
+	zero := 0
+	age := 3600
+	target := EventBridgeTarget{
+		ID:               "orders-fifo",
+		Arn:              "arn:aws:sqs:us-east-1:000000000000:orders.fifo",
+		SqsParameters:    &SqsParameters{MessageGroupId: "orders"},
+		DeadLetterConfig: &EventBridgeDeadLetterConfig{Arn: "arn:aws:sqs:us-east-1:000000000000:orders-dlq"},
+		RetryPolicy:      &RetryPolicy{MaximumRetryAttempts: &zero, MaximumEventAgeInSeconds: &age},
+	}
+
+	raw, err := json.Marshal(target)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	for _, field := range []string{
+		`"SqsParameters":{"MessageGroupId":"orders"}`,
+		`"DeadLetterConfig":{"Arn":"arn:aws:sqs:us-east-1:000000000000:orders-dlq"}`,
+		`"MaximumRetryAttempts":0`,
+		`"MaximumEventAgeInSeconds":3600`,
+	} {
+		if !strings.Contains(string(raw), field) {
+			t.Errorf("expected marshaled target to contain %s, got %s", field, raw)
+		}
+	}
+
+	var roundTrip EventBridgeTarget
+	if err := json.Unmarshal(raw, &roundTrip); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if roundTrip.SqsParameters == nil || roundTrip.SqsParameters.MessageGroupId != "orders" {
+		t.Fatalf("unexpected SqsParameters after round trip: %+v", roundTrip.SqsParameters)
+	}
+	if roundTrip.DeadLetterConfig == nil || roundTrip.DeadLetterConfig.Arn != target.DeadLetterConfig.Arn {
+		t.Fatalf("unexpected DeadLetterConfig after round trip: %+v", roundTrip.DeadLetterConfig)
+	}
+	if roundTrip.RetryPolicy == nil || roundTrip.RetryPolicy.MaximumRetryAttempts == nil || *roundTrip.RetryPolicy.MaximumRetryAttempts != 0 {
+		t.Fatalf("unexpected RetryPolicy after round trip: %+v", roundTrip.RetryPolicy)
+	}
+
+	// A plain Lambda target must not grow empty SQS/DLQ objects on the wire.
+	plain, _ := json.Marshal(EventBridgeTarget{ID: "fn", Arn: "arn:aws:lambda:us-east-1:000000000000:function:fn"})
+	for _, field := range []string{"SqsParameters", "DeadLetterConfig", "RetryPolicy"} {
+		if strings.Contains(string(plain), field) {
+			t.Errorf("expected %s to be omitted, got %s", field, plain)
+		}
+	}
+}

@@ -6,7 +6,7 @@ Welcome to Tarn! This guide will help you get up and running in minutes.
 Tarn is under active development. Expect breaking changes as we finalize the MVP.
 
 Known limitations:
-- EventBridge: Default-bus rules and custom events; ECS and Lambda targets are local-only
+- EventBridge: Rules on the default and custom buses, custom events, and Lambda, ECS and SQS targets
 - S3: Path-style only; virtual-hosted style is not supported
 
 Learn more about what we want to build with Tarn in the [project roadmap](https://github.com/aircwo-systems/tarn/blob/develop-docs/ROADMAP.md).

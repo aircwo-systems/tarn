@@ -65,6 +65,14 @@ func (h *Handler) Dispatch(w http.ResponseWriter, r *http.Request) {
 		h.untagResource(w, body)
 	case "PutEvents":
 		h.putEvents(w, body)
+	case "CreateEventBus":
+		h.createEventBus(w, body)
+	case "DescribeEventBus":
+		h.describeEventBus(w, body)
+	case "DeleteEventBus":
+		h.deleteEventBus(w, body)
+	case "ListEventBuses":
+		h.listEventBuses(w, body)
 	default:
 		log.Printf("[eventbridge] unhandled action (returning empty OK): %s", action)
 		writeJSON(w, http.StatusOK, map[string]any{})
@@ -392,7 +400,7 @@ func toRuleShape(rule *types.EventBridgeRule) map[string]any {
 		"Name":         rule.Name,
 		"Arn":          rule.Arn,
 		"State":        rule.State,
-		"EventBusName": "default",
+		"EventBusName": ruleEventBusName(rule),
 	}
 	if strings.TrimSpace(rule.ScheduleExpression) != "" {
 		shape["ScheduleExpression"] = rule.ScheduleExpression
@@ -416,6 +424,117 @@ func toRuleShape(rule *types.EventBridgeRule) map[string]any {
 }
 
 const timeRFC3339Milli = "2006-01-02T15:04:05.000Z"
+
+func ruleEventBusName(rule *types.EventBridgeRule) string {
+	if rule == nil || strings.TrimSpace(rule.EventBusName) == "" {
+		return "default"
+	}
+	return rule.EventBusName
+}
+
+func (h *Handler) createEventBus(w http.ResponseWriter, body []byte) {
+	var req struct {
+		Name        string `json:"Name"`
+		Description string `json:"Description"`
+		Tags        []struct {
+			Key   string `json:"Key"`
+			Value string `json:"Value"`
+		} `json:"Tags"`
+	}
+	if err := decodeJSON(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	tags := make(map[string]string, len(req.Tags))
+	for _, tag := range req.Tags {
+		if key := strings.TrimSpace(tag.Key); key != "" {
+			tags[key] = tag.Value
+		}
+	}
+	bus, err := h.svc.CreateEventBus(req.Name, req.Description, tags)
+	if err != nil {
+		writeSvcError(w, err)
+		return
+	}
+	out := map[string]any{"EventBusArn": bus.Arn}
+	if bus.Description != "" {
+		out["Description"] = bus.Description
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) describeEventBus(w http.ResponseWriter, body []byte) {
+	var req struct {
+		Name string `json:"Name"`
+	}
+	if err := decodeJSON(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	bus, err := h.svc.DescribeEventBus(req.Name)
+	if err != nil {
+		writeSvcError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toEventBusShape(bus))
+}
+
+func (h *Handler) deleteEventBus(w http.ResponseWriter, body []byte) {
+	var req struct {
+		Name string `json:"Name"`
+	}
+	if err := decodeJSON(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	if err := h.svc.DeleteEventBus(req.Name); err != nil {
+		writeSvcError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{})
+}
+
+func (h *Handler) listEventBuses(w http.ResponseWriter, body []byte) {
+	var req struct {
+		NamePrefix string `json:"NamePrefix"`
+		Limit      int    `json:"Limit"`
+		NextToken  string `json:"NextToken"`
+	}
+	if err := decodeJSON(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "ValidationException", err.Error())
+		return
+	}
+	buses, next, err := h.svc.ListEventBuses(req.NamePrefix, req.Limit, req.NextToken)
+	if err != nil {
+		writeSvcError(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(buses))
+	for _, bus := range buses {
+		out = append(out, toEventBusShape(bus))
+	}
+	resp := map[string]any{"EventBuses": out}
+	if next != "" {
+		resp["NextToken"] = next
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// toEventBusShape renders a bus in the AWS JSON-protocol shape, where
+// timestamps are epoch seconds.
+func toEventBusShape(bus *types.EventBridgeEventBus) map[string]any {
+	shape := map[string]any{"Name": bus.Name, "Arn": bus.Arn}
+	if bus.Description != "" {
+		shape["Description"] = bus.Description
+	}
+	if !bus.CreatedAt.IsZero() {
+		shape["CreationTime"] = float64(bus.CreatedAt.UnixMilli()) / 1000
+	}
+	if !bus.LastModifiedAt.IsZero() {
+		shape["LastModifiedTime"] = float64(bus.LastModifiedAt.UnixMilli()) / 1000
+	}
+	return shape
+}
 
 func decodeJSON(body []byte, dst any) error {
 	if len(body) == 0 {

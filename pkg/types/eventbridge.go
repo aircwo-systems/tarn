@@ -31,17 +31,52 @@ type EventBridgeRule struct {
 	Targets            []EventBridgeTarget `json:"Targets,omitempty"`
 }
 
+// EventBridgeEventBus models a custom event bus. The default bus always
+// exists and is not stored.
+type EventBridgeEventBus struct {
+	Name           string            `json:"Name"`
+	Arn            string            `json:"Arn"`
+	Description    string            `json:"Description,omitempty"`
+	Tags           map[string]string `json:"Tags,omitempty"`
+	CreatedAt      time.Time         `json:"CreatedAt"`
+	LastModifiedAt time.Time         `json:"LastModifiedAt"`
+}
+
 // EventBridgeTarget models one target attached to an EventBridge rule.
 type EventBridgeTarget struct {
-	ID               string            `json:"Id"`
-	Arn              string            `json:"Arn"`
-	RoleArn          string            `json:"RoleArn,omitempty"`
-	Input            string            `json:"Input,omitempty"`
-	InputPath        string            `json:"InputPath,omitempty"`
-	InputTransformer *InputTransformer `json:"InputTransformer,omitempty"`
-	EcsParameters    *EcsParameters    `json:"EcsParameters,omitempty"`
-	LastResult       string            `json:"LastResult,omitempty"`
-	LastInvokedAt    *time.Time        `json:"LastInvokedAt,omitempty"`
+	ID               string                       `json:"Id"`
+	Arn              string                       `json:"Arn"`
+	RoleArn          string                       `json:"RoleArn,omitempty"`
+	Input            string                       `json:"Input,omitempty"`
+	InputPath        string                       `json:"InputPath,omitempty"`
+	InputTransformer *InputTransformer            `json:"InputTransformer,omitempty"`
+	EcsParameters    *EcsParameters               `json:"EcsParameters,omitempty"`
+	SqsParameters    *SqsParameters               `json:"SqsParameters,omitempty"`
+	DeadLetterConfig *EventBridgeDeadLetterConfig `json:"DeadLetterConfig,omitempty"`
+	RetryPolicy      *RetryPolicy                 `json:"RetryPolicy,omitempty"`
+	LastResult       string                       `json:"LastResult,omitempty"`
+	LastInvokedAt    *time.Time                   `json:"LastInvokedAt,omitempty"`
+}
+
+// SqsParameters mirrors the EventBridge target shape for SQS queue targets.
+// MessageGroupId is required for FIFO queues and rejected for standard ones.
+type SqsParameters struct {
+	MessageGroupId string `json:"MessageGroupId,omitempty"`
+}
+
+// RetryPolicy is stored and echoed for Terraform/SDK parity. Tarn delivers
+// each event once; a failed delivery goes straight to the DeadLetterConfig
+// queue when one is configured.
+type RetryPolicy struct {
+	MaximumRetryAttempts     *int `json:"MaximumRetryAttempts,omitempty"`
+	MaximumEventAgeInSeconds *int `json:"MaximumEventAgeInSeconds,omitempty"`
+}
+
+// EventBridgeDeadLetterConfig names the SQS queue that receives events
+// EventBridge could not deliver to a target. It is distinct from Lambda's
+// DeadLetterConfig, whose wire field is TargetArn rather than Arn.
+type EventBridgeDeadLetterConfig struct {
+	Arn string `json:"Arn,omitempty"`
 }
 
 // EcsParameters describes the ECS RunTask request associated with an

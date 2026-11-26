@@ -580,3 +580,113 @@ func jsonResponse(status int, body string) (*http.Response, error) {
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}, nil
 }
+
+// eventBridgeFlushRecorder answers the overview and records EventBridge and
+// SQS deletes in order, with the bus each EventBridge call addressed.
+func eventBridgeFlushRecorder(t *testing.T, endpoint, overview string, calls *[]string) http.RoundTripper {
+	t.Helper()
+	return roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.String() == endpoint+"/_tarn/admin/overview":
+			return jsonResponse(http.StatusOK, overview)
+		case r.Method == http.MethodPost && r.URL.String() == endpoint+"/" && strings.HasPrefix(r.Header.Get("X-Amz-Target"), "AWSEvents."):
+			var body struct {
+				Name         string `json:"Name"`
+				Rule         string `json:"Rule"`
+				EventBusName string `json:"EventBusName"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			action := strings.TrimPrefix(r.Header.Get("X-Amz-Target"), "AWSEvents.")
+			*calls = append(*calls, action+":"+body.EventBusName+":"+body.Rule+body.Name)
+			return jsonResponse(http.StatusOK, `{}`)
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.String(), endpoint+"/000000000000/"):
+			*calls = append(*calls, "DeleteQueue:"+strings.TrimPrefix(r.URL.String(), endpoint+"/000000000000/"))
+			return jsonResponse(http.StatusOK, `<DeleteQueueResponse/>`)
+		}
+		return jsonResponse(http.StatusNotFound, `{"Message":"not found"}`)
+	})
+}
+
+func TestRunFlushRemovesEventBridgeRulesOnEveryBusThenBuses(t *testing.T) {
+	const endpoint = "http://tarn.test"
+	var calls []string
+	prevClient := cliHTTPClient
+	cliHTTPClient = &http.Client{Transport: eventBridgeFlushRecorder(t, endpoint, `{
+		"config":{"accountId":"000000000000"},
+		"queues":[{"name":"signins","url":"`+endpoint+`/000000000000/signins","tags":{}}],
+		"eventBridgeRules":[
+			{"name":"users","eventBusName":"default","targets":[{"id":"q","arn":"arn:aws:sqs:us-east-1:000000000000:signins"}]},
+			{"name":"users","eventBusName":"domain-events","targets":[{"id":"q","arn":"arn:aws:sqs:us-east-1:000000000000:signins"}]}
+		],
+		"eventBuses":[{"name":"domain-events"}]
+	}`, &calls)}
+	defer func() { cliHTTPClient = prevClient }()
+	t.Setenv("TARN_ENDPOINT", endpoint)
+
+	var out bytes.Buffer
+	if err := runFlush(&cobra.Command{Use: "tarn"}, &out, flushOptions{}); err != nil {
+		t.Fatalf("runFlush: %v\n%s", err, out.String())
+	}
+
+	got := strings.Join(calls, ",")
+	want := []string{
+		"RemoveTargets:default:users",
+		"DeleteRule:default:users",
+		"RemoveTargets:domain-events:users",
+		"DeleteRule:domain-events:users",
+		"DeleteEventBus::domain-events",
+		"DeleteQueue:signins",
+	}
+	last := -1
+	for _, call := range want {
+		idx := strings.Index(got, call)
+		if idx < 0 {
+			t.Fatalf("missing %q in %s", call, got)
+		}
+		if idx < last {
+			t.Fatalf("%q out of order in %s", call, got)
+		}
+		last = idx
+	}
+	if !strings.Contains(out.String(), "Deleted EventBridge Rule: domain-events/users") || !strings.Contains(out.String(), "Deleted EventBridge Bus: domain-events") {
+		t.Fatalf("unexpected output:\n%s", out.String())
+	}
+}
+
+func TestRunFlushWithTagSelectsRulesTargetingFlushedQueuesAndTaggedBuses(t *testing.T) {
+	const endpoint = "http://tarn.test"
+	var calls []string
+	prevClient := cliHTTPClient
+	cliHTTPClient = &http.Client{Transport: eventBridgeFlushRecorder(t, endpoint, `{
+		"config":{"accountId":"000000000000"},
+		"queues":[
+			{"name":"r10-q","url":"`+endpoint+`/000000000000/r10-q","tags":{"feature":"r10"}},
+			{"name":"r9-q","url":"`+endpoint+`/000000000000/r9-q","tags":{"feature":"r9"}}
+		],
+		"eventBridgeRules":[
+			{"name":"to-r10","eventBusName":"default","targets":[{"id":"q","arn":"arn:aws:sqs:us-east-1:000000000000:r10-q"}]},
+			{"name":"to-r9","eventBusName":"default","targets":[{"id":"q","arn":"arn:aws:sqs:us-east-1:000000000000:r9-q"}]},
+			{"name":"on-r10-bus","eventBusName":"r10-bus","targets":[]},
+			{"name":"on-r9-bus","eventBusName":"r9-bus","targets":[]}
+		],
+		"eventBuses":[{"name":"r10-bus","tags":{"feature":"r10"}},{"name":"r9-bus","tags":{"feature":"r9"}}]
+	}`, &calls)}
+	defer func() { cliHTTPClient = prevClient }()
+	t.Setenv("TARN_ENDPOINT", endpoint)
+
+	var out bytes.Buffer
+	if err := runFlush(&cobra.Command{Use: "tarn"}, &out, flushOptions{TagFilter: "feature=r10"}); err != nil {
+		t.Fatalf("runFlush: %v\n%s", err, out.String())
+	}
+	got := strings.Join(calls, ",")
+	for _, want := range []string{"DeleteRule:default:to-r10", "DeleteRule:r10-bus:on-r10-bus", "DeleteEventBus::r10-bus", "DeleteQueue:r10-q"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %s", want, got)
+		}
+	}
+	for _, unwanted := range []string{"to-r9", "on-r9-bus", "r9-bus", "r9-q"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("unexpected %q in %s", unwanted, got)
+		}
+	}
+}

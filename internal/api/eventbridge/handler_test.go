@@ -203,3 +203,144 @@ func TestUnknownActionReturnsEmptyOK(t *testing.T) {
 		t.Fatalf("expected empty json object response, got: %q", rec.Body.String())
 	}
 }
+
+func TestPutTargetsSQSWireShapeRoundTrip(t *testing.T) {
+	h := newTestHandler(t)
+	if rec := invoke(t, h, "PutRule", map[string]any{"Name": "users", "EventPattern": `{"source":["app.users"]}`}); rec.Code != http.StatusOK {
+		t.Fatalf("PutRule status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	put := invoke(t, h, "PutTargets", map[string]any{
+		"Rule": "users",
+		"Targets": []map[string]any{
+			{
+				"Id":               "audit",
+				"Arn":              "arn:aws:sqs:us-east-1:000000000000:audit.fifo",
+				"SqsParameters":    map[string]any{"MessageGroupId": "users"},
+				"DeadLetterConfig": map[string]any{"Arn": "arn:aws:sqs:us-east-1:000000000000:audit-dlq"},
+				"RetryPolicy":      map[string]any{"MaximumRetryAttempts": 0, "MaximumEventAgeInSeconds": 60},
+			},
+			{"Id": "fifo-missing-group", "Arn": "arn:aws:sqs:us-east-1:000000000000:other.fifo"},
+		},
+	})
+	if put.Code != http.StatusOK {
+		t.Fatalf("PutTargets status=%d body=%s", put.Code, put.Body.String())
+	}
+	var putBody struct {
+		FailedEntryCount int `json:"FailedEntryCount"`
+		FailedEntries    []struct {
+			TargetID  string `json:"TargetId"`
+			ErrorCode string `json:"ErrorCode"`
+		} `json:"FailedEntries"`
+	}
+	if err := json.NewDecoder(put.Body).Decode(&putBody); err != nil {
+		t.Fatal(err)
+	}
+	if putBody.FailedEntryCount != 1 || putBody.FailedEntries[0].TargetID != "fifo-missing-group" || putBody.FailedEntries[0].ErrorCode != "ValidationException" {
+		t.Fatalf("unexpected failed entries: %+v", putBody)
+	}
+
+	list := invoke(t, h, "ListTargetsByRule", map[string]any{"Rule": "users"})
+	var listBody struct {
+		Targets []map[string]any `json:"Targets"`
+	}
+	if err := json.NewDecoder(list.Body).Decode(&listBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(listBody.Targets) != 1 {
+		t.Fatalf("targets = %+v", listBody.Targets)
+	}
+	target := listBody.Targets[0]
+	if sqsParams, _ := target["SqsParameters"].(map[string]any); sqsParams["MessageGroupId"] != "users" {
+		t.Fatalf("SqsParameters = %v", target["SqsParameters"])
+	}
+	if dlq, _ := target["DeadLetterConfig"].(map[string]any); dlq["Arn"] != "arn:aws:sqs:us-east-1:000000000000:audit-dlq" {
+		t.Fatalf("DeadLetterConfig = %v", target["DeadLetterConfig"])
+	}
+	if retry, _ := target["RetryPolicy"].(map[string]any); retry["MaximumRetryAttempts"] != float64(0) || retry["MaximumEventAgeInSeconds"] != float64(60) {
+		t.Fatalf("RetryPolicy = %v", target["RetryPolicy"])
+	}
+
+	byTarget := invoke(t, h, "ListRuleNamesByTarget", map[string]any{"TargetArn": "arn:aws:sqs:us-east-1:000000000000:audit.fifo"})
+	var namesBody struct {
+		RuleNames []string `json:"RuleNames"`
+	}
+	if err := json.NewDecoder(byTarget.Body).Decode(&namesBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(namesBody.RuleNames) != 1 || namesBody.RuleNames[0] != "users" {
+		t.Fatalf("RuleNames = %v", namesBody.RuleNames)
+	}
+}
+
+func TestEventBusLifecycleWireShape(t *testing.T) {
+	h := newTestHandler(t)
+
+	create := invoke(t, h, "CreateEventBus", map[string]any{
+		"Name":        "domain-events",
+		"Description": "identity events",
+		"Tags":        []map[string]string{{"Key": "team", "Value": "identity"}},
+	})
+	if create.Code != http.StatusOK {
+		t.Fatalf("CreateEventBus status=%d body=%s", create.Code, create.Body.String())
+	}
+	var createBody struct {
+		EventBusArn string `json:"EventBusArn"`
+	}
+	if err := json.NewDecoder(create.Body).Decode(&createBody); err != nil {
+		t.Fatal(err)
+	}
+	if createBody.EventBusArn != "arn:aws:events:us-east-1:000000000000:event-bus/domain-events" {
+		t.Fatalf("EventBusArn = %q", createBody.EventBusArn)
+	}
+
+	describe := invoke(t, h, "DescribeEventBus", map[string]any{"Name": "domain-events"})
+	var describeBody map[string]any
+	if err := json.NewDecoder(describe.Body).Decode(&describeBody); err != nil {
+		t.Fatal(err)
+	}
+	if describeBody["Name"] != "domain-events" || describeBody["Arn"] != createBody.EventBusArn || describeBody["Description"] != "identity events" {
+		t.Fatalf("DescribeEventBus = %v", describeBody)
+	}
+	if _, ok := describeBody["CreationTime"].(float64); !ok {
+		t.Fatalf("CreationTime should be epoch seconds, got %T", describeBody["CreationTime"])
+	}
+
+	tags := invoke(t, h, "ListTagsForResource", map[string]any{"ResourceARN": createBody.EventBusArn})
+	if !bytes.Contains(tags.Body.Bytes(), []byte(`"Key":"team"`)) {
+		t.Fatalf("bus tags = %s", tags.Body.String())
+	}
+
+	if rec := invoke(t, h, "PutRule", map[string]any{"Name": "users", "EventPattern": `{"source":["app"]}`, "EventBusName": "domain-events"}); rec.Code != http.StatusOK {
+		t.Fatalf("PutRule status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rule := invoke(t, h, "DescribeRule", map[string]any{"Name": "users", "EventBusName": "domain-events"})
+	var ruleBody map[string]any
+	if err := json.NewDecoder(rule.Body).Decode(&ruleBody); err != nil {
+		t.Fatal(err)
+	}
+	if ruleBody["EventBusName"] != "domain-events" || ruleBody["Arn"] != "arn:aws:events:us-east-1:000000000000:rule/domain-events/users" {
+		t.Fatalf("DescribeRule = %v", ruleBody)
+	}
+
+	list := invoke(t, h, "ListEventBuses", map[string]any{})
+	var listBody struct {
+		EventBuses []map[string]any `json:"EventBuses"`
+	}
+	if err := json.NewDecoder(list.Body).Decode(&listBody); err != nil {
+		t.Fatal(err)
+	}
+	if len(listBody.EventBuses) != 2 || listBody.EventBuses[0]["Name"] != "default" || listBody.EventBuses[1]["Name"] != "domain-events" {
+		t.Fatalf("ListEventBuses = %v", listBody.EventBuses)
+	}
+
+	if rec := invoke(t, h, "DeleteEventBus", map[string]any{"Name": "domain-events"}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("DeleteEventBus with rules status=%d", rec.Code)
+	}
+	if rec := invoke(t, h, "DeleteRule", map[string]any{"Name": "users", "EventBusName": "domain-events"}); rec.Code != http.StatusOK {
+		t.Fatalf("DeleteRule status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := invoke(t, h, "DeleteEventBus", map[string]any{"Name": "domain-events"}); rec.Code != http.StatusOK {
+		t.Fatalf("DeleteEventBus status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}

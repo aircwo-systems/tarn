@@ -148,6 +148,7 @@ type overviewResponse struct {
 	DynamoDBStreams     []dynamodbStreamSummary  `json:"dynamodbStreams,omitempty"`
 	EventSourceMappings []esmSummary             `json:"eventSourceMappings"`
 	EventBridgeRules    []eventBridgeRuleSummary `json:"eventBridgeRules,omitempty"`
+	EventBuses          []eventBusSummary        `json:"eventBuses,omitempty"`
 	StateMachines       []stateMachineSummary    `json:"stateMachines,omitempty"`
 	CognitoPools        []cognitosvc.PoolSummary `json:"cognitoPools,omitempty"`
 	KMSKeys             []kmsKeySummary          `json:"kmsKeys,omitempty"`
@@ -343,11 +344,21 @@ type eventBridgeTargetSummary struct {
 	InputPathsMap  map[string]string `json:"inputPathsMap,omitempty"`
 	InputTemplate  string            `json:"inputTemplate,omitempty"`
 	TaskDefinition string            `json:"taskDefinition,omitempty"`
+	MessageGroupID string            `json:"messageGroupId,omitempty"`
+	DeadLetterArn  string            `json:"deadLetterArn,omitempty"`
+}
+
+type eventBusSummary struct {
+	Name        string            `json:"name"`
+	Arn         string            `json:"arn"`
+	Description string            `json:"description,omitempty"`
+	Tags        map[string]string `json:"tags,omitempty"`
 }
 
 type eventBridgeRuleSummary struct {
 	Name               string                     `json:"name"`
 	Arn                string                     `json:"arn"`
+	EventBusName       string                     `json:"eventBusName,omitempty"`
 	ScheduleExpression string                     `json:"scheduleExpression"`
 	EventPattern       string                     `json:"eventPattern,omitempty"`
 	State              string                     `json:"state"`
@@ -641,9 +652,7 @@ func (h *Handler) ResourceCounts() map[string]int {
 		add("stateMachines", len(h.stepfunctions.ListStateMachines()))
 	}
 	if h.eventbridge != nil {
-		if rules, _, err := h.eventbridge.ListRules("", "", 1000, ""); err == nil {
-			add("rules", len(rules))
-		}
+		add("rules", len(h.eventbridge.AllRules()))
 	}
 	if h.apigw != nil {
 		add("apis", len(h.apigw.ListAPIs()))
@@ -806,9 +815,13 @@ func (h *Handler) buildOverview() ([]byte, error) {
 	if h.esm != nil {
 		esmMappings = h.esm.ListMappings("", "")
 	}
+	// Every bus's rules: flush reads this overview, so a rule hidden here
+	// would survive a flush.
 	var eventBridgeRules []*types.EventBridgeRule
+	var eventBuses []*types.EventBridgeEventBus
 	if h.eventbridge != nil {
-		eventBridgeRules, _, _ = h.eventbridge.ListRules("", "", 500, "")
+		eventBridgeRules = h.eventbridge.AllRules()
+		eventBuses = h.eventbridge.CustomEventBuses()
 	}
 	var stateMachines []*types.StateMachine
 	if h.stepfunctions != nil {
@@ -928,20 +941,35 @@ func (h *Handler) buildOverview() ([]byte, error) {
 			if target.EcsParameters != nil {
 				summary.TaskDefinition = target.EcsParameters.TaskDefinitionArn
 			}
+			if target.SqsParameters != nil {
+				summary.MessageGroupID = target.SqsParameters.MessageGroupId
+			}
+			if target.DeadLetterConfig != nil {
+				summary.DeadLetterArn = target.DeadLetterConfig.Arn
+			}
 			targets = append(targets, summary)
 			targetName := lambdaNameFromARNOrName(target.Arn)
+			connectionKind := "eventbridge-lambda"
+			if queueName, ok := sqsQueueNameFromARN(target.Arn); ok {
+				targetName, connectionKind = queueName, "eventbridge-sqs"
+			}
 			resp.Connections = append(resp.Connections, infraConnection{
 				SourceFunction: rule.Name,
 				TargetID:       targetName,
 				TargetName:     targetName,
-				TargetKind:     "eventbridge-lambda",
+				TargetKind:     connectionKind,
 				Evidence:       "rule-target",
 				Source:         target.ID,
 			})
 		}
+		busName := rule.EventBusName
+		if busName == "" {
+			busName = "default"
+		}
 		resp.EventBridgeRules = append(resp.EventBridgeRules, eventBridgeRuleSummary{
 			Name:               rule.Name,
 			Arn:                rule.Arn,
+			EventBusName:       busName,
 			ScheduleExpression: rule.ScheduleExpression,
 			EventPattern:       rule.EventPattern,
 			State:              rule.State,
@@ -952,7 +980,10 @@ func (h *Handler) buildOverview() ([]byte, error) {
 			Targets:            targets,
 		})
 	}
-	sort.Slice(resp.EventBridgeRules, func(i, j int) bool { return resp.EventBridgeRules[i].Name < resp.EventBridgeRules[j].Name })
+	sort.SliceStable(resp.EventBridgeRules, func(i, j int) bool { return resp.EventBridgeRules[i].Name < resp.EventBridgeRules[j].Name })
+	for _, bus := range eventBuses {
+		resp.EventBuses = append(resp.EventBuses, eventBusSummary{Name: bus.Name, Arn: bus.Arn, Description: bus.Description, Tags: bus.Tags})
+	}
 
 	// Step Functions state machine summaries (with their recent executions).
 	for _, sm := range stateMachines {
@@ -2984,7 +3015,8 @@ func (h *Handler) FireEventBridgeRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		RuleName string `json:"ruleName"`
+		RuleName     string `json:"ruleName"`
+		EventBusName string `json:"eventBusName"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "bad request: "+err.Error())
@@ -2996,7 +3028,14 @@ func (h *Handler) FireEventBridgeRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.eventbridge.FireRuleNow(req.RuleName, map[string]string{"trigger": "manual"})
+	meta := map[string]string{"trigger": "manual"}
+	var result *eventbridgesvc.FireResult
+	var err error
+	if strings.TrimSpace(req.EventBusName) != "" {
+		result, err = h.eventbridge.FireRuleNowOnBus(req.EventBusName, req.RuleName, meta)
+	} else {
+		result, err = h.eventbridge.FireRuleNow(req.RuleName, meta)
+	}
 	if err != nil {
 		if se, ok := err.(*eventbridgesvc.ServiceError); ok {
 			writeError(w, se.StatusCode(), se.Message)
@@ -3190,6 +3229,15 @@ func queueNameFromEndpoint(endpoint string) string {
 		return endpoint[idx+1:]
 	}
 	return endpoint
+}
+
+// sqsQueueNameFromARN returns the queue name of arn:aws:sqs:<r>:<a>:<name>.
+func sqsQueueNameFromARN(arn string) (string, bool) {
+	parts := strings.SplitN(strings.TrimSpace(arn), ":", 6)
+	if len(parts) != 6 || parts[0] != "arn" || parts[2] != "sqs" || parts[5] == "" {
+		return "", false
+	}
+	return parts[5], true
 }
 
 func lambdaNameFromARNOrName(value string) string {
@@ -3807,6 +3855,8 @@ func (h *Handler) collectGateways(codeSHAs map[string]string) (summaries []gatew
 					detail.IntegrationTarget = "sqs:" + ig.SQSQueueName
 				case ig.LambdaFunctionName != "":
 					detail.IntegrationTarget = "lambda:" + ig.LambdaFunctionName
+				case ig.IntegrationType == "HTTP_PROXY":
+					detail.IntegrationTarget = ig.IntegrationURI
 				}
 				if len(ig.RequestParameters) > 0 {
 					detail.RequestParameters = ig.RequestParameters

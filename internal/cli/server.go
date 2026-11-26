@@ -296,6 +296,8 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	eventbridgeSvc.SetTraceStore(shared.traceStore)
 	eventbridgeSvc.SetCollector(shared.collector)
 	eventbridgeSvc.SetTaskRunner(ecsRunner)
+	// SQS queue targets and target dead-letter queues.
+	eventbridgeSvc.SetSQSSender(sqsSvc)
 
 	// Step Functions
 	stepFunctionsStore := stepfunctionssvc.NewStore(acctCfg)

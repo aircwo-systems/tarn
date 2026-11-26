@@ -70,6 +70,7 @@ func newTestBundleWithTraces(t *testing.T, cfg *config.Config, traceStore *trace
 	esmSvc := eventsource.NewService(cfg, esmStore, nil, nil, nil)
 	ebStore := eventbridge.NewStore(cfg)
 	ebSvc := eventbridge.NewService(cfg, ebStore, lambdaSvc)
+	ebSvc.SetSQSSender(sqsSvc)
 	if err := ebSvc.Init(); err != nil {
 		t.Fatalf("init eventbridge service: %v", err)
 	}
