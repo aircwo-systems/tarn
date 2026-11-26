@@ -95,6 +95,12 @@ func (s *Service) LogSystemEvent(level LogLevel, message string) {
 // LogAPIRequest writes an event to the /tarn/api log group. JSON-protocol calls
 // all POST to "/", so target (the X-Amz-Target operation) names the call.
 func (s *Service) LogAPIRequest(method, path string, status int, duration time.Duration, target string) {
+	s.LogAPIRequestWithFields(method, path, status, duration, target, "")
+}
+
+// LogAPIRequestWithFields is LogAPIRequest with extra " key=value" fields
+// appended to the line, such as an API Gateway proxy's upstream and status.
+func (s *Service) LogAPIRequestWithFields(method, path string, status int, duration time.Duration, target, fields string) {
 	level := LevelINFO
 	if status >= 500 {
 		level = LevelERROR
@@ -106,6 +112,7 @@ func (s *Service) LogAPIRequest(method, path string, status int, duration time.D
 	if target != "" {
 		msg += " target=" + target
 	}
+	msg += fields
 	s.store.PutLogEvents("/tarn/api", "requests", []LogEvent{
 		{
 			Timestamp: time.Now().UTC(),

@@ -4,16 +4,19 @@ import "time"
 
 // APIGatewayAPI represents an API Gateway HTTP API (v2).
 type APIGatewayAPI struct {
-	APIID                    string            `json:"apiId"`
-	Name                     string            `json:"name"`
-	Description              string            `json:"description,omitempty"`
-	ProtocolType             string            `json:"protocolType"`
-	RouteSelectionExpression string            `json:"routeSelectionExpression,omitempty"`
-	APIEndpoint              string            `json:"apiEndpoint,omitempty"`
-	APIArn                   string            `json:"apiArn,omitempty"`
-	Tags                     map[string]string `json:"tags,omitempty"`
-	CorsConfiguration        *APIGatewayCORS   `json:"corsConfiguration,omitempty"`
-	CreatedDate              time.Time         `json:"createdDate"`
+	APIID                    string `json:"apiId"`
+	Name                     string `json:"name"`
+	Description              string `json:"description,omitempty"`
+	ProtocolType             string `json:"protocolType"`
+	RouteSelectionExpression string `json:"routeSelectionExpression,omitempty"`
+	// APIKeySelectionExpression is reported for Terraform parity; HTTP APIs
+	// have no API keys.
+	APIKeySelectionExpression string            `json:"apiKeySelectionExpression,omitempty"`
+	APIEndpoint               string            `json:"apiEndpoint,omitempty"`
+	APIArn                    string            `json:"apiArn,omitempty"`
+	Tags                      map[string]string `json:"tags,omitempty"`
+	CorsConfiguration         *APIGatewayCORS   `json:"corsConfiguration,omitempty"`
+	CreatedDate               time.Time         `json:"createdDate"`
 }
 
 // APIGatewayCORS is an HTTP API's corsConfiguration. When set, API Gateway
@@ -35,6 +38,7 @@ type APIGatewayIntegration struct {
 	IntegrationType      string            `json:"integrationType"`
 	IntegrationMethod    string            `json:"integrationMethod,omitempty"`
 	IntegrationURI       string            `json:"integrationUri"`
+	ConnectionType       string            `json:"connectionType,omitempty"`
 	PayloadFormatVersion string            `json:"payloadFormatVersion,omitempty"`
 	TimeoutInMillis      int               `json:"timeoutInMillis,omitempty"`
 	RequestParameters    map[string]string `json:"requestParameters,omitempty"`
@@ -48,12 +52,14 @@ type APIGatewayIntegration struct {
 
 // APIGatewayRoute represents an API route.
 type APIGatewayRoute struct {
-	RouteID     string    `json:"routeId"`
-	APIID       string    `json:"apiId,omitempty"`
-	RouteKey    string    `json:"routeKey"`
-	Target      string    `json:"target,omitempty"`
-	RouteArn    string    `json:"routeArn,omitempty"`
-	CreatedDate time.Time `json:"createdDate"`
+	RouteID  string `json:"routeId"`
+	APIID    string `json:"apiId,omitempty"`
+	RouteKey string `json:"routeKey"`
+	Target   string `json:"target,omitempty"`
+	// AuthorizationType is always NONE: Tarn does not run route authorizers.
+	AuthorizationType string    `json:"authorizationType,omitempty"`
+	RouteArn          string    `json:"routeArn,omitempty"`
+	CreatedDate       time.Time `json:"createdDate"`
 }
 
 // APIGatewayStage represents an API stage.

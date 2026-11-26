@@ -75,6 +75,37 @@ Resources are isolated per account — separate queues, functions, secrets, buck
   </div>
 </div>
 
+## HTTP API in front of a service
+
+An `HTTP_PROXY` integration forwards requests to any HTTP URL, including an ECS service running in Tarn through its `/_ecs/` proxy.
+
+```hcl
+resource "aws_apigatewayv2_api" "admin" {
+  name          = "admin-gateway"
+  protocol_type = "HTTP"
+}
+
+resource "aws_apigatewayv2_integration" "identity" {
+  api_id               = aws_apigatewayv2_api.admin.id
+  integration_type     = "HTTP_PROXY"
+  integration_method   = "ANY"
+  integration_uri      = "http://127.0.0.1:4566/_ecs/000000000000/admin/identity/admin/{proxy}"
+  timeout_milliseconds = 5000
+
+  request_parameters = {
+    "overwrite:header.x-api-key" = var.gateway_key
+  }
+}
+
+resource "aws_apigatewayv2_route" "admin" {
+  api_id    = aws_apigatewayv2_api.admin.id
+  route_key = "ANY /admin/{proxy+}"
+  target    = "integrations/${aws_apigatewayv2_integration.identity.id}"
+}
+```
+
+In AWS the same layout usually uses a VPC link, which Tarn does not have yet. See [API Gateway](/services/api-gateway#http-api-with-an-http-backend) for how Tarn forwards requests and maps parameters.
+
 ## Production Compatibility
 
 Tarn includes compatibility stubs for a number of Terraform-driven control-plane actions, especially around IAM, SNS, SQS, DynamoDB, Secrets Manager, and EventBridge. This helps production-shaped `.tf` files apply with fewer local-only changes.

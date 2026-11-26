@@ -157,6 +157,10 @@ type sharedDeps struct {
 	// cognitoIndex maps user pool and client IDs to accounts. Each account's
 	// Cognito service registers its pools as it loads.
 	cognitoIndex *cognito.Index
+	// localDispatch serves API Gateway HTTP_PROXY calls addressed to Tarn's
+	// own listener in process. The server installs its handler after the
+	// default account is built.
+	localDispatch *apigateway.LocalDispatcher
 }
 
 // initAccountBundle creates all per-account services and handlers.
@@ -269,6 +273,7 @@ func initAccountBundle(acctCfg *config.Config, shared *sharedDeps) (*api.Account
 	}
 	gatewaySvc.SetTraceStore(shared.traceStore)
 	gatewaySvc.SetCollector(shared.collector)
+	gatewaySvc.SetLocalDispatcher(shared.localDispatch)
 
 	// API Gateway v1
 	gatewayV1Svc := apigatewayv1.NewService(acctCfg, lambdaSvc, apigatewayv1.SQSSendFunc(sqsSendFn))
@@ -545,14 +550,15 @@ func startServer(cfg *config.Config) error {
 	}
 
 	shared := &sharedDeps{
-		eng:          eng,
-		pool:         pool,
-		traceStore:   traceStore,
-		collector:    collector,
-		infraSvc:     infraSvc,
-		redisSvc:     redisSvc,
-		vault:        vault,
-		cognitoIndex: cognito.NewIndex(),
+		eng:           eng,
+		pool:          pool,
+		traceStore:    traceStore,
+		collector:     collector,
+		infraSvc:      infraSvc,
+		redisSvc:      redisSvc,
+		vault:         vault,
+		cognitoIndex:  cognito.NewIndex(),
+		localDispatch: apigateway.NewLocalDispatcher(cfg),
 	}
 
 	// Build the per-account factory closure. It captures all shared deps.
@@ -637,6 +643,7 @@ func startServer(cfg *config.Config) error {
 	server.SetTraceStore(shared.traceStore)
 	server.SetConnections(conns)
 	server.SetCognitoIndex(shared.cognitoIndex)
+	shared.localDispatch.SetHandler(server.InProcessHandler())
 	awsConnections := api.NewAWSConnections(cfg, vault, nil)
 	defer awsConnections.Close()
 	server.SetAWSConnections(awsConnections)

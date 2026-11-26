@@ -1,10 +1,11 @@
 # AWS Terraform compatibility check
 
 This stack checks AWS API compatibility through Terraform and boto3. It pins
-Terraform's AWS provider to 6.66.0 and creates 13 resources with default tags.
+Terraform's AWS provider to 6.66.0 and creates 16 resources with default tags.
 It covers log retention, Lambda configuration, event mappings, S3 queue
 notifications, OpenAPI import, API keys and usage plans. A generic message API
-forwards requests to SQS.
+forwards requests to SQS. An HTTP API with an `HTTP_PROXY` integration and a
+`request_parameters` block forwards requests to Tarn's own health endpoint.
 
 Use an isolated Tarn server. The fixture uses example account `123456789012`,
 region `eu-west-2`, resource names beginning with `tarn-compatibility` and port 14567.
@@ -33,8 +34,8 @@ terraform destroy -auto-approve
 
 The second plan must exit 0 with `No changes`. `smoke.py` checks a URL-encoded S3
 object event arriving in SQS, rejection of missing and wrong API keys, an
-authorised REST request arriving in SQS, and real ARM64 execution with an
-environment variable. It removes its test messages and object before destroy.
+authorised REST request arriving in SQS, a request through the HTTP API's
+`HTTP_PROXY` integration, and real ARM64 execution with an environment variable. It removes its test messages and object before destroy.
 
 For another local port, pass the same endpoint to both tools:
 

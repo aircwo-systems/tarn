@@ -118,6 +118,8 @@ func (h *Handler) CreateIntegration(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		IntegrationType      string            `json:"integrationType"`
 		IntegrationURI       string            `json:"integrationUri"`
+		IntegrationMethod    string            `json:"integrationMethod"`
+		ConnectionType       string            `json:"connectionType"`
 		PayloadFormatVersion string            `json:"payloadFormatVersion"`
 		TimeoutInMillis      int               `json:"timeoutInMillis"`
 		RequestParameters    map[string]string `json:"requestParameters"`
@@ -130,6 +132,8 @@ func (h *Handler) CreateIntegration(w http.ResponseWriter, r *http.Request) {
 	integration, err := h.svc.CreateIntegration(apiID, apisvc.IntegrationCreateInput{
 		IntegrationType:      req.IntegrationType,
 		IntegrationURI:       req.IntegrationURI,
+		IntegrationMethod:    req.IntegrationMethod,
+		ConnectionType:       req.ConnectionType,
 		PayloadFormatVersion: req.PayloadFormatVersion,
 		TimeoutInMillis:      req.TimeoutInMillis,
 		RequestParameters:    req.RequestParameters,
@@ -176,6 +180,8 @@ func (h *Handler) UpdateIntegration(w http.ResponseWriter, r *http.Request) {
 	integrationID := r.PathValue("integrationId")
 	var req struct {
 		IntegrationURI       *string           `json:"integrationUri"`
+		IntegrationMethod    *string           `json:"integrationMethod"`
+		ConnectionType       *string           `json:"connectionType"`
 		PayloadFormatVersion *string           `json:"payloadFormatVersion"`
 		TimeoutInMillis      *int              `json:"timeoutInMillis"`
 		RequestParameters    map[string]string `json:"requestParameters"`
@@ -187,6 +193,8 @@ func (h *Handler) UpdateIntegration(w http.ResponseWriter, r *http.Request) {
 
 	integration, err := h.svc.UpdateIntegration(apiID, integrationID, apisvc.IntegrationUpdateInput{
 		IntegrationURI:       req.IntegrationURI,
+		IntegrationMethod:    req.IntegrationMethod,
+		ConnectionType:       req.ConnectionType,
 		PayloadFormatVersion: req.PayloadFormatVersion,
 		TimeoutInMillis:      req.TimeoutInMillis,
 		RequestParameters:    req.RequestParameters,
@@ -422,9 +430,17 @@ func (h *Handler) Invoke(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	body, err := io.ReadAll(r.Body)
+	// Stop reading at API Gateway's payload limit rather than buffering an
+	// upload of any size.
+	body, err := io.ReadAll(io.LimitReader(r.Body, apisvc.MaxPayloadBytes+1))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "BadRequestException", "failed to read request body")
+		return
+	}
+	if len(body) > apisvc.MaxPayloadBytes {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": apisvc.RequestTooLargeMessage})
 		return
 	}
 

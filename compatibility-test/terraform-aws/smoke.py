@@ -78,6 +78,26 @@ def check(endpoint):
     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=messages[0]["ReceiptHandle"])
     print("PASS key rejection, authorised REST request -> SQS")
 
+    http_api = next(
+        item for item in boto3.client("apigatewayv2", **credentials).get_apis()["Items"]
+        if item["Name"] == "tarn-compatibility-proxy"
+    )
+    # The integration URL is Tarn's own listener, so Tarn serves it in process.
+    # The SigV4-shaped header routes the call to the fixture's account.
+    request = urllib.request.Request(
+        f"{http_api['ApiEndpoint']}/tarn/health",
+        headers={
+            "Authorization": (
+                "AWS4-HMAC-SHA256 Credential=123456789012/20261015/"
+                "eu-west-2/execute-api/aws4_request, SignedHeaders=host, Signature=0"
+            ),
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        assert response.status == 200, response.status
+        assert json.load(response)["status"] == "running"
+    print("PASS HTTP API HTTP_PROXY integration -> Tarn health endpoint")
+
     result = functions.invoke(FunctionName="tarn-compatibility", Payload=b'{"probe":1}')
     payload = json.load(result["Payload"])
     assert not result.get("FunctionError"), payload

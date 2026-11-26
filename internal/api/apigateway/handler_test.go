@@ -161,7 +161,7 @@ func TestRejectUnsupportedProtocolAndIntegrationType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create api: %v", err)
 	}
-	badIntegrationReq := httptest.NewRequest(http.MethodPost, "/v2/apis/"+api.APIID+"/integrations", bytes.NewBufferString(`{"IntegrationType":"HTTP_PROXY","IntegrationUri":"https://example.com"}`))
+	badIntegrationReq := httptest.NewRequest(http.MethodPost, "/v2/apis/"+api.APIID+"/integrations", bytes.NewBufferString(`{"IntegrationType":"HTTP","IntegrationUri":"https://example.com"}`))
 	badIntegrationReq.SetPathValue("apiId", api.APIID)
 	badIntegrationRec := httptest.NewRecorder()
 	h.CreateIntegration(badIntegrationRec, badIntegrationReq)

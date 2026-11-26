@@ -29,6 +29,8 @@ const (
 	integrationTypeAWS              = "AWS"
 	defaultPayloadFormatVersion     = "2.0"
 	defaultRouteSelectionExpression = "$request.method $request.path"
+	// defaultAPIKeySelectionExpression is the only value AWS accepts for HTTP APIs.
+	defaultAPIKeySelectionExpression = "$request.header.x-api-key"
 )
 
 var stageNamePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,128}$`)
@@ -49,6 +51,10 @@ type Service struct {
 	store      *Store
 	traceStore *tracesvc.Store
 	collector  *tracesvc.Collector
+	// httpTransport carries HTTP_PROXY integration calls; local serves the
+	// ones addressed to Tarn's own listener in process.
+	httpTransport *http.Transport
+	local         *LocalDispatcher
 }
 
 // Flush forces an immediate synchronous disk write (for tests).
@@ -59,6 +65,10 @@ func (s *Service) SetTraceStore(ts *tracesvc.Store) { s.traceStore = ts }
 
 // SetCollector attaches a trace collector so sub-spans during lambda invocations are captured.
 func (s *Service) SetCollector(c *tracesvc.Collector) { s.collector = c }
+
+// SetLocalDispatcher lets HTTP_PROXY integrations whose URL is Tarn's own
+// listener run in process.
+func (s *Service) SetLocalDispatcher(d *LocalDispatcher) { s.local = d }
 
 // APIUpdateInput contains mutable API fields.
 type APIUpdateInput struct {
@@ -71,6 +81,8 @@ type APIUpdateInput struct {
 type IntegrationCreateInput struct {
 	IntegrationType      string
 	IntegrationURI       string
+	IntegrationMethod    string
+	ConnectionType       string
 	PayloadFormatVersion string
 	TimeoutInMillis      int
 	RequestParameters    map[string]string
@@ -79,6 +91,8 @@ type IntegrationCreateInput struct {
 // IntegrationUpdateInput contains mutable integration fields.
 type IntegrationUpdateInput struct {
 	IntegrationURI       *string
+	IntegrationMethod    *string
+	ConnectionType       *string
 	PayloadFormatVersion *string
 	TimeoutInMillis      *int
 	RequestParameters    map[string]string
@@ -124,10 +138,11 @@ type InvokeOutput struct {
 // NewService creates a new API Gateway service.
 func NewService(cfg *config.Config, lambdaSvc lambdaService, sqsSend SQSSendFunc) *Service {
 	return &Service{
-		cfg:     cfg,
-		lambda:  lambdaSvc,
-		sqsSend: sqsSend,
-		store:   NewStore(cfg),
+		cfg:           cfg,
+		lambda:        lambdaSvc,
+		sqsSend:       sqsSend,
+		store:         NewStore(cfg),
+		httpTransport: newHTTPProxyTransport(),
 	}
 }
 
@@ -172,17 +187,21 @@ func (s *Service) CreateAPI(name, description, protocolType, routeSelectionExpre
 	if err := s.store.CreateAPI(api, s.newStage(apiID, "$default", "", now)); err != nil {
 		return nil, err
 	}
-	return s.store.GetAPI(apiID)
+	return withAPIDefaults(s.store.GetAPI(apiID))
 }
 
 // ListAPIs returns all APIs.
 func (s *Service) ListAPIs() []*types.APIGatewayAPI {
-	return s.store.ListAPIs()
+	apis := s.store.ListAPIs()
+	for _, api := range apis {
+		withAPIDefaults(api, nil)
+	}
+	return apis
 }
 
 // GetAPI returns an API by id.
 func (s *Service) GetAPI(apiID string) (*types.APIGatewayAPI, error) {
-	return s.store.GetAPI(apiID)
+	return withAPIDefaults(s.store.GetAPI(apiID))
 }
 
 // UpdateAPI updates mutable API fields.
@@ -209,7 +228,7 @@ func (s *Service) UpdateAPI(apiID string, input APIUpdateInput) (*types.APIGatew
 	if err := s.store.SaveAPI(api); err != nil {
 		return nil, err
 	}
-	return s.store.GetAPI(apiID)
+	return withAPIDefaults(s.store.GetAPI(apiID))
 }
 
 // DeleteAPI deletes an API and all nested resources.
@@ -217,16 +236,40 @@ func (s *Service) DeleteAPI(apiID string) error {
 	return s.store.DeleteAPI(apiID)
 }
 
-// CreateIntegration creates a Lambda AWS_PROXY or SQS AWS integration.
+// CreateIntegration creates a Lambda AWS_PROXY, SQS AWS or HTTP_PROXY integration.
 func (s *Service) CreateIntegration(apiID string, input IntegrationCreateInput) (*types.APIGatewayIntegration, error) {
 	if input.IntegrationType == "" {
 		input.IntegrationType = integrationTypeAWSProxy
 	}
-	if input.IntegrationType != integrationTypeAWSProxy && input.IntegrationType != integrationTypeAWS {
-		return nil, fmt.Errorf("unsupported IntegrationType %q (only AWS_PROXY and AWS are supported)", input.IntegrationType)
+	switch input.IntegrationType {
+	case integrationTypeAWSProxy, integrationTypeAWS, integrationTypeHTTPProxy:
+	default:
+		return nil, fmt.Errorf("unsupported IntegrationType %q (only AWS_PROXY, AWS and HTTP_PROXY are supported)", input.IntegrationType)
 	}
 	if input.IntegrationURI == "" {
 		return nil, errors.New("IntegrationUri is required")
+	}
+	connectionType, err := normalizeConnectionType(input.ConnectionType)
+	if err != nil {
+		return nil, err
+	}
+	integrationMethod := http.MethodPost
+	if input.IntegrationType == integrationTypeHTTPProxy {
+		if err := validateHTTPProxyURI(input.IntegrationURI); err != nil {
+			return nil, err
+		}
+		if integrationMethod, err = normalizeIntegrationMethod(input.IntegrationMethod); err != nil {
+			return nil, err
+		}
+		if input.PayloadFormatVersion == "" {
+			input.PayloadFormatVersion = payloadFormatVersion1
+		}
+		if input.PayloadFormatVersion != payloadFormatVersion1 {
+			return nil, fmt.Errorf("invalid PayloadFormatVersion %q: HTTP_PROXY integrations support 1.0 only", input.PayloadFormatVersion)
+		}
+		if _, err := parseHTTPProxyMappings(input.RequestParameters); err != nil {
+			return nil, err
+		}
 	}
 	if input.PayloadFormatVersion == "" {
 		input.PayloadFormatVersion = defaultPayloadFormatVersion
@@ -248,8 +291,9 @@ func (s *Service) CreateIntegration(apiID string, input IntegrationCreateInput) 
 		IntegrationID:        integrationID,
 		APIID:                apiID,
 		IntegrationType:      input.IntegrationType,
-		IntegrationMethod:    http.MethodPost,
+		IntegrationMethod:    integrationMethod,
 		IntegrationURI:       input.IntegrationURI,
+		ConnectionType:       connectionType,
 		PayloadFormatVersion: input.PayloadFormatVersion,
 		TimeoutInMillis:      input.TimeoutInMillis,
 		RequestParameters:    input.RequestParameters,
@@ -281,17 +325,52 @@ func (s *Service) CreateIntegration(apiID string, input IntegrationCreateInput) 
 	if err := s.store.CreateIntegration(apiID, integration); err != nil {
 		return nil, err
 	}
-	return s.store.GetIntegration(apiID, integrationID)
+	return s.GetIntegration(apiID, integrationID)
 }
 
 // ListIntegrations returns all integrations for an API.
 func (s *Service) ListIntegrations(apiID string) ([]*types.APIGatewayIntegration, error) {
-	return s.store.ListIntegrations(apiID)
+	items, err := s.store.ListIntegrations(apiID)
+	for _, item := range items {
+		withIntegrationDefaults(item)
+	}
+	return items, err
 }
 
 // GetIntegration returns a single integration.
 func (s *Service) GetIntegration(apiID, integrationID string) (*types.APIGatewayIntegration, error) {
-	return s.store.GetIntegration(apiID, integrationID)
+	integration, err := s.store.GetIntegration(apiID, integrationID)
+	if err != nil {
+		return nil, err
+	}
+	return withIntegrationDefaults(integration), nil
+}
+
+// withAPIDefaults fills fields AWS always reports, for APIs stored before
+// Tarn recorded them, so a Terraform refresh sees no drift.
+func withAPIDefaults(api *types.APIGatewayAPI, err error) (*types.APIGatewayAPI, error) {
+	if api != nil && api.APIKeySelectionExpression == "" {
+		api.APIKeySelectionExpression = defaultAPIKeySelectionExpression
+	}
+	return api, err
+}
+
+// withRouteDefaults reports AuthorizationType NONE, AWS's default. Tarn does
+// not run route authorizers.
+func withRouteDefaults(route *types.APIGatewayRoute, err error) (*types.APIGatewayRoute, error) {
+	if route != nil && route.AuthorizationType == "" {
+		route.AuthorizationType = "NONE"
+	}
+	return route, err
+}
+
+// withIntegrationDefaults fills ConnectionType on integrations stored before
+// Tarn recorded it. AWS reports INTERNET for every non-VPC-link integration.
+func withIntegrationDefaults(integration *types.APIGatewayIntegration) *types.APIGatewayIntegration {
+	if integration != nil && integration.ConnectionType == "" {
+		integration.ConnectionType = connectionTypeInternet
+	}
+	return integration
 }
 
 // UpdateIntegration updates mutable integration fields.
@@ -301,25 +380,60 @@ func (s *Service) UpdateIntegration(apiID, integrationID string, input Integrati
 		return nil, err
 	}
 
+	httpProxy := integration.IntegrationType == integrationTypeHTTPProxy
+
 	if input.IntegrationURI != nil {
 		if *input.IntegrationURI == "" {
 			return nil, errors.New("IntegrationUri cannot be empty")
 		}
-		lambdaArn, lambdaName, err := parseLambdaIntegrationURI(*input.IntegrationURI)
+		switch integration.IntegrationType {
+		case integrationTypeHTTPProxy:
+			if err := validateHTTPProxyURI(*input.IntegrationURI); err != nil {
+				return nil, err
+			}
+		case integrationTypeAWS:
+			sqsArn, queueName, err := parseSQSIntegrationURI(*input.IntegrationURI)
+			if err != nil {
+				return nil, err
+			}
+			integration.SQSQueueArn = sqsArn
+			integration.SQSQueueName = queueName
+		default:
+			lambdaArn, lambdaName, err := parseLambdaIntegrationURI(*input.IntegrationURI)
+			if err != nil {
+				return nil, err
+			}
+			if _, err := s.lambda.GetFunction(lambdaName); err != nil {
+				return nil, fmt.Errorf("invalid IntegrationUri: %w", err)
+			}
+			integration.LambdaFunctionArn = lambdaArn
+			integration.LambdaFunctionName = lambdaName
+		}
+		integration.IntegrationURI = *input.IntegrationURI
+	}
+
+	if input.IntegrationMethod != nil && httpProxy {
+		method, err := normalizeIntegrationMethod(*input.IntegrationMethod)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := s.lambda.GetFunction(lambdaName); err != nil {
-			return nil, fmt.Errorf("invalid IntegrationUri: %w", err)
+		integration.IntegrationMethod = method
+	}
+
+	if input.ConnectionType != nil {
+		connectionType, err := normalizeConnectionType(*input.ConnectionType)
+		if err != nil {
+			return nil, err
 		}
-		integration.IntegrationURI = *input.IntegrationURI
-		integration.LambdaFunctionArn = lambdaArn
-		integration.LambdaFunctionName = lambdaName
+		integration.ConnectionType = connectionType
 	}
 
 	if input.PayloadFormatVersion != nil {
 		if *input.PayloadFormatVersion == "" {
 			return nil, errors.New("PayloadFormatVersion cannot be empty")
+		}
+		if httpProxy && *input.PayloadFormatVersion != payloadFormatVersion1 {
+			return nil, fmt.Errorf("invalid PayloadFormatVersion %q: HTTP_PROXY integrations support 1.0 only", *input.PayloadFormatVersion)
 		}
 		integration.PayloadFormatVersion = *input.PayloadFormatVersion
 	}
@@ -332,13 +446,20 @@ func (s *Service) UpdateIntegration(apiID, integrationID string, input Integrati
 	}
 
 	if input.RequestParameters != nil {
-		integration.RequestParameters = input.RequestParameters
+		params := input.RequestParameters
+		if httpProxy {
+			params = mergeMappingUpdate(integration.RequestParameters, params)
+			if _, err := parseHTTPProxyMappings(params); err != nil {
+				return nil, err
+			}
+		}
+		integration.RequestParameters = params
 	}
 
 	if err := s.store.SaveIntegration(apiID, integration); err != nil {
 		return nil, err
 	}
-	return s.store.GetIntegration(apiID, integrationID)
+	return s.GetIntegration(apiID, integrationID)
 }
 
 // DeleteIntegration deletes an integration if no route references it.
@@ -399,17 +520,21 @@ func (s *Service) CreateRoute(apiID string, input RouteCreateInput) (*types.APIG
 	if err := s.store.CreateRoute(apiID, route); err != nil {
 		return nil, err
 	}
-	return s.store.GetRoute(apiID, routeID)
+	return withRouteDefaults(s.store.GetRoute(apiID, routeID))
 }
 
 // ListRoutes returns all routes for an API.
 func (s *Service) ListRoutes(apiID string) ([]*types.APIGatewayRoute, error) {
-	return s.store.ListRoutes(apiID)
+	routes, err := s.store.ListRoutes(apiID)
+	for _, route := range routes {
+		withRouteDefaults(route, nil)
+	}
+	return routes, err
 }
 
 // GetRoute returns a route by id.
 func (s *Service) GetRoute(apiID, routeID string) (*types.APIGatewayRoute, error) {
-	return s.store.GetRoute(apiID, routeID)
+	return withRouteDefaults(s.store.GetRoute(apiID, routeID))
 }
 
 // UpdateRoute updates mutable route fields.
@@ -456,7 +581,7 @@ func (s *Service) UpdateRoute(apiID, routeID string, input RouteUpdateInput) (*t
 	if err := s.store.SaveRoute(apiID, route); err != nil {
 		return nil, err
 	}
-	return s.store.GetRoute(apiID, routeID)
+	return withRouteDefaults(s.store.GetRoute(apiID, routeID))
 }
 
 // DeleteRoute deletes a route.
@@ -521,7 +646,8 @@ func (s *Service) UpdateStage(apiID, stageName string, input StageUpdateInput) (
 	return s.store.GetStage(apiID, stageName)
 }
 
-// Invoke resolves an incoming request to a route+integration and invokes Lambda.
+// Invoke resolves an incoming request to a route and integration, and calls
+// the integration: Lambda, SQS or an HTTP URL.
 func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput, error) {
 	traceStart := time.Now()
 
@@ -578,8 +704,12 @@ func (s *Service) Invoke(ctx context.Context, input *InvokeInput) (*InvokeOutput
 			})
 		}
 		return out, sqsErr
+	case integrationTypeHTTPProxy:
+		return s.invokeHTTPProxyIntegration(ctx, integration, input, matched, pathParams), nil
+	case integrationTypeAWSProxy, "":
+		// Lambda, below.
 	default:
-		// AWS_PROXY — Lambda
+		return nil, fmt.Errorf("unsupported integration type %q", integration.IntegrationType)
 	}
 
 	correlationID := tracesvc.CorrelationIDFromHeaders(input.Headers)
@@ -1222,4 +1352,7 @@ func parseSQSIntegrationURI(uri string) (sqsArn string, queueName string, err er
 }
 
 // Close stops background persistence after writing any pending state.
-func (s *Service) Close() { s.store.Close() }
+func (s *Service) Close() {
+	s.store.Close()
+	s.httpTransport.CloseIdleConnections()
+}

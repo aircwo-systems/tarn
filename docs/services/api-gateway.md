@@ -18,7 +18,8 @@ Create HTTP and REST APIs with Tarn.
 | DeleteCorsConfiguration | Supported | |
 | CreateRoute | Supported | $default route, path parameters |
 | DeleteRoute | Supported | |
-| CreateIntegration | Supported | Lambda (`AWS_PROXY`) and SQS (`AWS`) |
+| CreateIntegration | Supported | Lambda (`AWS_PROXY`), SQS (`AWS`) and HTTP URLs (`HTTP_PROXY`) |
+| UpdateIntegration | Supported | Validates changes as `CreateIntegration` does |
 | DeleteIntegration | Supported | |
 | CreateStage | Supported | Creates an auto-deployed stage with an optional description |
 | DeleteStage | Supported | |
@@ -64,6 +65,70 @@ const apiRes = await apiGw.send(new CreateApiCommand({
 // Create Lambda function and integrate...
 ```
 </div>
+
+### HTTP API with an HTTP backend
+
+An `HTTP_PROXY` integration forwards each request to a URL and returns the upstream response unchanged. Put a container service behind a gateway this way without a forwarding Lambda. Point the integration at Tarn's ECS proxy, `/_ecs/{account}/{cluster}/{service}/`.
+
+<div class="example-block">
+<div class="lang">JavaScript (AWS SDK)</div>
+
+```javascript
+import {
+  ApiGatewayV2Client, CreateApiCommand, CreateIntegrationCommand, CreateRouteCommand,
+} from "@aws-sdk/client-apigatewayv2";
+
+const apigw = new ApiGatewayV2Client({ endpoint: "http://127.0.0.1:4566" });
+
+const api = await apigw.send(new CreateApiCommand({ Name: "admin-gateway", ProtocolType: "HTTP" }));
+const integration = await apigw.send(new CreateIntegrationCommand({
+  ApiId: api.ApiId,
+  IntegrationType: "HTTP_PROXY",
+  IntegrationMethod: "ANY",
+  IntegrationUri: "http://127.0.0.1:4566/_ecs/000000000000/admin/identity/admin/{proxy}",
+  TimeoutInMillis: 5000,
+  RequestParameters: { "overwrite:header.x-api-key": gatewayKey },
+}));
+await apigw.send(new CreateRouteCommand({
+  ApiId: api.ApiId,
+  RouteKey: "ANY /admin/{proxy+}",
+  Target: `integrations/${integration.IntegrationId}`,
+}));
+```
+</div>
+
+`GET /_apigateway/{api-id}/$default/admin/users?q=smith` reaches the `identity` service as `GET /admin/users?q=smith`. The caller's `Authorization` header passes through unchanged, and the service sees exactly one `x-api-key`, the gateway's.
+
+How Tarn forwards a request:
+
+- `IntegrationMethod: ANY` (the default) sends the caller's method. Any other method replaces it.
+- Each `{name}` in the URI's path takes the matched route's path parameter, escaped. A `{proxy+}` value keeps its slashes. Variables may appear only in the path, so a request cannot change the upstream host or query. Without a path variable Tarn sends the URI's own path.
+- The query string arrives as the caller sent it, in order and with repeated keys.
+- Tarn forwards every request header except hop-by-hop ones, sets `Host` to the target's, and adds `X-Forwarded-For` and `X-Forwarded-Proto`. A request without a correlation ID gets an `X-Correlation-Id`.
+- Status, headers and body come back unchanged, including several `Set-Cookie` headers. Tarn does not follow redirects or decompress bodies.
+- Tarn calls the upstream once and never retries, as API Gateway does.
+
+`RequestParameters` takes `append:`, `overwrite:` and `remove:` on `header.<name>` and `querystring.<name>`, plus `overwrite:path`. A value is a static string, `$request.header.<name>`, `$request.querystring.<name>`, `$request.path`, `$request.path.<name>`, `$context.requestId`, `$context.apiId` or `$context.stage`. Values read the request as received, not the result of other mappings. Tarn rejects a reserved header such as `Authorization`, `X-Forwarded-For` or `x-amz-*`, a source it does not support such as `$request.body.id`, a value that mixes text and an expression, and an `overwrite` and `remove` for the same header. A query mapping changes only the parameters it names. The rest keep their exact spelling and order.
+
+`UpdateIntegration` merges `RequestParameters` into the stored mappings, as AWS does. A key with a value adds or replaces that mapping, a key sent with an empty value deletes it, and keys left out are kept. So an update cannot set an empty static value. Create can.
+
+::: warning Static values are readable
+`GetIntegration` returns static mapping values as stored, as AWS does. Anyone who can read the API's configuration can read an API key set with `overwrite:header.x-api-key`.
+:::
+
+| Upstream result | Caller gets |
+|---|---|
+| Any response | Its status, headers and body |
+| No response headers within `TimeoutInMillis` | `504` |
+| Connection refused, DNS or TLS failure, connection reset | `502` |
+| Request body over 10 MB | `413`, without calling the upstream. This applies to every HTTP API integration. |
+| Response body over 10 MB | `502` |
+
+Tarn's own errors are JSON, `{"message": "..."}`.
+
+A URI on Tarn's own port with host `127.0.0.1`, `localhost`, `host.docker.internal` or the `--host` value runs in process, without opening a socket. So a URL copied from a container's configuration works from the gateway too. Answers from the ECS proxy pass through like any upstream response, such as `503` when the service has no running task. The ECS proxy gives up waiting for response headers after 10 seconds, so with an ECS target a `TimeoutInMillis` above 10 000 never fires and the proxy's `504` arrives first.
+
+Each proxied request leaves a trace under its correlation ID, with an `ecs` span named after the service for an ECS target and an `http` span named after the host otherwise. Its `/tarn/api` line adds the API ID, stage, route key, upstream URL, upstream status, upstream time and correlation ID, plus a `cause` such as `timeout` when the call failed.
 
 ### REST API with Terraform
 
@@ -152,7 +217,9 @@ Preflights never carry credentials, so Tarn checks them against the default acco
 ## Known Limitations
 
 - HTTP APIs support `ProtocolType=HTTP` only
-- HTTP APIs support Lambda and SQS integrations only
+- HTTP APIs have no VPC links. `ConnectionType: VPC_LINK` returns `BadRequestException`. Use an `INTERNET` integration with an `http://` URL, such as Tarn's ECS proxy.
+- `HTTP_PROXY` integrations support payload format `1.0` only, and no `ResponseParameters`, `TlsConfig` or stage variables
+- An update deletes a mapping by sending it with an empty value, which is how Terraform removes a `request_parameters` entry. A `remove:` entry always has an empty value, so an update cannot delete one, and deleting one from Terraform configuration leaves it in place. Delete and recreate the integration to drop it.
 - REST APIs execute Lambda proxy and SQS AWS integrations only
 - Integration response mappings apply static (single-quoted) header values only; `integration.response.*` mappings are ignored
 - Gateway responses (`DEFAULT_4XX`, `DEFAULT_5XX`) are not configurable, so REST API errors carry no CORS headers

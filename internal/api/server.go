@@ -34,6 +34,7 @@ import (
 	cognitosvc "github.com/aircwo-systems/tarn/internal/cognito"
 	"github.com/aircwo-systems/tarn/internal/config"
 	logssvc "github.com/aircwo-systems/tarn/internal/logs"
+	"github.com/aircwo-systems/tarn/internal/reqlog"
 	tracesvc "github.com/aircwo-systems/tarn/internal/trace"
 )
 
@@ -187,6 +188,10 @@ type Server struct {
 	conns             *Connections
 	awsConnections    *AWSConnections
 	ecsProxyTransport *http.Transport
+	// mux is the route table without the logging middleware, for requests
+	// Tarn sends to itself in process (an API Gateway HTTP_PROXY integration
+	// whose URL is Tarn's own listener).
+	mux *http.ServeMux
 	// cognitoIndex maps user pool and client IDs to accounts, for Cognito
 	// calls that carry no SigV4 credentials.
 	cognitoIndex *cognitosvc.Index
@@ -209,6 +214,7 @@ func NewServer(cfg *config.Config, registry *HandlerRegistry, logsSvc *logssvc.S
 
 	mux := http.NewServeMux()
 	s.registerRoutes(mux)
+	s.mux = mux
 	s.datadog = s.newDatadogMux()
 
 	s.httpServer = &http.Server{
@@ -222,6 +228,40 @@ func NewServer(cfg *config.Config, registry *HandlerRegistry, logsSvc *logssvc.S
 	}
 
 	return s
+}
+
+// InProcessHandler routes a request Tarn sends to itself exactly as the
+// listener would (owner API, archived-account guard, Datadog intake, AWS
+// protocol dispatch, then the route table), but writes no request log line
+// and records no account activity, so the request is not counted twice.
+func (s *Server) InProcessHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isAWSConnectionPath(r.URL.Path) {
+			s.awsConnections.ServeHTTP(w, r)
+			return
+		}
+		if s.rejectArchived(w, r, account.FromRequest(r, s.cfg.AccountID)) {
+			return
+		}
+		if h, pattern := s.datadog.Handler(r); pattern != "" {
+			h.ServeHTTP(w, r)
+			return
+		}
+		if !s.dispatchProtocolRequest(w, r) {
+			s.mux.ServeHTTP(w, r)
+		}
+	})
+}
+
+// rejectArchived answers 403 for a request made with an archived account's
+// key, other than to the paths that restore it, and reports whether it did.
+func (s *Server) rejectArchived(w http.ResponseWriter, r *http.Request, accountID string) bool {
+	if accountID == s.cfg.AccountID || isAccountExemptPath(r.URL.Path) || !s.registry.IsArchived(accountID) {
+		return false
+	}
+	writeAccountArchived(w, accountID)
+	log.Printf("%s %s 403 (account %s archived)", r.Method, r.URL.Path, accountID)
+	return true
 }
 
 // SetConnections replaces the connection tracker. The secrets proxy starts
@@ -944,12 +984,14 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 		}
 		start := time.Now()
 		accountID := account.FromRequest(r, s.cfg.AccountID)
-		if accountID != s.cfg.AccountID && !isAccountExemptPath(r.URL.Path) && s.registry.IsArchived(accountID) {
-			writeAccountArchived(w, accountID)
-			log.Printf("%s %s 403 (account %s archived)", r.Method, r.URL.Path, accountID)
+		if s.rejectArchived(w, r, accountID) {
 			return
 		}
 		wrapped := &statusWriter{ResponseWriter: w, status: 200}
+		// Handlers add request-specific fields (an API Gateway proxy's
+		// upstream, say) to this request's one /tarn/api line.
+		ctx, fields := reqlog.WithFields(r.Context())
+		r = r.WithContext(ctx)
 		if h, pattern := s.datadog.Handler(r); pattern != "" {
 			h.ServeHTTP(wrapped, r)
 			log.Printf("%s %s %d %s", r.Method, r.URL.Path, wrapped.status, time.Since(start))
@@ -963,10 +1005,11 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 		}
 		duration := time.Since(start)
 		target := strings.TrimSpace(r.Header.Get("X-Amz-Target"))
+		extra := fields.String()
 		if target != "" {
-			log.Printf("%s %s %d %s target=%s", r.Method, r.URL.Path, wrapped.status, duration, target)
+			log.Printf("%s %s %d %s target=%s%s", r.Method, r.URL.Path, wrapped.status, duration, target, extra)
 		} else {
-			log.Printf("%s %s %d %s", r.Method, r.URL.Path, wrapped.status, duration)
+			log.Printf("%s %s %d %s%s", r.Method, r.URL.Path, wrapped.status, duration, extra)
 		}
 		if !strings.HasPrefix(r.URL.Path, "/_tarn/") {
 			// Only AWS API calls count as activity: the dashboard polls with
@@ -980,10 +1023,17 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 				logsSvc = hs.Logs
 			}
 			if logsSvc != nil {
-				logsSvc.LogAPIRequest(r.Method, r.URL.Path, wrapped.status, duration, target)
+				logsSvc.LogAPIRequestWithFields(r.Method, r.URL.Path, wrapped.status, duration, target, extra)
 			}
 		}
 	})
+}
+
+// isPassThroughPath reports paths whose request bodies belong to a user's
+// backend: the ECS proxy and HTTP API invoke URLs. (REST API invoke URLs are
+// routed below, before any form parsing.)
+func isPassThroughPath(p string) bool {
+	return strings.HasPrefix(p, "/_ecs/") || strings.HasPrefix(p, "/_apigateway/")
 }
 
 // isAccountExemptPath reports paths served even for an archived account's
@@ -1015,12 +1065,12 @@ func (s *Server) dispatchProtocolRequest(w http.ResponseWriter, r *http.Request)
 	if r.Method != http.MethodPost {
 		return false
 	}
-	if strings.HasPrefix(r.URL.Path, "/_ecs/") {
-		// The ECS reverse proxy (registerECSProxyRoutes) owns this whole
-		// subtree and must see the request untouched: r.ParseForm() below
-		// would drain a form-encoded proxied body before it reaches the
-		// backend, and a proxied request that happens to carry AWS protocol
-		// headers/params must not get hijacked into SNS/DynamoDB/etc.
+	if isPassThroughPath(r.URL.Path) {
+		// The ECS reverse proxy and API Gateway invoke routes own these
+		// subtrees and must see the request untouched: r.ParseForm() below
+		// would drain a form-encoded body before it reaches the backend, and
+		// a request that happens to carry AWS protocol headers/params must
+		// not get hijacked into SNS/DynamoDB/etc.
 		return false
 	}
 
